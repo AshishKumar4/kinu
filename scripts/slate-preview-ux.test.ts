@@ -26,6 +26,19 @@ async function selectPlan(page: Page, label: string): Promise<void> {
   await page.select('[aria-label="Plan history"]', value);
 }
 
+/** One whole plan-history read cycle, elapsed. The failure banner appears only
+ *  once a read has run past whatever just happened, and — because a resource
+ *  that has already loaded keeps its value through a failure — it clears only
+ *  once the next read has succeeded. Both edges are the barrier; the caller
+ *  must have seen the pane's first read land, or the banner it waits for is
+ *  the fresh pane's own empty state. */
+async function readCycleElapsed(page: Page): Promise<void> {
+  await page.click('[data-break-plans]');
+  await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+  await page.click('[data-break-plans]');
+  await page.waitForFunction(() => !document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+}
+
 describe('the Slate preview frame', () => {
   test('a Slate calls its own preview origin without reaching the host document', async () => {
     await withGallery(async ({ browser, origin }) => {
@@ -137,6 +150,56 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await selectPlan(page, 'Nested delivery');
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
         expect(await page.$('[data-plan-decisions]')).toBeNull();
+
+        // ── A plan arrives from an actor this walk has never named ──────
+        // `courier` is on the workspace roster but on no `children` page, so no
+        // amount of "Older plans / more actors" reaches it. Only the hint does,
+        // and the hint is worth nothing until the exact authorized read answers.
+        expect(await page.$eval('[aria-label="Plan history"]', el => el.textContent)).not.toContain('Courier');
+        // A pending plan of the reader's OWN is not a reason to bury news the
+        // workspace has never shown. Re-submitting the root plan puts this pane
+        // back in the state arrivals were once suppressed in, while the reader
+        // is off on a preview tab.
+        await page.click('[data-new-plan]');
+        await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Plan history"] option')]
+          .some(el => el.textContent?.includes('Dashboard delivery') && el.textContent.includes('pending')));
+        await page.click('[aria-label="Device app"]');
+        await page.waitForSelector('[aria-label="Device app"][aria-current="true"]');
+        // Neither a malformed reference nor one the workspace never issued may
+        // move the user. The stale one is reported where every unreadable actor
+        // is; the malformed one never becomes a reference at all, so if it had
+        // leaked past the schema the read would have failed instead of warned.
+        await page.click('[data-notify-malformed]');
+        await page.click('[data-notify-stale]');
+        await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('courier: The requested subordinate or retained history is unavailable.'));
+        expect(await page.$eval('[aria-label="Device app"]', el => el.getAttribute('aria-current'))).toBe('true');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).not.toContain('Could not load workspace plan history');
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
+        // The real reference: Work takes the user, the exact plan is on screen.
+        await page.click('[data-notify-plan]');
+        await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Courier rollout'));
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Deliver courier');
+        // Focused, never decided, and the chat is still the one the user chose.
+        expect(await page.$('[data-plan-decisions]')).toBeNull();
+        expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
+        // One presentation policy: a live actor's arrival is neither labelled
+        // nor described as retained, and its review is an explicit navigation.
+        expect(await page.$eval('[aria-label="Plan history"] option:checked', el => el.textContent)).not.toContain('retained');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).not.toContain('Retained actor history');
+        expect(await page.$eval('[data-work-plans]', el => el.textContent)).toContain('Review in courier conversation');
+        // A repeat of a reference already seen is not an arrival: the selection
+        // the user has since made stands. The history failure is the barrier —
+        // it only appears once a whole read cycle has run past the repeat.
+        await selectPlan(page, 'Nested delivery');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Nested'));
+        await page.click('[data-notify-plan]');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
+        await page.click('[data-break-plans]');
+        await page.waitForFunction(() => !document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Nested');
         await page.click('[aria-label="Sandbox app"]');
         await page.click('[data-worker-plan]');
         await page.waitForSelector('[aria-label="Work"][aria-current="true"]');
@@ -149,6 +212,35 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'))?.click());
         await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
         expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
+        // ── The hint is spent for the CONNECTION, not for one pane ──────
+        // Walking back out to the workspace conversation and into the actor's
+        // again remounts both panes. An arrival the reader was already shown
+        // may not arrive a second time, and the pane a conversation opens
+        // answers for ITS actor — the courier's arrival is the newest plan in
+        // this workspace, and "newest anywhere" is the root pane's own default.
+        await page.click('[data-open-workspace]');
+        await page.waitForSelector('[data-plan-owner="main"]');
+        // The fresh root pane has read: the actor's plan and the arrived one
+        // are both in its history, so what it opened on is settled.
+        await page.waitForFunction(() => {
+          const labels = [...document.querySelectorAll('[aria-label="Plan history"] option')].map(el => el.textContent ?? '');
+          return labels.some(label => label.includes('Worker revision two')) && labels.some(label => label.includes('Courier rollout'));
+        });
+        await readCycleElapsed(page);
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Dashboard delivery');
+        await selectPlan(page, 'Worker revision two');
+        await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Worker revision two'));
+        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Review in worker conversation'))?.click());
+        await page.waitForSelector('[data-plan-owner="worker"]');
+        // The arrived plan is in THIS pane's history too, so every precondition
+        // a replay needs is met, and a whole further read cycle runs past it.
+        await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Plan history"] option')].some(el => el.textContent?.includes('Courier rollout')));
+        await readCycleElapsed(page);
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
+        expect(await page.$eval('[data-plan-title]', el => el.textContent)).not.toContain('Courier');
+        // Spending the hint never discards the reference: the pane keeps
+        // resolving it, so the arrived plan stays reachable in history.
+        expect(await page.$eval('[aria-label="Plan history"]', el => el.textContent)).toContain('Courier rollout');
       }
     } finally { await page.close(); }
   });

@@ -582,9 +582,27 @@ export function mockAgentsSdk(): void {
           },
         });
       }
+      /** The read half of the same registry, and the ONLY facet lookup that is
+       *  allowed not to create one. The real SDK returns `null` the moment
+       *  `_existingSubAgentIdentity` finds no row and reaches `ctx.facets` only
+       *  after that (`agents/dist/index.js`, `async getExistingSubAgent`) — so
+       *  an owner reading a retained path can never mint the child it was asked
+       *  about, and a stale reference resolves to nothing rather than to a fresh
+       *  empty actor. That NON-insertion is the observable half here, so the
+       *  registry SELECT is copied and the INSERT `subAgent` performs is
+       *  deliberately absent; the facet itself is workerd-only, so a registered
+       *  name answers with the same throwing stub `subAgent` hands back. */
       async getExistingSubAgent(cls: { name: string }, name: string): Promise<object | null> {
+        await Promise.resolve();
         if (!this.hasSubAgent(cls.name, name)) return null;
-        return this.subAgent(cls, name);
+        return new Proxy({}, {
+          get: (_target, prop) => {
+            if (prop === 'then') return undefined;
+            return async () => {
+              throw new Error(`harness getExistingSubAgent: ${cls.name} "${name}".${String(prop)} needs a facet, which is workerd-only`);
+            };
+          },
+        });
       }
       listSubAgents(cls: { name: string }): Array<{ className: string; name: string; createdAt: number }> {
         return this.#subAgentRegistry().exec(

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
 import {
+  actorReferenceOf,
   decodeJsonValue,
   type BackendHost,
   type BroadcastEvent,
@@ -10,8 +11,10 @@ import {
   type ProgrammaticTurn,
 } from '@kinu.run/core';
 import {
+  hiredSubordinateHarness,
   orchestratorHarness,
   subordinateHarness,
+  type ActorHarness,
   type HarnessOrchestratorAgent,
   type HarnessSubordinateAgent,
 } from './helpers/actor-harness';
@@ -22,6 +25,12 @@ type HarnessAgent = HarnessOrchestratorAgent | HarnessSubordinateAgent;
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
+
+/** The one message type a subordinate's submitted plan puts on the workspace
+ *  connection, and the whole payload the browser is allowed to see. */
+const REFERENCE_EVENT = 'workspace_plan_updated';
+const ReferenceEventSchema = v.object({ type: v.literal(REFERENCE_EVENT) });
+const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
 
 function prototypeMethod(agent: HarnessAgent, name: string) {
   let owner: object | null = agent;
@@ -65,6 +74,114 @@ function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
     parts: [{ type: 'text', text: `${mode} this change` }],
     metadata: { kinuMode: mode },
   }]);
+}
+
+/**
+ * Every message the ROOT actually put on its own broadcast channel, parsed —
+ * the workspace connection as a browser reads it.
+ *
+ * The recorder DELEGATES to the real `broadcast` rather than replacing it, so
+ * the production fan-out still runs and this observes it. Replacing it would
+ * turn `workspace.broadcast(...)` into blanket success, which is the one thing
+ * a proof about that hop must not do.
+ */
+function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] {
+  const seen: JsonValue[] = [];
+  const forward = parent.broadcast.bind(parent);
+  Object.defineProperty(parent, 'broadcast', {
+    configurable: true,
+    value: (message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void => {
+      // The text frames are the ones that carry JSON; the binary ones are not a
+      // smaller version of the same thing. Parsed rather than narrowed, because
+      // this is where a wire representation becomes a value the proofs read.
+      const text = v.safeParse(v.string(), message);
+      if (text.success) seen.push(decodeJsonValue({ value: JSON.parse(text.output) }));
+      forward(message, without);
+    },
+  });
+  return seen;
+}
+
+function referenceEvents(seen: readonly JsonValue[]): JsonValue[] {
+  return seen.filter((message) => v.is(ReferenceEventSchema, message));
+}
+
+/** The child's OWN chat channel — distinct from the workspace connection its
+ *  parent fans out on — plus the programmatic-turn admission a decision needs. */
+function planHost(agent: HarnessSubordinateAgent) {
+  const broadcasts: BroadcastEvent[] = [];
+  const queued: ProgrammaticTurn[] = [];
+  setActorField(agent, '_host', {
+    broadcast: (event) => broadcasts.push(event),
+    enqueueTurn: async (turn) => {
+      queued.push(turn);
+      return { status: 'queued' };
+    },
+    turnInFlight: () => false,
+    setTimer: () => {},
+  });
+  return { broadcasts, queued };
+}
+
+/** The owner's own record of a hire, which is the hop its authoritative read is
+ *  allowed to traverse: the row a completed birth leaves — the REGISTERED
+ *  actor's reference attached, no birth still owed. The reference is read off
+ *  the hire itself, so the row names the directory actor
+ *  `hiredSubordinateHarness` created rather than hand-typed fields, which is
+ *  what lets the existing-only read resolve a storage key from it.
+ *  `hiredSubordinateHarness` deliberately leaves this to its caller — `create`
+ *  is a plain INSERT, so a fixture that wrote one would collide with every
+ *  suite that writes its own. */
+function roster(parent: HarnessOrchestratorAgent, hire: HarnessSubordinateAgent): void {
+  const actor = hire.observeRuntime().actor;
+  parent.harnessRoster().create({
+    name: actor.name,
+    actorReference: actorReferenceOf(actor),
+    birth: null,
+    deleteRequested: false,
+    createdBy: 'user',
+    status: 'idle',
+    currentTask: null,
+    createdAt: 1,
+    dismissedAt: null,
+    lifetime: 'durable',
+    taskEventId: null,
+  });
+}
+
+/** A roster name with no actor behind it — what an owner sees for a child the
+ *  workspace never finished hiring. The existing-only read must answer nothing
+ *  for it instead of minting the facet it was asked about. */
+function rosterWithoutActor(parent: HarnessOrchestratorAgent, name: string): void {
+  parent.harnessRoster().create({
+    name,
+    actorReference: null,
+    birth: null,
+    deleteRequested: false,
+    createdBy: 'user',
+    status: 'idle',
+    currentTask: null,
+    createdAt: 1,
+    dismissedAt: null,
+    lifetime: 'durable',
+    taskEventId: null,
+  });
+}
+
+/** An additional agent hanging off a REAL workspace root, on an owner Plan
+ *  turn: the only lineage `submitPlanEdits` admits, assembled through the
+ *  production seeding handshake rather than declared. */
+async function hiredPlanner(
+  parent: ActorHarness<HarnessOrchestratorAgent>,
+  name: string,
+): Promise<ActorHarness<HarnessSubordinateAgent>> {
+  return await hiredSubordinateHarness(parent, {
+    name,
+    displayName: 'Plan Owner',
+    nameOrigin: 'user',
+    role: 'general',
+    mission: 'own the plan it submits',
+  });
 }
 
 function setSubordinateTurn(
@@ -124,19 +241,18 @@ describe('Plan mode tool lifecycle', () => {
   });
 
   test('an owner Plan turn on an additional agent has its own review, while assigned Plan work reports to its parent', async () => {
-    const ownerHarness = subordinateHarness();
+    // The REAL root+child fixture. An owner Plan turn ends in `submitPlanEdits`,
+    // which refuses any actor whose recorded SDK lineage and seeded identity row
+    // do not agree about which workspace hired it — so a stand-in with a declared
+    // parent nobody seeded cannot reach this test's subject at all.
+    const parent = orchestratorHarness();
+    const ownerHarness = await hiredPlanner(parent, 'plan-owner-1');
+    // Production rosters a hire before it can run a turn, and the root's
+    // announcement endpoint answers from that roster, so the order matters here
+    // for the same reason it matters there.
+    roster(parent.agent, ownerHarness.agent);
     const owner = ownerHarness.agent;
-    const broadcasts: BroadcastEvent[] = [];
-    const queued: ProgrammaticTurn[] = [];
-    setActorField(owner, '_host', {
-      broadcast: (event) => broadcasts.push(event),
-      enqueueTurn: async (turn) => {
-        queued.push(turn);
-        return { status: 'queued' };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    });
+    const { broadcasts, queued } = planHost(owner);
     setSubordinateTurn(owner, 'plan', false);
 
     const ownerTools = rawTools(owner);
@@ -383,5 +499,278 @@ describe('Plan mode tool lifecycle', () => {
       `plan:${plan.id}:1:approve:1`,
       `plan:${plan.id}:1:approve:2`,
     ]);
+  });
+});
+
+/**
+ * THE WORKSPACE PLAN REFERENCE EVENT — its one writer, its closed payload, and
+ * the authoritative read a recipient must perform before it focuses anything.
+ *
+ * The event is a HINT. A subordinate that submits a plan tells the root only
+ * where to look — a path, an id, a revision — and the browser then re-reads
+ * that exact reference through the root's existing-only lineage inspection.
+ * Two properties make that safe, and both are behaviour rather than structure:
+ * the payload carries nothing a recipient could render without re-reading, and
+ * the read admits only a lineage the root can already prove, minting nothing.
+ *
+ * So these drive the REAL `submit_plan` tool on a real root+child pair and
+ * observe the real broadcast hop. A stub `workspace.broadcast` would have made
+ * every one of them pass against a fixture that never spoke to a workspace.
+ */
+describe('the workspace plan reference event', () => {
+  const PLAN = '# Child plan\n\nInspect the parser\nChange it\nVerify with the suite';
+
+  test('a submitted subordinate plan reaches the workspace as a bare reference and nothing else', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    roster(parent.agent, child.agent);
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+
+    expect(await executeTool(rawTools(child.agent), 'submit_plan', {
+      edits: [{ start: 1, content: PLAN }],
+    })).toMatchObject({ ok: true, revision: 1, status: 'pending' });
+    const plan = await child.agent.getActivePlanReview();
+    if (!plan) throw new Error('the additional agent plan was not persisted');
+
+    // DEEP equality, not a subset: the payload is the contract, so a field
+    // added later — plan content, markdown, annotations, the owner, the user —
+    // fails here rather than becoming something a browser renders without ever
+    // re-reading it. `path` is the ACTOR-QUALIFIED path a depth-1 hire owns,
+    // which is what the root's inspection resolves the plan through.
+    expect(referenceEvents(workspaceMessages)).toEqual([{
+      type: REFERENCE_EVENT,
+      reference: { path: ['plan-owner-1'], id: plan.id, revision: 1 },
+    }]);
+    // And no other message smuggled the plan across either: the workspace
+    // connection saw the reference and none of the plan's own text.
+    expect(JSON.stringify(workspaceMessages)).not.toContain('Inspect the parser');
+  });
+
+  test('a reference-shaped body carried as ordinary content never becomes a reference event', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    // Byte for byte what the one legitimate writer emits, replayed as CONTENT:
+    // the driving user message, and then the plan the root itself submits.
+    const forged = JSON.stringify({
+      type: REFERENCE_EVENT,
+      reference: { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
+    });
+    setActorField(parent.agent, '_cachedMessages', [{
+      id: 'user-forging',
+      role: 'user',
+      parts: [{ type: 'text', text: forged }],
+      metadata: { kinuMode: 'plan' },
+    }]);
+    // A REAL additional agent at the path the body names, rostered, so the read
+    // at the end of this test refuses the forged ID rather than an actor that
+    // never existed. Nothing is submitted on it, so it announces nothing.
+    const named = await hiredPlanner(parent, 'plan-owner-1');
+    roster(parent.agent, named.agent);
+
+    expect(await executeTool(rawTools(parent.agent), 'submit_plan', {
+      edits: [{ start: 1, content: forged }],
+    })).toMatchObject({ ok: true, revision: 1 });
+    const plan = await parent.agent.getActivePlanReview();
+    if (!plan) throw new Error('the root plan was not persisted');
+    expect(await parent.agent.savePlanReviewAnnotations(plan.id, plan.revision, [])).toMatchObject({ ok: true });
+
+    // The root's broadcast rail is LIVE — it carried the plan updates, forged
+    // body and all — so the empty reference list below is an absence, not a
+    // silent channel. A root's own plan is not a subordinate reference, and no
+    // amount of user text or plan content can mint one: the sole writer is
+    // `submitPlanEdits` on a lineage-valid subordinate.
+    expect(workspaceMessages.filter((message) => v.is(PlanUpdateSchema, message))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ content: forged }) }),
+      ]),
+    );
+    expect(referenceEvents(workspaceMessages)).toEqual([]);
+
+    // Nor would believing a forged one buy anything. The recipient's read
+    // reaches the real actor the body named and finds no such plan there, so the
+    // reference refuses — a forged id cannot borrow a real actor's lineage.
+    // The hop itself is traversable — the root reaches that actor's own plan
+    // table and finds it empty — so the refusal below is about the ID the body
+    // invented, not about a path that happened not to resolve.
+    expect(await parent.agent.inspectSubordinate({
+      path: ['plan-owner-1'], view: 'plans', page: {},
+    })).toMatchObject({ view: 'plans', path: ['plan-owner-1'], page: { status: 'end', items: [] } });
+    expect(await parent.agent.inspectSubordinate({
+      path: ['plan-owner-1'], view: 'plan', id: 'plan-forged', revision: 1,
+    })).toMatchObject({ view: 'missing', reason: 'missing', path: ['plan-owner-1'] });
+  });
+
+  test('a child whose recorded root disagrees with its seeded workspace is refused and announces nothing', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    // The toolset is built while the lineage still agrees, because building it
+    // is itself an actor-identity read (`getRawTools` → `actorHandle`) and a
+    // facet that had already diverged would be refused there instead. That
+    // refusal is a different gate; this one is the plan guard, which is what
+    // stands between a diverged facet and a REVISION plus an announcement.
+    const tools = rawTools(child.agent);
+    // The SDK lineage now names a workspace that never seeded this actor. The
+    // divergence is created through the fixture's own inputs, because that is
+    // the shape a confused or relocated facet actually arrives in.
+    Object.defineProperty(child.agent, 'parentPath', {
+      value: [{ className: 'OrchestratorAgent', name: 'someone-elses-workspace' }],
+      configurable: true,
+    });
+
+    await expect(executeTool(tools, 'submit_plan', {
+      edits: [{ start: 1, content: PLAN }],
+    })).rejects.toMatchObject({
+      code: 'denied',
+      message: 'The actor has no valid workspace plan lineage',
+    });
+    expect(await child.agent.getActivePlanReview()).toBeNull();
+    expect(referenceEvents(workspaceMessages)).toEqual([]);
+  });
+
+  test('a child whose identity row names a different actor is refused and announces nothing', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    const tools = rawTools(child.agent);
+    // The facet answers to a storage key its registered actor does not claim —
+    // the one divergence that would let an actor submit a plan the root would
+    // then resolve at somebody else's path.
+    Object.defineProperty(child.agent, 'name', { value: 'plan-owner-2', configurable: true });
+
+    await expect(executeTool(tools, 'submit_plan', {
+      edits: [{ start: 1, content: PLAN }],
+    })).rejects.toMatchObject({
+      code: 'denied',
+      message: 'The actor has no valid workspace plan lineage',
+    });
+    expect(await child.agent.getActivePlanReview()).toBeNull();
+    expect(referenceEvents(workspaceMessages)).toEqual([]);
+  });
+
+  test('a workspace that no longer claims the same owner refuses the plan and announces nothing', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    // The owner CLAIM changes hands under a facet the previous owner hired, and
+    // the root re-reads it on its next activation. The lineage still lines up;
+    // what has moved is who the workspace belongs to.
+    parent.db.prepare('UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?')
+      .run('a-different-owner', 'harness-actor');
+    parent.agent.forgetActivationLatches();
+
+    await expect(executeTool(rawTools(child.agent), 'submit_plan', {
+      edits: [{ start: 1, content: PLAN }],
+    })).rejects.toMatchObject({
+      code: 'denied',
+      message: 'The workspace no longer owns this plan actor',
+    });
+    expect(await child.agent.getActivePlanReview()).toBeNull();
+    expect(referenceEvents(workspaceMessages)).toEqual([]);
+  });
+
+  test('the root resolves the exact reference through existing storage and mints no facet for a stale one', async () => {
+    const parent = orchestratorHarness();
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    // Rostered at HIRE time, the way production hires: the root's own record of
+    // the child exists before that child does any work, so nothing below
+    // depends on a roster row that only appears after the fact.
+    roster(parent.agent, child.agent);
+    await executeTool(rawTools(child.agent), 'submit_plan', { edits: [{ start: 1, content: PLAN }] });
+    const plan = await child.agent.getActivePlanReview();
+    if (!plan) throw new Error('the additional agent plan was not persisted');
+    // A rostered name the root never actually hired. The traversal gets as far
+    // as the existing-only lookup, which is the assertion below: it must answer
+    // nothing rather than mint the child it was asked about.
+    rosterWithoutActor(parent.agent, 'never-hired');
+
+    const facet = parent.agent.facetClass();
+    // The hire REGISTERED its facet and the rostered name the root never hired
+    // did not, so the baseline below is a real registry rather than an empty
+    // one compared with itself — which is the only way the length assertion at
+    // the end can catch a read that minted something. The registry is keyed by
+    // the actor's STORAGE KEY, not by the name the roster carries: that is the
+    // key the existing-only read resolves out of the reference on the row.
+    expect(parent.agent.listSubAgents(facet).map((entry) => entry.name))
+      .toEqual([child.agent.observeRuntime().actor.storageKey]);
+    const registered = parent.agent.listSubAgents(facet).length;
+
+    expect(await parent.agent.inspectSubordinate({
+      path: ['plan-owner-1'], view: 'plan', id: plan.id, revision: 1,
+    })).toMatchObject({
+      view: 'plan',
+      path: ['plan-owner-1'],
+      plan: { id: plan.id, revision: 1, content: PLAN, status: 'pending' },
+    });
+
+    // STALE, four ways — the right actor at a revision it never reached, the
+    // right actor with an id that never existed, a rostered actor that was never
+    // hired, and a name the roster does not carry at all. Each must be
+    // `missing`, never a DIFFERENT plan: a recipient that focused whatever came
+    // back would otherwise render one plan under another plan's reference.
+    for (const reference of [
+      { path: ['plan-owner-1'], id: plan.id, revision: 2 },
+      { path: ['plan-owner-1'], id: 'plan-never-written', revision: 1 },
+      { path: ['never-hired'], id: plan.id, revision: 1 },
+      { path: ['not-even-rostered'], id: plan.id, revision: 1 },
+    ]) {
+      expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))
+        .toMatchObject({ view: 'missing', reason: 'missing', path: reference.path });
+    }
+
+    // And the reads created nothing. `getExistingSubAgent` is the only facet
+    // lookup that does not bootstrap, and a root that resolved references
+    // through `subAgent` instead would have registered a facet per miss —
+    // which is how an owner reading its own retained history grows a subtree.
+    expect(parent.agent.listSubAgents(facet)).toHaveLength(registered);
+  });
+
+  test('a roster row whose facet the SDK no longer holds resolves missing, and the read does not re-register it', async () => {
+    const parent = orchestratorHarness();
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    planHost(child.agent);
+    setSubordinateTurn(child.agent, 'plan', false);
+    roster(parent.agent, child.agent);
+    await executeTool(rawTools(child.agent), 'submit_plan', { edits: [{ start: 1, content: PLAN }] });
+    const plan = await child.agent.getActivePlanReview();
+    if (!plan) throw new Error('the additional agent plan was not persisted');
+    const facet = parent.agent.facetClass();
+    const reference = { path: ['plan-owner-1'], id: plan.id, revision: 1 };
+
+    // POSITIVE CONTROL: the very same reference resolves while the hire's SDK
+    // identity is live. Without it the refusal below would prove nothing — a
+    // reference that never resolved is `missing` for reasons of its own.
+    expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' })).toMatchObject({
+      view: 'plan', path: ['plan-owner-1'], plan: { id: plan.id, revision: 1, content: PLAN },
+    });
+
+    // REVOKE the facet the SDK holds and leave the owner's roster row exactly
+    // where it was. That is what a reclaimed or evicted child leaves behind: a
+    // roster still listing a child the SDK no longer has, over a plan table
+    // that is still on disk and would still answer if anything reached it.
+    await parent.agent.deleteSubAgent(facet, child.agent.observeRuntime().actor.storageKey);
+    expect(parent.agent.listSubAgents(facet)).toEqual([]);
+    expect(parent.agent.harnessRoster().get('plan-owner-1')).toMatchObject({ name: 'plan-owner-1' });
+
+    expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))
+      .toMatchObject({ view: 'missing', reason: 'missing', path: ['plan-owner-1'] });
+    expect(await parent.agent.inspectSubordinate({ path: ['plan-owner-1'], view: 'plans', page: {} }))
+      .toMatchObject({ view: 'missing', reason: 'missing', path: ['plan-owner-1'] });
+
+    // And neither read resurrected what it asked about. A lookup that
+    // re-registered the revoked name would make a revocation undoable by
+    // reading it, which is how a reclaimed facet comes back to life holding a
+    // plan its owner already let go of.
+    expect(parent.agent.listSubAgents(facet)).toEqual([]);
   });
 });

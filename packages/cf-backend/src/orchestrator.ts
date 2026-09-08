@@ -226,8 +226,9 @@ import {
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
+  WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
-import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult } from "@kinu.run/core";
+import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -3853,6 +3854,43 @@ export class OrchestratorAgent extends ActorAgent {
     const owner = this.getOwnerUserId();
     if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
     return this.inspectSubordinateStorage(request, { owner, workspace: this.name, traversed: [], storagePath: [] });
+  }
+
+  /**
+   * A facet of this workspace has a new plan revision, and this workspace's own
+   * clients are told a REFERENCE to it — nothing else.
+   *
+   * NATIVE ONLY, and deliberately its own name rather than the inherited
+   * `broadcast`. `sealRpcSurface` shadows every unlisted member as an own
+   * property, which leaves it callable in process and unresolvable over a stub,
+   * so `broadcast` is not something a facet can reach and must not become
+   * something a facet can reach: a generic string channel to every connected
+   * client is the one hole this file's allowlist exists to keep shut. This
+   * takes a parsed reference, spells the event name here, and can carry nothing
+   * else. Not `@callable`, exactly like `workspaceBoxOp` and `supervisorOp`:
+   * reachable by a Durable Object stub in this Worker, unreachable from the
+   * browser or the CLI.
+   *
+   * BROADCAST ONLY: no SQL write, no state, nothing read back, and no plan body
+   * — the same shape as {@link publishHeadStream}, for the same reason. It is a
+   * HINT. The recipient re-reads the exact reference through the owner-gated
+   * `inspectSubordinate`, which verifies every stored ownership hop, before it
+   * displays or focuses anything; that read, not this call, is the authority.
+   *
+   * The one check worth making here is the one this object can answer from its
+   * OWN records without trusting its caller: the actor named at the head of the
+   * path has to be on this workspace's roster. A stub call carries no caller
+   * identity, so this cannot prove WHICH facet is speaking — which is exactly
+   * why the reader's authoritative read is where authority lives, and why a
+   * hint that survives this check still buys nothing it was not already owed.
+   */
+  async announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
+    const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
+    const name = parsed.path[0];
+    if (!name || !this.subordinateRoster.get(name)) {
+      throw new KinuError('denied', 'This workspace has no such plan actor.');
+    }
+    this.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
   }
 
   @callable()

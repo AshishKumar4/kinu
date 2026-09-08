@@ -8,6 +8,7 @@
       "@cloudflare/vitest-pool-workers/types"
     ]
   },
+  "//exclude": "Not a skip: each name here is compiled by the cf-backend project's `files` list, which is where its type closure actually lives. A probe that imports production `src` drags the whole worker into THIS project, whose globals are the workerd runner's rather than the ambient `Env` from packages/cf-backend/env.d.ts, so every `Env` annotation in src would go unresolved. Add a probe to one list and you must add it to the other; a name in neither is checked by no compiler at all.",
   "include": ["./**/*.ts", "../../vitest.config.ts"],
-  "exclude": ["./decorated-agent.test.ts", "./slate-facet-probe.ts"]
+  "exclude": ["./decorated-agent.test.ts", "./slate-facet-probe.ts", "./plan-announce-probe.ts"]
 }

@@ -280,6 +280,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // writing into its parent's: it is given its own assignment, and one plan
     // per actor is what makes the list mean anything.
     agent_tasks: EVERYWHERE,
+    // Which approved plan revision a task came from, written in the same
+    // synchronous transaction as the task itself (tasks/store.ts). Alongside
+    // `agent_tasks` and for the same reason: every root that can hold a task
+    // list can hold one whose provenance a plan review reads back.
+    plan_task_links: EVERYWHERE,
     background_jobs: EVERYWHERE,
     // The once-only boundary in front of a tool whose effects leave the process:
     // one row per claimed call, `PRIMARY KEY (turn_id, normalized_call_id,

@@ -445,6 +445,13 @@ const ORCHESTRATOR_METHODS = [
   // signature, and re-checks the capability handle inside the object.
   'routeWorkspacePreview',
   'workspaceBoxOp',
+  // A facet says one of its plans has a new revision, and this workspace tells
+  // its own clients a path/id/revision reference. Listed because the inherited
+  // `broadcast` deliberately is NOT: a generic string channel to every
+  // connected client is what this table exists to keep shut, so the narrow,
+  // parsed, single-event name is what a facet may reach instead. Never
+  // `@callable` — a browser holds the reader side of this, not the writer.
+  'announceSubordinatePlan',
   // A facet's home, on the same byte plane and for the same reason: the
   // answer carries the credential the session runs the facet's commands as,
   // and the registry it is provisioned in exists only on this object.
