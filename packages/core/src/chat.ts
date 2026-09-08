@@ -17,6 +17,7 @@ import {
   type ToolCallPart,
   type StepResult,
   type StopCondition,
+  type TextStreamPart,
 } from 'ai';
 import {
   assertToolsSupportedByModel,
@@ -85,6 +86,8 @@ export type ChatEvent =
    *  sub-step or a failed run without losing the output already streamed. */
   | { type: 'error'; message: string }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
+
+export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
 export interface ChatOptions {
   model: LanguageModel;
@@ -172,6 +175,9 @@ export interface ChatOptions {
    *  failures handles them (heads/head-inference.ts does).
    */
   onStep?: (step: StepResult<ToolSet>) => Promise<void> | void;
+  /** Raw SDK output for a host UI bridge, before presentation/model conversion.
+   * Not included in the serializable ChatEvent projection. */
+  onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
 }
 
 /**
@@ -529,6 +535,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             break;
           }
           case 'tool-result': {
+            await opts.onToolOutput?.(chunk);
             const raw = chunk.output;
             // Full text, never a head slice: this string is the call's durable
             // record (recordToolCall → the evolution signal) AND the identity the

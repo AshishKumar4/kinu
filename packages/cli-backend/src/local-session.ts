@@ -134,7 +134,7 @@ import {
   revertChangelogEntryById, type ChangelogRevertResult,
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
   latestAlternateTakeSet,
-  getCurrentScaffoldVersion,
+  prepareActorProgram,
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
@@ -2764,15 +2764,18 @@ export class LocalAgentSession implements BackendHost {
     // `defaultTurn` back unchanged (same object, zero overhead); once shadow
     // evaluation promotes a scaffold, THAT scaffold is the turn's inference
     // loop, reaching the model and tools only through the host.* bridge.
+    const program = await prepareActorProgram({ runtime: this.rt, mode: this.turnWorkMode,
+      version: await this.rt.identity.scaffold.version(), signal: abort.signal });
     const turnStream = scaffoldChatTransform({
-      currentVersion: getCurrentScaffoldVersion(this.rt.storage.sql) ?? 0,
+      program,
       chat: defaultTurn,
       run: {
         rt: this.rt,
         workMode: this.turnWorkMode,
         task: item.text,
-        llmStream: this.makeScaffoldLLMStream(model, turnTools),
-        callTool: this.makeScaffoldCallTool(turnTools),
+        signal: abort.signal,
+        llmStream: this.makeScaffoldLLMStream(model, turnTools, abort.signal),
+        callTool: this.makeScaffoldCallTool(turnTools, undefined, abort.signal),
         history: this.makeScaffoldHistory(),
       },
     });
@@ -4217,7 +4220,7 @@ export class LocalAgentSession implements BackendHost {
       history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
     });
-    for await (const value of stream) yield { value: projectJsonValue({ value }) };
+    for await (const event of stream) yield { event };
   }
 
   /** The pending scaffold's rollout state — trials so far and what the
@@ -4259,10 +4262,11 @@ export class LocalAgentSession implements BackendHost {
 
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
-  private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
+  private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet, signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model,
       tools: () => turnTools,
+      signal,
       spend: {
         source: 'scaffold',
         report: this.modelCallSink,
@@ -4285,11 +4289,11 @@ export class LocalAgentSession implements BackendHost {
    *  Built ONCE per rollout and closed over: the identity has to be stable
    *  across the whole rollout, not per call. */
   private makeScaffoldCallTool(
-    turnTools: ToolSet, callScope?: string,
+    turnTools: ToolSet, callScope?: string, signal?: AbortSignal,
   ): NonNullable<ScaffoldRunOptions['callTool']> {
-    if (callScope === undefined) return createScaffoldCallTool(() => turnTools);
+    if (callScope === undefined) return createScaffoldCallTool(() => turnTools, undefined, signal);
     const scoped = this.rolloutTools(callScope);
-    return createScaffoldCallTool(() => scoped, callScope);
+    return createScaffoldCallTool(() => scoped, callScope, signal);
   }
 
   /** `host.history` — a read-only, budgeted page of the conversation the

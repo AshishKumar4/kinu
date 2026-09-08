@@ -1,3 +1,4 @@
+import type { ChatEvent } from '../src/chat';
 // GEPA selection honesty (wiring). The optimiser must be handed a train set
 // DISJOINT from the set its winner is scored on, and must refuse to run at all
 // when the ledger has no failure to optimise toward — an empty train set would
@@ -106,7 +107,7 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
       sql: rt.storage.sql,
       config,
       surface: () => ({
-        llmStream: async function* () { yield ''; },
+        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
         defaultInference: async function* () { yield { value: { type: 'text-delta', delta: 'an answer' } }; },
       }),
       model: () => new MockLanguageModelV3({

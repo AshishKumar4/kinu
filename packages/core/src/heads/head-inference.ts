@@ -27,6 +27,7 @@ import type { ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { prepareActorTurn } from '../orchestrator/actor-turn';
 import type { PromptModelContext } from '../prompting/model-profile';
+import { ExtensionHost } from '../extension';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
@@ -601,6 +602,18 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     return refusal !== null;
   };
 
+  const assertActive = (): void => {
+    if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
+    const gate = budgetExhausted(input.budget);
+    if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
+  };
+  const prepareModelStep = async () => {
+    await outOfBudget();
+    assertActive();
+    if (refusal !== null) throw new MissionBudgetExhausted(refusal);
+    return undefined;
+  };
+
   // Steps recorded so far — the trace's dense sequence and the report's count.
   // ONE counter across every turn, because `head_steps` is keyed `${id}-s${seq}`
   // and a per-turn counter would overwrite the first turn's trace with the
@@ -708,22 +721,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           return outOfBudget();
         },
         onStep,
+        extensions: new ExtensionHost().register({ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }),
       };
       if (deps.signal !== undefined) turn.signal = deps.signal;
       const prepared = await prepareActorTurn({
         runtime: deps.runtime, mode: input.mode, task: input.task, chat: turn,
         loopVersion: await deps.runtime.identity.scaffold.version(),
-        scaffoldStreamOptions: {
-          onStepFinish: onStep, stopWhen: turn.stopWhen,
-          prepareStep: async () => {
-            await outOfBudget();
-            if (refusal !== null) throw new MissionBudgetExhausted(refusal);
-            if (deps.isAborted()) throw new Error(deps.abortReason?.() ?? 'head was aborted');
-            const gate = budgetExhausted(input.budget);
-            if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
-            return undefined;
-          },
-        },
+        assertActive,
+        scaffoldStreamOptions: { onStep, stopWhen: turn.stopWhen, prepareStep: prepareModelStep },
       });
       for await (const event of prepared.events) {
         // Forwarded as the provider drew them: one frame per delta, in order,

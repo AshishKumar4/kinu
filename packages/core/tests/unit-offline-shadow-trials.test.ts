@@ -1,3 +1,4 @@
+import type { ChatEvent } from '../src/chat';
 /**
  * The promotion gate's trials are OFFLINE.
  *
@@ -108,7 +109,7 @@ function countedControl(
       counts.surface++;
       contexts.push(context ?? []);
       return {
-        llmStream: async function* () { yield ''; },
+        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
         defaultInference: async function* () { counts.defaultInference++; yield { value: '' }; },
       };
     },
