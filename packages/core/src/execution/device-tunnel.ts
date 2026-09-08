@@ -266,9 +266,17 @@ export const DEVICE_PTY_EXIT = 'PTY_EXIT';
  *  the RPC correlator sees them: they have no id to correlate, and a
  *  correlator handed one would drop it without a word. */
 
-/** A window a terminal can actually have. The kernel carries each axis as an
- *  `unsigned short`, and a thousand cells on a side is past any real display,
- *  so the hub and the daemon both refuse anything larger. */
+/**
+ * A window a terminal can actually have. The kernel carries each axis as an
+ * `unsigned short`, and a thousand cells on a side is past any real display, so
+ * the hub and the daemon both refuse anything larger.
+ *
+ * The daemon spells it a second time as `MAX_AXIS` in
+ * `packages/pc-agent/src/pty.js`, and it has to: that package is a standalone
+ * CommonJS daemon on the user's own machine with no workspace dependency, so it
+ * cannot import this. The two are the ends of one wire protocol and must agree,
+ * which `packages/pc-agent/tests/pty.test.js` asserts against this constant.
+ */
 export const DEVICE_PTY_MAX_AXIS = 1000;
 
 /**
