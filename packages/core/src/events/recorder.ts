@@ -189,11 +189,15 @@ export const RUN_EVENT_LIMIT_DEFAULT = 200;
  * already enforced, applied by {@link boundRunEventQuery} so the route is no
  * longer the only place it holds.
  *
- * It is NOT the recorder's ceiling. An in-object read-model states its own
- * window because it folds an answer out of the whole of it — `getRunSummaries`
- * sums a run's usage and prints the total as the workspace's spend, so a window
- * silently narrowed to a stranger's allowance would be a truncated denominator
- * presented as a settled figure.
+ * It is NOT a ceiling every in-object read-model inherits. One folds an answer
+ * out of its whole window — `getRunSummaries` sums a run's usage and prints the
+ * total as the workspace's spend, so a window silently narrowed to a stranger's
+ * allowance would be a truncated denominator presented as a settled figure.
+ * Those state their own window, or none at all.
+ *
+ * {@link RunEventRecorder.readSince} is the one in-object read that DOES take
+ * this number, and by derivation rather than coincidence: it serves a
+ * reconnecting browser, which is the untrusted caller this ceiling is about.
  */
 export const RUN_EVENT_LIMIT_MAX = 500;
 
@@ -515,10 +519,16 @@ export class RunEventRecorder {
     return rows[0]?.n ?? 0;
   }
 
-  /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
-  readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
+  /**
+   * Replay all events strictly after `afterIndex` — for SSE Last-Event-ID
+   * resume. The default window is {@link RUN_EVENT_LIMIT_MAX}, and this is the
+   * one in-object read that borrows it: a resuming browser is exactly the
+   * untrusted caller that ceiling was written for, reconnecting mid-run, so the
+   * tail it replays is the largest page that caller could have asked for.
+   */
+  readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
     // Same invariant as `read`: only a finite positive integer reaches SQL.
-    const capped = boundedInt(limit, 500, 1, Number.MAX_SAFE_INTEGER);
+    const capped = boundedInt(limit, RUN_EVENT_LIMIT_MAX, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE run_id = ${runId} AND event_index > ${afterIndex}
@@ -567,9 +577,9 @@ export class RunEventRecorder {
    * a new run's first step before an old run's last one whenever both landed
    * in the same millisecond.
    */
-  readRecentByType(type: RunEventType, limit = 200): RunEvent[] {
+  readRecentByType(type: RunEventType, limit = RUN_EVENT_LIMIT_DEFAULT): RunEvent[] {
     // Same invariant as `read`: only a finite positive integer reaches SQL.
-    const capped = boundedInt(limit, 200, 1, Number.MAX_SAFE_INTEGER);
+    const capped = boundedInt(limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE type = ${type}

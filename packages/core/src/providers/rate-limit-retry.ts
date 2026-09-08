@@ -12,6 +12,26 @@ import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
  */
 export const PROVIDER_SDK_RETRIES = 2;
 
+/**
+ * The fallback wait curve, and ONLY the fallback: when a 429 carries
+ * `Retry-After`, that header is the wait and none of these three is consulted
+ * (see `parseRetryAfter` below). They shape the full-jitter ceiling for a
+ * provider that rate-limits without saying for how long.
+ *
+ * None of the three bounds attempts. Attempts are unbounded — a rate-limited
+ * request ends on success, a definitive failure, or the caller's cancellation.
+ * So these choose only how often a waiting request re-asks:
+ *
+ *   BASE 2_000 ms — one order of magnitude above the pacer's request spacing,
+ *     so the first retry is a real pause rather than a second request inside
+ *     the same window the provider just refused.
+ *   FACTOR 2 — the doubling every backoff in this repository uses (peer
+ *     ingress, the email outbox, owed terminal effects, cross-DO RPC).
+ *   MAX 60_000 ms — the ceiling the growth stops at, so a long outage costs one
+ *     probe a minute instead of one an hour. A silent 429 says nothing about
+ *     when to come back, and a request that stops asking has given up on work
+ *     nobody cancelled.
+ */
 const DEFAULT_BASE_DELAY_MS = 2_000;
 const DEFAULT_BACKOFF_FACTOR = 2;
 const DEFAULT_MAX_DELAY_MS = 60_000;
