@@ -14,11 +14,12 @@ const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 const EXEC_TOKEN = `pta_${USER_ID}_${'e'.repeat(44)}`;
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 const BOTH_TOKEN = `pta_${USER_ID}_${'b'.repeat(44)}`;
-
+const PROXY_TOKEN = `pta_${USER_ID}_${'p'.repeat(44)}`;
 const ACCESS_TOKENS = new Map([
   [EXEC_TOKEN, { hash: 'exec-hash', scopes: ['workspace.exec'] }],
   [READ_TOKEN, { hash: 'read-hash', scopes: ['workspace.read'] }],
   [BOTH_TOKEN, { hash: 'both-hash', scopes: ['workspace.read', 'workspace.exec'] }],
+  [PROXY_TOKEN, { hash: 'proxy-hash', scopes: ['ai.proxy'] }],
 ]);
 
 const ErrorResponseSchema = v.object({ error: v.string() });
@@ -139,6 +140,10 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   const agent = {
     async claimOwner(userId: string) {
       return { owner: userId, capabilityHash: 'sha-existing' };
+    },
+    async inspectSubordinate() {
+      calls.push('inspect');
+      return { view: 'children', path: [], page: { status: 'end', items: [] } };
     },
     async getAgentStatus() {
       calls.push('status');
@@ -341,4 +346,17 @@ describe('access token management routes (session tokens only)', () => {
     const missing = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens/ghost', { method: 'DELETE' }), env);
     expect(missing?.status).toBe(404);
   });
+});
+
+test('retained subordinate inspection requires the owning interactive session', async () => {
+  const { env, calls } = setupEnv();
+  const inspection = rpcInit('inspectSubordinate', [{ path: [], view: 'children', page: {} }]);
+  for (const token of [EXEC_TOKEN, READ_TOKEN, BOTH_TOKEN, PROXY_TOKEN]) {
+    expect(handled(await handleCliRequest(req(token, RPC, inspection), env)).status).toBe(403);
+  }
+  expect(handled(await handleCliRequest(req(SESSION_TOKEN, '/api/cli/workspaces/foreign/rpc', inspection), env)).status).toBe(404);
+  expect(calls).toEqual([]);
+  expect(handled(await handleCliRequest(req(SESSION_TOKEN, RPC, inspection), env)).status).toBe(200);
+  expect(calls).toEqual(['inspect']);
+  expect(handled(await handleCliRequest(req(SESSION_TOKEN, RPC, rpcInit('inspectSubordinateStorage', [])), env)).status).toBe(404);
 });

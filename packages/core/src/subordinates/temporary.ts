@@ -71,12 +71,9 @@ export const TEMPORARY_LIFETIME = 'task';
  * honest field says the transcript was kept and names the agent that holds it,
  * rather than inventing a URI whose reader does not exist.
  *
- * That name RESOLVES: `agents({action:'list', agent})` serves the archived row
- * and the child's own state, because the detail lookup asks the roster whether it
- * KNOWS the name rather than whether it is still in the working set
- * (`TeamToolDeps.knows`). Archived rows are readable and never addressable — the
- * ask and send arms still route on the active roster, so nothing released can be
- * handed new work.
+ * The model-facing list resolves an archived roster row without reopening it.
+ * Owners read retained history and run events through the workspace inspection
+ * path. Ask and send still require an active roster entry.
  */
 export interface TemporaryRunOutcome {
   readonly status: 'completed' | 'failed';
@@ -88,11 +85,8 @@ export interface TemporaryRunOutcome {
   /**
    * Whether an actor survives this result to be read back.
    *
-   * `kept` for every agent that RAN: releasing a temporary agent never wipes its
-   * history, and the `agent` above resolves through `agents({action:'list',
-   * agent})`. `none` only where the child was never born — a spawn that failed
-   * leaves nothing to keep, and saying `kept` there would name a transcript that
-   * does not exist. Same keys either way; the value is what differs.
+   * Releasing a temporary agent keeps its history. Owners inspect that history
+   * by its subordinate path. `none` means the child was never created.
    */
   readonly transcript: 'kept' | 'none';
   readonly elapsed_ms: number;

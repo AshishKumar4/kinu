@@ -242,9 +242,8 @@ export interface TeamToolDeps {
    * path and dead-ended. Archived rows are readable, never addressable.
    */
   knows(name: string): Promise<boolean>;
-  /** Roster row + live snapshot for one subordinate, or the whole roster.
-   *  Resolves an ARCHIVED row too, which is what makes a released temporary
-   *  agent's transcript reachable by the name its result reported. */
+  /** Roster row and live state. Archived rows have no live state; retained
+   * history is available through the separate owner inspection path. */
   status(input: { name?: string }): Promise<object>;
   /** Conversational injection into the subordinate's next turn. */
   message(input: { name: string; content: string; mode: WorkMode }): Promise<

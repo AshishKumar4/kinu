@@ -26,6 +26,8 @@ import {
 // its own subclass. The VALUE comes from `facetClass()`, which each
 // concrete actor supplies.
 import type { SubordinateAgent } from './subordinate-agent';
+import { inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
   SubordinateRosterEntry as SubordinateView,
@@ -4834,22 +4836,15 @@ export abstract class ActorAgent extends Think<Env> {
   // does not route through partyserver and can land before `onStart` — the race
   // `installWorkspaceCapability` documents. It is flag-gated and idempotent.
 
-  /**
-   * One page of the durable transcript, oldest-first within the page, newest
-   * page when called with no cursor.
-   *
-   * `@callable()` because a chat pane calls it over the socket. The pane is
-   * SEEDED by the SDK's own `get-messages` route — `Think.messages`, a bounded
-   * newest window governed by `hydrationByteBudget` — and this is the only way
-   * to reach anything older than that window.
-   *
-   * On the substrate rather than on the workspace root, because a facet runs
-   * `initWorkspaceSchema` against its own `ctx.storage.sql` and therefore has
-   * its own conversation. Declared on the root alone, a subordinate's chat had
-   * no way to ask for a page of its own history, so the column drove its
-   * scroller with nothing to fetch and everything past the hydration window was
-   * unreachable rather than slow.
-   */
+  /** Native owner inspection. Does not initialize the SDK or application tables. */
+  async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
+    return inspectSubordinateStorage({
+      sql: this.boundSql, raw: this.ctx.storage.sql,
+      storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
+      existing: (name) => this.getExistingSubAgent(this.facetClass(), name),
+    }, request, authority);
+  }
+
   @callable()
   async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();

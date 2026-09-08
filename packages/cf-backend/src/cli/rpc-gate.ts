@@ -222,6 +222,7 @@ export const AGENT_RPC_ACCESS = {
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
   listSubordinates: 'interactive',
+  inspectSubordinate: 'interactive',
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
   listMounts: 'interactive',
