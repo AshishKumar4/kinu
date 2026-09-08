@@ -20,7 +20,7 @@ import {
   // report.* — codemode projection of the native `report` tool.
   createReportCodemodeProvider, type CodemodeProvider,
   type DelegationBudget,
-  type PlanReview,
+  type PlanReview, type PlanEdit, type PlanReviewResult, WorkspacePlanReferenceSchema,
   planReviewAwaitingDecision,
   subordinateDescriptorSource,
   type InlineSteer,
@@ -518,6 +518,58 @@ export class SubordinateAgent extends ActorAgent {
    */
   private async workspaceOwner(): Promise<DurableObjectStub<OrchestratorAgent>> {
     return await getAgentByName<Env, OrchestratorAgent>(this.env[WORKSPACE_ACTOR_CLASS], this.workspaceName());
+  }
+
+  /**
+   * An owner Plan turn on this facet, announced to the workspace as a REFERENCE.
+   *
+   * The reference carries a workspace-relative ACTOR PATH, and a facet can name
+   * exactly one hop of it: the registered name its parent rostered it under
+   * (`identity.name`). `parentPath` holds STORAGE KEYS — the facet DO names,
+   * which are the immutable `storageKey` of each actor — so it cannot spell an
+   * ancestor's registered name, and a path spelled from storage keys is one the
+   * root's roster and its lineage inspection both answer `missing` for.
+   *
+   * That is the whole path exactly when this facet is a depth-1 hire, which is
+   * the only depth `submit_plan` is ever bound at: the tool is offered on an
+   * OWNER-driven turn (`actorToolDeps`), and the browser reaches a subordinate's
+   * own chat through `resolveSubordinateClientKey`, which answers from the
+   * ROOT's roster. Anything deeper is refused here rather than announced under a
+   * path the workspace cannot resolve — the same refusal a mismatched lineage
+   * gets, and before any plan revision is written.
+   */
+  protected override async submitPlanEdits(edits: readonly PlanEdit[]): Promise<PlanReviewResult> {
+    const identity = this.identity.read();
+    const facet = this.facetIdentity.read();
+    const root = this.parentPath[0];
+    if (!identity || this.parentPath.length !== 1 || identity.depth !== 1
+      || root?.className !== WORKSPACE_ACTOR_CLASS || root.name !== identity.parentWorkspace
+      || facet.parentWorkspace !== identity.parentWorkspace || facet.ownerUserId !== identity.ownerUserId
+      || facet.name !== identity.name || facet.storageKey !== this.name) {
+      throw new KinuError('denied', 'The actor has no valid workspace plan lineage');
+    }
+    // The registering authority's own answer, not this facet's copy of it: at
+    // depth 1 the parent IS the workspace, and it validates the reference this
+    // facet was seeded with against its directory before answering. A refusal
+    // throws inside `parentBootstrap`, so nothing below reads a Refusal.
+    const authority = await this.validateOwnActor();
+    if (authority.parentWorkspace !== identity.parentWorkspace || authority.ownerUserId !== identity.ownerUserId
+      || authority.name !== identity.name || authority.storageKey !== this.name) {
+      throw new KinuError('denied', 'The workspace no longer owns this plan actor');
+    }
+    const result = await super.submitPlanEdits(edits);
+    if (!result.ok) return result;
+    const reference = v.parse(WorkspacePlanReferenceSchema, {
+      path: [identity.name], id: result.plan.id, revision: result.plan.revision,
+    });
+    // Only a hint, and only over the narrow name the root's RPC allowlist
+    // carries. The inherited `broadcast` is sealed to an own property on the
+    // root, so it is in-process callable and NOT resolvable over this stub —
+    // calling it here threw on the wire while every in-process fixture passed.
+    // The recipient still reads the exact reference back through the root's
+    // existing-only lineage inspection before displaying or focusing it.
+    await (await this.workspaceOwner()).announceSubordinatePlan(reference);
+    return result;
   }
 
   /** Homes for this actor's own facets — its nested hires and its searches'

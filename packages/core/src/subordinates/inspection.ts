@@ -24,9 +24,16 @@ const EventQuerySchema = v.strictObject({
   since: v.optional(IndexSchema),
   limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(RUN_EVENT_LIMIT_MAX))),
 });
+export const WorkspacePlanReferenceSchema = v.strictObject({
+  path: PathSchema, id: v.pipe(v.string(), v.nonEmpty()),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
+});
+export type WorkspacePlanReference = v.InferOutput<typeof WorkspacePlanReferenceSchema>;
+
 export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('planTasks'), id: v.pipe(v.string(), v.nonEmpty()), revision: v.pipe(v.number(), v.integer(), v.minValue(1)) }),
+  v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
+  v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
   v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema }),
@@ -49,6 +56,7 @@ const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('stat
 ]);
 export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('plans'), path: PathSchema, page: pageSchema(PlanReviewSchema) }),
+  v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
   v.object({ view: v.literal('planTasks'), path: PathSchema, tasks: v.array(AgentTaskTreeSchema) }),
   v.object({ view: v.literal('children'), path: PathSchema, page: pageSchema(SubordinateRosterEntrySchema) }),
   v.object({ view: v.literal('history'), path: PathSchema, page: pageSchema(HistorySchema) }),
@@ -73,10 +81,13 @@ export function readSubordinateInspection(
     case 'plans':
       if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
       return { view: 'plans', path, page: new PlanReviewStore(sql).listPage('default', request.page) };
+    case 'plan':
     case 'planTasks': {
-      if (!tableExists(sql, 'plan_reviews') || !tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
       const plan = new PlanReviewStore(sql).get(request.id, request.revision);
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
+      if (request.view === 'plan') return { view: 'plan', path, plan };
+      if (!tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
       return { view: 'planTasks', path, tasks: readPlanTasks(sql, plan) };
     }
     case 'children': {

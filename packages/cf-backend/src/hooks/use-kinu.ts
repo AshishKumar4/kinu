@@ -184,7 +184,7 @@ export interface WorkspaceSnapshot {
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
 }
 
-import { PlanReviewSchema } from "@kinu.run/core";
+import { PlanReviewSchema, WorkspacePlanReferenceSchema, type WorkspacePlanReference } from "@kinu.run/core";
 
 const MctsRowSchema = v.object({
   id: v.string(),
@@ -283,6 +283,22 @@ const SubordinateActivityEventSchema = v.object({
   timestamp: v.number(),
 });
 
+/**
+ * The one frame the arrival plumbing consumes: a plan reference and nothing
+ * else, because a workspace announces THAT a plan exists and the exact
+ * authorized read is what says anything about it.
+ *
+ * Exported so a caller that PUSHES this frame builds it through the same
+ * schema this hook parses it with — the gallery's transport fixture does, and
+ * its `type` comes off `entries.type.literal` rather than a second copy of the
+ * event name. A fixture with a stale name is otherwise a frame this hook
+ * silently drops, which a browser gate sees as a timeout three steps later.
+ */
+export const WorkspacePlanUpdatedFrameSchema = v.strictObject({
+  type: v.literal("workspace_plan_updated"),
+  reference: WorkspacePlanReferenceSchema,
+});
+
 const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
   // The server's statement of what this conversation IS, sent unconditionally
@@ -332,6 +348,7 @@ const SocketMessageSchema = v.variant("type", [
   }),
   v.looseObject({ type: v.literal("signal_card") }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
+  WorkspacePlanUpdatedFrameSchema,
   v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
   SubordinateActivityEventSchema,
   v.object({
@@ -640,6 +657,28 @@ export function useWorkspaceRpc(agentId: string) {
   return { rpc, connectionStatus };
 }
 
+/**
+ * One arrived plan reference, and the claim that spends it.
+ *
+ * A `workspace_plan_updated` frame carries a reference and nothing else, so
+ * the pane that resolves it is the only place that learns whether the exact
+ * read authorized it. That is why the reference stays exposed for as long as
+ * this connection holds it, long after the hint was acted on: the pane
+ * re-reads it every cycle, which is what keeps the arrived plan reachable in
+ * the history it merges.
+ *
+ * `claim` answers the other question — has this connection already ACTED on
+ * this reference? — and says yes exactly once. That memory belongs to the
+ * connection, not to a pane: panes are remounted by every conversation
+ * switch, and an honoured hint that replays on the fresh mount takes the
+ * reader off the conversation they just opened. Both halves ride in one value
+ * so they cannot be half-wired through the components that thread them.
+ */
+export interface WorkspacePlanArrival {
+  readonly reference: WorkspacePlanReference;
+  claim(reference: WorkspacePlanReference): boolean;
+}
+
 
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
@@ -746,6 +785,15 @@ export function useKinu(target?: string | KinuActorAddress) {
   const knownPorts = useRef<Set<string> | null>(null);
   const [previewFocus, setPreviewFocus] = useState<string | null>(null);
   const [planFocus, setPlanFocus] = useState<string | null>(null);
+  const [arrivedReference, setArrivedReference] = useState<WorkspacePlanReference | null>(null);
+  // Two different memories, kept apart because they answer two different
+  // questions. `knownWorkspacePlans` is which references this connection has
+  // been TOLD about, so a repeated frame is not a second arrival.
+  // `claimedWorkspacePlans` is which ones a pane has already ACTED on, so an
+  // honoured hint never fires twice — not on the next read cycle, and not on
+  // the fresh pane a conversation switch mounts.
+  const knownWorkspacePlans = useRef(new Set<string>());
+  const claimedWorkspacePlans = useRef(new Set<string>());
   const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
@@ -1368,6 +1416,12 @@ export function useKinu(target?: string | KinuActorAddress) {
             knownPlans.current.add(key);
             setActivePlan(plan);
           }
+        } else if (!isSubordinate && msg.type === 'workspace_plan_updated') {
+          const key = JSON.stringify(msg.reference);
+          if (!knownWorkspacePlans.current.has(key)) {
+            knownWorkspacePlans.current.add(key);
+            setArrivedReference(msg.reference);
+          }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
           if (roster) {
@@ -1664,6 +1718,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     knownSlates.current = null;
     knownPorts.current = null;
     knownPlans.current.clear();
+    knownWorkspacePlans.current.clear();
+    claimedWorkspacePlans.current.clear();
+    setArrivedReference(null);
     setPreviewFocus(null);
     setPlanFocus(null);
     setSlateReloads(new Map());
@@ -1677,6 +1734,25 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSubordinateEvents([]);
     setSignalCards([]);
   }, [workspace, subordinate]);
+
+  /** Spend one arrived reference. True exactly once per reference for the
+   *  lifetime of this connection, false forever after. Claiming records only
+   *  the key it was handed: a newer arrival is a different key, so honouring
+   *  one hint can never suppress the next, and the held reference itself is
+   *  never cleared — the pane keeps resolving it so the arrived plan stays in
+   *  the history it merges. */
+  const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
+    const key = JSON.stringify(reference);
+    if (claimedWorkspacePlans.current.has(key)) return false;
+    claimedWorkspacePlans.current.add(key);
+    return true;
+  }, []);
+  const workspacePlanArrival = useMemo<WorkspacePlanArrival | null>(
+    () => arrivedReference === null
+      ? null
+      : { reference: arrivedReference, claim: claimWorkspacePlan },
+    [arrivedReference, claimWorkspacePlan],
+  );
 
   /**
    * Start a turn with this text and these attachments.
@@ -1903,6 +1979,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** Exposed ports across the canonical Workspace and Sandbox executors. */
     pinnedPorts,
     previewFocus, planFocus,
+    /** The plan reference this connection was last told about, paired with the
+     *  claim that spends it. Null until a frame arrives. */
+    workspacePlanArrival,
     previewError,
     refreshExposedPorts,
     /** Background jobs — the Work surface's Now half and its journal. */

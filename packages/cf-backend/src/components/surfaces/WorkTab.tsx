@@ -29,6 +29,7 @@ import {
   RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
 } from "@phosphor-icons/react";
 import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind, PlanReview } from "@kinu.run/core";
+import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { BackgroundJob, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -87,6 +88,8 @@ export interface WorkTabProps {
   plan: PlanReview | null;
   planRpc: Rpc;
   planOwner?: string;
+  workspacePlanArrival?: WorkspacePlanArrival | null;
+  activePlanActors?: readonly string[];
   onReviewActor?: (name: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
@@ -105,7 +108,7 @@ export interface WorkTabProps {
 }
 
 export function WorkTab({
-  plan, planRpc, planOwner, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
+  plan, planRpc, planOwner, workspacePlanArrival, activePlanActors, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
@@ -152,14 +155,14 @@ export function WorkTab({
 
   if (nothingAtAll && !hasPlans && !plan) {
     return (
-      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><EmptyState title="Nothing has happened yet"
+      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><EmptyState title="Nothing has happened yet"
         hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." /></div>
     );
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} />
+      <WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} />
       {pendingActions.length > 0 && (
         <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
           <Section id="work-needs-you" title="Needs you"
