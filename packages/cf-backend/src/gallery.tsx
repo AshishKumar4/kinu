@@ -4408,6 +4408,17 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   }),
 ];
 
+/**
+ * A long run carrying the three shapes the fold has to tell apart: fifty
+ * observations, three consequential changes, and one call that put a running
+ * app on screen.
+ *
+ * The preview call is an `observe`-shaped port exposure sitting between the
+ * scan and the changes, deliberately: an effect classification has no reason
+ * to keep it, and it is neither the first row nor the last. So it is the row
+ * that proves the preview rule rather than the mutation rule or an accident
+ * of position.
+ */
 const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   id: "tc-large-run", role: "assistant",
   parts: [
@@ -4419,6 +4430,7 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
       input: { action: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
       output: "…",
     })),
+    { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "sandbox", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
     { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
     { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
     { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { action: "update", id: "t4", status: "done" }, output: "ok" },
