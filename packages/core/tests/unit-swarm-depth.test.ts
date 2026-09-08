@@ -1079,7 +1079,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     if ('reason' in result) return;
     expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 20 });
 
-    const page = readExplorationCanvas(rt.storage.sql);
+    const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0]!;
     // The knobs this run ran under, from a ledger row the swarm path used to write not at

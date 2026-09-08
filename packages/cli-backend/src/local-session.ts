@@ -1271,7 +1271,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** The self-change digest over the durable ledgers (core buildChangelog). */
   getEvolutionChangelog(limit = 50): EvolutionChangelogView {
-    return getEvolutionChangelog(this.config, this.rt.storage.sql, limit);
+    return getEvolutionChangelog(this.rt.storage.sql, this.rt.actor, limit);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */

@@ -22,6 +22,14 @@ export function sameActorReference(left: ActorReference, right: ActorReference):
   return left.actorId === right.actorId && left.workspaceId === right.workspaceId && left.parentActorId === right.parentActorId;
 }
 export interface ActorHandle extends ActorIdentity {
+  /** Re-run the binding's own validation, for a holder about to act as this
+   *  actor without reading `config` or `programState` first. A store bound to a
+   *  handle captures `actorId` once and calls this before every statement, so a
+   *  handle whose row was retired, re-parented or re-pathed stops authorising
+   *  writes at exactly the point the property getters below already stop
+   *  serving stores. It exposes the callback those getters run — no second
+   *  authority and no policy of its own. */
+  readonly assertCurrent: () => void;
   readonly config: AgentConfigStore;
   readonly programState: ProgramStateStore;
 }
@@ -34,6 +42,7 @@ export function bindActorHandle(sql: SqlExecutor, reference: ActorIdentity, vali
   let programState: ProgramStateStore | undefined;
   return Object.freeze({
     ...identity,
+    assertCurrent: validate,
     get config() {
       validate();
       return config ??= createAgentConfigStore(sql, identity.actorId, validate);

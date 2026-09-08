@@ -69,6 +69,7 @@ import type { HeadStep } from '../heads/types';
 import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type {
   FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,
@@ -438,6 +439,10 @@ export function reenterSwarm(deps: {
   readonly sql: SqlExecutor;
   readonly ledger: MctsSearchStore;
   readonly journal: HeadJournal;
+  /** Whose re-entry. The journal rows a pending node is read from are
+   *  actor-private, so the raw read below carries the same owner the ledger
+   *  and journal above are bound to. */
+  readonly actor: ActorHandle;
 }, input: {
   readonly task: string;
   readonly now: number;
@@ -480,7 +485,7 @@ export function reenterSwarm(deps: {
     originContext: deps.ledger.readSwarmOriginContext(newest.rootId) ?? [],
     nodes,
     superseded,
-    pending: pendingNodes(deps.sql, newest.rootId),
+    pending: pendingNodes(deps.sql, deps.actor.actorId, newest.rootId),
   };
 }
 
@@ -504,7 +509,7 @@ export function reenterSwarm(deps: {
  * moves its `spawned_at` forward, so ordering on that column would reshuffle siblings
  * on the second re-entry and hand them each other's diversity angles.
  */
-function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNode[] {
+function pendingNodes(sql: SqlExecutor, actorId: string, rootId: string): readonly PendingSwarmNode[] {
   // EVERY CHILD THIS SEARCH SPAWNED, recorded or not, because a pending node's slot
   // is its position among its PARENT'S children and that cannot be read off the
   // pending set alone. `recorded` is the join that says which of them the tree
@@ -516,7 +521,7 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
     SELECT j.id, j.parent_id, j.depth, j.task, j.rationale,
       (SELECT COUNT(*) FROM search_nodes s WHERE s.id = j.id) AS recorded
     FROM head_journal j
-    WHERE j.root_id = ${rootId}
+    WHERE j.actor_id = ${actorId} AND j.root_id = ${rootId}
       AND j.parent_id IN (SELECT id FROM search_nodes WHERE root_id = ${rootId})
     ORDER BY j.depth ASC, j.rowid ASC`;
   const levels = new Map<string, typeof rows>();
@@ -577,10 +582,10 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
 export function readStartedSwarmProfile(storage: {
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
-}, task: string): SwarmProfileSnapshot | null {
+}, actor: ActorHandle, task: string): SwarmProfileSnapshot | null {
   initSearchTables(storage.execRaw);
   initMctsSearchTable(storage.execRaw);
-  const ledger = new MctsSearchStore(storage.sql);
+  const ledger = new MctsSearchStore(storage.sql, actor);
   const [newest] = ledger.findRunningSwarms(task);
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }

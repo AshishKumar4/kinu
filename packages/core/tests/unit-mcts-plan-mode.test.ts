@@ -70,7 +70,7 @@ describe('MCTS in Plan mode', () => {
   test('never resumes a same-task search from the other work mode', async () => {
     const { rt } = createTestRuntime();
     initTables(rt);
-    const search = new MctsSearchStore(rt.storage.sql);
+    const search = new MctsSearchStore(rt.storage.sql, rt.actor);
     const abort = new AbortController();
     await expect(runMCTS(rt, createMockSession(), 'same task', {
       mode: 'build', budget: 2, branches: 1, search, signal: abort.signal,

@@ -99,7 +99,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
     message_id TEXT PRIMARY KEY, feedback TEXT NOT NULL, created_at INTEGER NOT NULL)`);
 
-  const facts = createFactsStore(rt.storage.sql);
+  const facts = createFactsStore(rt.storage.sql, rt.actor);
   // The seam the cloud backend implements over the UserDO capability gate: a
   // workspace publishes under its own name and never sees its own entries back.
   const deps = {
@@ -835,7 +835,7 @@ describe('the library answers from an untouched workspace', () => {
     expect(await listPublishable({
       sql: rt.storage.sql,
       craftStore: rt.craftStore,
-      facts: createFactsStore(rt.storage.sql),
+      facts: createFactsStore(rt.storage.sql, rt.actor),
       readScaffoldVersion: (version: number) => readScaffoldVersion(rt, version),
     })).toEqual([]);
   });

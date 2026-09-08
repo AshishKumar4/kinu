@@ -38,7 +38,7 @@ import {
   // Approval
   reviewCommand, gateExec,
 } from '../src/index';
-import { makeSql, makeExecRaw, createTestRuntime } from './helpers';
+import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';
 
 interface HeadReportIndex {
   [headId: string]: HeadReport;
@@ -72,9 +72,11 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
 describe('v2 e2e: branching heads → merge', () => {
   test('split 3 heads, await all, merge with deterministic mock LLM', async () => {
     const db = new Database(':memory:');
-    initHeadsTables(makeExecRaw(db));
+    const execRaw = makeExecRaw(db);
+    initHeadsTables(execRaw);
     const sql = makeSql(db);
-    const journal = new HeadJournal(sql);
+    const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-heads');
+    const journal = new HeadJournal(sql, actor);
 
     const headReports: HeadReportIndex = {
       'survey': {
@@ -160,7 +162,8 @@ describe('v2 e2e: branching heads → merge', () => {
     expect(result.headIds.length).toBe(3);
     expect(result.headIds.every((id) => id.length > 0)).toBe(true);
 
-    const rows = sql<{ status: string; summary: string | null }>`SELECT status, summary FROM head_journal`;
+    const rows = sql<{ status: string; summary: string | null }>`
+      SELECT status, summary FROM head_journal WHERE actor_id = ${actor.actorId}`;
     expect(rows.length).toBe(3);
     for (const r of rows) {
       expect(r.status).toBe('completed');

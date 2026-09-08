@@ -61,7 +61,7 @@ describe('MCTS search isolation', () => {
   test('a convergence that throws settles the search as failed, not converged, and leaves no open node', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     // converge() awaits a summary call after the branches are scored; failing it
     // is the cheapest faithful stand-in for "the settle work did not complete".
     rt.llm = scriptedLLM(() => 0.9, () => { throw new Error('summary model down'); });
@@ -71,7 +71,9 @@ describe('MCTS search isolation', () => {
       budget: 1, branches: 1, search: store,
     })).rejects.toThrow('summary model down');
 
-    const run = db.query<{ root_id: string }, []>('SELECT root_id FROM mcts_search_runs').get();
+    const run = db.query<{ root_id: string }, [string]>(
+      'SELECT root_id FROM mcts_search_runs WHERE actor_id = ?',
+    ).get(rt.actor.actorId);
     if (!run) throw new Error('Expected a durable MCTS search run');
     const rootId = run.root_id;
     // The durable record must never claim an outcome the search did not reach.
@@ -108,7 +110,7 @@ describe('MCTS search isolation', () => {
   test('a search abandoned mid-run cannot capture a later search\'s budget', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     rt.llm = scriptedLLM(() => 0.9, () => 'summary');
     rt.judgeModel = rt.llm;
 

@@ -23,6 +23,7 @@ import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
 import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
+import { createTestActors } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 
 /** Big enough for the run-list read below, and deliberately NOT a bound on any
@@ -31,7 +32,10 @@ const RUN_LIST_LIMIT = 50;
 
 function rig() {
   const ws = createTestWorkspace();
-  return { ws, events: new RunEventRecorder(ws.sql) };
+  // The head journal half of this total is actor-private, so the aggregate is
+  // asked on behalf of a REAL owner rather than of the whole database.
+  const actor = createTestActors(ws.sql, ws.execRaw).main;
+  return { ws, actor, events: new RunEventRecorder(ws.sql) };
 }
 
 /** One turn step, as the turn accumulator writes it. A step with no `usage` is a
@@ -44,8 +48,8 @@ function step(events: RunEventRecorder, usage: Usage, usd?: number): void {
 
 describe('workspaceSpend', () => {
   test('an empty workspace has no producers and no coverage to report', () => {
-    const { ws, events } = rig();
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const { ws, events, actor } = rig();
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.producers).toEqual([]);
     expect(spend.total.usage).toEqual({});
@@ -57,14 +61,14 @@ describe('workspaceSpend', () => {
   });
 
   test('the turn loop lands as `agent`, and judges as themselves', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100, cacheRead: 800 }, 0.01);
     step(events, { input: 1200, output: 90, cacheRead: 1100 }, 0.012);
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'judge', usage: { input: 400, output: 20 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     const bySource = Object.fromEntries(spend.producers.map((p) => [p.source, p]));
 
     expect(spend.producers.map((p) => p.source)).toEqual(['agent', 'judge']);
@@ -78,14 +82,14 @@ describe('workspaceSpend', () => {
   });
 
   test('a producer the provider never measured is counted, never zeroed', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100 }, 0.01);
     // The Workers AI embedder: its response carries no usage field of any kind.
     for (let i = 0; i < 3; i++) {
       events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     }
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     const platform = spend.producers.find((p) => p.source === 'platform');
 
     expect(platform).toMatchObject({ calls: 3, callsWithoutUsage: 3 });
@@ -100,12 +104,12 @@ describe('workspaceSpend', () => {
   });
 
   test('a provider that genuinely reported zeros is not a silent one', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'fast', usage: { input: 0, output: 0 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.producers[0]).toMatchObject({ calls: 1, callsWithoutUsage: 0 });
     expect(spend.producers[0]?.usage).toEqual({ input: 0, output: 0 });
@@ -114,7 +118,7 @@ describe('workspaceSpend', () => {
   });
 
   test('a measured call with no catalog rate keeps the dollar figure a floor', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100 }, 0.01);
     // A judge runs cross-family on purpose, so the actor's catalog rate cannot
     // price it — reported in tokens, absent in dollars.
@@ -122,7 +126,7 @@ describe('workspaceSpend', () => {
       type: 'model_call', source: 'judge', usage: { input: 5000, output: 400 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.total.usd).toBeCloseTo(0.01, 10);
     expect(spend.total.unpricedCalls).toBe(1);
@@ -132,13 +136,13 @@ describe('workspaceSpend', () => {
   });
 
   test('a producer that reported some calls and not others is `partial`', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'fast', usage: { input: 300, output: 30 },
     });
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast' });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.coverage.partial).toEqual(['fast']);
     expect(spend.coverage.silent).toEqual([]);
@@ -146,8 +150,8 @@ describe('workspaceSpend', () => {
   });
 
   test('heads come from their journal, with cache reads and neurons intact', () => {
-    const { ws, events } = rig();
-    const journal = new HeadJournal(ws.sql);
+    const { ws, events, actor } = rig();
+    const journal = new HeadJournal(ws.sql, actor);
     journal.recordSplit('root-1', 'audit the parser', 1);
     for (const id of ['h1', 'h2']) {
       journal.insertSpawn({
@@ -169,7 +173,7 @@ describe('workspaceSpend', () => {
       childHeadIds: [], toolCalls: [],
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     const head = spend.producers.find((p) => p.source === 'head');
 
     expect(head).toMatchObject({ calls: 2, callsWithoutUsage: 1 });
@@ -180,7 +184,7 @@ describe('workspaceSpend', () => {
   });
 
   test('a total is not bounded by any window, however long the log gets', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     // WHAT THIS DEFENDS, measured rather than reasoned about. On a synthetic log
     // of 8,000 turn steps and 2,000 judge calls, the shipped fold at the CLI's
     // own SPEND_WINDOW of 2000 returned 2,001 of the 8,000 agent steps and
@@ -202,7 +206,7 @@ describe('workspaceSpend', () => {
       });
     }
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     const agent = spend.producers.find((p) => p.source === 'agent');
     const judge = spend.producers.find((p) => p.source === 'judge');
 
@@ -223,7 +227,7 @@ describe('workspaceSpend', () => {
   });
 
   test('one busy producer cannot crowd another out of the total', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     // The window's worst failure was not the size of the under-count, it was
     // which producer disappeared: a rare judge call behind a busy turn loop.
     for (let i = 0; i < 400; i++) step(events, { input: 10, output: 1 });
@@ -231,7 +235,7 @@ describe('workspaceSpend', () => {
       type: 'model_call', source: 'judge', usage: { input: 700, output: 70 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.producers.find((p) => p.source === 'agent')?.calls).toBe(400);
     expect(spend.producers.find((p) => p.source === 'judge')?.usage)
@@ -239,7 +243,7 @@ describe('workspaceSpend', () => {
   });
 
   test('the stored payload really carries the fields the aggregate reads', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     const every: Required<Usage> = {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
@@ -267,33 +271,33 @@ describe('workspaceSpend', () => {
     // …and every one of those fields survives the sum. A column the SQL forgot
     // would read as a field nobody reported, which is the absence this whole
     // read model exists to keep honest.
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.total.usage).toEqual(every);
     expect(USAGE_FIELDS.filter((f) => spend.total.usage[f] === undefined)).toEqual([]);
     expect(spend.total.usd).toBeCloseTo(0.02, 10);
   });
 
   test('producers are ordered by measured tokens, unmeasured ones last', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'fast', usage: { input: 100, output: 10 },
     });
     step(events, { input: 9000, output: 900 });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(spend.producers.map((p) => p.source)).toEqual(['agent', 'fast', 'platform']);
   });
 
   test('a call filed with no run open still reaches the total, and is not a run', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'reflection', usage: { input: 800, output: 40 },
     });
     step(events, { input: 9000, output: 900 });
 
-    expect(workspaceSpend({ events, sql: ws.sql }).total.usage)
+    expect(workspaceSpend({ events, sql: ws.sql, actor }).total.usage)
       .toEqual({ input: 9800, output: 940 });
     // …and the owner's run history does not grow a run the agent never had. The
     // real run beside it is what makes this decidable: an empty list would read
@@ -304,7 +308,7 @@ describe('workspaceSpend', () => {
 
 describe('workspaceSpend — the breakdown', () => {
   test('the off-turn share is every measured token no turn of this agent spent', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });          // agent: 800
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'reflection', usage: { input: 150, output: 10 },
@@ -313,32 +317,32 @@ describe('workspaceSpend — the breakdown', () => {
       type: 'model_call', source: 'judge', usage: { input: 30, output: 10 },
     });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     expect(usageTotal(spend.total.usage)).toBe(1000);
     expect(spend.offTurnShare).toBeCloseTo(0.2, 10);
   });
 
   test('a workspace whose only spend is its own turns has an off-turn share of zero', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });
 
-    expect(workspaceSpend({ events, sql: ws.sql }).offTurnShare).toBe(0);
+    expect(workspaceSpend({ events, sql: ws.sql, actor }).offTurnShare).toBe(0);
   });
 
   test('nothing measured has NO share — absent, never 0%', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
 
     // The producer is counted, so this is a workspace that spent something and
     // measured none of it: 0% off-turn would read as "all of it was the agent".
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.coverage.calls).toBe(1);
     expect(spend.offTurnShare).toBeNull();
   });
 
   test('missions come from the ledger the caps are enforced against, dearest first', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });
     const governor = new MissionGovernor({ storage: { sql: ws.sql, execRaw: ws.execRaw } });
     governor.declare('checkout-fixes', { usd: 25 }, {});
@@ -346,7 +350,7 @@ describe('workspaceSpend — the breakdown', () => {
     governor.debit(4_000, { labels: ['sweep'], calls: 2 });
     governor.debit(100, { labels: ['checkout-fixes'], calls: 1 });
 
-    const spend = workspaceSpend({ events, sql: ws.sql });
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
     // The parent carries the child's debit as well as its own — the ledger rolls
     // a debit up the whole chain, which is exactly why it is the one figure a
@@ -365,11 +369,11 @@ describe('workspaceSpend — the breakdown', () => {
   });
 
   test('a workspace that declared no budget reports no missions and does not fail', () => {
-    const { ws, events } = rig();
+    const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });
 
     // No governor was ever built here, so `mission_budget` does not exist. An
     // unbudgeted workspace is the common case and must not read as broken.
-    expect(workspaceSpend({ events, sql: ws.sql }).missions).toEqual([]);
+    expect(workspaceSpend({ events, sql: ws.sql, actor }).missions).toEqual([]);
   });
 });

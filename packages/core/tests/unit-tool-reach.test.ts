@@ -111,7 +111,7 @@ describe('the reach declaration', () => {
       })),
       memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql })),
       tasks: () => createTasksCodemodeProvider(
-        new TaskListStore(rt.storage.sql, rt.storage.transactionSync),
+        new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync),
         rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({

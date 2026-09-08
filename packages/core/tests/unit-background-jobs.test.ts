@@ -8,11 +8,12 @@ import {
 } from '../src/jobs/index';
 import { isBackgroundOutcomeText } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 
 function newStore() {
   const db = new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
-  return new BackgroundJobStore(makeSql(db));
+  return new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -112,18 +113,18 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'w', kind: 'agents', workMode: 'build', now: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAt()).toBeNull();
+    expect(s.nextResumeAtInWorkspace()).toBeNull();
 
     s.deferResume('w', 5_000);
     expect(s.get('w')?.resumeAfter).toBe(5_000);
-    expect(s.nextResumeAt()).toBe(5_000);
+    expect(s.nextResumeAtInWorkspace()).toBe(5_000);
     expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
     expect(s.list()[0]?.resumeAfter).toBe(5_000);
 
     // The claim SERVES the wait, so it clears it — and arms nothing by itself.
     expect(s.reclaim('w', 6_000)).toEqual({ epoch: 1, attempts: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAt()).toBeNull();
+    expect(s.nextResumeAtInWorkspace()).toBeNull();
   });
 
   test('a wait is only ever owed by a RUNNING job', () => {
@@ -133,10 +134,10 @@ describe('BackgroundJobStore', () => {
     // A settled row must not become work the next sweep thinks is still coming.
     s.deferResume('settled', 9_000);
     expect(s.get('settled')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAt()).toBeNull();
+    expect(s.nextResumeAtInWorkspace()).toBeNull();
   });
 
-  test('resumeOwedIds names only the jobs whose next attempt is still in the future', () => {
+  test('resumeOwedIdsInWorkspace names only the jobs whose next attempt is still in the future', () => {
     const s = newStore();
     for (const id of ['due', 'waiting', 'never']) {
       s.create({ id, kind: 'agents', workMode: 'build', now: 1 });
@@ -144,10 +145,10 @@ describe('BackgroundJobStore', () => {
     s.deferResume('due', 1_000);
     s.deferResume('waiting', 10_000);
 
-    expect(s.resumeOwedIds(5_000)).toEqual(['waiting']);
-    expect(s.resumeOwedIds(50_000)).toEqual([]);
+    expect(s.resumeOwedIdsInWorkspace(5_000)).toEqual(['waiting']);
+    expect(s.resumeOwedIdsInWorkspace(50_000)).toEqual([]);
     // The soonest instant is what a caller arms its one wake for.
-    expect(s.nextResumeAt()).toBe(1_000);
+    expect(s.nextResumeAtInWorkspace()).toBe(1_000);
   });
 
   test('create stores input_json; getInput round-trips it for retry', () => {

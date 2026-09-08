@@ -7,7 +7,7 @@
 // dropped for one backend — fails here rather than in whichever agent noticed
 // its context had gone quiet.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
 import { collectDynamicContext } from '../src/state/dynamic-context';
 import { createAgentStores } from '../src/state/agent-stores';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
@@ -22,6 +22,9 @@ import type {
 interface Fixture {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
+  /** A SECOND bundle over the SAME database, bound to a real sibling actor —
+   *  what the per-step block of another agent in this workspace reads. */
+  readonly sibling: AgentStores;
 }
 
 function setup(): Fixture {
@@ -29,7 +32,13 @@ function setup(): Fixture {
   initWorkspaceSchema({
     execRaw: testSql.execRaw, sql: testSql.sql, exec: makeSqlExec(testSql.db),
   });
-  return { rt, stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync) };
+  const actors = createTestActors(testSql.sql, testSql.execRaw);
+  const sibling = actors.sibling('sibling');
+  return {
+    rt,
+    stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync),
+    sibling: createAgentStores(() => testSql.sql, () => sibling, rt.storage.transactionSync),
+  };
 }
 
 interface Overrides {
@@ -40,15 +49,59 @@ interface Overrides {
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
 
-function collect(o: Fixture, over: Overrides = {}): DynamicContext {
+function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.stores): DynamicContext {
   return collectDynamicContext({
-    rt: o.rt, stores: o.stores,
+    rt: o.rt, stores,
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
     subordinateDelegates: over.subordinateDelegates,
     approvals: over.approvals,
   });
 }
+
+describe('the four store-backed planes are the reading actor\'s own', () => {
+  // This is the convergence point: ONE function reads four actor-private stores
+  // and its output is the live context block of one model step. Over a database
+  // holding two actors, an unscoped read here is how a sibling's facts, jobs,
+  // tasks and forks get rendered into this agent's prompt — so the isolation is
+  // asserted where the four planes actually meet, not only per store.
+  test('a sibling\'s facts, jobs, tasks and fork runs never enter this block', () => {
+    const o = setup();
+    o.sibling.facts.upsert('deploy_target', 'sibling.workers.dev', {});
+    o.sibling.jobs.create({ id: 'j1', kind: 'fork', workMode: 'build', label: 'sibling work', now: 1 });
+    o.sibling.taskList.add(['Sibling step'], null, 1);
+    o.sibling.headJournal.insertSpawn({
+      id: 'sib-h0', parentId: null, rootId: 'sib-root', depth: 1,
+      task: 'sibling branch', rationale: 'sibling branch', mode: 'build',
+      inheritedContext: [], mergeStrategy: 'synthesize',
+      budget: { spawnedAt: 1, maxDepth: 2 },
+    });
+
+    const ctx = collect(o);
+    expect(ctx.jobs).toEqual({ items: [], total: 0 });
+    expect(ctx.tasks).toEqual({ items: [], total: 0 });
+    // The live fork roster folds into `delegates` beside subordinates; the
+    // sibling's running head must contribute neither a row nor a count.
+    expect(ctx.delegates).toEqual({ items: [], total: 0 });
+    expect(ctx.factsBlock).toBeUndefined();
+  });
+
+  test('each actor\'s block reports its own rows, from the same database', () => {
+    const o = setup();
+    o.stores.facts.upsert('deploy_target', 'mine.workers.dev', {});
+    o.stores.jobs.create({ id: 'j1', kind: 'fork', workMode: 'build', label: 'my work', now: 1 });
+    o.sibling.facts.upsert('deploy_target', 'theirs.workers.dev', {});
+    o.sibling.jobs.create({ id: 'j1', kind: 'fork', workMode: 'build', label: 'their work', now: 1 });
+
+    const mine = collect(o);
+    const theirs = collect(o, {}, o.sibling);
+    expect(mine.jobs?.items.map((j) => j.label)).toEqual(['my work']);
+    expect(theirs.jobs?.items.map((j) => j.label)).toEqual(['their work']);
+    expect(mine.factsBlock).toContain('mine.workers.dev');
+    expect(mine.factsBlock).not.toContain('theirs.workers.dev');
+    expect(theirs.factsBlock).toContain('theirs.workers.dev');
+  });
+});
 
 describe('collectDynamicContext', () => {
   test('an empty agent reports empty planes, not absent ones', () => {
@@ -119,8 +172,8 @@ describe('the backend-only planes ride the typed source callbacks', () => {
   });
 
   test('subordinates list ahead of the search roster both backends contribute', () => {
-    const { rt, stores } = setup();
-    const ctx = collect({ rt, stores }, {
+    const o = setup();
+    const ctx = collect(o, {
       subordinateDelegates: () => [{
         kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
       }],
@@ -132,8 +185,8 @@ describe('the backend-only planes ride the typed source callbacks', () => {
 
   test('approvals and backend-provided capability notices pass through per step', () => {
     let parked = 0;
-    const { rt, stores } = setup();
-    const ctx = collect({ rt, stores }, {
+    const o = setup();
+    const ctx = collect(o, {
       approvals: () => {
         parked += 1;
         return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }], total: 1 };
@@ -148,7 +201,7 @@ describe('the backend-only planes ride the typed source callbacks', () => {
     // A callback, not a value: the block is re-read per step, so what the
     // backend's store answers NOW is what renders.
     expect(parked).toBe(1);
-    collect({ rt, stores }, {
+    collect(o, {
       approvals: () => {
         parked += 1;
         return { items: [], total: 0 };

@@ -43,7 +43,7 @@ describe('a node keeps its assigned question across re-entry', () => {
     const { rt } = createTestRuntime();
     const result = await runSwarm({ rt, model: model(), mode: 'build', logger: createRecordingLogger() }, resolved());
     if ('reason' in result) throw new Error(result.error);
-    const journal = new HeadJournal(rt.storage.sql);
+    const journal = new HeadJournal(rt.storage.sql, rt.actor);
     const run = journal.listRuns(1)[0];
     if (!run) throw new Error('The swarm left no run to inspect');
     expect(run.heads.map((head) => head.task).sort()).toEqual(BRIEFS.map((brief) => brief.task).sort());
@@ -56,8 +56,8 @@ describe('a node keeps its assigned question across re-entry', () => {
     initSearchTables(rt.storage.execRaw);
     initMctsSearchTable(rt.storage.execRaw);
     initSwarmNodeRecords(rt.storage.execRaw);
-    const ledger = new MctsSearchStore(sql);
-    const journal = new HeadJournal(sql);
+    const ledger = new MctsSearchStore(sql, rt.actor);
+    const journal = new HeadJournal(sql, rt.actor);
     ledger.begin({
       rootId: 'root', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 6, branches: 2, mode: 'build', maxDepth: 3 }, budget: 6, now: 1,
@@ -74,7 +74,7 @@ describe('a node keeps its assigned question across re-entry', () => {
     }
     void sql`INSERT INTO search_nodes (id, parent_id, root_id, depth, task, observation)
       VALUES ('child-0', 'parent', 'root', 2, 'Inspect cache invalidation', 'settled result')`;
-    const reentry = reenterSwarm({ sql, ledger, journal }, { task: TASK, now: 3 });
+    const reentry = reenterSwarm({ sql, ledger, journal, actor: rt.actor }, { task: TASK, now: 3 });
     const wave = resumedWaves(reentry)[0];
     if (!wave) throw new Error('The unfinished level was lost');
     const config = resolved();

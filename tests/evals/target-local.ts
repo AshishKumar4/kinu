@@ -192,7 +192,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
 
   spend(): Promise<WorkspaceSpend> {
     return Promise.resolve(workspaceSpend({
-      events: this.stores.eventRecorder, sql: this.runtime.storage.sql,
+      events: this.stores.eventRecorder, sql: this.runtime.storage.sql, actor: this.runtime.actor,
     }));
   }
 
@@ -232,10 +232,11 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
    */
   searchLedger(): Promise<EvalSearchLedger> {
     const sql = this.runtime.storage.sql;
+    const actor = this.runtime.actor;
     return Promise.resolve({
       searchRuns: this.stores.mctsSearchStore.list(LEDGER_PAGE).length,
-      forkRuns: listForkRuns(sql, null, LEDGER_PAGE).items.length,
-      canvasNodes: readExplorationCanvas(sql, null, LEDGER_PAGE).items.length,
+      forkRuns: listForkRuns(sql, actor, null, LEDGER_PAGE).items.length,
+      canvasNodes: readExplorationCanvas(sql, actor, null, LEDGER_PAGE).items.length,
       recordObjectives: listRecordObjectives(sql, null, LEDGER_PAGE).items.length,
       backgroundJobs: listBackgroundJobs(this.stores.jobs, LEDGER_PAGE).length,
     });

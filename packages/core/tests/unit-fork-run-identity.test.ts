@@ -45,7 +45,7 @@ import {
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { listForkRuns } from '../src/read-models/fork-runs';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 
 const TASK = 'Curate and hand-pick the best brand names for the product';
 
@@ -96,7 +96,8 @@ function freshJournal() {
   initSearchTables(execRaw);
   initMctsSearchTable(execRaw);
   const sql = makeSql(db);
-  return { db, sql, journal: new HeadJournal(sql) };
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'fork-identity-test');
+  return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
 /**
@@ -158,7 +159,7 @@ function drive(journal: HeadJournal, spawned: HeadInput[], settles: boolean, bra
 
 describe('a re-driven fork job stays one run', () => {
   test('three interrupted drives and a fourth that lands are ONE run, not four', async () => {
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
     const interruptedRuns = Array.from(
@@ -168,7 +169,7 @@ describe('a re-driven fork job stays one run', () => {
 
     await drive(journal, spawned, true);
 
-    const runs = listForkRuns(sql, null, 30).items;
+    const runs = listForkRuns(sql, actor, null, 30).items;
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'completed' });
 
@@ -188,7 +189,7 @@ describe('a re-driven fork job stays one run', () => {
     //
     // The head id is now derived from the branch point and the slot, so a re-drive
     // re-spawns the SAME ids and `insertSpawn` re-opens the rows they already have.
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
 
@@ -201,7 +202,7 @@ describe('a re-driven fork job stays one run', () => {
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal
-      WHERE root_id = ${spawned[0]?.rootId ?? ''} ORDER BY rowid`;
+      WHERE actor_id = ${actor.actorId} AND root_id = ${spawned[0]?.rootId ?? ''} ORDER BY rowid`;
     // FIVE ROWS FOR FIVE BRANCHES, after four drives. The incident produced twenty.
     expect(rows).toHaveLength(5);
     // …and they are the same five ids every attempt spawned.
@@ -216,13 +217,14 @@ describe('a re-driven fork job stays one run', () => {
     expect(rows.filter((row) => row.status === 'aborted')).toHaveLength(0);
     expect(rows.every((row) => row.error_message === null)).toBe(true);
     expect(sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_journal WHERE error_message LIKE '%the retry%'`[0]?.n)
+      SELECT COUNT(*) AS n FROM head_journal
+      WHERE actor_id = ${actor.actorId} AND error_message LIKE '%the retry%'`[0]?.n)
       .toBe(0);
 
     // ONE run, and its report compiles once: one cached merge for one root.
-    expect(listForkRuns(sql, null, 30).items).toHaveLength(1);
+    expect(listForkRuns(sql, actor, null, 30).items).toHaveLength(1);
     expect(sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_merge_results`[0]?.n).toBe(1);
+      SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
@@ -263,7 +265,7 @@ describe('a re-driven fork job stays one run', () => {
     // an attempt that never reported must compile nothing, because there is no
     // set of findings to compile; and the attempt that lands must compile once,
     // not once per branch.
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const compiled: string[] = [];
     const pendingHeads: PendingHead[] = [];
@@ -290,29 +292,31 @@ describe('a re-driven fork job stays one run', () => {
     // One durable answer, under one run identity — `cacheMerge` is keyed on the
     // root, so a re-drive that had minted a fresh id would have added a row here
     // rather than replaced one.
-    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_merge_results`[0]?.n).toBe(1);
-    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_runs`[0]?.n).toBe(1);
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
+    expect(sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM head_runs WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
     const [row] = sql<{ merged_narrative: string }>`
-      SELECT merged_narrative FROM head_merge_results`;
+      SELECT merged_narrative FROM head_merge_results WHERE actor_id = ${actor.actorId}`;
     expect(row?.merged_narrative).toBe(MERGE.narrative);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
   test('a settled run is never reclaimed: the next fork on the same task is its own run', async () => {
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
     await drive(journal, spawned, true);
     await drive(journal, spawned, true);
 
-    const runs = listForkRuns(sql, null, 30).items;
+    const runs = listForkRuns(sql, actor, null, 30).items;
     expect(runs).toHaveLength(2);
     expect(runs.every((run) => run.status === 'completed')).toBe(true);
     expect(new Set(spawned.map((head) => head.rootId)).size).toBe(2);
   });
 
   test('a different task never joins another run', async () => {
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
 
     const pendingHeads: PendingHead[] = [];
@@ -325,7 +329,7 @@ describe('a re-driven fork job stays one run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    expect(listForkRuns(sql, null, 30).items.map((run) => run.task).slice().sort())
+    expect(listForkRuns(sql, actor, null, 30).items.map((run) => run.task).slice().sort())
       .toEqual([TASK, 'a completely different question']);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
@@ -339,7 +343,7 @@ describe('a re-driven fork job stays one run', () => {
    * what an interrupted split is until something retries it.
    */
   test('an interrupted split reads as stopped, never as merged', async () => {
-    const { sql, journal } = freshJournal();
+    const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
 
@@ -352,7 +356,7 @@ describe('a re-driven fork job stays one run', () => {
     // which is the state a workspace reopens in.
     journal.abandonRunning('no executor: outlived the activation that spawned it');
 
-    const [run] = listForkRuns(sql, null, 30).items;
+    const [run] = listForkRuns(sql, actor, null, 30).items;
     expect(run).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'partial' });
     if (!run) throw new Error('Expected an interrupted fork run');
     expect(run.winnerScore).toBeNull();

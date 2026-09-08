@@ -17,6 +17,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initHeadsTables } from '../src/heads/schema';
@@ -30,10 +31,14 @@ import type { ForkRunSummary } from '../src/read-models/fork-runs';
 function freshDb() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
+  const sql = makeSql(db);
   initSearchTables(execRaw);
   initMctsSearchTable(execRaw);
   initHeadsTables(execRaw);
-  return { db, sql: makeSql(db) };
+  // A REAL actor over this database: both stores these runs are folded from are
+  // actor-private, so a seeded row exists only for the owner that wrote it.
+  const actor = createTestActors(sql, execRaw).main;
+  return { db, sql, actor, actorId: actor.actorId };
 }
 
 /**
@@ -45,37 +50,39 @@ function freshDb() {
  */
 function seedJournalledRun(
   db: Database,
+  actorId: string,
   run: {
     rootId: string; task: string; at: number; heads: Array<{ status: string }>;
     merged?: boolean; parentHead?: { status: string }; rationale?: string;
   },
 ): void {
-  db.prepare(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES (?, ?, ?)`)
-    .run(run.rootId, run.rationale ?? run.task, run.at);
+  db.prepare(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)`)
+    .run(actorId, run.rootId, run.rationale ?? run.task, run.at);
   if (run.parentHead) {
     db.prepare(
-      `INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-       VALUES (?, NULL, ?, 0, ?, '', ?, ?, 'synthesize')`,
-    ).run(run.rootId, run.rootId, `parent of ${run.task}`, run.parentHead.status, run.at);
+      `INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+       VALUES (?, ?, NULL, ?, 0, ?, '', ?, ?, 'synthesize')`,
+    ).run(actorId, run.rootId, run.rootId, `parent of ${run.task}`, run.parentHead.status, run.at);
   }
   run.heads.forEach((head, i) => {
     db.prepare(
-      `INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-       VALUES (?, ?, ?, 1, ?, '', ?, ?, 'synthesize')`,
-    ).run(`${run.rootId}-h${i}`, run.parentHead ? run.rootId : null, run.rootId, `branch ${i}`, head.status, run.at + i);
+      `INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+       VALUES (?, ?, ?, ?, 1, ?, '', ?, ?, 'synthesize')`,
+    ).run(actorId, `${run.rootId}-h${i}`, run.parentHead ? run.rootId : null, run.rootId, `branch ${i}`, head.status, run.at + i);
   });
   if (run.merged) {
     db.prepare(
       `INSERT INTO head_merge_results
-         (root_id, merged_narrative, cost_head_count, cost_total_tokens, cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
-       VALUES (?, 'synthesis', ?, 0, 0, 1, ?, 'synthesize')`,
-    ).run(run.rootId, run.heads.length, run.at + 100);
+         (actor_id, root_id, merged_narrative, cost_head_count, cost_total_tokens, cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
+       VALUES (?, ?, 'synthesis', ?, 0, 0, 1, ?, 'synthesize')`,
+    ).run(actorId, run.rootId, run.heads.length, run.at + 100);
   }
 }
 
 /** A run with a search tree: a root node, N branches, and optionally the ledger row. */
 function seedSearchRun(
   db: Database,
+  actorId: string,
   run: {
     rootId: string; task: string; at: number; branches: number;
     /** What the engine wrote as the ROOT's own label — the run's name. */
@@ -98,9 +105,9 @@ function seedSearchRun(
   }
   if (run.ledger) {
     db.prepare(
-      `INSERT INTO mcts_search_runs (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-       VALUES (?, ?, 'mcts', 'm1', '{}', 3, 9, ?, 0, ?, ?)`,
-    ).run(run.rootId, run.task, run.ledger, run.at, run.at);
+      `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
+       VALUES (?, ?, ?, 'mcts', 'm1', '{}', 3, 9, ?, 0, ?, ?)`,
+    ).run(actorId, run.rootId, run.task, run.ledger, run.at, run.at);
   }
 }
 
@@ -115,64 +122,64 @@ function seedSearchRun(
  */
 describe('a run carries a name', () => {
   test('the name the caller gave is what the run is called', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, {
       rootId: 'r-named', task: 'Security and code audit of the repo at /home/user/kinu — a self-evolving agent runtime',
       at: 1000, branches: 3, name: 'repo audit', ledger: 'converged',
     });
-    expect(readForkRun(sql, 'r-named')?.name).toBe('repo audit');
+    expect(readForkRun(sql, actor, 'r-named')?.name).toBe('repo audit');
   });
 
   test('a run that named nothing is called by its task\'s first clause', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, {
       rootId: 'r-derived', task: 'Security and code audit of the repo — a self-evolving agent runtime with a Cloudflare backend',
       at: 1000, branches: 2, ledger: 'converged',
     });
     // Cut where the task itself offers a cut, and never the whole paragraph.
-    expect(readForkRun(sql, 'r-derived')?.name).toBe('Security and code audit of the repo');
+    expect(readForkRun(sql, actor, 'r-derived')?.name).toBe('Security and code audit of the repo');
   });
 
   test('a task with no clause break is cut at a word, not mid-word', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, {
       rootId: 'r-long',
       task: 'Reproduce the checkout regression against the staging snapshot and report what the guard actually does',
       at: 1000, branches: 1, ledger: 'converged',
     });
-    const name = readForkRun(sql, 'r-long')?.name ?? '';
+    const name = readForkRun(sql, actor, 'r-long')?.name ?? '';
     expect(name.length).toBeLessThanOrEqual(48);
     expect(name.endsWith(' ')).toBe(false);
     expect('Reproduce the checkout regression against the staging snapshot'.startsWith(name)).toBe(true);
   });
 
   test('a journal-only run is named too', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, {
       rootId: 'r-journal', task: 'Audit the CLI surface, then the daemon', at: 1000,
       heads: [{ status: 'completed' }], merged: true,
     });
-    expect(readForkRun(sql, 'r-journal')?.name).toBe('Audit the CLI surface');
+    expect(readForkRun(sql, actor, 'r-journal')?.name).toBe('Audit the CLI surface');
   });
 });
 
 describe('listForkRuns', () => {
   test('lists runs from both stores in one chronological order', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, { rootId: 'r-merge-old', task: 'audit the CLI', at: 1000, heads: [{ status: 'completed' }, { status: 'completed' }], merged: true });
-    seedSearchRun(db, { rootId: 'r-search', task: 'pick a backfill', at: 2000, branches: 5, winner: 0.82, ledger: 'converged' });
-    seedJournalledRun(db, { rootId: 'r-merge-new', task: 'split the docs', at: 3000, heads: [{ status: 'running' }] });
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, { rootId: 'r-merge-old', task: 'audit the CLI', at: 1000, heads: [{ status: 'completed' }, { status: 'completed' }], merged: true });
+    seedSearchRun(db, actorId, { rootId: 'r-search', task: 'pick a backfill', at: 2000, branches: 5, winner: 0.82, ledger: 'converged' });
+    seedJournalledRun(db, actorId, { rootId: 'r-merge-new', task: 'split the docs', at: 3000, heads: [{ status: 'running' }] });
 
-    const runs = listForkRuns(sql, null, 20).items;
+    const runs = listForkRuns(sql, actor, null, 20).items;
     expect(runs.map((r) => r.id)).toEqual(['r-merge-new', 'r-search', 'r-merge-old']);
     expect(runs.map((r) => [r.hasSearchTree, r.hasNodeTranscripts]))
       .toEqual([[false, true], [true, false], [false, true]]);
   });
 
   test('a run with a tree carries its branch count and winning score', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, { rootId: 'r1', task: 'pick a backfill', at: 2000, branches: 6, winner: 0.82, ledger: 'converged' });
-    const [run] = listForkRuns(sql).items;
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, { rootId: 'r1', task: 'pick a backfill', at: 2000, branches: 6, winner: 0.82, ledger: 'converged' });
+    const [run] = listForkRuns(sql, actor).items;
     expect(run).toMatchObject({
       task: 'pick a backfill', hasSearchTree: true, hasNodeTranscripts: false,
       status: 'completed', branches: 6, winnerScore: 0.82,
@@ -180,9 +187,9 @@ describe('listForkRuns', () => {
   });
 
   test('a journalled run counts its nodes and has no winner — nothing there ranked', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, { rootId: 'r1', task: 'audit the CLI', at: 1000, heads: [{ status: 'completed' }, { status: 'completed' }, { status: 'completed' }], merged: true });
-    const [run] = listForkRuns(sql).items;
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit the CLI', at: 1000, heads: [{ status: 'completed' }, { status: 'completed' }, { status: 'completed' }], merged: true });
+    const [run] = listForkRuns(sql, actor).items;
     expect(run).toMatchObject({
       task: 'audit the CLI', hasSearchTree: false, hasNodeTranscripts: true,
       status: 'completed', branches: 3, winnerScore: null,
@@ -190,26 +197,26 @@ describe('listForkRuns', () => {
   });
 
   test('a run with a node still going reads as running', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'running' }] });
-    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'running' }] });
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
   });
 
   test('nodes that errored without a synthesis read as partial, not completed', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'errored' }] });
-    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'errored' }] });
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
   });
 
   test("a recursive sub-split is judged by its parent head, as the detail view judges it", () => {
     // HeadJournal.assembleRun prefers the root head row's own status; the list
     // must agree, or one run reads two ways depending on which pane you open.
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, {
       rootId: 'r1', task: 'nested', at: 1000, parentHead: { status: 'running' },
       heads: [{ status: 'completed' }, { status: 'completed' }],
     });
-    const [run] = listForkRuns(sql).items;
+    const [run] = listForkRuns(sql, actor).items;
     expect(run).toMatchObject({ status: 'running', branches: 2, task: 'parent of nested' });
   });
 
@@ -217,29 +224,29 @@ describe('listForkRuns', () => {
     // mcts_search_runs prunes settled rows after a day; search_nodes keeps the
     // tree forever. A ledger-driven list would make week-old runs disappear —
     // the exact complaint this read model answers.
-    const { db, sql } = freshDb();
-    seedSearchRun(db, { rootId: 'r-won', task: 'old but decided', at: 1000, branches: 3, winner: 0.9 });
-    seedSearchRun(db, { rootId: 'r-stopped', task: 'old and abandoned', at: 900, branches: 2 });
-    const runs = listForkRuns(sql).items;
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, { rootId: 'r-won', task: 'old but decided', at: 1000, branches: 3, winner: 0.9 });
+    seedSearchRun(db, actorId, { rootId: 'r-stopped', task: 'old and abandoned', at: 900, branches: 2 });
+    const runs = listForkRuns(sql, actor).items;
     expect(runs.map((r) => [r.id, r.status])).toEqual([['r-won', 'completed'], ['r-stopped', 'partial']]);
   });
 
   test('a failed search says failed', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
-    expect(listForkRuns(sql).items[0]!.status).toBe('failed');
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('failed');
   });
 
   test('a settled search with no acceptable candidate never reads completed', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, {
       rootId: 'r1',
       task: 'nothing cleared the floor',
       at: 1000,
       branches: 2,
       ledger: 'no_acceptable_candidate',
     });
-    const [run] = listForkRuns(sql).items;
+    const [run] = listForkRuns(sql, actor).items;
     expect(run).toMatchObject({
       status: 'failed',
       winnerScore: null,
@@ -250,63 +257,63 @@ describe('listForkRuns', () => {
     // They go through the same HeadRuntime seam and journal, but a mid-turn
     // user redirect is not a search the agent chose — it renders as a chip on
     // the message it forked, and listing it here would be the duplication.
-    const { db, sql } = freshDb();
+    const { db, sql, actor, actorId } = freshDb();
     const branchId = newBranchId();
-    seedJournalledRun(db, { rootId: branchId, task: 'user redirect', at: 2000, heads: [{ status: 'completed' }], merged: true });
-    seedJournalledRun(db, { rootId: 'r-real', task: 'a real run', at: 1000, heads: [{ status: 'completed' }], merged: true });
-    expect(listForkRuns(sql).items.map((r) => r.id)).toEqual(['r-real']);
+    seedJournalledRun(db, actorId, { rootId: branchId, task: 'user redirect', at: 2000, heads: [{ status: 'completed' }], merged: true });
+    seedJournalledRun(db, actorId, { rootId: 'r-real', task: 'a real run', at: 1000, heads: [{ status: 'completed' }], merged: true });
+    expect(listForkRuns(sql, actor).items.map((r) => r.id)).toEqual(['r-real']);
   });
 
   test('Steer-as-Branch rows cannot consume the page limit before they are excluded', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, {
       rootId: 'r-real', task: 'the real run', at: 1000,
       heads: [{ status: 'completed' }], merged: true,
     });
     for (let index = 0; index < 30; index += 1) {
-      seedJournalledRun(db, {
+      seedJournalledRun(db, actorId, {
         rootId: newBranchId(), task: `redirect ${index}`, at: 2000 + index,
         heads: [{ status: 'completed' }], merged: true,
       });
     }
 
-    expect(listForkRuns(sql, null, 30).items.map((run) => run.id)).toEqual(['r-real']);
+    expect(listForkRuns(sql, actor, null, 30).items.map((run) => run.id)).toEqual(['r-real']);
   });
 
   test('the limit bounds the run list, not each store', () => {
-    const { db, sql } = freshDb();
+    const { db, sql, actor, actorId } = freshDb();
     for (let i = 0; i < 4; i++) {
-      seedJournalledRun(db, { rootId: `m${i}`, task: `merge ${i}`, at: 1000 + i * 10, heads: [{ status: 'completed' }], merged: true });
-      seedSearchRun(db, { rootId: `s${i}`, task: `search ${i}`, at: 1005 + i * 10, branches: 2, winner: 0.5, ledger: 'converged' });
+      seedJournalledRun(db, actorId, { rootId: `m${i}`, task: `merge ${i}`, at: 1000 + i * 10, heads: [{ status: 'completed' }], merged: true });
+      seedSearchRun(db, actorId, { rootId: `s${i}`, task: `search ${i}`, at: 1005 + i * 10, branches: 2, winner: 0.5, ledger: 'converged' });
     }
-    const runs = listForkRuns(sql, null, 3).items;
+    const runs = listForkRuns(sql, actor, null, 3).items;
     expect(runs).toHaveLength(3);
     expect(runs.map((r) => r.id)).toEqual(['s3', 'm3', 's2']);
   });
 
   test('an exact lookup reaches a run outside the recent-list window', () => {
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, {
       rootId: 'bookmarked', task: 'historical run', at: 1,
       heads: [{ status: 'completed' }], merged: true,
     });
     for (let index = 0; index < 30; index += 1) {
-      seedSearchRun(db, {
+      seedSearchRun(db, actorId, {
         rootId: `recent-${index}`, task: `recent ${index}`, at: 100 + index,
         branches: 1, winner: 0.5, ledger: 'converged',
       });
     }
 
-    expect(listForkRuns(sql, null, 30).items.some((run) => run.id === 'bookmarked')).toBe(false);
-    expect(readForkRun(sql, 'bookmarked')).toMatchObject({
+    expect(listForkRuns(sql, actor, null, 30).items.some((run) => run.id === 'bookmarked')).toBe(false);
+    expect(readForkRun(sql, actor, 'bookmarked')).toMatchObject({
       id: 'bookmarked', task: 'historical run', hasSearchTree: false, hasNodeTranscripts: true,
     });
-    expect(readForkRun(sql, 'missing')).toBeNull();
+    expect(readForkRun(sql, actor, 'missing')).toBeNull();
   });
 
   test('nothing searched yet is an empty list, not a throw', () => {
-    const { sql } = freshDb();
-    expect(listForkRuns(sql).items).toEqual([]);
+    const { sql, actor } = freshDb();
+    expect(listForkRuns(sql, actor).items).toEqual([]);
   });
 });
 
@@ -328,6 +335,7 @@ describe('a stale running lease', () => {
    *  evidence under test. */
   function seedTree(
     db: Database,
+    actorId: string,
     run: { rootId: string; root: string; branches: readonly string[]; ledger?: string },
   ): void {
     const node = db.prepare(
@@ -340,57 +348,57 @@ describe('a stale running lease', () => {
     });
     if (run.ledger) {
       db.prepare(
-        `INSERT INTO mcts_search_runs (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
-         VALUES (?, 'audit the coupon guard', 'mcts', 'm1', '{}', 3, 0, ?, 0, 1000, 1000)`,
-      ).run(run.rootId, run.ledger);
+        `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
+         VALUES (?, ?, 'audit the coupon guard', 'mcts', 'm1', '{}', 3, 0, ?, 0, 1000, 1000)`,
+      ).run(actorId, run.rootId, run.ledger);
     }
   }
 
   test('a closed tree under a running row stopped without an answer', () => {
     // The reported run: two nodes reported, the rest stopped, nothing won, and a
     // lease nobody settled. `abandonSearchTree` is what left the nodes `failed`.
-    const { db, sql } = freshDb();
-    seedTree(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedTree(db, actorId, {
       rootId: 'r-stale', root: 'failed',
       branches: ['failed', 'failed', 'failed', 'failed'],
       ledger: 'running',
     });
-    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
   });
 
   test('a tree that converged under a running row is settled, not running', () => {
     // The other half of the same crash window: `converge` closed the tree and the
     // `converged` write never landed. A terminal node is written by nothing else.
-    const { db, sql } = freshDb();
-    seedTree(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedTree(db, actorId, {
       rootId: 'r-won', root: 'pruned', branches: ['terminal', 'pruned'], ledger: 'running',
     });
-    expect(listForkRuns(sql).items[0]!).toMatchObject({ status: 'completed', winnerScore: 0.4 });
+    expect(listForkRuns(sql, actor).items[0]!).toMatchObject({ status: 'completed', winnerScore: 0.4 });
   });
 
   test('a search with a frontier left is still running', () => {
     // The guard on all of it: an open childless node is selectable, so this run
     // IS at work and must keep saying so.
-    const { db, sql } = freshDb();
-    seedTree(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedTree(db, actorId, {
       rootId: 'r-live', root: 'open', branches: ['open', 'failed'], ledger: 'running',
     });
-    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
   });
 
   test('a search that has not expanded anything yet is running', () => {
-    const { db, sql } = freshDb();
-    seedTree(db, { rootId: 'r-fresh', root: 'open', branches: [], ledger: 'running' });
-    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+    const { db, sql, actor, actorId } = freshDb();
+    seedTree(db, actorId, { rootId: 'r-fresh', root: 'open', branches: [], ledger: 'running' });
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
   });
 
   test('an expanded parent left open is not a frontier', () => {
     // `frontier.ts` selects `status='open' AND NOT EXISTS (children)`. Counting a
     // bare open node instead would make every legacy tree whose settle left its
     // root open read as running forever.
-    const { db, sql } = freshDb();
-    seedTree(db, { rootId: 'r-legacy', root: 'open', branches: ['pruned', 'pruned'] });
-    expect(listForkRuns(sql).items[0]!.status).toBe('partial');
+    const { db, sql, actor, actorId } = freshDb();
+    seedTree(db, actorId, { rootId: 'r-legacy', root: 'open', branches: ['pruned', 'pruned'] });
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
   });
 });
 
@@ -405,18 +413,18 @@ describe('a run that wrote both stores', () => {
 
   /** One root, both halves — the shape a swarm leaves behind. The journal starts
    *  AFTER the tree, which is what made the tree-less half sort newer. */
-  function seedSwarmRun(db: Database, rootId = 'swarm-1'): void {
-    seedSearchRun(db, { rootId, task: TASK, at: 1000, branches: 3, winner: 0.71, ledger: 'converged' });
-    seedJournalledRun(db, {
+  function seedSwarmRun(db: Database, actorId: string, rootId = 'swarm-1'): void {
+    seedSearchRun(db, actorId, { rootId, task: TASK, at: 1000, branches: 3, winner: 0.71, ledger: 'converged' });
+    seedJournalledRun(db, actorId, {
       rootId, task: TASK, at: 1400, rationale: PRESET,
       heads: [{ status: 'completed' }, { status: 'completed' }, { status: 'completed' }],
     });
   }
 
   test('is ONE run, and it carries every half it wrote', () => {
-    const { db, sql } = freshDb();
-    seedSwarmRun(db);
-    const runs = listForkRuns(sql).items;
+    const { db, sql, actor, actorId } = freshDb();
+    seedSwarmRun(db, actorId);
+    const runs = listForkRuns(sql, actor).items;
     // The denominator: one seeded root must arrive as exactly one row. Two rows is
     // the defect — the caller then dedups, and dedup picks a winner.
     expect(runs).toHaveLength(1);
@@ -434,41 +442,41 @@ describe('a run that wrote both stores', () => {
   });
 
   test('starts when its FIRST half was written, not when its second was', () => {
-    const { db, sql } = freshDb();
-    seedSwarmRun(db);
-    expect(listForkRuns(sql).items[0]!.startedAt).toBe(1000);
+    const { db, sql, actor, actorId } = freshDb();
+    seedSwarmRun(db, actorId);
+    expect(listForkRuns(sql, actor).items[0]!.startedAt).toBe(1000);
   });
 
   test('reports the task it ran, never the preset name in the split rationale', () => {
-    const { db, sql } = freshDb();
-    seedSwarmRun(db);
+    const { db, sql, actor, actorId } = freshDb();
+    seedSwarmRun(db, actorId);
     // `recordSplit` stamps `label ?? preset` into `head_runs.rationale`, and the
     // list used to read that column as the run's task because a swarm journals no
     // row for its root. The tree's root node holds the real task.
-    expect(listForkRuns(sql).items[0]!.task).toBe(TASK);
-    expect(listForkRuns(sql).items[0]!.task).not.toBe(PRESET);
+    expect(listForkRuns(sql, actor).items[0]!.task).toBe(TASK);
+    expect(listForkRuns(sql, actor).items[0]!.task).not.toBe(PRESET);
   });
 
   test('a run with no tree still falls back to the split rationale for its task', () => {
     // The other direction of the same precedence: a journal-only run has no tree
     // root to name it, and its synthetic root has no journal row either, so the
     // rationale is the only thing that says what the run was for.
-    const { db, sql } = freshDb();
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedJournalledRun(db, actorId, {
       rootId: 'j1', task: 'unused', at: 1000, rationale: 'compare two rewrites',
       heads: [{ status: 'completed' }],
     });
-    expect(listForkRuns(sql).items[0]!.task).toBe('compare two rewrites');
+    expect(listForkRuns(sql, actor).items[0]!.task).toBe('compare two rewrites');
   });
 
   test('is running while either half is still writing', () => {
-    const { db, sql } = freshDb();
-    seedSearchRun(db, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.5, ledger: 'converged' });
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.5, ledger: 'converged' });
+    seedJournalledRun(db, actorId, {
       rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
       heads: [{ status: 'completed' }, { status: 'running' }],
     });
-    expect(listForkRuns(sql).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
   });
 
   test('a settled search with one failed node reads as settled, not partial', () => {
@@ -476,13 +484,13 @@ describe('a run that wrote both stores', () => {
     // branch is normal in a search. The journal rule — nothing synthesised and
     // something errored means `partial` — is about heads reaching a synthesis, and
     // applying it here would report every swarm with a lost node as unfinished.
-    const { db, sql } = freshDb();
-    seedSearchRun(db, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.6, ledger: 'converged' });
-    seedJournalledRun(db, {
+    const { db, sql, actor, actorId } = freshDb();
+    seedSearchRun(db, actorId, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.6, ledger: 'converged' });
+    seedJournalledRun(db, actorId, {
       rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
       heads: [{ status: 'completed' }, { status: 'errored' }],
     });
-    expect(listForkRuns(sql).items[0]!.status).toBe('completed');
+    expect(listForkRuns(sql, actor).items[0]!.status).toBe('completed');
   });
 
   test('arrives whole on whichever page it falls on, halves together', () => {
@@ -491,15 +499,15 @@ describe('a run that wrote both stores', () => {
     // tree begins before `middle` and its journal after it, so a per-store bound
     // admits the tree and rejects the journal, and the run arrives half-empty on
     // the page after `middle`.
-    const { db, sql } = freshDb();
-    seedSwarmRun(db);
-    seedJournalledRun(db, { rootId: 'middle', task: 'in between', at: 1200, heads: [{ status: 'completed' }] });
-    seedSearchRun(db, { rootId: 'newest', task: 'newest', at: 9000, branches: 1, ledger: 'converged' });
+    const { db, sql, actor, actorId } = freshDb();
+    seedSwarmRun(db, actorId);
+    seedJournalledRun(db, actorId, { rootId: 'middle', task: 'in between', at: 1200, heads: [{ status: 'completed' }] });
+    seedSearchRun(db, actorId, { rootId: 'newest', task: 'newest', at: 9000, branches: 1, ledger: 'converged' });
 
     const seen: ForkRunSummary[] = [];
     let cursor: SeekCursor | null = null;
     for (let page = 0; page < 5; page++) {
-      const next: Page<ForkRunSummary> = listForkRuns(sql, cursor, 1);
+      const next: Page<ForkRunSummary> = listForkRuns(sql, actor, cursor, 1);
       seen.push(...next.items);
       if (next.status === 'end') break;
       cursor = next.next;
@@ -510,9 +518,9 @@ describe('a run that wrote both stores', () => {
   });
 
   test('an exact lookup carries both halves too', () => {
-    const { db, sql } = freshDb();
-    seedSwarmRun(db);
-    expect(readForkRun(sql, 'swarm-1')).toMatchObject({
+    const { db, sql, actor, actorId } = freshDb();
+    seedSwarmRun(db, actorId);
+    expect(readForkRun(sql, actor, 'swarm-1')).toMatchObject({
       hasSearchTree: true, hasNodeTranscripts: true, task: TASK, winnerScore: 0.71,
     });
   });
@@ -535,12 +543,12 @@ describe('a run that wrote both stores', () => {
  * canvas is only correct while the branch reader still has it.
  */
 describe('the canvas page does not carry step traces', () => {
-  function seedWithTrace(db: Database, chars: number) {
-    seedJournalledRun(db, {
+  function seedWithTrace(fixture: ReturnType<typeof freshDb>, chars: number) {
+    seedJournalledRun(fixture.db, fixture.actorId, {
       rootId: 'traced', task: 'a swarm that talked a lot', at: 1_000,
       heads: [{ status: 'completed' }, { status: 'completed' }],
     });
-    const journal = new HeadJournal(makeSql(db));
+    const journal = new HeadJournal(fixture.sql, fixture.actor);
     for (const id of ['traced-h0', 'traced-h1']) {
       journal.appendStep(id, 0, { text: 'x'.repeat(chars), toolCalls: [{ name: 'file' }] });
       journal.appendStep(id, 1, { text: 'y'.repeat(chars), toolCalls: [] });
@@ -550,22 +558,23 @@ describe('the canvas page does not carry step traces', () => {
 
   test('a page of a run whose heads wrote long traces is the same size as one whose heads wrote short ones', () => {
     const short = freshDb();
-    seedWithTrace(short.db, 10);
+    seedWithTrace(short, 10);
     const long = freshDb();
-    seedWithTrace(long.db, 50_000);
+    seedWithTrace(long, 50_000);
 
-    const shortBytes = JSON.stringify(readExplorationCanvas(short.sql)).length;
-    const longBytes = JSON.stringify(readExplorationCanvas(long.sql)).length;
+    const shortBytes = JSON.stringify(readExplorationCanvas(short.sql, short.actor)).length;
+    const longBytes = JSON.stringify(readExplorationCanvas(long.sql, long.actor)).length;
     // Identical, not merely close: nothing derived from a step's length may
     // reach this payload at all. 200 KiB of prose was written on the long side.
     expect(longBytes).toBe(shortBytes);
   });
 
   test('the branch reader still delivers every step', () => {
-    const { db, sql } = freshDb();
-    const journal = seedWithTrace(db, 10);
+    const fixture = freshDb();
+    const { sql, actor } = fixture;
+    const journal = seedWithTrace(fixture, 10);
     // The canvas lists the head…
-    const page = readExplorationCanvas(sql);
+    const page = readExplorationCanvas(sql, actor);
     const head = page.items[0]?.head?.heads.find((candidate) => candidate.id === 'traced-h0');
     expect(head).toBeDefined();
     // …and its lifecycle is intact, including the aggregate over the very rows
@@ -575,6 +584,6 @@ describe('the canvas page does not carry step traces', () => {
     const steps = journal.readSteps('traced-h0');
     expect(steps.map((step) => step.text)).toEqual(['x'.repeat(10), 'y'.repeat(10)]);
     expect(steps[0]?.toolCalls.map((call) => call.name)).toEqual(['file']);
-    expect(new HeadJournal(sql).readHeadView('traced-h0')?.task).toBe('branch 0');
+    expect(new HeadJournal(sql, actor).readHeadView('traced-h0')?.task).toBe('branch 0');
   });
 });
