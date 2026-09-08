@@ -489,23 +489,6 @@ var REVIEWED_ADVISORIES = {
     reason: "transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI's TUI " + "image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of " + "that major line, so the fix (21.3.1) needs a @jimp bump.",
     ids: [1114301]
   },
-  hono: {
-    reason: "transitive: @modelcontextprotocol/sdk requires ^4.11.4, resolved 4.12.23. The " + "4.13.2 copy our @cloudflare/sandbox path uses matches none of these. All twelve are " + "middleware and adapter defects \u2014 CORS, JSX/memo per-request context, Lambda and API " + "Gateway adapters, serve-static \u2014 in an app this repository never mounts. The SDK range " + "admits the fixed 4.12.34.",
-    ids: [
-      1123997,
-      1123998,
-      1123999,
-      1124000,
-      1124001,
-      1124005,
-      1124009,
-      1124010,
-      1130733,
-      1138771,
-      1138772,
-      1138773
-    ]
-  },
   "ip-address": {
     reason: "transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero " + "octet and IPv4-mapped misclassification that can bypass an SSRF check \u2014 in the rate " + "limiter, which nothing here mounts.",
     ids: [1130722, 1130723, 1130724]
