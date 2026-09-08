@@ -158,6 +158,26 @@ export class SlateHost {
    */
   private readonly invocations = new Map<string, SlateInvocation>();
 
+  /**
+   * An invocation for a request this host did not originate — a browser hitting
+   * the preview. The lineage is the root, but it is a NAMED root: without one,
+   * a slate could keep a preview request's bindings and present them from
+   * inside a hop to get an empty chain, which is the same replay the hop path
+   * refuses. Released when the routed request settles.
+   *
+   * `null` when no running slate serves that port; there is then nothing whose
+   * bindings could be kept.
+   */
+  previewInvocation(port: number): { readonly value: string; release: () => void } | null {
+    for (const running of this.running.values()) {
+      if (running.process.port !== port) continue;
+      const value = crypto.randomUUID();
+      this.invocations.set(value, { id: running.id, chain: [] });
+      return { value, release: () => { this.invocations.delete(value); } };
+    }
+    return null;
+  }
+
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
   async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {

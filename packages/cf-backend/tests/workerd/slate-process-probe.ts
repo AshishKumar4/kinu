@@ -96,24 +96,24 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   }
 
   /**
-   * One request, driven the way `ResidentSlateHost.call` drives one: mint an
-   * invocation for `chain`, send its id, retire it when the request settles.
-   * `chain === undefined` is the preview shape — no invocation at all.
+   * One request, driven the way the host drives one: mint an invocation for
+   * `chain`, send its id, retire it when the request settles. `chain`
+   * undefined is the PREVIEW shape — a root lineage, and still a named one,
+   * exactly as `ResidentSlateHost.previewInvocation` makes it.
    */
   async request(path: string, chain?: string[]): Promise<{ status: number; body: string }> {
-    const invocation = chain === undefined ? null : crypto.randomUUID();
-    if (invocation !== null && chain !== undefined) {
-      SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
-    }
+    // EVERY entry is named now, preview included: an unnamed request is what a
+    // slate used to keep and replay as a root lineage.
+    const invocation = crypto.randomUUID();
+    SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: chain ?? [] });
     try {
       const response = await this.ports.routeRequest(8789, new Request(
-        'https://slate.invalid' + path,
-        invocation === null ? undefined : { headers: { 'x-slate-call': invocation } },
+        'https://slate.invalid' + path, { headers: { 'x-slate-call': invocation } },
       ), path);
       if (response === null) return { status: 404, body: 'No listener' };
       return { status: response.status, body: await response.text() };
     } finally {
-      if (invocation !== null) SlateProcessProbeDO.invocations.delete(invocation);
+      SlateProcessProbeDO.invocations.delete(invocation);
     }
   }
 
