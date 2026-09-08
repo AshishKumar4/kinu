@@ -18,10 +18,10 @@ export function createSandboxReleaseExec(
 ): ReleaseExec {
   return {
     async exec(command, opts) {
-      const res = await withSandboxRetry(() => handle.exec(command, {
-        cwd: opts?.cwd,
-        timeout: opts?.timeout,
-      }));
+      // No `timeout`: an absent one is how `SandboxHandle.exec` spells "this
+      // call carries no work deadline", so the command ends when its process
+      // does and the exit code below is the one it really produced.
+      const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd }));
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',

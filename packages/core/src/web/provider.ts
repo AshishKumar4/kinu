@@ -73,11 +73,18 @@ export interface DefaultWebSearchProviderDeps {
   /** Platform HTML→markdown override (cf-backend: env.AI.toMarkdown). Falls
    *  back to the dependency-free local converter when absent or it throws. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
-  /** Per-request network timeout. Default 15s. */
+  /**
+   * Per-request network budget in ms, CALLER-REQUESTED ONLY.
+   *
+   * Absent means the request ends on its response, on a network failure, or on
+   * the platform below it — never on a clock chosen here. The 15_000 ms default
+   * that used to stand in its place cited no requirement, and it failed a slow
+   * origin with `request timed out`, which a reader cannot tell apart from an
+   * origin that really refused.
+   */
   timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 20;
 const TavilyResponseSchema = v.object({
@@ -109,16 +116,21 @@ class WebFetchError extends Error {
 /** The single shared provider implementation. Both backends construct it with
  *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const budgetMs = deps.timeoutMs;
   // workerd's fetch enforces its `this` binding: invoking the dependency as
   // a member of `deps` sets `this = deps` and throws "Illegal invocation".
   // Detach once so every call goes out with `this = undefined`, exactly like
   // a bare `fetch()` call (undici on the CLI is `this`-insensitive either way).
   const fetchImpl = deps.fetch;
 
-  const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  // With no caller budget the request carries no controller and no signal at
+  // all: nothing local can end it, so it ends on the origin's answer or on a
+  // network failure. A budget the caller DID ask for gets the timer and the
+  // abort it asked for.
+  const withRequestBudget = async <T>(run: (signal?: AbortSignal) => Promise<T>): Promise<T> => {
+    if (budgetMs === undefined) return run();
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), budgetMs);
     const onAbort = new Promise<never>((_, reject) => {
       ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
     });
@@ -126,7 +138,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       return await Promise.race([run(ctrl.signal), onAbort]);
     } catch (error) {
       if (ctrl.signal.aborted) {
-        throw new WebFetchError(`request timed out after ${timeoutMs}ms`, true, { cause: error });
+        throw new WebFetchError(`request timed out after ${String(budgetMs)}ms`, true, { cause: error });
       }
       throw error;
     } finally {
@@ -158,7 +170,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     limit: number,
     headers: Record<string, string>,
   ): Promise<WebSearchResponse> {
-    return withTimeout(async (signal) => {
+    return withRequestBudget(async (signal) => {
       const res = await fetchImpl('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
@@ -189,14 +201,14 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           }));
         return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
       } catch (error) {
-        if (signal.aborted) throw error;
+        if (signal?.aborted === true) throw error;
         throw new WebFetchError('Tavily search returned an unreadable response', false, { cause: error });
       }
     });
   }
 
   async function duckDuckGoSearch(query: string, limit: number): Promise<WebSearchResponse> {
-    return withTimeout(async (signal) => {
+    return withRequestBudget(async (signal) => {
       const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const res = await fetchImpl(endpoint, {
         headers: {
@@ -239,7 +251,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       // benign public page could bounce the agent's fetch onto a metadata or
       // private address the initial check had refused.
       let finalUrl = parsed.toString();
-      const fetched = await withTimeout(async (signal) => {
+      const fetched = await withRequestBudget(async (signal) => {
         let target = finalUrl;
         for (let redirects = 0; ; redirects++) {
           const hop = await fetchImpl(target, {

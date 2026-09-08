@@ -783,8 +783,8 @@ describe('createSandboxReleaseExec', () => {
     expect(res.exitCode).toBe(1);
   });
 
-  test('passes raw exit codes and cwd/timeout through; normalizes legacy output field', async () => {
-    const calls: Array<{ command: string; opts?: { cwd?: string; timeout?: number } }> = [];
+  test('passes raw exit codes and cwd through with no work deadline; normalizes legacy output field', async () => {
+    const calls: Array<{ command: string; opts?: Parameters<SandboxHandle['exec']>[1] }> = [];
     const exec = createSandboxReleaseExec(
       makeHandle(async (command, opts) => {
         calls.push({ command, opts });
@@ -792,9 +792,11 @@ describe('createSandboxReleaseExec', () => {
       }),
       {},
     );
-    const res = await exec.exec('bun test', { cwd: '/workspace/pc', timeout: 9000 });
+    const res = await exec.exec('bun test', { cwd: '/workspace/pc' });
     expect(res).toEqual({ stdout: 'legacy out', stderr: 'boom', exitCode: 3 });
-    expect(calls).toEqual([{ command: 'bun test', opts: { cwd: '/workspace/pc', timeout: 9000 } }]);
+    // No `timeout` reaches the handle: an absent one is the process lane, and a
+    // release command that outlives a wall clock is a command still running.
+    expect(calls).toEqual([{ command: 'bun test', opts: { cwd: '/workspace/pc' } }]);
   });
 
   test('retries once on a transient container disconnect, then returns the real result', async () => {

@@ -1555,7 +1555,7 @@ export class LocalAgentSession implements BackendHost {
       const entry = tool({
         description: d.description ?? `${d.serverName}/${d.name}`,
         inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
-        execute: async (args) => conn.call(d.serverName, d.name, args),
+        execute: async (args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
       });
       tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
     }
