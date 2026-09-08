@@ -30,6 +30,8 @@ import { RunEventRecorder } from '../events/recorder';
 import { BackgroundJobStore } from '../jobs/store';
 import { MctsSearchStore } from '../mcts/search-store';
 import { ActorClaimStore } from '../orchestrator/actor-claims';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
+import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
 
 /** Field names match what both backends already called these, so a backend
  *  reads its stores through one object without renaming any call site. */
@@ -46,6 +48,9 @@ export interface AgentStores {
   readonly claims: ActorClaimStore;
   readonly jobs: BackgroundJobStore;
   readonly mctsSearchStore: MctsSearchStore;
+  /** The agent's own structured data: the tables it declares through `db.*`,
+   *  in this workspace's one database, actor-scoped or shared by declaration. */
+  readonly appData: AppDataStore;
 }
 
 /**
@@ -65,8 +70,14 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let jobs: BackgroundJobStore | undefined;
   let claims: ActorClaimStore | undefined;
   let mctsSearchStore: MctsSearchStore | undefined;
+  let appData: AppDataStore | undefined;
 
-  return {
+  // Named, because two members reach the others: `appData` writes its evidence
+  // through this bundle's own recorder and files it under the run of this
+  // actor's admitted turn. Reaching them through the bundle keeps ONE memo per
+  // store — a second construction would be a second `nextIndex` cache over the
+  // same rows, which is how two events come to share an index.
+  const bundle: AgentStores = {
     get config(): AgentConfigStore {
       return actor().config;
     },
@@ -91,5 +102,20 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
     get mctsSearchStore(): MctsSearchStore {
       return (mctsSearchStore ??= new MctsSearchStore(sql(), actor()));
     },
+    get appData(): AppDataStore {
+      return (appData ??= createAppDataStore({
+        sql: sql(),
+        actor: actor(),
+        transactionSync,
+        events: () => bundle.eventRecorder,
+        // The run a data operation belongs to is the run of the turn it
+        // happened under, which the actor's own admitted claim already names —
+        // so nothing has to thread a run id through the sandbox. Between turns
+        // there is no run, and `WORKSPACE_RUN_ID` is where a call made between
+        // runs is filed (events/model-call.ts).
+        runId: () => bundle.claims.unsettled(1)[0]?.runId ?? WORKSPACE_RUN_ID,
+      }));
+    },
   };
+  return bundle;
 }
