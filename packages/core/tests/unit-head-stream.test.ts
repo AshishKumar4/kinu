@@ -14,7 +14,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
@@ -116,6 +116,7 @@ function headInput(): HeadInput {
 
 function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInferenceDeps {
   return {
+    runtime: createTestRuntime().rt,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     workspaceLayout: 'shared-workspace', ...over,
   };

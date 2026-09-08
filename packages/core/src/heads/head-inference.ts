@@ -4,10 +4,9 @@
 // (SubordinateAgent.runAsHead), the CLI's in-process head-worker, and both
 // transports of a swarm node (strategy/node-agent.ts).
 //
-// IT OWNS NO LOOP OF ITS OWN. The turn body is `runChat` (../chat.ts) — the one
-// place a model request is issued, tools are dispatched, the stream is watched
-// for a stall, the step context is pruned and an unpaired tool call is repaired.
-// This module owns what that body cannot know: how many TURNS this agent gets,
+// prepareActorTurn selects and pins the runtime's program. Its builtin branch
+// uses the shared chat loop; a promoted program uses the same host bridges as
+// an actor chat. This module owns how many turns the reporting agent gets,
 // the record_evidence / record_decision accumulator tools, the head system
 // prompt + inherited-context messages, the per-step journal trace, the mission
 // ledger it charges, and the HeadReport assembly (via the shared head-summary
@@ -24,7 +23,9 @@ import {
   tool, jsonSchema,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult,
 } from 'ai';
-import { runChat, type ChatOptions } from '../chat';
+import type { ChatOptions } from '../chat';
+import type { AgentRuntime } from '../types/agent-runtime';
+import { prepareActorTurn } from '../orchestrator/actor-turn';
 import type { PromptModelContext } from '../prompting/model-profile';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
@@ -32,7 +33,7 @@ import {
   budgetExhausted,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
-import type { MissionBudgetRefusal, MissionScope } from '../mission-budget';
+import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } from '../mission-budget';
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
@@ -41,7 +42,7 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 
@@ -422,6 +423,8 @@ function exhaustedMissionReport(
 }
 
 export interface HeadInferenceDeps {
+  /** The same bound logical actor runtime that built this head's tools. */
+  runtime: AgentRuntime;
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
   /** The head's FULL toolset — the accumulator tools (buildHeadAccumulatorTools)
@@ -563,11 +566,8 @@ const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.strin
  * RUN ONE AGENT — every kind that is not an actor's own chat — AND ASSEMBLE ITS
  * REPORT.
  *
- * THE TURN BODY IS {@link runChat} AND NOTHING HERE REPEATS IT. This function
- * used to hold a second `generateText` call, which is how a fork missed the
- * shared loop's dead-stream detection, mid-step abort, step-boundary pruning,
- * and unpaired-tool-call repair. Each exists once in the turn body; driving the
- * same body deletes the second path.
+ * The turn body is selected by {@link prepareActorTurn}; report collection
+ * does not reimplement the native loop or reload a promoted program's live alias.
  *
  * WHAT IS LEFT HERE is what a turn body cannot know: how many turns this agent
  * gets, what a finished step means to its journal, which ledger it charges, and
@@ -649,7 +649,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   /** What ended the run early, when something threw. Classified below with the
    *  natural path rather than in a catch of its own, so an aborted run reads the
    *  same whether the abort landed between steps or inside one. */
-  let failure: unknown;
+  let failure: KinuError | undefined;
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
     if (step.text.trim()) lastText = step.text;
@@ -710,14 +710,34 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         onStep,
       };
       if (deps.signal !== undefined) turn.signal = deps.signal;
-      for await (const event of runChat(turn)) {
+      const prepared = await prepareActorTurn({
+        runtime: deps.runtime, mode: input.mode, task: input.task, chat: turn,
+        loopVersion: await deps.runtime.identity.scaffold.version(),
+        scaffoldStreamOptions: {
+          onStepFinish: onStep, stopWhen: turn.stopWhen,
+          prepareStep: async () => {
+            await outOfBudget();
+            if (refusal !== null) throw new MissionBudgetExhausted(refusal);
+            if (deps.isAborted()) throw new Error(deps.abortReason?.() ?? 'head was aborted');
+            const gate = budgetExhausted(input.budget);
+            if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
+            return undefined;
+          },
+        },
+      });
+      for await (const event of prepared.events) {
         // Forwarded as the provider drew them: one frame per delta, in order,
         // never held. Nothing survives the step boundary, so the durable row that
         // lands next supersedes the paint without a tail to reconcile.
         if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); continue; }
         if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); continue; }
+        if (event.type === 'error') {
+          failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: new Error(event.message), otherwise: 'unavailable' });
+          continue;
+        }
         if (event.type !== 'done') continue;
         settled = true;
+        if (prepared.program.kind === 'scaffold') lastText = event.text;
         // The turn's own response messages, tool calls already paired by the
         // turn body. Appended, never accumulated per step: every step's
         // `response.messages` is CUMULATIVE (ai 6 builds one array and clones it
@@ -727,14 +747,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       }
       // A run the spawner cancelled, or one past the deadline it was granted,
       // gets no further turn however much work it is still holding.
-      if (deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
+      if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
       const resumed = await deps.resume?.();
       if (!resumed) break;
       history.push(...resumed);
     }
     if (settled) deps.reportMessages?.(history.slice(seeded));
   } catch (err) {
-    failure = err;
+    failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
   }
 
   if (refusal) {
@@ -760,9 +780,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // minutes apart read at different depths and the one with the real reason in it
   // was the one nobody had to debug.
   const stopReason = broke
-    ? renderCauseChain(toKinuError({
-      doing: `run agent ${input.id} to a report`, cause: failure, otherwise: 'unavailable',
-    }))
+    ? renderThrownChain({ cause: failure })
     : deps.abortReason?.()
       ?? (budgetGate.exhausted
         ? `${budgetGate.reason} budget exhausted`
