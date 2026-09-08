@@ -414,9 +414,9 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
   /** The advisor switched on the way an owner switches it on — the durable
    *  `actor_config` row — with a reviewer whose prompts this array collects. */
-  function withAdvisor(rt: CLIRuntime, db: Database): string[] {
+  function withAdvisor(rt: CLIRuntime): string[] {
     const asked: string[] = [];
-    db.query(`INSERT OR REPLACE INTO actor_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
       stream: async function* () { yield ''; },
       complete: async (prompt: string) => {
@@ -453,7 +453,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
   test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
-    const asked = withAdvisor(rt, db);
+    const asked = withAdvisor(rt);
     stashAdvisorLane(db, { turnId: 'turn-orphan', gateOpen: true });
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
@@ -487,7 +487,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   test('a checkpointed review keeps the completion-gate verdict it was judged under', async () => {
     for (const gateOpen of [true, false]) {
       const { db, rt } = workspace();
-      const asked = withAdvisor(rt, db);
+      const asked = withAdvisor(rt);
       stashAdvisorLane(db, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
       const { model } = scriptedModel('acknowledged');
       const events: SessionEvent[] = [];
