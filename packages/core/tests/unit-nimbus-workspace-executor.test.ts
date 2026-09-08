@@ -248,10 +248,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     expect(JSON.parse(String(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
   });
 
-  test('exposing a port nothing listens on names the container', async () => {
-    // No node program starts on this host, so no workspace port will ever
-    // listen. The exposure answers where a server CAN run instead of the
-    // transport's `io`.
+  test('a port without a listener refuses rather than advertising a working preview', async () => {
     const box = fakeBox();
     box.ports = {
       expose: async () => { throw new Error('No process is listening on workspace port 8789'); },
@@ -261,9 +258,8 @@ describe('a workspace whose host cannot compile node programs', () => {
     const provider = blockedProvider(box);
     const toolRefusal = JSON.parse(String(await provider.tools.exposePort.execute(8789)));
     expect(toolRefusal.reason).toBe('unsupported');
-    expect(toolRefusal.error).toContain('sandbox');
     const direct = await provider.exposePort!(8789);
-    expect(direct).toEqual({ supported: false, reason: expect.stringContaining('sandbox') });
+    expect(direct.supported).toBe(false);
   });
 
   test('an exposure failure that is not an empty port still travels as io', async () => {

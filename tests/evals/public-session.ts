@@ -952,6 +952,15 @@ export class KinuPublicSession {
     return v.parse(SlatePreviewSchema, answer);
   }
 
+  /** Read existing preview endpoints without starting the app under test. */
+  async exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]> {
+    const answer = await infraBoundary(
+      'getExposedPorts(' + executor + ') on ' + this.input.origin + '/' + this.workspace,
+      () => this.rpc('getExposedPorts', [executor]),
+    );
+    return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
+  }
+
   /** The durable transcript the web pane is seeded from. */
   async history(): Promise<readonly PublicMessage[]> {
     const rows = await infraBoundary(
