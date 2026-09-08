@@ -420,6 +420,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // an interrupted turn's history says what the turn actually did. Cleared at
     // every step boundary: from there the step is the SDK's to report.
     let stepContent: Array<TextPart | ToolCallPart> = [];
+    // Tool execution can begin before fullStream publishes its tool-call part.
+    // Keep dispatched calls until the SDK completes their step, so cancellation
+    // cannot erase work already admitted by the tool boundary.
+    let dispatchedCalls: Map<string, ToolCallPart> | undefined;
 
     /** This call's cumulative generated array as of its last finished step. The
      *  SDK accumulates `step.response.messages` within the call and never
@@ -446,6 +450,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Capture instead: the error still reaches callers through the rethrow
       // below, so there is exactly one place that decides how a failure reads.
       onError: ({ error }) => { streamError = error; },
+      experimental_onToolCallStart: ({ toolCall }) => {
+        dispatchedCalls ??= new Map();
+        dispatchedCalls.set(toolCall.toolCallId, { type: 'tool-call',
+          toolCallId: toolCall.toolCallId, toolName: toolCall.toolName, input: toolCall.input });
+      },
       onAbort: ({ steps }) => {
         // The caller's abort interrupts the TURN. This callback is the only
         // terminal handover: an aborted run never settles `result.steps`, so
@@ -471,6 +480,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         stepCount++;
         const usage = normalizeUsage(step.usage);
         responseSoFar = [...step.response.messages];
+        for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
         const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
         if (usageReported(usage)) event.usage = usage;
         pendingStepEvents.push(event);
@@ -636,6 +646,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // already recorded has no result anywhere, and `streamText` refuses to
     // assemble EVERY later request from that history — including the
     // continuation request below, whose prefix IS this array.
+    if (cut && dispatchedCalls) {
+      for (const call of dispatchedCalls.values()) {
+        if (!stepContent.some(part => part.type === 'tool-call' && part.toolCallId === call.toolCallId)) stepContent.push(call);
+      }
+    }
     const produced = cut && stepContent.length > 0
       ? [...finished, { role: 'assistant' as const, content: stepContent }]
       : finished;

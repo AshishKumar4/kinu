@@ -11,8 +11,6 @@
   "asymmetry BackgroundJobRunnerDeps.onSettled#absent-in-cli",
   "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
-  "asymmetry KinuExtension.onToolCall#absent-in-cli",
-  "asymmetry KinuExtension.onToolResult#absent-in-cli",
   "asymmetry MemoryToolDeps.vectorStore#absent-in-cli",
   "asymmetry RefinementDeps.refiner#absent-in-cli",
   "asymmetry ShellApprovalPolicy.deferrals#absent-in-cli",

@@ -179,9 +179,13 @@ workstream, keep the coordination and integration turn yourself.
 
 Every turn, cloud or local, flows through one `ExtensionHost`
 (`core/src/extension.ts`). The cloud bridges Think subclass hooks onto it.
-The CLI drives `runChat` through it from `LocalAgentSession`
-(`cli-backend/src/local-session.ts`). No private callback path parallels the
-plugin API.
+The CLI host `LocalAgentSession` delegates its conversational runner to core's
+`ActorSession`, bound to the runtime's issued actor handle. That owner holds
+working history, dynamic context, steering, the orchestrator and cancellation.
+The local host retains queue admission and durable/effect settlement. No private
+callback path parallels the plugin API; an in-memory turn lease is not a durable
+turn claim. Hosted Think state and durable program/context claims remain separate
+work, not capabilities implied by the local runner.
 
 Three agent kinds run turns here, on two bodies. `runChat` (`core/src/chat.ts`)
 serves CLI sessions and swarm nodes alike, since a node reaches it through

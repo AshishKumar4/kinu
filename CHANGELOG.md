@@ -615,6 +615,11 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Local conversational execution state now belongs to a runtime-bound
+  `ActorSession`: history, steering, model context, mode and cancellation are
+  isolated per logical actor. Stale turn leases cannot affect a newer turn.
+  Cancellation also retains tool calls dispatched before the SDK publishes them.
+
 - The Terminal-Bench seeded-sample regression uses a recorded selection-only population and the original sealed expected draw, so it always runs regardless of an optional corpus download. Real-corpus validation and historical seals are unchanged.
 
 - Recovery eval credit requires the authored seeded-test command on the workspace, an observed nonzero process exit, and its later successful rerun; unrelated failed/successful commands cannot substitute.
