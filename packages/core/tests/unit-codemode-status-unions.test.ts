@@ -24,7 +24,7 @@ describe('codemode declared status unions come from the shared constants', () =>
   test('tasks.update declares every TASK_STATUS', () => {
     const ws = createTestWorkspace();
     const provider = createTasksCodemodeProvider(
-      new TaskListStore(ws.sql),
+      new TaskListStore(ws.sql, write => ws.db.transaction(write)()),
       createAgentConfigStore(ws.sql),
     );
     const types = provider.types ?? '';

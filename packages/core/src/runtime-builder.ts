@@ -48,6 +48,7 @@ export interface ModelLaneComponents {
 
 export interface RuntimeComponents {
   sql: SqlExecutor;
+  transactionSync<T>(write: () => T): T;
   execRaw: RawSqlExec;
   vfs: VFS;
   /** Where this agent's own state lives when `vfs` is a shared plane. The CLI
@@ -138,7 +139,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const pinned: PinnedLanes = {};
 
   return {
-    storage: { vfs, sql, execRaw },
+    storage: { vfs, sql, execRaw, transactionSync: components.transactionSync },
     agentStateVfs,
     memory,
     executor,

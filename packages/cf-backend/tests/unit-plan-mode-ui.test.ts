@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { planReviewAwaitingDecision } from '@kinu.run/core';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 const hook = source('src/hooks/use-kinu.ts');
 const page = source('src/pages/WorkspacePage.tsx');
-const output = source('src/components/surfaces/OutputSurface.tsx');
 // The composer is one shared component now; the mode control and the
 // Steer-as-Branch gate moved into it out of WorkspacePage.
 const composer = source('src/components/Composer.tsx');
@@ -40,27 +38,6 @@ describe('Plan mode browser contract', () => {
   test('a streaming Plan turn cannot expose Steer-as-Branch', () => {
     expect(composer).toContain('mode?.value !== "plan"');
     expect(page).toContain('!t || !state.isStreaming || effectiveChatMode === "plan"');
-  });
-
-  test('a new plan owns Outputs focus and preview cannot steal it mid-review', () => {
-    expect(page).toContain('visiblePlan?.status === "pending"');
-    expect(page).toContain('visiblePlan?.status === "changes_requested"');
-    expect(page).toContain('if (key && key !== previousPlanRef.current) setSurface("Output")');
-    expect(output).toContain('type OutputView = "preview" | "diff" | "plan"');
-    expect(output).toContain('lazy(() => import("./PlanReviewView"))');
-    expect(output).toContain('if (plan) setView("plan")');
-    expect(output).toContain('!planReviewAwaitingDecision(plan)');
-    expect(planReviewAwaitingDecision({ status: 'pending', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'changes_requested', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'approved', handoffAccepted: false })).toBe(true);
-    expect(planReviewAwaitingDecision({ status: 'approved', handoffAccepted: true })).toBe(false);
-  });
-
-  test('Outputs follows actual work and keeps same-numbered previews distinct', () => {
-    expect(output).toContain('pickDefaultExecutor(executors, lastActiveExecutor)');
-    expect(output).toContain('key={previewPortId(p)}');
-    expect(output).toContain('selectPreviewPort(pinnedPorts, activeId)');
-    expect(output).toContain('executorLabel(p.executor)');
   });
 
   test('reuses the supported Plannotator primitives inside Kinu ownership', () => {

@@ -53,6 +53,7 @@ import {
 } from '../utils/json';
 import { renderThrownChain, KinuError } from '../obs/index';
 import type { WorkMode } from '../prompting/surface';
+import { bindTaskPlan } from '../tasks/plan-scope';
 import { currentWorkMode, requireWorkModePermission, runWorkModeInvocation } from '../execution/work-mode';
 
 type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
@@ -487,6 +488,9 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   // 4. Execute through the platform executor (codemode/DynamicWorkerExecutor on CF).
   const exec: Executor = rt.executor;
   const providers = assembleProviders(rt, hostProvider, opts, mode);
+  for (const provider of providers) {
+    for (const [name, invoke] of Object.entries(provider.fns)) provider.fns[name] = bindTaskPlan(invoke);
+  }
 
   assertScaffoldActive(opts);
   const result = await runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers));

@@ -217,22 +217,7 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
   const page = await openFrame(browser, origin, 'workspacepage', 'dark', { width: 1280, height: 900 });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
-  await page.evaluate(() => {
-    const panel = document.querySelectorAll('[data-panel]')[1];
-    const output = [...(panel?.querySelectorAll('button') ?? [])].find((button) => button.textContent?.trim() === 'Output');
-    if (!(output instanceof HTMLButtonElement)) throw new Error('WorkspacePage has no Output tab');
-    output.click();
-  });
-  await page.waitForFunction(() => {
-    const panel = document.querySelectorAll('[data-panel]')[1];
-    return [...(panel?.querySelectorAll('button') ?? [])].some((button) => button.textContent?.trim() === 'plan');
-  });
-  await page.evaluate(() => {
-    const panel = document.querySelectorAll('[data-panel]')[1];
-    const plan = [...(panel?.querySelectorAll('button') ?? [])].find((button) => button.textContent?.trim() === 'plan');
-    if (!(plan instanceof HTMLButtonElement)) throw new Error('Output has no Plan tab');
-    plan.click();
-  });
+  await page.click('[aria-label="Work"]');
   await page.waitForSelector('[data-plan-review-root]');
   await page.waitForFunction(
     () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
@@ -393,7 +378,7 @@ describe('the plan review document, as a browser lays it out', () => {
     expect(observed.mobile.footerInsideViewport).toBe(true);
   });
 
-  test('the real WorkspacePage route keeps the rail over its narrow Output column', () => {
+  test('the real WorkspacePage route keeps the rail over its narrow Work column', () => {
     expect(observed.workspace.title).toBe('Repair the applyCoupon eligibility guard');
     expect(observed.workspace.rootWidth).toBeLessThan(500);
     expect(observed.workspace.railPosition).toBe('absolute');

@@ -4,6 +4,8 @@ import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { boundedInt } from '../utils/bounds';
 
 // One plan_reviews row holds content plus annotations_json. The platform
 // caps that row at do.sqlite.row_bytes. Both caps below fit inside it
@@ -48,6 +50,22 @@ export interface PlanReviewAnnotation {
   readonly mathTargets?: readonly PlanAnnotationMathTarget[];
 }
 
+const PlanReviewStatusSchema = v.picklist([
+  'pending', 'changes_requested', 'approved', 'superseded',
+]);
+
+export const PlanReviewSchema = v.object({
+  id: v.string(), sessionId: v.string(), revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  content: v.string(), status: PlanReviewStatusSchema,
+  annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly PlanReviewAnnotation[] => {
+    const admitted = admitPlanReviewAnnotations(dataset.value);
+    if (!admitted.ok) { addIssue({ message: admitted.error }); return NEVER; }
+    return admitted.annotations;
+  })),
+  feedback: v.nullable(v.string()), handoffAccepted: v.boolean(),
+  createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
+});
+
 export interface PlanReview {
   readonly id: string;
   readonly sessionId: string;
@@ -89,9 +107,6 @@ interface PlanReviewRow {
   decided_at: number | null;
 }
 
-const PlanReviewStatusSchema = v.picklist([
-  'pending', 'changes_requested', 'approved', 'superseded',
-]);
 const PLAN_ANNOTATION_FIELDS = new Set([
   'id', 'blockId', 'startOffset', 'endOffset', 'type', 'text', 'originalText',
   'createdA', 'author', 'startMeta', 'endMeta', 'mathTargets',
@@ -322,6 +337,17 @@ export class PlanReviewStore {
   constructor(private readonly sql: SqlExecutor, options: PlanReviewStoreOptions = {}) {
     this.newId = options.newId ?? (() => `plan-${nanoid(12)}`);
     this.now = options.now ?? Date.now;
+  }
+
+  listPage(sessionId: string, request: PageRequest = {}): Page<PlanReview> {
+    const limit = boundedInt(request.limit, 20, 1, 50);
+    const after = request.cursor?.after;
+    const anchor = after === undefined ? null : this.sql<{ rowid: number }>`SELECT rowid FROM plan_reviews WHERE session_id=${sessionId} AND id || ':' || revision=${after}`[0];
+    if (after !== undefined && !anchor) throw new StaleCursorError('plan history', after);
+    const rows = anchor
+      ? this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE session_id=${sessionId} AND rowid<${anchor.rowid} ORDER BY rowid DESC LIMIT ${limit + 1}`
+      : this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE session_id=${sessionId} ORDER BY rowid DESC LIMIT ${limit + 1}`;
+    return seekPage(rows.map(toPlanReview), limit, plan => plan.id + ':' + plan.revision);
   }
 
   get(id: string, revision: number): PlanReview | null {

@@ -32,11 +32,13 @@ import {
   runScaffold,
   type ScaffoldDefaultInferenceChunk,
   type ScaffoldRunOptions,
+  type ScaffoldEmitFn,
 } from './executor';
 import { projectJsonValue } from '../utils/json';
 import { scaffoldEventsToUIStream } from './ui-stream';
 import { currentWorkMode } from '../execution/work-mode';
 import type { ActorTurnProgram } from '../orchestrator/actor-program';
+import { bindTaskPlan } from '../tasks/plan-scope';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
  *  backend SDK (layering), and the seam only needs this shape. */
@@ -61,28 +63,22 @@ export function scaffoldInferenceTransform(opts: {
   if (program.kind === 'builtin' || (run.workMode ?? currentWorkMode()) === 'plan') return result;
 
   let delegated = false;
+  // Capture at preparation, not when the lazy generator is finally consumed.
+  const execute = bindTaskPlan(({ emit, options }: { emit: ScaffoldEmitFn; options: Parameters<InferenceStreamResult['toUIMessageStream']>[0] }) => runScaffold({
+    ...run, emit,
+    scaffoldCodeOverride: program.source,
+    defaultInference: () => {
+      delegated = true;
+      return wrapDefaultStream(result.toUIMessageStream(options));
+    },
+  }).finally(async () => {
+    if (!delegated) await result.toUIMessageStream(options)[Symbol.asyncIterator]().return?.();
+  }));
   return {
-    toUIMessageStream: (options) =>
-      scaffoldEventsToUIStream((emit) =>
-        runScaffold({
-          ...run,
-          emit,
-          scaffoldCodeOverride: program.source,
-          defaultInference: () => {
-            delegated = true;
-            return wrapDefaultStream(result.toUIMessageStream(options));
-          },
-        }).finally(async () => {
-          // Returning the iterator cancels the orphaned default stream.
-          // Awaited and unguarded: a cancellation that fails means the model
-          // request is still running and still being billed, which is the one
-          // outcome this seam exists to prevent.
-          if (!delegated) await result.toUIMessageStream(options)[Symbol.asyncIterator]().return?.();
-        }),
-        { sendReasoning: options?.sendReasoning },
-      ),
-    // Structured output (workflow turns) resolves only if the scaffold
-    // delegated (the promise belongs to the default stream).
+    toUIMessageStream: (options) => scaffoldEventsToUIStream(
+      (emit) => execute({ emit, options }),
+      { sendReasoning: options?.sendReasoning },
+    ),
     output: result.output,
   };
 }

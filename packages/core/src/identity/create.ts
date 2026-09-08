@@ -59,7 +59,7 @@ function buildComponents(
   const schedule = createInlineSchedule(sql);
 
   return buildRuntime({
-    sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
+    sql, execRaw, transactionSync: write => db.transaction(write)(), vfs, llm, executor, schedule, shell: workspace.shell,
     agentId: config.agentId, agentName: config.agentName,
     memory, craftStore,
     /**

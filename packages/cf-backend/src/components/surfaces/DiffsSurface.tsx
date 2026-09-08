@@ -1,127 +1,14 @@
-/**
- * Output surface — what the agent PRODUCED. Two views: the live app Preview
- * (exposePort, promoted out of the buried Executors card) and the cumulative
- * Workspace Diff (the change-set since the baseline — code/docs/data the agent
- * wrote, reviewable, with "mark reviewed" to re-baseline). Generic artifact
- * viewers (media/reports) layer in here over time.
- */
-import { lazy, Suspense, useState, useEffect, useCallback, useRef } from "react";
+/** Cumulative changes on the selected execution environment. */
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { MonitorIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon, NotePencilIcon } from "@phosphor-icons/react";
+import { GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
-import { planReviewAwaitingDecision, type FileDiff, type PlanReview } from "@kinu.run/core";
-import {
-  executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor, type ExecutorInfo,
-} from "@/lib/executors";
-import { PreviewFrame } from "@/components/PreviewFrame";
+import type { FileDiff } from "@kinu.run/core";
+import { executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor, type ExecutorInfo } from "@/lib/executors";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { tabCls } from "@/components/ui/form";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";
-import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
-
-export interface PinnedPort { executor: string; port: number; url: string; name?: string }
-
-const PlanReviewView = lazy(() => import("./PlanReviewView"));
-
-export interface OutputSurfaceProps {
-  pinnedPorts: PinnedPort[];
-  previewError: string | null;
-  onRefreshPorts: () => void;
-  executors: ExecutorInfo[];
-  lastActiveExecutor?: string | null;
-  plan: PlanReview | null;
-  rpc: Rpc;
-  planRpc?: Rpc;
-}
-
-type OutputView = "preview" | "diff" | "plan";
-
-export function OutputSurface({
-  pinnedPorts, previewError, onRefreshPorts, executors, lastActiveExecutor, plan, rpc, planRpc,
-}: OutputSurfaceProps) {
-  const [view, setView] = useState<OutputView>(plan ? "plan" : pinnedPorts.length > 0 ? "preview" : "diff");
-  useEffect(() => {
-    if (pinnedPorts.length > 0 && !planReviewAwaitingDecision(plan)) setView("preview");
-  }, [pinnedPorts.length, plan?.status, plan?.handoffAccepted]);
-  useEffect(() => {
-    if (plan) setView("plan");
-  }, [plan?.id, plan?.revision]);
-  return (
-    <div className="h-full flex flex-col -m-5">
-      <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border shrink-0">
-        {(["preview", "diff", "plan"] as const).map((v) => (
-          <button key={v} onClick={() => setView(v)}
-            className={`px-2.5 py-1 text-[11px] rounded-md capitalize transition-colors flex items-center gap-1.5 ${view === v ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
-            {v === "preview" ? <MonitorIcon size={12} /> : v === "diff" ? <GitDiffIcon size={12} /> : <NotePencilIcon size={12} />}{v}
-            {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full p-dot-success" />}
-            {v === "plan" && plan?.status === "pending" && <span className="size-1.5 rounded-full p-dot-accent" />}
-          </button>
-        ))}
-      </div>
-      <div className="flex-1 min-h-0">
-        {view === "preview" ? <PreviewView pinnedPorts={pinnedPorts} error={previewError} onRetry={onRefreshPorts} />
-          : view === "diff" ? <DiffView executors={executors} lastActiveExecutor={lastActiveExecutor} rpc={rpc} />
-            : <Suspense fallback={<div className="h-full grid place-items-center"><Loader size="sm" /></div>}>
-                <PlanReviewView plan={plan} rpc={planRpc ?? rpc} />
-              </Suspense>}
-      </div>
-    </div>
-  );
-}
-
-/* ── Live preview ──────────────────────────────────────────────── */
-
-function PreviewView({ pinnedPorts, error, onRetry }: {
-  pinnedPorts: PinnedPort[];
-  error: string | null;
-  onRetry: () => void;
-}) {
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const port = selectPreviewPort(pinnedPorts, activeId);
-  const selectedId = port ? previewPortId(port) : null;
-  useEffect(() => {
-    if (activeId !== selectedId) setActiveId(selectedId);
-  }, [activeId, selectedId]);
-  if (pinnedPorts.length === 0) {
-    if (error) return <div className="p-5"><LoadFailure what="live previews" message={error} onRetry={onRetry} /></div>;
-    return <div className="p-5"><EmptyState icon={<MonitorIcon size={28} />} title="No live output yet" hint={EMPTY_HINTS.preview} /></div>;
-  }
-  if (!port) return null;
-  return (
-    <div className="flex flex-col h-full">
-      {error && <LoadFailure what="all live previews" message={error} onRetry={onRetry} className="border-b p-border px-3 py-2" />}
-      {pinnedPorts.length > 1 && (
-        <div className="flex items-center px-2 border-b p-border">
-          {pinnedPorts.map((p) => (
-            <button key={previewPortId(p)} onClick={() => setActiveId(previewPortId(p))}
-              className={`${tabCls} py-1.5 text-[11px] ${previewPortId(p) === selectedId ? "p-tab-active" : ""}`}>
-              {p.name ?? `${executorLabel(p.executor)} · :${p.port}`}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="flex-1 min-h-0">
-        <PreviewFrame url={port.url} label={`${executorLabel(port.executor)} · :${port.port}${port.name ? ` · ${port.name}` : ""}`} />
-      </div>
-    </div>
-  );
-}
-
-export function previewPortId(port: Pick<PinnedPort, "executor" | "port">): string {
-  return `${port.executor}:${port.port}`;
-}
-
-export function selectPreviewPort(
-  ports: readonly PinnedPort[],
-  activeId: string | null,
-): PinnedPort | null {
-  return (activeId === null ? null : ports.find((port) => previewPortId(port) === activeId))
-    ?? ports[0]
-    ?? null;
-}
-
-/* ── Cumulative workspace diff ─────────────────────────────────── */
+import { EmptyState, DiffLines } from "./shared";
 
 const STATUS_TONE = {
   added: "p-success",
@@ -140,12 +27,14 @@ interface DiffResult {
 interface LoadedDiff {
   executor: string;
   result: DiffResult;
+  hasChanges: boolean;
 }
 
-function DiffView({ executors, lastActiveExecutor, rpc }: {
+export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }: {
   executors: ExecutorInfo[];
   lastActiveExecutor?: string | null;
   rpc: Rpc;
+  onPresence: (present: boolean) => void;
 }) {
   const { set: expanded, toggle, clear: clearExpanded } = useToggledSet();
   const [busy, setBusy] = useState(false);
@@ -175,10 +64,13 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
     }
   }, [defaultExecutor, exec, options]);
 
-  const load = useCallback(async (): Promise<LoadedDiff> => ({
-    executor: exec,
-    result: await rpc<DiffResult>("getExecutorDiff", [exec]),
-  }), [rpc, exec]);
+  const executorKey = options.join("\n");
+  const load = useCallback(async (): Promise<LoadedDiff> => {
+    const rows = await Promise.all(executorKey.split("\n").map(async executor => ({ executor, result: await rpc<DiffResult>("getExecutorDiff", [executor]) })));
+    const selected = rows.find(row => row.executor === exec);
+    if (!selected) throw new Error("The selected change-set executor is unavailable");
+    return { ...selected, hasChanges: rows.some(row => row.result.files.length > 0 || !!row.result.error) };
+  }, [rpc, exec, executorKey]);
   const revalidate = useCallback(() => 2_000, []);
   const { resource, reload } = useAsyncResource(load, revalidate);
   const loaded = lastValue(resource);
@@ -197,6 +89,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: {
 
 
   const files = result?.files ?? [];
+  useEffect(() => { onPresence(loaded?.hasChanges === true || resource.status === "error" || !!result?.error); }, [loaded?.hasChanges, resource.status, result?.error, onPresence]);
 
   return (
     <div className="h-full overflow-y-auto p-5">

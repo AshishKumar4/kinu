@@ -592,6 +592,7 @@ export function createCLIRuntime(
   if (laptop) executionRouter.register(laptop);
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
+    transactionSync: write => db.transaction(write)(),
     sql,
     execRaw,
     vfs: agentVfs,
@@ -872,6 +873,7 @@ export function buildCLIHeadRuntime(
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
+    transactionSync: write => db.transaction(write)(),
     sql, execRaw, vfs: agentVfs, agentStateVfs,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore,
