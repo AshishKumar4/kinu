@@ -42,6 +42,7 @@ function createFullCLIRuntime() {
   execRaw('CREATE TABLE IF NOT EXISTS workspace_identity (id TEXT, name TEXT)');
   const agentId = crypto.randomUUID();
   db.run('INSERT INTO workspace_identity (id, name) VALUES (?, ?)', [agentId, 'cli-agent']);
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'cli-agent');
 
   const identity: Identity = {
     id: agentId,
@@ -51,12 +52,13 @@ function createFullCLIRuntime() {
       exists: () => vfs.exists('scaffold/agent.js'),
       read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
       write: (code) => vfs.writeFile('scaffold/agent.js', code),
-      version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+      version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
+        FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
     },
   };
 
   const rt: AgentRuntime = {
-    actor: createTestActor(sql, execRaw, crypto.randomUUID(), 'cli-agent'),
+    actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory,
     executor,

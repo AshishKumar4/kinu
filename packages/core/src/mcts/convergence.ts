@@ -186,8 +186,9 @@ async function recordTaskOutcome(
   score: number,
 ): Promise<void> {
   const scaffoldVersion = await rt.identity.scaffold.version();
+  rt.actor.assertCurrent();
   void rt.storage.sql`
-    INSERT INTO task_history (task, scaffold_version, outcome, score)
-    VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
+    INSERT INTO task_history (actor_id, task, scaffold_version, outcome, score)
+    VALUES (${rt.actor.actorId}, ${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
   `;
 }

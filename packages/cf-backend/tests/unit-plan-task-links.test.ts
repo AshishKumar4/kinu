@@ -83,8 +83,10 @@ test('actual owner approval admits the real Think program and attributes its nat
   const source = "async function run() { await host.callTool(\"tasks\", { action: \"add\", titles: [\"host task\"] }); }";
   await files.writeFile(rt.identity.scaffold.path, source);
   await files.writeFile(rt.identity.scaffold.path + '.v1', source);
-  db.exec("UPDATE scaffold_versions SET status = 'historical' WHERE status = 'current'");
-  db.query("INSERT INTO scaffold_versions(version,written_at,rationale,status) VALUES(1,1,'plan scope regression','current')").run();
+  db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
+    .run(rt.actor.actorId);
+  db.query("INSERT INTO scaffold_versions(actor_id,version,written_at,rationale,status) VALUES(?,1,1,'plan scope regression','current')")
+    .run(rt.actor.actorId);
   const plans = new PlanReviewStore(rt.storage.sql);
   const submitted = plans.submit('default', [{ start: 1, content: '# Implement the two tasks' }]);
   if (!submitted.ok) throw new Error(submitted.error);

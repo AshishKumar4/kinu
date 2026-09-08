@@ -17,7 +17,9 @@ function actor(path: string[], owner = 'owner') {
   const children = new Map<string, SubordinateInspectionPort>();
   const opened: string[] = [];
   const access: SubordinateInspectionAccess = {
-    sql: rt.storage.sql, raw,
+    // The actor whose storage tree this hop stands in — every scoped read below
+    // it answers for this one and no sibling in the same database.
+    sql: rt.storage.sql, actor: rt.actor, raw,
     storedParentPath: async () => parentPath,
     storedPhysicalKey: async () => path.at(-1),
     existing: async (child) => { opened.push(child.name); const port = children.get(child.name); return port ? { port, storageKey: child.name } : null; },
@@ -43,7 +45,7 @@ describe('owner reads of retained subordinate paths', () => {
   test('nested archived tool events page without changing the stored work', async () => {
     const root = actor([]); const child = actor(['child']); const leaf = actor(['child', 'leaf']);
     root.add('child', child.port); child.add('leaf', leaf.port);
-    const events = new RunEventRecorder(leaf.rt.storage.sql);
+    const events = new RunEventRecorder(leaf.rt.storage.sql, leaf.rt.actor);
     events.emit('run', { type: 'run_start', agentId: 'leaf' });
     events.emit('run', { type: 'tool_call_end', name: 'agents', toolCallId: 'ask-1', args: { action: 'ask', role: 'general' }, result: { agent: 'nested', transcript: 'kept' }, outcome: { success: true } });
     events.emit('run', { type: 'run_end', reason: 'completed' });
@@ -90,10 +92,11 @@ describe('owner reads of retained subordinate paths', () => {
 
   test('run and history pages retain their own continuation cursors', async () => {
     const root = actor([]); const child = actor(['child']); root.add('child', child.port);
-    const events = new RunEventRecorder(child.rt.storage.sql);
+    const events = new RunEventRecorder(child.rt.storage.sql, child.rt.actor);
     for (const id of ['one', 'two', 'three']) {
       events.emit(id, { type: 'run_start', agentId: 'child', userMessage: id });
-      void child.rt.storage.sql`INSERT INTO messages (id,role,content,created_at) VALUES (${id}, 'user', ${id}, ${id})`;
+      void child.rt.storage.sql`INSERT INTO messages (actor_id,id,role,content,created_at)
+        VALUES (${child.rt.actor.actorId}, ${id}, 'user', ${id}, ${id})`;
     }
     const runs = await read(root, { path: ['child'], view: 'runs', page: { limit: 2 } });
     if (runs.view !== 'runs' || runs.page.status !== 'more') throw new Error('Expected another run page');
@@ -113,7 +116,8 @@ describe('owner reads of retained subordinate paths', () => {
   test('retained history uses the exact roster name without an inspection-only cap', async () => {
     const name = 'reader'.repeat(30);
     const root = actor([]); const child = actor([name]); root.add(name, child.port);
-    void child.rt.storage.sql`INSERT INTO messages (id,role,content,created_at) VALUES ('message', 'user', 'retained answer', 1)`;
+    void child.rt.storage.sql`INSERT INTO messages (actor_id,id,role,content,created_at)
+      VALUES (${child.rt.actor.actorId}, 'message', 'user', 'retained answer', 1)`;
     expect(await read(root, { path: [name], view: 'history', page: {} })).toMatchObject({
       view: 'history', path: [name], page: { status: 'end', items: [{ content: 'retained answer' }] },
     });

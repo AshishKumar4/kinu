@@ -30,7 +30,7 @@ import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from './helpers';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
 
 const TASK = 'what did we decide about the codename?';
 const LIVE_ANSWER = '<<live-answer>>';
@@ -73,10 +73,10 @@ async function setup(): Promise<AgentRuntime> {
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   rt.executor = evalExecutor();
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'initial', 'current')`;
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, 'candidate', 'pending')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'candidate', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', PENDING_SOURCE);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "live" }; }');
   return rt;
@@ -159,9 +159,9 @@ describe('the interactive path runs no trial', () => {
     expect(outcome).toBe('queued');
     // The candidate was never built, never run, never judged.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
-    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
     // What it left behind instead: one durable row, carrying the whole turn.
-    const queued = listQueuedShadowTrials(rt.storage.sql, 1);
+    const queued = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1);
     expect(queued).toHaveLength(1);
     expect(queued[0].task).toBe(TASK);
     expect(queued[0].currentOutput).toBe(LIVE_ANSWER);
@@ -172,7 +172,7 @@ describe('the interactive path runs no trial', () => {
     const rt = await setup();
     const unsampled = countedControl(rt, { sampleRate: 0 });
     expect(shadowTrialPlan(unsampled.control, 'turn-1')).toBeNull();
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
 
     const sampled = countedControl(rt, { sampleRate: 1 });
     expect(shadowTrialPlan(sampled.control, 'turn-1')).toBe(1);
@@ -187,7 +187,8 @@ describe('the interactive path runs no trial', () => {
     expect(sampledCount).toBeGreaterThan(0);
     expect(sampledCount).toBeLessThan(keys.length);
 
-    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
+      WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
     const resolved = countedControl(rt);
     expect(shadowTrialPlan(resolved.control, 'turn-1')).toBeNull();
     expect(resolved.counts.surface).toBe(0);
@@ -201,7 +202,7 @@ describe('the interactive path runs no trial', () => {
     }
     expect(queueTurnShadowTrial(control, { task: 'one more', currentOutput: 'a', context: [] }, PLAN))
       .toBe('queue_full');
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(MAX_QUEUED_SHADOW_TRIALS);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(MAX_QUEUED_SHADOW_TRIALS);
   });
 });
 
@@ -211,21 +212,20 @@ describe('a queued trial is not evidence', () => {
     const { control } = countedControl(rt);
     // Four decisive wins recorded — one short of the ladder's minimum.
     for (let i = 0; i < 4; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations
-        (id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
     for (let i = 0; i < 6; i++) {
       queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
 
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     // Ten trials exist in some sense; four have been RUN, and only those count.
     expect(pending.trialsSoFar).toBe(4);
     expect(decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision).toBe('continue');
 
-    const status = getShadowStatus(rt.storage.sql);
+    const status = getShadowStatus(rt.storage.sql, rt.actor);
     expect(status.hasPending).toBe(true);
     if (!status.hasPending) throw new Error('unreachable');
     expect(status.queuedTrials).toBe(6);
@@ -248,8 +248,8 @@ describe('the offline drain is what executes trials', () => {
     expect(drain).toEqual({ trials: 1, applied: null });
     expect(counts.surface).toBe(1);
     expect(counts.judge).toBe(2); // the order-swapped pair
-    expect(getPendingScaffold(rt.storage.sql)!.trialsSoFar).toBe(1);
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.trialsSoFar).toBe(1);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
     // The candidate ran against the turn's OWN conversation, not a task-text
     // reconstruction of it — the shadow-parity contract, carried through the
     // queue rather than through a live closure.
@@ -259,10 +259,9 @@ describe('the offline drain is what executes trials', () => {
   test('a conclusive gate promotes from the drain, and the stale queue is discarded', async () => {
     const rt = await setup();
     for (let i = 0; i < 5; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations
-        (id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
     const counted = countedControl(rt, { autoPromote: true });
     const control: ScaffoldControl = {
@@ -277,11 +276,12 @@ describe('the offline drain is what executes trials', () => {
 
     expect(drain).toEqual({ trials: 1, applied: 'promote' });
     const statuses = new Map(rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions`.map((r) => [r.version, r.status]));
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId}`.map((r) => [r.version, r.status]));
     expect(statuses.get(1)).toBe('current');
     // The two trials still queued were evidence about a candidate nobody is
     // deciding on any more.
-    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
   });
 
   test('trials for a version that is no longer pending are discarded, not run', async () => {
@@ -289,13 +289,14 @@ describe('the offline drain is what executes trials', () => {
     const { control, counts } = countedControl(rt);
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     // The operator resolved it by hand while the trial sat in the queue.
-    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
+      WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
 
     const drain = await runQueuedShadowTrials(control);
 
     expect(drain).toEqual({ trials: 0, applied: null });
     expect(counts.surface).toBe(0);
-    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
   });
 
   test('a trial that throws is dropped rather than wedging the queue', async () => {
@@ -310,8 +311,8 @@ describe('the offline drain is what executes trials', () => {
     const drain = await runQueuedShadowTrials(control);
 
     expect(drain.applied).toBeNull();
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
-    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
   });
 });
 
@@ -340,17 +341,17 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     // No evolution state: nothing recorded for a later evolution-enabled host
     // to evolve on this run's behalf. Asserted before the drain as well as
     // after it, or a drain that ran would hide a turn that queued.
-    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
 
     await engine.runDueShadowTrials();
 
-    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
-    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
     // No evolution compute: no candidate rollout, no judge call.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
     // The candidate an earlier run left pending is untouched, not lost — the
     // next host that does evolve resolves it.
-    expect(getPendingScaffold(rt.storage.sql)?.version).toBe(1);
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(1);
   });
 
   test('such a host does not drain what an earlier evolution-enabled run queued', async () => {
@@ -364,10 +365,10 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     // The candidate rollout and its two judge calls are evolution compute, and
     // this run was told to spend none.
     expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
-    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations WHERE actor_id = ${rt.actor.actorId}`).toHaveLength(0);
     // Deferred, not dropped: the queue is durable, so the evidence waits for a
     // host that does evolve rather than being consumed by one that does not.
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(1);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(1);
   });
 
   test('the same turn on an evolution-enabled host queues one row and drains it', async () => {
@@ -376,13 +377,13 @@ describe('auto-evolution off runs no trial and leaves no trial to run', () => {
     const engine = hostEngine(rt, control, true);
 
     engine.queueShadowTrial(completedTurn(), CONTEXT, PLAN);
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(1);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(1);
 
     await engine.runDueShadowTrials();
 
-    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
+    expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(0);
     expect(counts.judge).toBe(2);
-    expect(getPendingScaffold(rt.storage.sql)?.trialsSoFar).toBe(1);
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)?.trialsSoFar).toBe(1);
   });
 });
 
@@ -401,7 +402,7 @@ describe('the stored replay context is bounded', () => {
 
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: huge }, PLAN);
 
-    const stored = listQueuedShadowTrials(rt.storage.sql, 1)[0].context;
+    const stored = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)[0].context;
     expect(stored.length).toBeLessThan(huge.length);
     expect(stored[0].role).toBe('user');
     expect(stored[stored.length - 1]).toEqual(huge[huge.length - 1]);
@@ -416,10 +417,10 @@ describe('a keyed trial survives the consumption of its queue row', () => {
   function openQueue() {
     const { sql, execRaw } = createTestSql();
     initShadowTables(execRaw);
-    return sql;
+    return { sql, actor: testActorHandle(sql) };
   }
   const trial = (id?: string, now?: number) => {
-    const args: Parameters<typeof queueShadowTrial>[1] = {
+    const args: Parameters<typeof queueShadowTrial>[2] = {
       pendingVersion: 2, task: TASK, currentOutput: LIVE_ANSWER, context: [],
     };
     if (id !== undefined) args.id = id;
@@ -428,34 +429,34 @@ describe('a keyed trial survives the consumption of its queue row', () => {
   };
 
   test('re-queueing a consumed key creates no second trial', () => {
-    const sql = openQueue();
-    expect(queueShadowTrial(sql, trial('trial:seq-1', 1))).toBe('queued');
-    expect(listQueuedShadowTrials(sql, 2)).toHaveLength(1);
+    const { sql, actor } = openQueue();
+    expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 1))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, actor, 2)).toHaveLength(1);
 
     // Scored, and the row that carried it deleted.
-    dropQueuedShadowTrial(sql, 'trial:seq-1');
-    expect(listQueuedShadowTrials(sql, 2)).toEqual([]);
+    dropQueuedShadowTrial(sql, actor, 'trial:seq-1');
+    expect(listQueuedShadowTrials(sql, actor, 2)).toEqual([]);
 
     // The replay: the obligation is discharged and nothing is queued for a
     // second scoring.
-    expect(queueShadowTrial(sql, trial('trial:seq-1', 9))).toBe('queued');
-    expect(listQueuedShadowTrials(sql, 2)).toEqual([]);
+    expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 9))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, actor, 2)).toEqual([]);
   });
 
   test('a full queue does not make a consumed key report queue_full', () => {
-    const sql = openQueue();
-    queueShadowTrial(sql, trial('trial:seq-1', 1));
-    dropQueuedShadowTrial(sql, 'trial:seq-1');
-    for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) queueShadowTrial(sql, trial());
+    const { sql, actor } = openQueue();
+    queueShadowTrial(sql, actor, trial('trial:seq-1', 1));
+    dropQueuedShadowTrial(sql, actor, 'trial:seq-1');
+    for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) queueShadowTrial(sql, actor, trial());
 
-    expect(queueShadowTrial(sql, trial('trial:seq-1', 9))).toBe('queued');
-    expect(queueShadowTrial(sql, trial())).toBe('queue_full');
+    expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 9))).toBe('queued');
+    expect(queueShadowTrial(sql, actor, trial())).toBe('queue_full');
   });
 
   test('unkeyed queueings stay distinct — two turns, two trials', () => {
-    const sql = openQueue();
-    expect(queueShadowTrial(sql, trial(undefined, 1))).toBe('queued');
-    expect(queueShadowTrial(sql, trial(undefined, 2))).toBe('queued');
-    expect(listQueuedShadowTrials(sql, 2)).toHaveLength(2);
+    const { sql, actor } = openQueue();
+    expect(queueShadowTrial(sql, actor, trial(undefined, 1))).toBe('queued');
+    expect(queueShadowTrial(sql, actor, trial(undefined, 2))).toBe('queued');
+    expect(listQueuedShadowTrials(sql, actor, 2)).toHaveLength(2);
   });
 });

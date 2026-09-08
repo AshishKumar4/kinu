@@ -80,10 +80,10 @@ describe('the readers can see the end of a long turn', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
@@ -110,7 +110,8 @@ describe('the readers can see the end of a long turn', () => {
     // One window, judged and recorded: the row is the evidence the verdict was
     // formed on, not a differently-truncated view of it.
     const row = rt.storage.sql<{ task: string; current_output: string }>`
-      SELECT task, current_output FROM scaffold_evaluations LIMIT 1`[0]!;
+      SELECT task, current_output FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0]!;
     expect(row.task).toBe(evidenceWindow(trajectory(20_000, `ASK-${ending}`), EVIDENCE_BUDGETS.shadowTask));
     expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
@@ -123,10 +124,10 @@ describe('the readers can see the end of a long turn', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];

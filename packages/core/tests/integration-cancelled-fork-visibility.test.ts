@@ -26,6 +26,7 @@ import {
 } from '../src/prompting/volatile-context';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 const HEADS = 4;
@@ -180,7 +181,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('the fork run that died is closed in the run-event ledger, not left mid-split', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // The dispatching turn, as the ledger records a split.
     recorder.emit(RUN, {
@@ -205,7 +207,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a fork whose split was never recorded reconciles without inventing a run', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // No `head_split` row: a benchmark trial, or a fork dispatched before the
     // ledger existed. There is no run to close, and guessing one would put a
@@ -236,7 +239,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a run a dead activation left open is closed, and a live one is not touched', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // The turn that dispatched the fork, cut before it could close itself.
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
@@ -274,7 +278,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a second activation closes nothing again', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
 
     await reconcileInterruptedForks({

@@ -17,6 +17,7 @@ import {
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
+import { createTestActor } from '../../core/tests/helpers';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -69,10 +70,14 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initMctsSearchTable(execRaw);
   initBackgroundJobsTable(execRaw);
   const sql = makeSql(db);
+  // The local read models resolve this store's own main actor
+  // (`openWorkspaceMainActor`), and `run_events` is scoped by it — so the seed
+  // has to register a real workspace identity rather than only create tables.
+  const actor = createTestActor(sql, execRaw, 'debug-workspace', 'debug');
 
   // ── Runs: an older plain run, then the latest — which backgrounds a call
   // and is polled anyway (agent.jobResult right after the detach handle). ──
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, actor);
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
   // A second turn on the same run whose provider reported nothing at all — the

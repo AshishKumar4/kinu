@@ -21,7 +21,7 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { initAllTables } from '../src/identity/schema';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
 
 /** `count` distinct runs in the log, one event each, so a page bound is
  *  observable as a row count. */
@@ -30,7 +30,7 @@ function seededRuns(count: number) {
   initAllTables(execRaw, sql);
   initRunEventTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const recorder = new RunEventRecorder(sql);
+  const recorder = new RunEventRecorder(sql, testActorHandle(sql));
   for (let i = 0; i < count; i++) {
     recorder.emit(`run-${String(i).padStart(4, '0')}`, { type: 'run_start', agentId: 'a' });
   }

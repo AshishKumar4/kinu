@@ -39,10 +39,10 @@ async function setup(): Promise<AgentRuntime> {
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, 'delegating pending', 'pending')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'delegating pending', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', DELEGATING_PENDING);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }');
   return rt;
@@ -96,7 +96,8 @@ describe('shadow context parity', () => {
     // The judged pending output is the delegated full-context answer — the
     // ui_chunk text reached the eval row verbatim.
     const row = rt.storage.sql<{ pending_output: string; winner: string }>`
-      SELECT pending_output, winner FROM scaffold_evaluations`[0]!;
+      SELECT pending_output, winner FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId}`[0]!;
     expect(row.pending_output).toBe(CONTEXT_AWARE_ANSWER);
     expect(row.winner).toBe('tie');
   });

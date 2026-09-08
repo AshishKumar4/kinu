@@ -1,24 +1,35 @@
 // Behavior tests for ConversationSearchStore, the zero-LLM transcript reader
 // over the canonical `messages` table (the store both backends persist to).
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, type TestSql } from '@kinu.run/test-utils';
+import { createTestSql, testActorHandle, type TestSql } from '@kinu.run/test-utils';
 import { ConversationSearchStore, initAllTables } from '../src/index';
 
 interface Fixture { sql: TestSql['sql']; store: ConversationSearchStore }
+
+/**
+ * The one actor every fixture in this file binds.
+ *
+ * `messages` keys on (actor_id, id) and the store reads only its own actor's
+ * rows, so the seeded transcript and the store under test have to name the same
+ * actor — stated once here rather than repeated at each seed, because a seed
+ * that drifted from the handle would read as an empty index rather than as a
+ * mismatch.
+ */
+const ACTOR_ID = 'actor-search';
 
 let nextRow = 0;
 function insert(sql: TestSql['sql'], sessionId: string, role: string, content: string, createdAt?: number): string {
   const id = `m-${++nextRow}-${sessionId}`;
   const ts = createdAt ?? 1_000_000 + nextRow * 1000;
-  void sql`INSERT INTO messages (id, session_id, role, content, created_at)
-      VALUES (${id}, ${sessionId}, ${role}, ${content}, ${ts})`;
+  void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${ACTOR_ID}, ${id}, ${sessionId}, ${role}, ${content}, ${ts})`;
   return id;
 }
 
 function setup(): Fixture {
   const { sql, execRaw } = createTestSql();
   initAllTables(execRaw, sql);
-  return { sql, store: new ConversationSearchStore(sql) };
+  return { sql, store: new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID })) };
 }
 
 describe('ConversationSearchStore.search', () => {
@@ -222,7 +233,9 @@ describe('ConversationSearchStore.browse', () => {
         '{"id":"pane-user","role":"user","parts":[{"type":"text","text":"pane kickoff"}]}',
         '1970-01-01 00:00:01.000')`;
     insert(sql, 'peer-session', 'user', 'peer kickoff', 2_000);
-    const conversations = new ConversationSearchStore(sql).browse();
+    const conversations = new ConversationSearchStore(
+      sql, testActorHandle(sql, { actorId: ACTOR_ID }),
+    ).browse();
     expect(conversations.find((row) => row.conversationId === 'default')?.preview)
       .toBe('pane kickoff');
     expect(conversations.find((row) => row.conversationId === 'peer-session')?.preview)

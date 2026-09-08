@@ -37,8 +37,8 @@ function scaffoldSrc(tag: string): string {
 
 async function seedV0(rt: AgentRuntime): Promise<void> {
   await rt.identity.scaffold.write(scaffoldSrc('v0'));
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
 }
 
 function entry(over: Partial<ScaffoldArchiveEntry>): ScaffoldArchiveEntry {
@@ -58,18 +58,18 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     // and is rolled back — it becomes an archived stepping stone.
     const v1 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
     expect(v1.ok).toBe(true);
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: v1.version!, task: 't1',
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.8, pendingScore: 0.3 },
     });
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
 
     // v2 explicitly BRANCHES FROM the rolled-back v1, not the live current v0.
     const v2 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v2'), { baseVersion: v1.version });
     expect(v2.ok).toBe(true);
 
-    const archive = listScaffoldArchive(rt.storage.sql);
+    const archive = listScaffoldArchive(rt.storage.sql, rt.actor);
     const byVersion = new Map(archive.map((e) => [e.version, e]));
     expect(byVersion.get(v1.version!)!.parentVersion).toBe(0);
     expect(byVersion.get(v1.version!)!.status).toBe('rolled_back');
@@ -84,12 +84,12 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     expect(await readScaffoldVersion(rt, v1.version!)).toBe(scaffoldSrc('v1'));
 
     // And the v2 pending can win + promote like any trunk proposal.
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: v2.version!, task: 't2',
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.4, pendingScore: 0.9 },
     });
-    const outcome = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+    const outcome = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     expect(outcome.action).toBe('promote');
     expect(await rt.identity.scaffold.read()).toBe(scaffoldSrc('v2'));
   });
@@ -100,7 +100,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     const result = await modifyScaffold(rt, RATIONALE, scaffoldSrc('vX'), { baseVersion: 42 });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('base version v42 not found');
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
   });
 });
 
@@ -360,15 +360,15 @@ describe('rejected proposals are queryable evidence', () => {
     const result = await modifyScaffold(rt, RATIONALE, proposal);
     expect(result.ok).toBe(true);
     for (const winner of ['current', 'current', 'pending'] as const) {
-      recordShadowEvaluation(rt.storage.sql, {
+      recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: result.version!, task: 't',
         currentOutput: 'a', pendingOutput: 'b',
         judgeResult: { winner, rationale: `${winner} was clearer`, currentScore: 1, pendingScore: 0 },
       });
     }
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
 
-    const [rejected] = listRejectedProposals(rt.storage.sql);
+    const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
     expect(rejected!.kind).toBe('rolled_back');
     expect(rejected!.version).toBe(result.version!);
     expect(rejected!.reason).toBe('lost 2 of 3 decisive shadow trials');
@@ -380,9 +380,9 @@ describe('rejected proposals are queryable evidence', () => {
     const rt = setupRt();
     await seedV0(rt);
     await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
 
-    const [rejected] = listRejectedProposals(rt.storage.sql);
+    const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
     expect(rejected!.reason).toBe('discarded before any decisive shadow trial (0 trials, all ties)');
     expect(rejected!.pathology).toBeNull();
   });
@@ -396,7 +396,7 @@ describe('rejected proposals are queryable evidence', () => {
     const vetoed = `async function* run(rt, task) { await fetch("https://x"); }`;
     expect((await modifyScaffold(rt, RATIONALE, vetoed)).ok).toBe(false);
 
-    const [rejected] = listRejectedProposals(rt.storage.sql);
+    const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
     expect(rejected!.kind).toBe('misevolution_veto');
     expect(rejected!.version).toBeNull();
     expect(rejected!.reason).toContain('network-egress');
@@ -406,7 +406,7 @@ describe('rejected proposals are queryable evidence', () => {
   test('an archive with nothing refused answers with nothing', async () => {
     const rt = setupRt();
     await seedV0(rt);
-    expect(listRejectedProposals(rt.storage.sql)).toEqual([]);
+    expect(listRejectedProposals(rt.storage.sql, rt.actor)).toEqual([]);
   });
 });
 
@@ -474,7 +474,7 @@ describe('the named pathology is stamped on the version it belongs to', () => {
     const tagged = `// pathology: no_action/prose\n${scaffoldSrc('v1')}`;
     const result = await modifyScaffold(rt, RATIONALE, tagged);
 
-    const [row] = listScaffoldArchive(rt.storage.sql).filter((e) => e.version === result.version);
+    const [row] = listScaffoldArchive(rt.storage.sql, rt.actor).filter((e) => e.version === result.version);
     expect(row!.pathology).toBe('no_action/prose');
   });
 
@@ -483,7 +483,7 @@ describe('the named pathology is stamped on the version it belongs to', () => {
       const rt = setupRt();
       await seedV0(rt);
       const result = await modifyScaffold(rt, RATIONALE, code);
-      const [row] = listScaffoldArchive(rt.storage.sql).filter((e) => e.version === result.version);
+      const [row] = listScaffoldArchive(rt.storage.sql, rt.actor).filter((e) => e.version === result.version);
       expect(row!.pathology).toBeNull();
     }
   });

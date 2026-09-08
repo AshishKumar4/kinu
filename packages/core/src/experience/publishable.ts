@@ -31,6 +31,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
@@ -65,6 +66,10 @@ const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;
 /** The stores a workspace publishes from. */
 export interface PublishSources {
   sql: SqlExecutor;
+  /** Whose artifacts these are. The scaffold pointer and its trial record are
+   *  per-actor, so "the version this workspace runs" is a question only an
+   *  actor-scoped read can answer. */
+  actor: ActorHandle;
   craftStore: CraftStore;
   facts: FactsStore;
   /** One scaffold version's source, as `scaffold/shadow.ts` reads it. A seam
@@ -209,9 +214,10 @@ async function scaffoldCandidate(
   if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
     return { refused: `"${key}" is not a scaffold version — a scaffold is published by its version number` };
   }
+  src.actor.assertCurrent();
   const row = src.sql<ScaffoldVersionRow>`
     SELECT version, status, rationale, written_at FROM scaffold_versions
-    WHERE version = ${version} LIMIT 1`[0];
+    WHERE actor_id = ${src.actor.actorId} AND version = ${version} LIMIT 1`[0];
   if (!row) return { refused: `no scaffold version v${version} in this workspace` };
   if (row.status !== 'current') {
     return {
@@ -224,7 +230,7 @@ async function scaffoldCandidate(
   // through the gate that decides promotions, rather than restating its rule:
   // the v0 bootstrap (never tried) and a hand-forced promote (thin record) both
   // carry status='current' and neither earned it.
-  const record = readShadowVerdict(src.sql, version).summary;
+  const record = readShadowVerdict(src.sql, src.actor, version).summary;
   const gate = decidePromotion({
     trialsSoFar: record.trials,
     pendingWins: record.pendingWins,
@@ -325,7 +331,7 @@ export async function listPublishable(
   // At most one scaffold: the live version is the only publishable one and
   // there is exactly one of it. Listed first because it can never be crowded
   // out of a limit by a workspace with many crafts.
-  const live = getCurrentScaffoldVersion(src.sql);
+  const live = getCurrentScaffoldVersion(src.sql, src.actor);
   const scaffold = live === null ? null : await scaffoldCandidate(src, String(live), now);
   const scaffolds = scaffold !== null && !isRefusal(scaffold) ? [scaffold] : [];
 

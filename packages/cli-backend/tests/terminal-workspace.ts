@@ -33,9 +33,11 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    PRIMARY KEY (actor_id, id))`);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
@@ -48,10 +50,10 @@ export function openTerminalWorkspace(dbPath: string) {
  *  a shadow trial at all. */
 export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
   await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-  void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
-    VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
-  void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
+  void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
+  void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
   rt.actor.config.setShadowSampleRate(1);
 }
 

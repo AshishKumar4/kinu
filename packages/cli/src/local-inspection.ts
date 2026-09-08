@@ -72,6 +72,7 @@ import {
   decodeJsonValue,
   parseJsonValue,
   type SqlExec,
+  type ActorHandle,
   listRecordObjectives,
   listRecordCells,
   readRecordCell,
@@ -195,13 +196,14 @@ export function getLocalAgentState(name: string): LocalAgentState {
 export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
   return withLocalDb(name, (db) => {
     const sql = makeSql(db);
-    return workspaceSpend({ events: new RunEventRecorder(sql), sql });
+    return workspaceSpend({ events: new RunEventRecorder(sql, openWorkspaceMainActor(sql)), sql });
   });
 }
 
 export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   return withLocalDb(name, (db) => {
     const status = getLocalStatus(db);
+    const actor = mainActor(db);
     return {
       name: status.name ?? name,
       purpose: status.purpose,
@@ -209,15 +211,19 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       scaffoldVersion: status.scaffoldVersion,
       craftedToolCount: status.craftedToolCount,
       searchNodeCount: status.searchNodeCount,
-      taskCount: tableExists(db, 'task_history')
-        ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM task_history`)?.c ?? 0
+      taskCount: actor && tableExists(db, 'task_history')
+        ? get<{ c: number }>(
+          db, `SELECT COUNT(*) AS c FROM task_history WHERE actor_id = ?`, actor.actorId,
+        )?.c ?? 0
         : 0,
       // Not reported: it is a walk of the workspace filesystem, and this path
       // may not open one (see getLocalStatus).
       memorySize: 0,
       createdAt: status.createdAt ?? 0,
-      conversationCount: tableExists(db, 'messages')
-        ? get<{ c: number }>(db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages`)?.c ?? 0
+      conversationCount: actor && tableExists(db, 'messages')
+        ? get<{ c: number }>(
+          db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages WHERE actor_id = ?`, actor.actorId,
+        )?.c ?? 0
         : 0,
       model: status.model,
       reasoningEffort: status.reasoningEffort,
@@ -312,11 +318,11 @@ export function listLocalEvents(name: string, opts: { variant?: string; since?: 
 /** Recent runs from the durable run-event log — the local peer of the cloud
  *  `listRuns` RPC. One page; `kinu inspect` prints a window, not a walk. */
 export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'run_events')
-      ? [...listRuns(new RunEventRecorder(makeSql(db)), null, limit).items]
-      : []
-  ));
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'run_events')) return [];
+    const sql = makeSql(db);
+    return [...listRuns(new RunEventRecorder(sql, openWorkspaceMainActor(sql)), null, limit).items];
+  });
 }
 
 /** One run's durable events, oldest first — the local peer of `getRunEvents`.
@@ -324,9 +330,11 @@ export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
 export function listLocalRunEvents(
   name: string, runId: string, opts: { since?: number; limit?: number } = {},
 ): RunEvent[] {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'run_events') ? new RunEventRecorder(makeSql(db)).read(runId, opts) : []
-  ));
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'run_events')) return [];
+    const sql = makeSql(db);
+    return new RunEventRecorder(sql, openWorkspaceMainActor(sql)).read(runId, opts);
+  });
 }
 
 /**
@@ -343,7 +351,8 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
     // The durable run-event log of the most recent run — tool calls, steps and
     // turn boundaries. The cloud timeline spine leads with the same source.
     if (tableExists(db, 'run_events')) {
-      const recorder = new RunEventRecorder(makeSql(db));
+      const sql = makeSql(db);
+      const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
       const latest = listRuns(recorder, null, 1).items[0];
       if (latest) {
         rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
@@ -503,7 +512,8 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
  *  itself (core status.ts) works over any SqlExecutor. */
 export async function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDb(name, (db) => {
-    return [...getChatHistoryPage(makeSql(db), { limit }).items];
+    const sql = makeSql(db);
+    return [...getChatHistoryPage(sql, openWorkspaceMainActor(sql), { limit }).items];
   });
 }
 
@@ -511,15 +521,19 @@ export async function getLocalChatHistory(name: string, limit = 100): Promise<Ch
 export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'actor_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
-    return getEvolutionChangelog(openWorkspaceMainActor(makeSql(db)).config, makeSql(db), limit);
+    const sql = makeSql(db);
+    return getEvolutionChangelog(sql, openWorkspaceMainActor(sql), limit);
   });
 }
 
 /** Local peer of the cloud `listScaffoldVersions` RPC. */
 export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {
-  return withLocalDb(name, (db) => (
-    tableExists(db, 'scaffold_versions') ? listScaffoldVersions(makeSql(db), limit) : []
-  ));
+  return withLocalDb(name, (db) => {
+    const actor = mainActor(db);
+    return actor && tableExists(db, 'scaffold_versions')
+      ? listScaffoldVersions(makeSql(db), actor, limit)
+      : [];
+  });
 }
 
 /** Local peer of the cloud `getFacts` RPC. */
@@ -829,6 +843,18 @@ function tableExists(db: SqliteDb, name: string): boolean {
   return coreTableExists(makeSql(db), name);
 }
 
+/** The actor whose rows this inspection reports.
+ *
+ *  A workspace database holds every actor the workspace issued, and the
+ *  scaffold pointer and task ledger are per-actor — a count taken without the
+ *  predicate sums over strangers, and `status = 'current'` would name whichever
+ *  actor promoted last. Null when the database carries no durable identity yet:
+ *  it then owns no actor-scoped rows either, so zero is the honest answer
+ *  rather than a total over rows nobody claims. */
+function mainActor(db: SqliteDb): ActorHandle | null {
+  return tableExists(db, 'workspace_identity') ? openWorkspaceMainActor(makeSql(db)) : null;
+}
+
 function columnSet(db: SqliteDb, table: string): Set<string> {
   return new Set(all<{ name: string }>(db, `PRAGMA table_info(${safeIdentifier(table)})`).map((row) => row.name));
 }
@@ -840,6 +866,7 @@ function safeIdentifier(value: string): string {
 
 function getLocalStatus(db: SqliteDb): LocalStatus {
   const hasIdentity = tableExists(db, 'workspace_identity');
+  const actor = mainActor(db);
   const identity = hasIdentity
     ? get<{ name: string; created_at: number }>(
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`)
@@ -861,9 +888,11 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     createdAt: identity?.created_at ?? null,
     // The LIVE version — the one that actually drives a turn. MAX(version)
     // reported an unresolved pending proposal as though it were already running.
-    scaffoldVersion: tableExists(db, 'scaffold_versions')
+    scaffoldVersion: actor && tableExists(db, 'scaffold_versions')
       ? get<{ v: number }>(db,
-        `SELECT version AS v FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`)?.v ?? 0
+        `SELECT version AS v FROM scaffold_versions
+         WHERE actor_id = ? AND status = 'current' ORDER BY version DESC LIMIT 1`,
+        actor.actorId)?.v ?? 0
       : 0,
     searchNodeCount: tableExists(db, 'search_nodes')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM search_nodes`)?.c ?? 0
@@ -871,8 +900,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     craftedToolCount: tableExists(db, 'crafted_tools')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM crafted_tools`)?.c ?? 0
       : 0,
-    messageCount: tableExists(db, 'messages')
-      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM messages`)?.c ?? 0
+    messageCount: actor && tableExists(db, 'messages')
+      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM messages WHERE actor_id = ?`, actor.actorId)?.c ?? 0
       : 0,
     model: tableExists(db, 'actor_config')
       ? openWorkspaceMainActor(makeSql(db)).config.getModel()
