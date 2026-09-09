@@ -369,7 +369,6 @@ export {
 // The actor's editable working history, and the `/context` projection of it.
 export {
   ActorWorkingContextStore, initActorWorkingContextTables,
-  WORKING_SOURCES, WORKING_STATUSES, WORKING_VIAS, WORKING_CLOSED_REASONS,
   type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
   type WorkingStatus, type WorkingVia, type WorkingClosedReason,
 } from './orchestrator/working-context';
@@ -384,8 +383,7 @@ export {
   type ContextEventRecorder, type ContextEditEvent,
 } from './orchestrator/context-plane';
 export {
-  contextMount, createContextPlane, encodeWorkingFile, decodeWorkingFile,
-  CONTEXT_MOUNT, CONTEXT_MOUNT_NAME, WORKING_FILE,
+  contextMount,
   type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
 } from './vfs/context-plane';
 export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
@@ -526,23 +524,22 @@ export {
 } from './tools/sandbox-contract';
 export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider, type ProgramStateStore } from './tools/state-codemode';
 export {
-  APP_TABLE_PREFIX, AGENT_DATA_CATALOG, APP_COLUMN_TYPES, APP_TABLE_SCOPES,
-  APP_COMPARISONS, APP_MUTATIONS, DB_TYPES,
-  initAgentDataTables, createAppDataStore, createDbCodemodeProvider, AppBatchError,
+  APP_TABLE_SCOPES, APP_MUTATIONS,
+  initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
   type AppColumn, type AppColumnType, type AppTableScope, type AppMutation,
   type AppTableSpec, type AppTableRecord, type AppPredicate, type AppWhere,
   type AppSelect, type AppOp, type AppOpResult, type AppRow,
   type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
 } from './tools/db-codemode';
-export { ActorReferenceSchema, ActorIdentitySchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
+export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
-export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, SubordinateSeedSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
 export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
 // open-38: ONE physical workspace SQLite for every logical actor. The host that
 // binds an issued actor's runtime objects over that one database, and the loop
 // origin every created actor is seeded with.
 export {
-  createActorHost, recoverActorTurns, actorScopedTables, childContextResolver,
+  createActorHost, recoverActorTurns, childContextResolver,
   type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';

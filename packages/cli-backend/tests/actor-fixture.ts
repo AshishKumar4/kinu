@@ -9,8 +9,8 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
 } from '@kinu.run/core';
-import { localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
-import { buildCLIHeadRuntime, buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
+import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
+import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import type { HostedHeadSeat } from '../src/head-runtime';
 
 /**
@@ -22,9 +22,12 @@ import type { HostedHeadSeat } from '../src/head-runtime';
  */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
   const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, kind: 'head', lifetime: 'task' });
-  const opts: Parameters<typeof buildCLIHeadRuntime>[0] = { parentRuntime: parent, actorBinding: binding };
-  if (observer) opts.writeObserver = observer;
-  return buildCLIHeadRuntime(opts);
+  // The handle this head's runtime carries is the one bound HERE. A per-kind
+  // runtime is built over the handle its binder issued — the release fence is
+  // bound to that object — so the fixture binds once and hands that handle
+  // through `buildLocalActorRuntime`, exactly as a host does.
+  const handle = bindLocalActor(parent.storage.sql, binding);
+  return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, observer);
 }
 
 /**

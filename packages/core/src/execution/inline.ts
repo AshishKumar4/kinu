@@ -79,13 +79,6 @@ export interface InlineExecutorDeps {
    *  no owner would be filed against whoever read the stream next. */
   actor?: ActorHandle;
   /**
-   * Optional mid-turn notification — fires synchronously from workspace.createTool
-   * after a successful create/update. The hosted sandbox does not need it
-   * because it reads craftStore.list() fresh on every execute; other adapters
-   * can use it for eager notification.
-   */
-  onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
-  /**
    * The turn's read/edit ledger, read live — SHARED with the native `file`
    * tool, so workspace.writeFile/editFile's read-before-write enforcement
    * is the SAME gate the native tool enforces (createFileDispatcher, tools/
@@ -153,7 +146,7 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
 }
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
-  const { vfs, memory, craftStore, shell, sql, actor, resourceLimits, onToolRegistered } = deps;
+  const { vfs, memory, craftStore, shell, sql, actor, resourceLimits } = deps;
   // Private fallback for callers that share no turn-scoped ledger (tests, the
   // identity bootstrap path) — stable across calls, so it still behaves like
   // ONE ledger for THIS executor's lifetime even though it is not turn-shared.
@@ -397,7 +390,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           }
           if (existing) {
             craftStore.update(toolName, { description: desc, code: codeStr });
-            onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
             return { ok: true, name: toolName, action: 'updated' };
           }
           const caseHit = craftStore.list().find(t =>
@@ -423,9 +415,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // The column defaults seed the neutral prior inside the same INSERT,
           // so the decay + injection floor can see the new tool at all — one
           // statement, no second write to race it.
-          // Optional eager notification; the hosted sandbox reads
-          // craftStore.list() live on every program, so CF leaves this a no-op.
-          onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
           // The craft store is SQLite in this agent's own object, so `io` is what

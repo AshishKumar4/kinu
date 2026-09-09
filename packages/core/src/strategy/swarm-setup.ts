@@ -45,7 +45,7 @@ import type { WorkMode } from '../prompting/surface';
 
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
-import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
+import type { NodeAgentDeps } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
 import type { HostedNodeSeat } from './node-agent';
@@ -1065,7 +1065,6 @@ export function buildNodeDeps(input: {
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  readonly host?: NodeLoopHost;
   readonly executeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
@@ -1083,10 +1082,6 @@ export function buildNodeDeps(input: {
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
-  // Only reached by an agent node: the toolless `thought` branch below never
-  // builds `nodeDeps` at all, which is what makes the split structural rather
-  // than a condition someone has to remember.
-  if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
   return nodeDeps;

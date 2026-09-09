@@ -52,11 +52,11 @@ import { isVfsError, makeVfsError } from './errno';
 import type { VfsMount } from './mounts';
 
 /** The reserved root this plane is served under. */
-export const CONTEXT_MOUNT_NAME = 'context';
-export const CONTEXT_MOUNT = `/${CONTEXT_MOUNT_NAME}`;
+const CONTEXT_MOUNT_NAME = 'context';
+const CONTEXT_MOUNT = `/${CONTEXT_MOUNT_NAME}`;
 
 /** The one editable path, relative to the actor's context root. */
-export const WORKING_FILE = 'working.jsonl';
+const WORKING_FILE = 'working.jsonl';
 
 /**
  * The stores one actor's context is served from.
@@ -151,7 +151,7 @@ const HeaderSchema = v.object({
  * attachment survives read-edit-write byte-for-byte instead of degrading into
  * prose that would not parse back.
  */
-export function encodeWorkingFile(header: ContextFileHeader, messages: readonly ModelMessage[]): string {
+function encodeWorkingFile(header: ContextFileHeader, messages: readonly ModelMessage[]): string {
   const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(messages)));
   const lines = [JSON.stringify({ $context: header }), ...encoded.map((message) => JSON.stringify(message))];
   return `${lines.join('\n')}\n`;
@@ -166,7 +166,7 @@ export interface ObservedWorkingFile {
 
 /** The inverse. Every refusal here is `bad_input`: the writer sent something
  *  this file cannot be, and naming which line is what lets it fix it. */
-export function decodeWorkingFile(text: string): ObservedWorkingFile {
+function decodeWorkingFile(text: string): ObservedWorkingFile {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   const first = lines[0];
   if (first === undefined) {
@@ -333,7 +333,7 @@ interface ContextTarget {
  * planes that cannot protect an in-place save. It maps onto the same
  * compare-and-set the header does: `expectedRevision` IS the working revision.
  */
-export function createContextPlane(deps: ContextMountDeps): VFS {
+function createContextPlane(deps: ContextMountDeps): VFS {
   const planes = new Map<string, ActorContextPlane>();
   const planeFor = (stores: ActorContextStores): ActorContextPlane => {
     const existing = planes.get(stores.actorId);

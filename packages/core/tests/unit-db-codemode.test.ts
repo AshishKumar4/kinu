@@ -26,7 +26,7 @@ import { createTestActors, testActorHandle, type TestActors } from '@kinu.run/te
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import {
-  AGENT_DATA_CATALOG, createAppDataStore, createDbCodemodeProvider,
+  createAppDataStore, createDbCodemodeProvider, initAgentDataTables,
   type AppDataStore, type AppOp,
 } from '../src/tools/db-codemode';
 import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
@@ -79,6 +79,28 @@ function world(): World {
       .map((row) => row.name),
     close: () => db.close(),
   };
+}
+
+/**
+ * The catalogue's physical name, OBSERVED rather than restated.
+ *
+ * `initAgentDataTables` is the production call every workspace schema makes,
+ * and on an empty database it creates exactly one table — that table is the
+ * catalogue. Reading the name out of the database instead of writing it here
+ * ties "the table the schema creates" to "the table no logical name reaches",
+ * which is the property the case below is about; a second copy of the string
+ * would agree with the module by construction and could not catch it moving.
+ */
+function catalogueTable(): string {
+  const probe = new Database(':memory:');
+  try {
+    initAgentDataTables(makeExecRaw(probe));
+    const created = makeSql(probe)<{ name: string }>`
+      SELECT name FROM sqlite_master WHERE type = 'table'`.map((row) => row.name);
+    expect(created).toHaveLength(1);
+    return created[0]!;
+  }
+  finally { probe.close(); }
 }
 
 const NOTES = {
@@ -383,7 +405,7 @@ describe('what db cannot reach', () => {
         'workspace_identity', 'workspace_actors', 'messages', 'workspace_capability',
         'webhook_secrets', 'deferred_approvals', 'actor_turn_claims', 'run_events',
         'tool_effect_claims', 'effect_tombstones', 'actor_config', 'actor_program_state',
-        AGENT_DATA_CATALOG, 'sqlite_master', 'sqlite_sequence',
+        catalogueTable(), 'sqlite_master', 'sqlite_sequence',
       ]) {
         expect(() => store.select(name)).toThrow();
         expect(() => store.apply({ op: 'delete', table: name, where: {} })).toThrow();
@@ -791,15 +813,28 @@ describe('agent data in the one workspace snapshot', () => {
       try {
         await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
         const restoredSql = makeSql(target);
-        // The name is pinned once, here, so the literal below cannot drift from
-        // the constant the store and the manifest use.
-        expect(AGENT_DATA_CATALOG).toBe('agent_data_tables');
-        const catalogue = restoredSql<{ name: string; scope: string }>`
-          SELECT name, scope FROM agent_data_tables ORDER BY name`;
-        expect(catalogue).toEqual([
+        // The catalogue comes back through a production store bound to the
+        // RESTORED database, so what is asserted is that the `db` capability
+        // still resolves both declarations there — not that bytes reached a
+        // table this test names. `listTables` orders by creation time, so the
+        // comparison sorts by name and does not rest on two writes landing in
+        // different milliseconds.
+        const restoredActor = testActorHandle(restoredSql, { actorId: w.a.actorId });
+        const restored = createAppDataStore({
+          sql: restoredSql, actor: restoredActor,
+          transactionSync: (write) => target.transaction(write)(),
+          events: () => new RunEventRecorder(restoredSql, restoredActor),
+          runId: () => RUN,
+        });
+        expect(restored.listTables()
+          .map(({ name, scope }) => ({ name, scope }))
+          .sort((left, right) => left.name.localeCompare(right.name))).toEqual([
           { name: 'findings', scope: 'workspace' },
           { name: 'notes', scope: 'actor' },
         ]);
+        // And the capability reads its own row out of the restored physical
+        // table, scoped to the actor the store is bound to.
+        expect(restored.select('notes')).toEqual([{ slug: 'k', body: 'main row', rank: 1 }]);
         // The rows come back with their owners, so the restored workspace's
         // isolation is the same isolation.
         expect(restoredSql<{ actor_id: string; body: string }>`

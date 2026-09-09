@@ -7,7 +7,7 @@ import type { ActorReference } from '../state/actor-handle';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 
-export const SubordinateSeedSchema = v.strictObject({
+const SubordinateSeedSchema = v.strictObject({
   name: v.pipe(v.string(), v.nonEmpty()),
   displayName: v.string(),
   nameOrigin: v.picklist(['user', 'auto']),

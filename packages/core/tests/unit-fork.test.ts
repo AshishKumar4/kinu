@@ -557,30 +557,37 @@ describe('forkWorkspaceStorage', () => {
   });
 });
 
-/** Populate `assistant_messages` the way the SDK's session provider does,
- *  mirroring rows that already exist in `messages`: same id, same parent edge,
- *  and a serialized UIMessage whose text parts flatten to the plain row's
- *  content. That identity is what the CF turn mirror establishes, and it is what
- *  makes eliding the plain text lossless. */
-function seedPaneTranscript(
-  src: TestWorkspace,
-  rows: Array<{ id: string; role: string; content: string; parent_id: string | null }>,
-) {
-  src.execRaw(SDK_SESSION_DDL);
-  // The owner the fork's own read resolves to (`snapshotWorkspaceForFork` opens
-  // the source's main actor), so the mirror lands under the same actor whose
-  // `messages` rows it mirrors.
-  const srcActor = openWorkspaceMainActor(src.sql).actorId;
-  for (const r of rows) {
-    const ui = JSON.stringify({ id: r.id, role: r.role, parts: [{ type: 'text', text: r.content }] });
-    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${srcActor}, ${r.id}, ${''}, ${r.parent_id}, ${r.role}, ${ui}, ${'1970-01-01 00:00:01'})`;
-  }
+/**
+ * A source workspace whose default chat lives in the SDK's pane store, built by
+ * the production pane WRITE: a plain-seeded workspace forked into a
+ * pane-authority target, which is the one path in this tree that turns a
+ * flattened chain into serialized UI messages under whole-second pane stamps.
+ *
+ * Built that way rather than hand-inserted so the serialized row shape and the
+ * stamp format are spelled ONCE, in `identity/fork.ts`. Restated here they
+ * agreed with production by construction: nothing below reached
+ * `encodeUiMessage` at all (a pane-authority write copies an already-rich chain
+ * verbatim), so the encoding every assertion depends on was measured nowhere and
+ * a change to it read as a pass.
+ */
+async function paneSourceWorkspace(
+  rows: Array<{ id: string; role: string; content: string; parent_id: string | null; created_at: number }>,
+): Promise<TestWorkspace> {
+  const plain = fresh();
+  const pane = fresh();
+  await seedTargetBootstrap(pane, 'PANE-ID');
+  await seedSource(plain, { identity: { id: 'PLAIN-ID', name: 'plain-src' }, purpose: 'p', messages: rows });
+  const lastId = rows[rows.length - 1]!.id;
+  await writeForkSnapshot(
+    pane.sql, pane.vfs,
+    await snapshotWorkspaceForFork(plain.sql, plain.vfs, lastId),
+    { workspaceId: 'PANE-ID', workspaceName: 'pane-src', targetAuthority: 'pane' },
+  );
+  return pane;
 }
 
 describe('fork snapshot payload', () => {
   test('the transcript crosses once, not once per table, and still lands intact', async () => {
-    const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
     const TURNS = 200;
@@ -591,8 +598,7 @@ describe('fork snapshot payload', () => {
       parent_id: i === 0 ? null : `m${i - 1}`,
       created_at: 1000 + i,
     }));
-    await seedSource(src, { identity: { id: 'S', name: 'src' }, purpose: 'p', messages: rows });
-    seedPaneTranscript(src, rows);
+    const src = await paneSourceWorkspace(rows);
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, `m${TURNS - 1}`);
 
@@ -620,6 +626,16 @@ describe('fork snapshot payload', () => {
     expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
     const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
     expect(plainLanded).toBe(0);
+
+    // The WORDS, read back the way the pane reads them. Ids, counts and a
+    // zero-length plain chain are all satisfied by a store full of rows no
+    // reader can flatten — and that is exactly the state an elision leaves
+    // behind when the rich row it elided against does not carry the text after
+    // all. So the contract is asserted where it is observable: every inherited
+    // turn comes back out of the target verbatim.
+    expect(sessionTreeAncestry(tgt.sql, openWorkspaceMainActor(tgt.sql), `m${TURNS - 1}`)
+      .map((node) => node.content))
+      .toEqual(rows.map((r) => r.content));
   });
 
   test('a fork inherits preferences but never the shell-approval authority', async () => {

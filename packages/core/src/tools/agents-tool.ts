@@ -46,7 +46,6 @@ import {
 } from './registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
-import type { NodeLoopHost } from '../strategy/node-agent';
 import type { ActorReference } from '../state/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
 import type { PublishHeadStream } from '../heads/head-stream';
@@ -343,7 +342,7 @@ const ASSIGN_NOTES = {
  * workspace to measure in. Wired under the `fork` key on
  * {@link AgentsToolDeps}; both backends construct the same typed contract.
  *
- * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `provisionNodeHome`,
+ * `runSwarmAction` reads `rt`, `model`, `provisionNodeHome`,
  * `reportNodeDelta` and `compactShared`. The members exist because the
  * backends' one builder produces the whole bag, not because this module
  * dispatches a strategy.
@@ -390,16 +389,6 @@ export interface AgentsForkDeps {
    *  absence makes the gate blend and say so. */
   costModel?: () => CostModel;
   /**
-   * Where a tool-using swarm node's loop runs, resolved per call.
-   *
-   * A FACTORY for the same reason `costModel` is: a
-   * backend may not be able to build one until the actor has an owner, so
-   * resolving it at dispatch keeps the refusal where it can be reported rather
-   * than at wiring time. Absent is a backend with no facets, and then a node's
-   * loop runs in this isolate — the same body, without a storage boundary.
-   */
-  nodeHost?: () => NodeLoopHost;
-  /**
    * The host-owned provisioner for one node's private home. The provisioner is
    * async because a hosted Nimbus session owns the filesystem; a synchronous
    * `SqliteVFS` view is only one possible implementation, not the contract.
@@ -423,27 +412,23 @@ export interface AgentsForkDeps {
   /**
    * Where a node's transient output frames go while a step is still being
    * produced — the backend's own broadcast channel, resolved per call for the
-   * same reason {@link nodeHost} is.
+   * same reason {@link costModel} is.
    *
-   * A HOSTED node does not use this: its facet publishes to the parent over the
-   * RPC it already holds. This is the IN-ISOLATE half, where there is no facet
-   * and the loop runs beside the socket. Absent is a backend with nothing
-   * watching, and costs a node nothing — the frames are superseded by its steps.
+   * A node's loop runs in the isolate that ran the search, beside the socket,
+   * so this is the whole of the channel rather than one transport's half.
+   * Absent is a backend with nothing watching, and costs a node nothing — the
+   * frames are superseded by its steps.
    */
   reportNodeDelta?: () => PublishHeadStream;
   /**
    * Where the run's DURABLE journal writes are announced — a node appearing, a
    * step landing, a report filing.
    *
-   * The twin of {@link reportNodeDelta}, and wired on BOTH transports rather
-   * than only the in-isolate one: a node's journal rows are the PARENT's
-   * whichever isolate produced them, so the announcement belongs to the parent
-   * either way. That asymmetry is the defect this closes — a hosted node's
-   * steps announced (they cross to the parent's `recordHeadStep`) while its
-   * spawn and its report did not, and an in-isolate node announced nothing at
-   * all, so a live search's own surface learned about it on a poll clock.
+   * The twin of {@link reportNodeDelta}: a node's journal rows are the PARENT's,
+   * so the announcement belongs to the parent — and until it existed a live
+   * search's own surface learned about a node on a poll clock.
    *
-   * A factory for {@link nodeHost}'s reason. Absent is a backend with nothing
+   * A factory for {@link costModel}'s reason. Absent is a backend with nothing
    * watching, and then the journal writes in silence.
    *
    * WIRED ON CF ONLY, beside {@link reportNodeDelta}, which is cf-only for the
@@ -1493,17 +1478,12 @@ async function runSwarmAction(
   // what they returned rather than deciding anything itself.
   const origin = fork.originContext?.();
   const signal = toolOptions?.abortSignal;
-  // Resolved here rather than at wiring time, so a backend that cannot build a
-  // host yet refuses where the refusal is reportable. Absent is what runs the
-  // node's loop in this isolate.
-  const host = fork.nodeHost?.();
-  // The transient frames an IN-ISOLATE node publishes. Only wired when this
-  // isolate is also the one holding the socket, which is exactly the case a
-  // hosted node's own facet-to-parent RPC covers instead.
-  const publishHeadStream = host ? undefined : fork.reportNodeDelta?.();
-  // The durable announcement, wired on BOTH transports: the journal a node's
-  // rows land in is this isolate's whichever isolate ran the node, so this is
-  // never the hosted case's business to replace.
+  // The transient frames a node publishes while a step is still being produced.
+  // Wired wherever the backend holds the socket, which is every backend now that
+  // a node's loop runs in the isolate that ran the search.
+  const publishHeadStream = fork.reportNodeDelta?.();
+  // The durable announcement: the journal a node's rows land in is the parent's,
+  // so this is the parent's own channel rather than the node's.
   const announceHeadActivity = fork.announceHeadActivity?.();
   // A host constructs the provisioner around its authoritative filesystem. It
   // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
@@ -1555,7 +1535,6 @@ async function runSwarmAction(
     // caller set is enforced while the money is still there to save.
     mission: mission?.scope,
     signal,
-    host,
     publishHeadStream,
     announceHeadActivity,
     provisionHome,

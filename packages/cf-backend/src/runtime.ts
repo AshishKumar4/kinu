@@ -313,13 +313,6 @@ export type CFRuntime = AgentRuntime & {
 /** Optional hooks the orchestrator can inject into the CF runtime. */
 export interface CFRuntimeHooks {
   /**
-   * Fires synchronously from workspace.createTool after a successful
-   * create/update. The execute_tools sandbox does not need it because it reads
-   * craftStore.list() on every call; other adapters can use it for eager
-   * notification.
-   */
-  onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
-  /**
    * Where a 'gate'-tier command goes when nobody is there to approve it — the
    * owner's parked-action queue (core's safety/deferred-approval.ts). A thunk,
    * and read at exec time, for the two reasons the runtime's other thunks are:
@@ -622,8 +615,6 @@ export function createCFRuntime(
       // sql is used by workspace.listTools() to read the crafted tools' EMA
       // quality columns.
       sql,
-      // Optional eager notification; the execute_tools sandbox live-reads CraftStore.
-      onToolRegistered: hooks.onToolRegistered,
       // Shares the native `file` tool's turn ledger/budget with workspace.*
       // (editFile's gate, readFile/writeFile's observe). The thunks are passed
       // unconditionally and read the supplied turn accumulator only when called.
