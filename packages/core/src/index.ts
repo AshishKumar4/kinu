@@ -689,6 +689,7 @@ export {
   type CraftedToolSource,
 } from './tools/crafted-executor';
 export {
+  assignedTurnFraming,
   buildSystemPromptSync,
   currentDateForPrompt,
   FALLBACK_PURPOSE,
@@ -696,6 +697,7 @@ export {
   unverifiedInstructionsMessage,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
+  type AssignedTurnFraming,
   type SystemPromptOptions,
 } from './prompt';
 // The boundaries of an assembled request — shared by the renderers that write

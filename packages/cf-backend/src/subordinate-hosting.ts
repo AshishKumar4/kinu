@@ -46,7 +46,8 @@ import {
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   terminalTaskReport, defaultLoopOrigin, delegationBudgetAtDepth, delegationExhausted,
-  type ActorHost, type ActorReference, type BoundActor, type DelegationBudget,
+  type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
+  type DelegationBudget,
   type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor,
   type MissionScope,
   type SqlExec, type SqlExecutor, type SubordinateEventResult, type SubordinateHandoff,
@@ -106,6 +107,22 @@ export interface HostedTaskTurn {
   readonly profile: ExplorationProfile;
 }
 
+/**
+ * THE MODEL-FACING PROFILE of one delegated turn: what it can call, and what it
+ * is told it is.
+ *
+ * The two are answered together because they are one decision seen twice: the
+ * prompt's tool index and delegation rungs are RENDERED FROM the surface that
+ * was built, so a builder that returned only the tools left its caller to
+ * re-derive the prompt from something else — which is how a prompt comes to
+ * advertise a tool the turn does not hold.
+ */
+export interface HostedTaskProfile {
+  readonly tools: ToolSet;
+  /** The framing, from core's one assigned-turn definition. */
+  readonly framing: AssignedTurnFraming;
+}
+
 /** What the root lends the subordinate rung. Deliberately the same host and
  *  directory the exploration rung uses: there is one actor host per workspace
  *  and every kind is acquired from it. */
@@ -131,11 +148,11 @@ export interface SubordinateHostSeams {
     readonly workMode: WorkMode;
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
-  /** The tool surface this hosted actor's delegated turn admits, built over
-   *  {@link HostedTaskTurn} — the whole turn, because the surface is a
-   *  function of every part of it and a builder that took only some would
-   *  resolve the rest a second time. */
-  taskTools(turn: HostedTaskTurn): ToolSet;
+  /** What this hosted actor's delegated turn may call and what it is told it
+   *  is, built over {@link HostedTaskTurn} — the whole turn, because the
+   *  profile is a function of every part of it and a builder that took only
+   *  some would resolve the rest a second time. */
+  taskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile>;
   /** The per-step live plane the turn reports. */
   dynamic(actor: HostedActor): DynamicContext;
   /** The mission ledger a delegated turn charges, or null. */
@@ -388,6 +405,12 @@ export async function runHostedTask(
       model: seams.resolveModel(resolved.profile.tier.model),
       profile: resolved,
     };
+    // WHAT THIS TURN MAY CALL AND WHAT IT IS TOLD IT IS, asked once. Without
+    // the framing the shared runner falls to its own default, which is a
+    // FORK's: a hire would be told it is one of several parallel reasoning
+    // threads whose findings a merge will combine, none of which is true of an
+    // actor working the brief its hirer wrote.
+    const profile = await seams.taskProfile(turn);
     // Annotated with the NAMED interface and assembled in statements: `mission`
     // is added only when this turn is budgeted, so an UNBUDGETED turn carries no
     // key at all rather than a spread of nothing. Absent and present are
@@ -397,7 +420,8 @@ export async function runHostedTask(
       actor,
       runId: crypto.randomUUID(),
       model: turn.model,
-      tools: seams.taskTools(turn),
+      tools: profile.tools,
+      framing: profile.framing,
       capture,
       workspaceLayout: 'shared-workspace',
       // Cancellation is the session's. A delegated turn is not cancelled by the

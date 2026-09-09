@@ -5302,7 +5302,11 @@ export abstract class ActorAgent extends Think<Env> {
   protected async refreshSoulText(): Promise<void> {
     this._cachedSoulText = await this.loadSoulText();
   }
-  private getSoulText(): string {
+  /** The workspace soul as the last refresh read it. Protected because a
+   *  hosted actor's turn is framed with the same one: its world is this
+   *  workspace, so the document that says what this workspace is for is the
+   *  document it works under too. */
+  protected getSoulText(): string {
     return this._cachedSoulText ?? '';
   }
 

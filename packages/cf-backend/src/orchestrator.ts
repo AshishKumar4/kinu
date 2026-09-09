@@ -22,9 +22,12 @@ import {
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
-  agentsProfileContext, buildActorTools, createTeamToolDeps, delegationExhausted,
+  activePromptSectionOverrides,
+  agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
+  BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording,
   type ActorHost, type ActorToolsetDeps, type AgentsForkDeps, type AgentsToolDeps,
+  type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
@@ -44,7 +47,7 @@ import {
 import {
   admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport,
   reportSettlesRun, runHostedTask,
-  type HostedTaskTurn, type SubordinateHostSeams,
+  type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
 import { createExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
@@ -772,7 +775,7 @@ export class OrchestratorAgent extends ActorAgent {
       // told a `scribe` child it had the workspace's whole surface.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
-      taskTools: (turn) => this.hostedTaskTools(turn),
+      taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor) => this.hostedActorDynamicContext(actor),
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
@@ -809,7 +812,7 @@ export class OrchestratorAgent extends ActorAgent {
    * the head accumulators — are not on this surface: a delegated turn reports
    * upward through `report`, it does not bank findings for a merge.
    */
-  private hostedTaskTools(turn: HostedTaskTurn): ToolSet {
+  private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     const factory = createExecuteToolsFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
@@ -834,6 +837,9 @@ export class OrchestratorAgent extends ActorAgent {
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
+    // NAMED, because both halves of the profile read it: the surface registers
+    // the tool from these deps and the framing renders the rungs they gate.
+    const agents = this.hostedAgentsToolDeps(turn);
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
@@ -846,7 +852,7 @@ export class OrchestratorAgent extends ActorAgent {
         turnId: () => turn.input.id,
       },
       executeTools: ({ native }) => factory.toolFor(native),
-      agents: this.hostedAgentsToolDeps(turn),
+      agents,
       // This actor's own semantic index and its own keyed world model — the
       // rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite
       // what the workspace observed under the same words.
@@ -862,7 +868,58 @@ export class OrchestratorAgent extends ActorAgent {
     // task is by definition parent-driven — where the cli, whose surface is
     // cached across turns, has to re-ask per turn.
     deps.report = report;
-    return withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+    const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+    // FRAMED FROM THE SURFACE THAT WAS BUILT, not from a second idea of it: the
+    // prompt's tool index and delegation rungs are rendered from these exact
+    // names, and `report` among them is what makes core's `state/delegation`
+    // section name this actor as a hire whose progress goes back to whoever
+    // assigned the work.
+    return { tools, framing: await this.hostedTaskFraming(turn, tools, agents) };
+  }
+
+  /**
+   * WHAT A DELEGATED TURN IS TOLD IT IS: core's assigned-turn framing, over
+   * this actor's own prompt surface.
+   *
+   * Every option is that actor's own fact, and each is the same value the
+   * workspace's own turns pass for themselves: the workspace soul (its world
+   * is this workspace), the executors ITS runtime routes to, the builtins
+   * actually on the surface above, the rungs its deps gate, the role its
+   * profile resolved, the sections its own evolution promoted, and its shown
+   * name beside the workspace's. The turn-time reads a chat turn adds — the
+   * AGENTS.md chain and the skill set, both of which are I/O and trust
+   * classification — are deliberately not taken here: this path runs no turn
+   * preamble, and a section rendered from bytes nobody classified is the one
+   * thing the instruction-trust boundary exists to prevent.
+   */
+  private async hostedTaskFraming(
+    turn: HostedTaskTurn, tools: ToolSet, agents: AgentsToolDeps,
+  ): Promise<AssignedTurnFraming> {
+    return assignedTurnFraming(turn.runtime, {
+      brief: turn.input.task,
+      surface: {
+        soulOverride: this.getSoulText(),
+        executors: turn.runtime.executionRouter?.listExecutors() ?? [],
+        availableTools: Object.keys(tools).filter(
+          (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
+        ),
+        agentsActions: agentsActionsFor(agents),
+        temporaryAsk: agents.team?.temporary !== undefined,
+        backend: 'cf',
+        workMode: turn.input.mode,
+        roleSection: turn.profile.profile.role,
+        model: { id: turn.profile.profile.tier.model },
+        currentDate: currentDateForPrompt(),
+        sectionOverrides: activePromptSectionOverrides(this.boundSql, turn.actor.handle),
+        // Its own shown name beside the workspace's, which is what makes the
+        // prompt address it as a named agent OF this workspace rather than as
+        // the workspace's own chat.
+        identity: {
+          ...(await this.promptIdentity()),
+          agent: turn.actor.stores.config.getDisplayName() ?? turn.actor.record.name,
+        },
+      },
+    });
   }
 
   /**
