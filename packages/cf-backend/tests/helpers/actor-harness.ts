@@ -602,8 +602,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const built: ToolSet[] = [];
     await runHostedTask({
       ...seams,
-      taskTools: (actor, runtime, reports, input) => {
-        const tools = seams.taskTools(actor, runtime, reports, input);
+      taskTools: (actor, runtime, reports, input, capture) => {
+        const tools = seams.taskTools(actor, runtime, reports, input, capture);
         built.push(tools);
         return tools;
       },
