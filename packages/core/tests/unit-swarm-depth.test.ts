@@ -1127,10 +1127,9 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('no clamp is disclosed, because none can bind', async () => {
-    // `swarm.judge_ensemble_clamped` is emitted once per distinct realised size
-    // below the request. With the pool sized from the request there is no such
-    // size, and a shortfall is an instrument fault that fails the run rather than
-    // an event on the way past.
+    // The pool is sized from the requested ensemble, so the run emits no
+    // `swarm.judge_ensemble_clamped` event. An ensemble shortfall is an instrument
+    // fault that fails the run, not a disclosed downgrade.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },

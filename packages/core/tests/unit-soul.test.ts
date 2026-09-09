@@ -4,9 +4,9 @@
  *
  * The property that matters is that those two cannot drift: `writeSoul` is the
  * only writer of either, so a listing showing a stale mission would mean a
- * second write path existed. Nothing here tests a storage encoding — the
- * document is a file, and how the filesystem stores it (BLOB or TEXT rows in
- * `vfs_files`) is the filesystem's business.
+ * second write path existed. Nothing here tests a storage encoding: the document
+ * is a file, and its physical representation belongs to the filesystem
+ * implementation.
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
