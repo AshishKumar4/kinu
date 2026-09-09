@@ -34,9 +34,9 @@ function store(scope = OWNER) {
   return {
     db,
     actor,
-    store: new InstructionApprovalStore(sql, actor, scope, (body) => db.transaction(body)()),
+    store: new InstructionApprovalStore(sql, actor, scope),
     reopen: (asScope: string) =>
-      new InstructionApprovalStore(sql, actor, asScope, (body) => db.transaction(body)()),
+      new InstructionApprovalStore(sql, actor, asScope),
   };
 }
 
@@ -110,12 +110,12 @@ describe('InstructionApprovalStore — revocation is a standing refusal', () => 
     expect(s.trustOf(PATH, 'house rules')).toBe('unverified');
   });
 
-  test('the revoked row is KEPT, so a later carry-over cannot re-grant it', () => {
+  test('the revoked row is KEPT, so the refusal survives', () => {
     const { store: s } = store();
     s.approve(PATH, instructionDigest('x'));
     s.revoke(PATH);
-    // This is the whole reason revoke does not DELETE: a first-seen carry-over
-    // asks "is there a row?", and a refusal has to be findable.
+    // This is the whole reason revoke does not DELETE: trust is decided from
+    // the stored row, so a refusal has to stay findable to keep failing closed.
     expect(s.get(PATH)).not.toBeNull();
     expect(s.get(PATH)?.decision).toBe('revoked');
   });
@@ -160,12 +160,12 @@ describe('InstructionApprovalStore — durability', () => {
     const { db, actor } = store();
     const sql = makeSql(db);
     const content = 'durable doctrine';
-    new InstructionApprovalStore(sql, actor, OWNER, (body) => db.transaction(body)())
+    new InstructionApprovalStore(sql, actor, OWNER)
       .approve(PATH, instructionDigest(content));
 
     // Re-running init must not disturb rows — it is called on every boot.
     initInstructionApprovalsTable(makeExecRaw(db));
-    expect(new InstructionApprovalStore(sql, actor, OWNER, (body) => db.transaction(body)())
+    expect(new InstructionApprovalStore(sql, actor, OWNER)
       .trustOf(PATH, content)).toBe('approved');
   });
 
@@ -182,104 +182,43 @@ describe('InstructionApprovalStore — durability', () => {
   });
 });
 
-describe('grandfatherExisting — one migration snapshot, never first sight', () => {
-  test('the snapshot carries only its existing paths as grandfathered', () => {
+describe('no carry-over — a discovered file starts unverified', () => {
+  test('bytes on disk before the first turn earn nothing without an owner decision', () => {
+    // The write path this guards: the old one-time baseline auto-approved
+    // whatever files existed at first-turn time — including agent-written or
+    // cloned bytes whose provenance nothing recorded. Discovery finding a file
+    // is not a decision, however long it has sat on disk.
     const { store: s } = store();
-    s.grandfatherExisting([
-      { path: PATH, digest: instructionDigest('existing house rules') },
-      { path: '/repo/skills/review.md', digest: instructionDigest('existing skill') },
-    ]);
-
-    expect(s.trustOf(PATH, 'existing house rules')).toBe('approved');
-    expect(s.get(PATH)?.decision).toBe('grandfathered');
-    expect(s.trustOf('/repo/skills/review.md', 'existing skill')).toBe('approved');
+    expect(s.trustOf(PATH, 'existing house rules')).toBe('unverified');
+    expect(s.trustOf('/repo/skills/review.md', 'existing skill')).toBe('unverified');
+    expect(s.get(PATH)).toBeNull();
   });
 
-  test('a path created after the marker is unverified, not grandfathered', () => {
+  test('an explicit owner approval still grants, and only those exact bytes', () => {
     const { store: s } = store();
-    s.grandfatherExisting([{ path: PATH, digest: instructionDigest('existing') }]);
+    const content = 'owner-reviewed house rules';
+    s.approve(PATH, instructionDigest(content));
 
-    // This is the attack a first-seen fallback allows: an agent writes a new
-    // AGENTS.md or skill path and gets system placement merely by making
-    // discovery notice it. The marker closes that path.
-    expect(s.trustOf('/repo/new/AGENTS.md', 'agent-written policy')).toBe('unverified');
-    expect(s.get('/repo/new/AGENTS.md')).toBeNull();
+    expect(s.trustOf(PATH, content)).toBe('approved');
+    expect(s.trustOf(PATH, `${content}\nagent rewrite`)).toBe('unverified');
   });
 
-  test('a rewrite after migration demotes and is never re-grandfathered', () => {
-    const { store: s } = store();
-    s.grandfatherExisting([{ path: PATH, digest: instructionDigest('original') }]);
-
-    expect(s.trustOf(PATH, 'original\nagent rewrite')).toBe('unverified');
-    s.grandfatherExisting([{ path: PATH, digest: instructionDigest('original\nagent rewrite') }]);
-    expect(s.trustOf(PATH, 'original\nagent rewrite')).toBe('unverified');
-    expect(s.get(PATH)?.digest).toBe(instructionDigest('original'));
-  });
-
-  test('the marker survives re-opening and prevents a later baseline', () => {
+  test('a stored grandfathered row keeps its force — the deletion drops the write path, not retained answers', () => {
+    // No API writes 'grandfathered' anymore; the only way to meet one is a row
+    // stored before the deletion, inserted here as raw SQL.
     const { db, actor, store: s } = store();
-    s.grandfatherExisting([{ path: PATH, digest: instructionDigest('original') }]);
+    const content = 'carried-over doctrine';
+    db.exec(`INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES ('${actor.actorId}', '${OWNER}', '${PATH}', '${instructionDigest(content)}', 'grandfathered')`);
 
-    const reopened = new InstructionApprovalStore(makeSql(db), actor, OWNER, (body) => db.transaction(body)());
-    reopened.grandfatherExisting([{ path: '/repo/later.md', digest: instructionDigest('later') }]);
-    expect(reopened.get('/repo/later.md')).toBeNull();
+    expect(s.get(PATH)?.decision).toBe('grandfathered');
+    expect(s.trustOf(PATH, content)).toBe('approved');
+    expect(s.trustOf(PATH, `${content} changed`)).toBe('unverified');
   });
 
-  test('existing approvals and revocations win over the migration snapshot', () => {
-    const { store: s } = store();
-    s.approve(PATH, instructionDigest('owner reviewed'));
-    s.revoke('/repo/refused.md');
-    s.grandfatherExisting([
-      { path: PATH, digest: instructionDigest('existing but different') },
-      { path: '/repo/refused.md', digest: instructionDigest('existing refused') },
-    ]);
-
-    expect(s.get(PATH)?.decision).toBe('approved');
-    expect(s.trustOf(PATH, 'owner reviewed')).toBe('approved');
-    expect(s.get('/repo/refused.md')?.decision).toBe('revoked');
-    expect(s.trustOf('/repo/refused.md', 'existing refused')).toBe('unverified');
-  });
-
-  test('trustOf stays a pure read and never creates a migration row', () => {
+  test('trustOf stays a pure read and creates no rows', () => {
     const { store: s } = store();
     expect(s.trustOf(PATH, 'bytes')).toBe('unverified');
     expect(s.get(PATH)).toBeNull();
-  });
-});
-
-describe('grandfatherExisting — atomic migration', () => {
-  test('a failed baseline leaves neither partial rows nor its marker', () => {
-    const { db, actor } = store();
-    db.exec(`
-      CREATE TRIGGER abort_second_baseline
-      BEFORE INSERT ON instruction_approvals
-      WHEN NEW.path = '/repo/second.md'
-      BEGIN SELECT RAISE(ABORT, 'baseline write failed'); END;
-    `);
-    const approvals = new InstructionApprovalStore(
-      makeSql(db),
-      actor,
-      OWNER,
-      (body) => db.transaction(body)(),
-    );
-
-    expect(() => approvals.grandfatherExisting([
-      { path: PATH, digest: instructionDigest('first') },
-      { path: '/repo/second.md', digest: instructionDigest('second') },
-    ])).toThrow('baseline write failed');
-    expect(approvals.get(PATH)).toBeNull();
-    expect(db.query(`SELECT scope FROM instruction_approval_migrations WHERE scope = ?`)
-      .get(OWNER)).toBeNull();
-  });
-});
-
-describe('markMigratedEmpty — fork targets', () => {
-  test('copied files start unverified because the target marker has no rows', () => {
-    const { store: s } = store();
-    s.markMigratedEmpty();
-
-    expect(s.trustOf(PATH, 'copied AGENTS.md bytes')).toBe('unverified');
-    s.grandfatherExisting([{ path: PATH, digest: instructionDigest('copied AGENTS.md bytes') }]);
-    expect(s.trustOf(PATH, 'copied AGENTS.md bytes')).toBe('unverified');
   });
 });

@@ -44,7 +44,7 @@ function store(scope = 'test-scope') {
   // its own instruction files, and an approval given to the root is not one the
   // temporary it spawned inherits.
   const actor = createTestActors(sql, execRaw).main;
-  return new InstructionApprovalStore(sql, actor, scope, (body) => db.transaction(body)());
+  return new InstructionApprovalStore(sql, actor, scope);
 }
 
 function agentsMd(content: string, trust: 'approved' | 'unverified'): AgentsMdSources {
@@ -287,10 +287,10 @@ describe('placement follows the store, end to end', () => {
     // so the isolation this case asserts is the workspace scope's and not the
     // actor key's — which has its own cases.
     const actor = createTestActors(sql, execRaw).main;
-    new InstructionApprovalStore(sql, actor, 'cf:workspace-a', (body) => db.transaction(body)())
+    new InstructionApprovalStore(sql, actor, 'cf:workspace-a')
       .approve(AGENTS_PATH, instructionDigest(DOCTRINE));
 
-    const forked = new InstructionApprovalStore(sql, actor, 'cf:workspace-b', (body) => db.transaction(body)());
+    const forked = new InstructionApprovalStore(sql, actor, 'cf:workspace-b');
     expect(forked.trustOf(AGENTS_PATH, DOCTRINE)).toBe('unverified');
     expect(promptFor({ agentsMd: agentsMd(DOCTRINE, forked.trustOf(AGENTS_PATH, DOCTRINE)) }))
       .not.toContain(DOCTRINE);

@@ -205,9 +205,6 @@ const SHARED_TRANSPORTS = {
   revokeInstruction: 'admitInstructionDecision',
   listInstructionApprovals: 'listInstructionApprovals',
   readInstructionApproval: 'openInstructionSource',
-  // The migration policy lives in InstructionApprovalStore; each backend only
-  // supplies its own filesystem snapshot before calling it.
-  ensureInstructionApprovalMigration: 'snapshotExistingInstructions',
   getSkillsVfs: 'skillsVfsOver',
   getStoredModelSpec: 'getStoredModelSpec',
   jobResult: 'jobResult',

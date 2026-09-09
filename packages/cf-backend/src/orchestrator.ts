@@ -85,7 +85,6 @@ import {
   feedbackToQuality,
   // Fork feature
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
-  InstructionApprovalStore,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
@@ -5652,7 +5651,8 @@ export class OrchestratorAgent extends ActorAgent {
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
     const outcome = await receiver.accept(frame);
     if (outcome.status === 'staged') return { ok: true, status: 'staged' };
-    this.markForkInstructionScopeMigrated(forkName);
+    // Copied approval rows key the source scope, so the target's copied
+    // instruction files start unverified with no marker to write.
     if (outcome.status === 'settled') {
       return {
         ok: true, status: 'published', agentId: this.ctx.id.toString(),
@@ -5667,48 +5667,6 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /**
-   * Forked bytes are copied, but approval rows are not authority that may be
-   * copied. This marker lands before deliverCloudFork publishes the target in
-   * UserDO, so the target's first turn sees copied AGENTS.md and skills as
-   * unverified rather than as a grandfathered migration baseline.
-   *
-   * ONCE PER ACTOR. The migration marker is keyed `(actor_id, scope)`, and one
-   * database holds every actor, so a fork copies the source
-   * workspace's database — `workspace_actors` rows included — so the target
-   * hosts every actor the source had, not just a main actor. Marking only one
-   * of them would leave the others to grandfather the target's copied
-   * instruction files on their first `grandfatherExisting`, which is exactly
-   * the "copied paths start unverified" invariant this call exists to hold.
-   *
-   * The LIVE roster only. A retired actor takes no turn, so it grandfathers
-   * nothing; the point at which a restored actor needs its marker is its
-   * restoration, not this publication, and `openFenced` refuses a retired row
-   * anyway — a handle over a retired actor is not authority over anything.
-   *
-   * The fence is the fork name. This runs on the target between accepting the
-   * transfer and publishing it in UserDO, so the one thing that must still be
-   * true of every handle it opens is that this object IS that target: a marker
-   * written after a rename would key an authority decision to a workspace
-   * identity nobody asked about.
-   */
-  private markForkInstructionScopeMigrated(forkName: string): void {
-    const transaction = <Result>(body: () => Result): Result => this.ctx.storage.transactionSync(body);
-    const directory = this.workspaceActors();
-    const requireForkTarget = (): void => {
-      if (this.name !== forkName) {
-        throw new KinuError('denied', 'The fork instruction marker belongs to a workspace this object is not.');
-      }
-    };
-    for (const record of directory.list()) {
-      new InstructionApprovalStore(
-        this.rt.storage.sql,
-        directory.openFenced(record.actorId, requireForkTarget),
-        `cf:${forkName}`,
-        transaction,
-      ).markMigratedEmpty();
-    }
-  }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
 
