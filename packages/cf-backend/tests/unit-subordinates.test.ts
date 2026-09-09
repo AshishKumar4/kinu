@@ -173,7 +173,7 @@ describe('subordinate wiring', () => {
       nameOrigin: 'user',
       mission: 'prove confinement',
     });
-    const subTools = await workspace.agent.observeHostedTaskTools(child.actor, 'prove confinement');
+    const { tools: subTools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove confinement');
     const subKeys = Object.keys(subTools);
     // A hire is a colleague with a role: it gets the same builtins the
     // workspace root gets, plus the report lane, over its OWN stores.

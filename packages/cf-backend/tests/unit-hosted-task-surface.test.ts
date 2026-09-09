@@ -101,6 +101,17 @@ function toolResults(model: MockLanguageModelV3): AnsweredCall[] {
   return [...seen.values()];
 }
 
+/** The system prompt the turn was actually issued under, off the request the
+ *  provider received. */
+function systemPrompt(model: MockLanguageModelV3): string {
+  for (const call of model.doStreamCalls) {
+    for (const message of call.prompt) {
+      if (message.role === 'system') return message.content;
+    }
+  }
+  throw new Error('the turn issued no request carrying a system prompt');
+}
+
 test('a hired subordinate saves and searches memory and lists its roster in its assigned turn', async () => {
   const workspace = orchestratorHarness();
   const child = await hostedSubordinateHarness(workspace, {
@@ -134,4 +145,43 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
   // answer for a child that has hired nobody; what matters is that the rung
   // exists and answers, which is what the head surface had no tool for.
   expect(results[2]?.rendered ?? '').toContain('subordinates');
+});
+
+/**
+ * AND IT IS FRAMED AS ONE.
+ *
+ * `runHostedTask` passed no framing, so the shared runner fell to its own
+ * default — the HEAD prompt — and a colleague hired into a workspace was told
+ * it was one of several parallel reasoning threads competing over one tree,
+ * with conventions for tools it does not hold and a merge nobody was running.
+ * The framing a parent-assigned turn runs under is the product's own agent
+ * prompt, and the `report` lane on its surface is what makes that prompt name
+ * it as a hire (core's `state/delegation` section).
+ */
+test('a hired subordinate is framed as a hire, not as a head', async () => {
+  const workspace = orchestratorHarness();
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'framing-prover', displayName: 'Framing prover', nameOrigin: 'user',
+    mission: 'prove the delegated framing',
+  });
+  const model = turnCalling([]);
+  workspace.agent.overrideProviderRegistry({
+    registry: createProviderRegistry(),
+    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
+    resolveModel: () => model,
+    normalizeSpecSync: (spec) => spec ?? 'test/model',
+  });
+
+  await workspace.agent.runHostedTaskTurn(child.actor, 'Say what you are.');
+
+  const system = systemPrompt(model);
+  // Named as what it is: a hired agent of this workspace whose `report` lane
+  // carries progress back to whoever assigned the work.
+  expect(system).toContain('You are a subordinate agent of this workspace');
+  expect(system).toContain('report');
+  // And never as a head. Both sentences are the fork framing's, and neither is
+  // true of a hire: nothing merges its findings and it has no siblings racing
+  // it for the tree.
+  expect(system).not.toContain('You are a "head"');
+  expect(system).not.toContain('ONE OF SEVERAL heads');
 });
