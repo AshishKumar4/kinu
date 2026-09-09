@@ -248,7 +248,6 @@ const SubordinateTaskPayloadSchema = v.object({
   kind: v.picklist(['task', 'message']),
   body: v.string(),
   deliverable: v.optional(v.string()),
-  deadline_hint: v.optional(v.string()),
   inherited_context: v.optional(v.string()),
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),

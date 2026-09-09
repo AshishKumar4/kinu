@@ -897,7 +897,7 @@ describe('subordinate event admission', () => {
 
     const task = admitSubordinateTask(log, {
       fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate',
-      deliverable: 'Report', deadlineHint: 'today', mode: 'build', now: 10,
+      deliverable: 'Report', mode: 'build', now: 10,
     });
     const report = admitSubordinateReport(log, {
       fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
@@ -910,7 +910,7 @@ describe('subordinate event admission', () => {
       trust: 'authenticated', priority: 'normal',
       payload: {
         from_workspace: 'kinu-main', kind: 'task', body: 'Investigate',
-        deliverable: 'Report', deadline_hint: 'today', kinu_mode: 'build',
+        deliverable: 'Report', kinu_mode: 'build',
       },
     });
     expect(log.pending({ variant: 'subordinate_report' })[0]).toMatchObject({

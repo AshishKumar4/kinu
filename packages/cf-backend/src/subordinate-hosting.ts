@@ -272,7 +272,6 @@ export async function admitHostedTask(
     readonly body: string;
     readonly mode: WorkMode;
     readonly deliverable?: string;
-    readonly deadlineHint?: string;
     readonly inheritedContext?: string;
     readonly creationId?: string;
   },
@@ -290,7 +289,6 @@ export async function admitHostedTask(
       now: Date.now(),
     };
     if (input.deliverable) admission.deliverable = input.deliverable;
-    if (input.deadlineHint) admission.deadlineHint = input.deadlineHint;
     if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
     if (input.creationId !== undefined) admission.creationId = input.creationId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);

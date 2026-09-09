@@ -817,9 +817,6 @@ export class LocalAgentHost {
           inheritedContextFromHistory(readConversationTail(this.requireEntry(input.key))),
         ),
         createName: mintSubordinateName,
-        // Existence only — the bytes are the child's to read, never this
-        // actor's, which is the saving the channel exists for.
-        statRef: async (path) => (await input.ws.rt.storage.vfs.stat(path)) !== null,
       }),
       team: null,
       peers: null,
@@ -1615,7 +1612,6 @@ export class LocalAgentHost {
       body: string;
       mode: WorkMode;
       deliverable?: string;
-      deadlineHint?: string;
       inheritedContext?: string;
     },
   ): SubordinateHandoff {
@@ -1625,7 +1621,6 @@ export class LocalAgentHost {
       kind: input.kind,
       body: input.body,
       deliverable: input.deliverable,
-      deadlineHint: input.deadlineHint,
       inheritedContext: input.inheritedContext,
       mode: input.mode,
       now: Date.now(),
