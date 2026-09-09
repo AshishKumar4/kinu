@@ -267,7 +267,7 @@ export function metadataObjectKey(root: string, chainId: string): string {
  *  directory (unnamed) does not exist". So this asks only whether an
  *  overlay-family filesystem is mounted at `dir`; the upper is the path this
  *  strategy passed to the mount command, verified by an existence probe. */
-export function isOverlayMounted(procMounts: string, dir: string): boolean {
+function isOverlayMounted(procMounts: string, dir: string): boolean {
   const line = findMount(procMounts, dir);
   return line !== undefined && line.fstype.includes('overlay');
 }
@@ -481,7 +481,7 @@ export function normalizeChainState(raw: StoredValue): ChainState | null {
 
 /** Commit only when the directory changed AND the period elapsed. An
  *  unchanged tick costs no archive, no upload and no new object. */
-export function shouldCheckpoint(
+function shouldCheckpoint(
   change: ChangeStatus,
   lastCheckpointAt: number,
   now: number,
