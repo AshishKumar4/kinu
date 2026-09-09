@@ -768,6 +768,23 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
       if (name !== undefined) uses.push({ specifier: origin.specifier, imported: name });
     } else uses.push(origin);
   });
+  // `lazy(() => import('./m'))`: React resolves the promise and reads exactly
+  // `.default`, so the module's default export is consumed without a binding
+  // this scope walk could see. Only that shape counts: a dynamic import handed
+  // anywhere else proves nothing about which member is read.
+  walk(tree, node => {
+    const { raw } = node;
+    if (raw.type !== 'ImportExpression') return;
+    const arrow = node.parent?.raw;
+    if (arrow?.type !== 'ArrowFunctionExpression' || arrow.body !== raw) return;
+    const call = node.parent?.parent?.raw;
+    if (call?.type !== 'CallExpression' || call.arguments[0] !== arrow) return;
+    const callee = call.callee.type === 'MemberExpression' && !call.callee.computed
+      ? call.callee.property : call.callee;
+    if (callee.type !== 'Identifier' || callee.name !== 'lazy') return;
+    const specifier = literalString(raw.source);
+    if (specifier !== undefined) uses.push({ specifier, imported: 'default' });
+  });
   return uses;
 }
 

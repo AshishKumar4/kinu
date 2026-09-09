@@ -119,10 +119,13 @@ export class SlateHost {
         const live = running !== undefined && await running.process.isRunning()
           && running === this.running.get(`${slateCallerKey(caller)}#${entry.name}`)
           && running.revision === (this.revisions.get(entry.name) ?? 0);
-        const summary = {
-          id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings),
+        const summary: SlateSummary = {
+          id: entry.name,
+          title: project.slate.title ?? project.name ?? entry.name,
+          bindings: Object.keys(project.slate.bindings),
+          port: live && running !== undefined ? running.process.port : undefined,
         };
-        slates.push(live && running !== undefined ? { ...summary, port: running.process.port } : summary);
+        slates.push(summary);
       } catch (cause) {
         problems.push({ id: entry.name, ...refusalOf(toKinuError({ doing: 'slate ' + entry.name, cause, otherwise: 'io' })) });
       }

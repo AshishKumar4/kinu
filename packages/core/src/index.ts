@@ -389,7 +389,6 @@ export {
   pruneStepToolOutputs,
   stepContextLimit,
   outputReserveTokens,
-  stepPruneBatchTokens,
   type ModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';

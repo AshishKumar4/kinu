@@ -109,7 +109,7 @@ export function stepContextLimit(limits: ModelWindow): number {
  * Never zero: a window too small to batch still frees something rather than
  * looping over a target it can never meet.
  */
-export function stepPruneBatchTokens(limits: ModelWindow): number {
+function stepPruneBatchTokens(limits: ModelWindow): number {
   return Math.max(1, Math.floor(stepContextLimit(limits) / 4));
 }
 
