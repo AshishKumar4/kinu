@@ -1,14 +1,18 @@
 import { SparkleIcon } from "@phosphor-icons/react";
+import type { ReactNode } from "react";
 import type { SlateSummary } from "@kinu.run/core";
 import type { Rpc } from "@/lib/protocol";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 
 /** One agent-authored Slate inside the work surface's chrome. */
-export function SlateSurface({ slate, rpc, reloadKey }: {
+export function SlateSurface({ slate, rpc, reloadKey, body }: {
   slate: SlateSummary;
   rpc: Rpc;
   /** Bumped when the Slate changes, so its preview URL is re-read. */
   reloadKey?: number;
+  /** Replaces the preview frame under the header. The public landing page
+   *  supplies a sample body here: its CSP cannot frame a preview origin. */
+  body?: ReactNode;
 }) {
   return (
     <div className="space-y-4 animate-fade-in">
@@ -21,7 +25,7 @@ export function SlateSurface({ slate, rpc, reloadKey }: {
           <span className="text-[10px] p-text-3 p-num">{slate.bindings.join(" · ")}</span>
         )}
       </div>
-      <SlateFrame id={slate.id} rpc={rpc} reloadKey={reloadKey} />
+      {body ?? <SlateFrame id={slate.id} rpc={rpc} reloadKey={reloadKey} />}
     </div>
   );
 }

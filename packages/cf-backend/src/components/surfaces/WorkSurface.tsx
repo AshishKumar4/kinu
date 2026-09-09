@@ -16,7 +16,7 @@
  * The gauge at the right is deliberately apart and deliberately unchanged: the
  * run's meters are about the run rather than a place to work in it.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
@@ -116,6 +116,10 @@ export interface WorkSurfaceProps {
   /** Per-Slate remount counter, bumped by the `slates_changed` broadcast —
    *  what makes an open frame re-read its preview URL. */
   slateReloads?: ReadonlyMap<string, number>;
+  /** A body to show under an open Slate's header instead of its preview
+   *  frame. The public landing page's fixture: that page cannot frame a
+   *  preview origin, so it supplies a sample body. Absent in the app. */
+  slateBody?: (slate: SlateSummary) => ReactNode;
   /** Whether the gated surfaces have content. Absent in fixture frames,
    *  which keeps every tab visible — unknown is not empty. */
   tabPresence?: TabPresence;
@@ -275,7 +279,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
           {openSlate !== null && (openSlateSummary
-            ? <SlateSurface slate={openSlateSummary} rpc={props.rpc} reloadKey={openSlateReloadKey} />
+            ? <SlateSurface slate={openSlateSummary} rpc={props.rpc} reloadKey={openSlateReloadKey} body={props.slateBody?.(openSlateSummary)} />
             : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
         </ErrorBoundary>
       </div>

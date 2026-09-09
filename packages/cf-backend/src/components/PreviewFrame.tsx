@@ -12,6 +12,39 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { PREVIEW_SANDBOX, isPreviewUrl } from "@/lib/preview-origin";
 import { ArrowsClockwiseIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
 
+/**
+ * The preview's header row: the live dot, the label, the URL, and copy /
+ * reload / open-in-new-tab. `PreviewFrame` puts it over its iframe; the public
+ * landing page puts it over a sample body, because that page's CSP is
+ * `frame-src 'none'` and it cannot frame anything.
+ */
+export function PreviewChrome({ url, label, onReload }: {
+  url: string;
+  label?: string;
+  onReload: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
+      <span className="size-1.5 rounded-full p-dot-success shrink-0" />
+      {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
+      <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
+      <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
+      <button
+        onClick={onReload}
+        className="p-text-3 hover:p-text p-1 shrink-0"
+        title="Reload"
+      ><ArrowsClockwiseIcon size={11} /></button>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="p-text-3 hover:p-text p-1 shrink-0"
+        title="Open in new tab"
+      ><ArrowSquareOutIcon size={11} /></a>
+    </div>
+  );
+}
+
 export function PreviewFrame({ url, label }: {
   url: string;
   /** Header label, e.g. ":8080 · hello-world". The URL is always shown. */
@@ -32,24 +65,7 @@ export function PreviewFrame({ url, label }: {
   }
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-        <span className="size-1.5 rounded-full p-dot-success shrink-0" />
-        {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
-        <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
-        <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
-        <button
-          onClick={() => setReloadKey(k => k + 1)}
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Reload"
-        ><ArrowsClockwiseIcon size={11} /></button>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Open in new tab"
-        ><ArrowSquareOutIcon size={11} /></a>
-      </div>
+      <PreviewChrome url={url} label={label} onReload={() => setReloadKey(k => k + 1)} />
       <iframe
         key={reloadKey}
         src={url}

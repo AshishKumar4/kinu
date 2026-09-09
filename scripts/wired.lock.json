@@ -1,5 +1,6 @@
 [
   "packages/cf-backend/src/codemode-egress.ts#CodemodeEgress (unreached-export)",
+  "packages/cf-backend/src/components/landing/LandingWorkspaceFrame.tsx#LandingWorkspaceFrame (unreached-export)",
   "packages/cf-backend/src/components/surfaces/EnvironmentSurface.tsx#statusOf (unreached-export)",
   "packages/cf-backend/src/components/surfaces/OutputSurface.tsx#previewPortId (unreached-export)",
   "packages/cf-backend/src/components/surfaces/OutputSurface.tsx#selectPreviewPort (unreached-export)",
