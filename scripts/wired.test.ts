@@ -209,6 +209,19 @@ describe('awaited dynamic import consumers', () => {
     const source = 'import { highlightCode as View } from "./lazy"; if (import.meta.main) console.log(<View />);';
     expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.tsx`, source]]))).toEqual([unused]);
   });
+  test('React.lazy reaches exactly the default export of the module it imports', () => {
+    const lazyDefault = 'export default function Frame() { return "frame"; } export const unused = 1;';
+    const frameDefault = `${lazyFile}#Frame (unreached-export)`;
+    const withLazy = (body: string) => census(new Map([
+      [lazyFile, lazyDefault],
+      [`${BASE}main.ts`, `import { lazy } from "react"; if (import.meta.main) console.log(main()); function main() { ${body} }`],
+    ]));
+    expect(withLazy('return lazy(() => import("./lazy"));')).toEqual([unused]);
+    expect(withLazy('return React.lazy(() => import("./lazy"));')).toEqual([unused]);
+    // A dynamic import handed anywhere else says nothing about which member is read.
+    expect(withLazy('return consume(() => import("./lazy"));')).toEqual([frameDefault, unused]);
+    expect(withLazy('return lazy(async () => { const m = await import("./lazy"); return m; });')).toEqual([frameDefault, unused]);
+  });
 });
 
 

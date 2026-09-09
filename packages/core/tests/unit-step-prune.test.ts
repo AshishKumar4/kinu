@@ -12,7 +12,6 @@ import {
   DynamicContextLedger,
   outputReserveTokens,
   stepContextLimit,
-  stepPruneBatchTokens,
   type ModelWindow,
 } from '../src/index';
 
@@ -199,16 +198,24 @@ describe('pruneStepToolOutputs', () => {
     }
   });
 
-  test('the batch quantum scales with the window it is a share of', () => {
+  test('a pass frees a share of the allocation, so a larger window frees more per pass', () => {
     // Not a fixed token count: a pass has to free a share of the allocation
     // it is protecting, or the same number is a no-op on a 1M window and
-    // clears everything on a 32k one.
-    expect(stepPruneBatchTokens({ contextWindow: 200_000, modelOutputLimit: 64_000 }))
-      .toBe(Math.floor(136_000 / 4));
-    expect(stepPruneBatchTokens({ contextWindow: 1_000_000, modelOutputLimit: 128_000 }))
-      .toBeGreaterThan(stepPruneBatchTokens({ contextWindow: 200_000, modelOutputLimit: 64_000 }));
-    // Never zero: a window too small to batch still frees something.
-    expect(stepPruneBatchTokens({ contextWindow: 1, modelOutputLimit: 1 })).toBeGreaterThan(0);
+    // clears everything on a 32k one. Observable as how many results the
+    // FIRST over-budget pass truncates: the overage is at most one result,
+    // so everything past it is the quantum.
+    const truncatedByFirstPass = (limits: ModelWindow): number => {
+      let turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
+      for (let step = 0; ; step++) {
+        turn = [...turn, ...toolExchange(step, 8_000)];
+        const pruned = pruneStepToolOutputs(turn, limits);
+        if (pruned !== undefined) return pruned.filter((message, i) => message !== turn[i]).length;
+      }
+    };
+    const sonnet = truncatedByFirstPass({ contextWindow: 200_000, modelOutputLimit: 64_000 });
+    const million = truncatedByFirstPass({ contextWindow: 1_000_000, modelOutputLimit: 128_000 });
+    expect(sonnet).toBeGreaterThan(1);
+    expect(million).toBeGreaterThan(sonnet);
   });
 });
 
