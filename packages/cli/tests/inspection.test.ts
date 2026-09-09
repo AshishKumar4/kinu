@@ -125,10 +125,10 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
   const list = runCli(home, ["list"]);
   expect(list.exitCode).toBe(0);
   expect(list.stdout.toString()).toContain("unreadable:");
-  // Parsed, not substring-matched: this diagnostic is structured, and the
-  // contract is the FIELDS — a stable dotted event name, a classification, the
-  // cause chain, and which workspace it was. Asserting the rendered line
-  // instead fails on any change that strictly improves the output.
+  // Parse the structured diagnostic and assert its contract fields: the stable
+  // dotted event name, classification, cause chain, and workspace.
+  // Rendered-line assertions can fail on formatting improvements that preserve
+  // those fields.
   const line = list.stderr.toString().trim().split('\n')
     .find((row) => row.includes('workspace.read_failed'));
   if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in stderr: ${list.stderr.toString()}`);

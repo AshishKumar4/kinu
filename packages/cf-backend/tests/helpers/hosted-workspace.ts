@@ -8,13 +8,10 @@
  * can express — and `databasesOpened()` is the witness that stays true only
  * while that holds.
  *
- * A fixture that stood the actors up itself would have to SIMULATE a per-actor
- * database: a `subAgent` interception that hands a spawner a real child object,
- * a `parentPath` override so the SDK's lineage matches, a second
- * `Database(':memory:')` per child, a `FacetIdentity` seed so the child could
- * read its own name back. One that fakes facet storage cannot witness one
- * database serving every actor, it can only agree with whichever side it was
- * built for.
+ * Every actor is acquired from the same production `ActorHost` over one
+ * `bun:sqlite` database. Simulating per-actor databases would make storage
+ * locality a fixture assumption rather than a property this fixture can
+ * establish.
  */
 
 import { Database } from 'bun:sqlite';

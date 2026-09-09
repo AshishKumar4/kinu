@@ -132,10 +132,10 @@ function gatedFirstModel(): GatedModel {
 /** A subordinate that answers its assignment with a TERMINAL report: one
  *  `report` tool call declaring `completed`, then its closing text.
  *
- *  The status is the child's own word, which is the whole point. A
- *  `relayToParent` that hardcodes `'progress'` leaves every local subordinate
- *  permanently `working` in its parent's eyes whatever it said, with the tool
- *  the cloud backend gives a child not wired here at all. */
+ *  The status is the child's own word, which is the whole point. The local
+ *  child has a wired `report` tool, and its declared terminal status reaches
+ *  the parent; hardcoding `'progress'` in `relayToParent` would leave the
+ *  child `working` regardless of its report. */
 function reportingChildModel(content: string) {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;

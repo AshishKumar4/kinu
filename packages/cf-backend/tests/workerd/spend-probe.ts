@@ -2,13 +2,11 @@
  * The workspace-spend aggregate, run on real Durable Object SQLite.
  *
  * WHY THIS IS A PLATFORM TEST AND NOT A SQL-SHAPE ONE. The totals the Activity
- * panel renders are summed by ONE query (`RunEventRecorder.spendByProducer`)
- * whose whole method is SQLite features no other production read path asks a
- * Durable Object for: `WITH` common table expressions and the JSON1 function
- * `json_extract` over the `run_events.payload` column. It is the one production
- * query that depends on SQLite's JSON functions being available on both
- * SqlExecutors, and every other test of this read runs under `bun test`, i.e.
- * against `bun:sqlite`, whose feature set says nothing whatever about workerd's.
+ * panel renders are summed by ONE query: `RunEventRecorder.spendByProducer`
+ * uses `WITH` common table expressions and the JSON1 function `json_extract`
+ * over `run_events.payload`, so its behavior must be exercised on Durable
+ * Object SQLite. Every other test of this read runs under `bun test`, i.e.
+ * against `bun:sqlite`, and passing there does not establish workerd support.
  *
  * So the question is not whether our SQL is right. It is whether the platform
  * answers it at all. A workerd SQLite built without JSON1 would throw

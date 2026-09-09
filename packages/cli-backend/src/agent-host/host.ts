@@ -1225,12 +1225,10 @@ export class LocalAgentHost {
   /**
    * The automatic turn-end report, as an effect the child's settled turn OWES.
    *
-   * Every decision stays where it already lived: whether a DURABLE turn relays is
-   * core's `subordinateRelaysTurnEnd` over the state {@link observeChildTurn}
-   * keeps, and which words a TASK child's ending earns is core's closed
-   * `terminalTaskReport` map. The child's LEDGER holds the obligation, so an
-   * interruption before the parent admitted it leaves a row a later start
-   * replays.
+   * Core's `subordinateRelaysTurnEnd` decides whether a DURABLE turn relays
+   * using the state {@link observeChildTurn} keeps, and `terminalTaskReport`
+   * supplies a TASK child's ending text. The child's ledger records the
+   * obligation for replay if parent admission is interrupted.
    *
    * There is no `error` branch and no `turn-end` branch here. Two branches each
    * starting their own detached relay is how one failing turn — an `error` event
@@ -1679,10 +1677,9 @@ export class LocalAgentHost {
     }
     parent.tree.runtimes.delete(reference.actorId);
     parent.tree.orchestrations.delete(reference.actorId);
-    // KEEP HISTORY IS LITERAL. A dismissed hire's rows stay in the one
-    // workspace database, addressable by its actor id, and only its scratch
-    // bytes go — the history is readable rows, not a file left behind that
-    // nothing points at.
+    // KEEP HISTORY IS LITERAL. A retained dismissal keeps the actor's history
+    // as readable rows in the workspace database, addressable by actor id.
+    // Only its scratch bytes are removed.
     const retirement: Parameters<ActorHost['retire']>[1] = {
       reference, name, destroy: !keepHistory,
     };

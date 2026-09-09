@@ -247,20 +247,15 @@ describe('a head forks its parent workspace', () => {
 });
 
 /**
- * A HOSTED HEAD HAS NO BOOTSTRAP SEQUENCE, SO THE PROPERTIES ONE WOULD OWE ARE
- * ANSWERED ELSEWHERE.
+ * WHERE A HOSTED HEAD'S PROPERTIES ARE ANSWERED.
  *
- *   • Its registered parent is `workspace_actors.parent_actor_id`, written by
- *     the directory under the parent's authority and re-validated on every
- *     binding. Nothing seeds a parent at a fresh actor, so there is no second
- *     seed call to refuse.
- *   • A branch is a `'branch'` directory row and `hostBranch` hands it two
- *     model calls; the containment property is asserted in
- *     unit-exploration-containment.test.ts, which drives `hostBranch` and shows
- *     it acquires no home.
- *   • `hostHead` takes its `HeadInput` as an argument and runs in the caller's
- *     isolate: one call, no window for the Durable Object to hibernate in, and
- *     no persisted work spec to re-validate. Recovery of an interrupted head is
- *     a journal question — `markInterrupted`, and `ActorHost.resumable` over
- *     unsettled claims — which is where it is tested.
+ *   • The directory owns and revalidates the head's registered parent
+ *     (`workspace_actors.parent_actor_id`, written under the parent's
+ *     authority and re-validated on every binding).
+ *   • `hostBranch` containment is covered in
+ *     unit-exploration-containment.test.ts, which drives it and shows it
+ *     acquires no home.
+ *   • `hostHead` receives `HeadInput` in one in-process call, while
+ *     interruption recovery is covered through `markInterrupted` and
+ *     `ActorHost.resumable` over unsettled claims.
  */
