@@ -434,6 +434,9 @@ const OPERATION_ID_PREFIX = 'bench:operation-id:';
  *  return, not to defer the work. */
 const OPERATION_DELAY_SECONDS = 1;
 
+/** The in-gate restore's latest wall-clock probe, written by `onStart`. */
+const RESTORE_PROBE_KEY = 'bench:restore-probe';
+
 /** The two key spellings, in one place each: four call sites read or write
  *  these rows, and a key spelled twice is a row nobody can find. */
 const operationKey = (token: string): string => `${OPERATION_PREFIX}${token}`;
@@ -468,6 +471,27 @@ class BenchBox extends Devbox<BenchEnv> {
     // constructor's signature identical to the base's rather than restating a
     // platform type that can drift.
     flushEnv = args[1];
+  }
+  /**
+   * Time the container-start restore from inside the gate, for the in-gate
+   * timing proof. Entry to settle, as the platform holds it: every request
+   * waits behind this hook, so its wall time is the number the
+   * `do.block_concurrency.cancel_ms` cap judges. Stored durably because the
+   * object may reset between the restore and the driver's read; overwritten
+   * by every start, so a read names the latest wake, never an old one.
+   */
+  override async onStart(): Promise<void> {
+    const enteredAt = Date.now();
+    await super.onStart();
+    const probe = { wallMs: Date.now() - enteredAt, at: enteredAt };
+    await this.ctx.storage.put(RESTORE_PROBE_KEY, probe);
+  }
+
+  /** The last in-gate restore's wall time, if any start has settled one. */
+  async readRestoreProbe(): Promise<{ readonly wallMs: number; readonly at: number } | undefined> {
+    return await this.ctx.storage.get<{ readonly wallMs: number; readonly at: number }>(
+      RESTORE_PROBE_KEY,
+    );
   }
 
   /**
@@ -1049,6 +1073,21 @@ export default {
             extractionAllowed: env.ALLOW_EXTRACTION === '1',
             storePrefix: storePrefixOf(env, strategy, name),
             state,
+            ms: Date.now() - started,
+          });
+        }
+
+        case 'GET /restore-probe': {
+          // The last in-gate restore's wall time, written by the start hook
+          // itself. The driver polls this after a wake settles: the number is
+          // the gate occupancy the platform cap judges, not the driver's own
+          // round trip.
+          const probe = await box.readRestoreProbe();
+          return json({
+            ok: probe !== undefined,
+            strategy,
+            box: name,
+            probe,
             ms: Date.now() - started,
           });
         }
