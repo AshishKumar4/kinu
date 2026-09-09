@@ -24,7 +24,6 @@ import {
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
-  isOverlayMounted,
   metadataObjectKey,
   publishCommand,
   shouldRebase,
@@ -1019,7 +1018,7 @@ describe('attach — the mount must be observed to have landed', () => {
       // Nothing was mounted over the work directory, so the next attach starts
       // from scratch rather than early-returning over half a composition.
       expect(record.calls.filter(call => call.startsWith('overlayAttach'))).toEqual([]);
-      expect(isOverlayMounted(mountsAfterAttach(calls)(), DEVBOX_WORKDIR)).toBe(false);
+      expect(mountsAfterAttach(calls)()).toBe(NOT_MOUNTED);
 
       // And the retry, on the same container, completes the whole restoration.
       const retry = await snapshotChainStorage(record.ports).attach();
@@ -1067,6 +1066,52 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(record.calls.filter(call => call.startsWith('seedUpper'))).toEqual([]);
       expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
     });
+
+  test('DEPLOYED DEFECT: a kernel overlay with dir options reads as attached too', async () => {
+    // A deployed container answered "produced an overlay whose upper directory
+    // (unnamed) does not exist" because an earlier version parsed `upperdir`
+    // out of the mount line and fuse-overlayfs never publishes it. The mount
+    // fact is the MECHANISM: both overlay families read as attached, and a
+    // mountpoint with an octal-escaped space still resolves to its path.
+    const kernelOverlay = [
+      'sysfs /sys sysfs rw,relatime 0 0',
+      `overlay ${DEVBOX_WORKDIR.replace(/ /g, '\\040')} overlay rw,lowerdir=/a:/b,upperdir=/c,workdir=/d 0 0`,
+    ].join('\n');
+    const record = harness({ state: chainState(), mounts: kernelOverlay });
+    expect((await attachOf(record)).kind).toBe('already-attached');
+    // A plain FUSE mount at the same path is a real filesystem and NOT an
+    // overlay: reading it as one would archive a directory that has no upper.
+    const fuseOnly = harness({
+      state: chainState(),
+      mounts: `sysfs /sys sysfs rw,relatime 0 0\ns3fs ${DEVBOX_WORKDIR} fuse.s3fs rw 0 0`,
+    });
+    await expect(attachOf(fuseOnly)).rejects.toThrow(/is not an overlay mount/);
+  });
+
+  test('a tick inside the minimum interval is skipped; on the boundary it commits', async () => {
+    // The interval gate applies to ticks only: an unchanged tick never
+    // archives however long it has been, a changed tick waits out the
+    // interval, and a quiesce ignores the clock.
+    const early = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + INTERVAL_MS - 1,
+    });
+    const waited = await checkpointOf(early, 'tick');
+    expect(waited.kind).toBe('skipped');
+    expect(waited.reason).toContain('within the minimum checkpoint interval');
+
+    const due = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + INTERVAL_MS,
+    });
+    expect((await checkpointOf(due, 'tick')).kind).toBe('committed');
+
+    const quiesced = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + 1,
+    });
+    expect((await checkpointOf(quiesced, 'quiesce')).kind).toBe('committed');
+  });
 
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
