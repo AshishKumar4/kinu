@@ -18,6 +18,7 @@ import * as v from 'valibot';
 import { z } from 'zod';
 import {
   buildSystemPromptSync,
+  BUILTIN_TOOLS,
   runChat,
   DynamicContextLedger,
   renderDynamicContextBlock,
@@ -168,6 +169,48 @@ describe('byte-stable system prefix', () => {
       activeSkills: { active: [skill('alpha')], reasons: [] },
     }));
     expect(skills).not.toBe(h1);
+  });
+
+  // The measured leak this pins. `provenance` is documented as an overlay and
+  // never a bar (prompting/surface.ts), yet it rendered as a conditional line
+  // inside OPERATING_GUIDANCE — ~400 bytes into a 9.2 KB prefix. A background
+  // job finishing mid-session therefore rewrote 8829 of 9228 bytes (95.7%),
+  // and the next chat turn rewrote them back: an alternating full-prefix cache
+  // write on every transition, for one sentence of per-turn instruction. It is
+  // per-turn material by definition — why THIS turn is running — so it rides
+  // the turn-local tail with the other per-turn facts.
+  //
+  // Two turns of ONE session, assembled the way both backends assemble them:
+  // one system prompt per turn plus one turn-local tail message per turn.
+  test('a chat turn and a background-job wake share one byte-identical prefix', () => {
+    const { rt } = createTestRuntime();
+    // The representative full surface, so "the sentence is nowhere in the
+    // prefix" covers every section rather than the handful a bare build emits.
+    const session = {
+      backend: 'cf' as const,
+      soulOverride: 'You are Kinu.',
+      availableTools: [...BUILTIN_TOOLS],
+      executors: [workspace, idleSandbox, connectedLaptop],
+      workMode: 'build' as const,
+      model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
+      currentDate: '2026-01-01',
+    };
+    const chatPrefix = buildSystemPromptSync(rt, session);
+    const wakePrefix = buildSystemPromptSync(rt, session);
+    expect(wakePrefix).toBe(chatPrefix);
+    // The guard that fails if the sentence is ever put back at system
+    // placement: no arm of any section may render it.
+    expect(chatPrefix).not.toContain('the referenced job result first');
+    expect(chatPrefix).not.toContain('Background-resume');
+
+    // …and the volatile fact still reaches the model, in the turn that has it.
+    const wakeTail = turnLocalContextMessage({ provenance: 'background_resume' });
+    expect(wakeTail).toMatchObject({ role: 'user' });
+    expect(String(wakeTail!.content)).toContain('the referenced job result first');
+    // A chat turn says nothing at all: the overlay exists for the wake alone,
+    // and a per-turn message that renders on every turn is weight this move
+    // was not meant to add.
+    expect(turnLocalContextMessage({ provenance: 'chat' })).toBeNull();
   });
 });
 
