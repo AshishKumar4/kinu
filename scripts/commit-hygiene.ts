@@ -195,22 +195,22 @@ export const ROSTER: readonly string[] = ['Main'];
  * `FacetIdentity` is the fourth and the first one governed: `76936034ba` line 21
  * cites its durable-write pattern, `packages/core/src/state/facet-identity.ts`
  * declared it at that commit and still declares it at `4b732f164`, and the
- * actor-host cutover deleted the per-actor facet identity row it named. The
- * citation is a class this repository shipped, checkable at either SHA, and
- * deleting a type is not grounds for rewriting the history that used it.
+ * per-actor facet identity row it named is not in the tree. The citation is a
+ * class this repository shipped, checkable at either SHA, and deleting a type is
+ * not grounds for rewriting the history that used it.
  *
  * `NodeLoopHost` is the fifth, and it arrived the same way one commit later.
  * `9078d528c8` line 3 ("The search's abort signal never reached a node run in a
  * facet: NodeLoopHost took no signal") cites the seam a facet backend ran a
  * swarm node through; `packages/core/src/strategy/node-host.ts` declared it at
- * that commit and still declared it at `008ee768a`, and THIS commit deletes it,
- * because the actor cutover replaced that seam with the required
- * `AgentsForkDeps.hostNode` and left `nodeHost` supplied by nothing in either
- * backend. So the citation is again a type this repository shipped, checkable
- * at either SHA — and again not grounds for rewriting the history that used it.
- * Note the shape of the trap: the gate reads a name as a person exactly when
- * the tree stops holding it, so completing a cutover is what turns a correct
- * historical message red. The remedy is this list, not a reset.
+ * that commit and still declared it at `008ee768a`. That seam is now the
+ * required `AgentsForkDeps.hostNode`, `nodeHost` is supplied by nothing in
+ * either backend, and the type is out of the tree. So the citation is again a
+ * type this repository shipped, checkable at either SHA — and again not grounds
+ * for rewriting the history that used it. Note the shape of the trap: the gate
+ * reads a name as a person exactly when the tree stops holding it, so completing
+ * a cutover is what turns a correct historical message red. The remedy is this
+ * list, not a reset.
  */
 export const NAMES_WITHOUT_CODE: readonly string[] = [
   'TypeScript', 'JavaScript', 'GitHub', 'AlphaEvolve', 'FunSearch', 'AshishKumar4',
@@ -233,7 +233,7 @@ export interface Narration {
  * `the owner` and `this session` are both DOMAIN NOUNS in this product, so
  * neither can be gated as a bare phrase.
  *
- * Measured before narrowing: `the owner` appears in 119 tracked source files as
+ * Measured across the tree: `the owner` appears in 119 tracked source files as
  * a first-class modelled entity — `the owner's UserDO`, `spend the owner's
  * inference credentials`, `notifies the owner`, `the owner's backup of their own
  * workspace`. `this session` is the cli-backend's own referent for a live session
@@ -358,10 +358,9 @@ export interface Violation {
  * commit that quotes a shipped product string cannot be held to a prose rule
  * about that string's content: `evolution/engine.ts:678` emits a user-facing
  * digest containing the words `this session`, and a body quoting it accurately
- * was a finding while misquoting it would have passed. Measured before adding
- * this: of 172 narration hits across the 1,898-commit history, ZERO sit inside a
- * fenced block and ZERO on an indented line, so the carve-out costs no coverage
- * at all.
+ * would otherwise be a finding while misquoting it passes. Measured over the
+ * 1,898-commit history: of 172 narration hits, ZERO sit inside a fenced block
+ * and ZERO on an indented line, so the carve-out costs no coverage at all.
  *
  * Deliberately NOT applied to the attribution rules — agent names are routinely
  * written in backticks (`` `AxisErgonomics`, 245 answered calls ``), and

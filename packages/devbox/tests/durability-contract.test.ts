@@ -100,7 +100,7 @@ describe('durability v1 wire contracts', () => {
     // A truncated digest cannot authenticate anything, so it never parses.
     expect(() => v.parse(ImmutableObjectRefSchema, { ...object, sha256: 'short' }))
       .toThrow('Expected a lowercase SHA-256 digest');
-    // A bare decimal is no longer a legal envelope cut.
+    // A bare decimal is not a legal envelope cut.
     expect(() => v.parse(RootEnvelopeV1Schema, {
       version: 1,
       format: 'merkle-pack/v1',
@@ -752,9 +752,9 @@ describe('an overlay-cas attach, in the readiness dimensions this contract decla
 
   test('A FRESH PREFIX IS TOLD APART FROM A FOLDED ONE AT THE SAME OP, MOUNT AND PAYLOAD COST',
     async () => {
-      // The classification `inventory()` used to answer. A fresh prefix reports
-      // `empty`; a folded one reports `attached`; both pay two remote operations
-      // and two mounts and read no payload, and neither is listed.
+      // The classification an `inventory()` listing would answer. A fresh prefix
+      // reports `empty`; a folded one reports `attached`; both pay two remote
+      // operations and two mounts and read no payload, and neither is listed.
       //
       // THE TWO ROWS ARE NOT EQUAL, and the difference is named rather than
       // asserted away: a folded prefix has a `cursor.json` to read and a fresh

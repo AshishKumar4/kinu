@@ -98,12 +98,11 @@ interface ConversationTurn {
  * in place with this turn's user message and everything the model produced —
  * assistant text and tool traffic — exactly as the AI SDK hands it back.
  *
- * It used to take one string and send `messages: [user]`, so "5-turn
- * conversation" was five one-turn conversations wearing that title: turn 5
- * asked "Summarize what we discussed", the model honestly answered "We haven't
- * actually discussed anything yet", and the test PASSED, because the only
- * per-turn assertion was `length > 0`. The history is the subject of that
- * suite's title, so it is threaded here, once, for every caller.
+ * Sending `messages: [user]` instead makes "5-turn conversation" five one-turn
+ * conversations wearing that title: turn 5 asks "Summarize what we discussed",
+ * the model honestly answers "We haven't actually discussed anything yet", and a
+ * suite whose only per-turn assertion is `length > 0` PASSES. The history is the
+ * subject of that suite's title, so it is threaded here, once, for every caller.
  *
  * `sent` IS RETURNED BECAUSE CONTENT CANNOT PROVE THREADING. The agent holds a
  * `memory` tool whose conversation-search action queries the same `messages`

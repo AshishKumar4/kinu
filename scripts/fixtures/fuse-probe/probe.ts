@@ -3,8 +3,8 @@
  * The in-container half of the FUSE capability probe.
  *
  * It deliberately depends only on bun, node compatibility and libc. The
- * Sandbox image has node and bun but has previously measured python3, gcc,
- * make and libfuse userspace tooling absent. This file therefore speaks the
+ * Sandbox image has node and bun; python3, gcc, make and libfuse userspace
+ * tooling have measured absent. This file therefore speaks the
  * `/dev/fuse` ABI directly and invokes libc's `syscall(2)` through Bun FFI.
  * A missing device, denied syscall, helper absence or seccomp refusal becomes
  * evidence and a typed NO_GO in the outer driver; this program never installs

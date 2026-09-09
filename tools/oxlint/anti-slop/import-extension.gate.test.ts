@@ -246,7 +246,7 @@ try {
     assert.equal(
       firedIn(greenDiagnostics, `${name}.ts`).length,
       0,
-      `anti-slop/${RULE} fires on the corrected ${name} form, so the cutover has no green state to reach`,
+      `anti-slop/${RULE} fires on the corrected ${name} form, so there is no green state to reach`,
     );
   }
 

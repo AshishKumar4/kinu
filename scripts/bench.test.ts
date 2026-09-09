@@ -618,9 +618,8 @@ describe('createAttemptSandbox', () => {
     const packages = workspacePackages(REPO_ROOT);
     expect(packages.size).toBeGreaterThan(1);
     for (const [name, packageDir] of packages) {
-      // Bun hoists workspace links to the ROOT node_modules — the per-package
-      // paths this used to check have not existed for some time, so it ENOENTed
-      // instead of catching the leak it was written to catch.
+      // Bun hoists workspace links to the ROOT node_modules, so a per-package
+      // path ENOENTs instead of catching the leak this is written to catch.
       const resolved = realpathSync(join(sandbox.dir, 'node_modules', name));
       // The copy's OWN directory, by equality: `startsWith` alone would accept a
       // link into some other package of the same sandbox.

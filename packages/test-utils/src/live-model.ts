@@ -33,9 +33,9 @@
  *
  * The third outcome is the one that matters: an environment that is HALF-SET, or
  * aimed somewhere it may not go, is a configuration bug and not a skip.
- * `KINU_TOKEN` with no origin used to resolve to an empty header and a silent
- * skip — a green suite that proved nothing, over a machine whose operator
- * believed it was configured. Both return `misconfigured` and the suites throw.
+ * `KINU_TOKEN` with no origin would otherwise resolve to an empty header and a
+ * silent skip — a green suite that proves nothing, over a machine whose operator
+ * believes it is configured. Both return `misconfigured` and the suites throw.
  */
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
@@ -345,11 +345,11 @@ export function liveChatModel(llm: LLMProviderConfig): LanguageModel {
  * meter for any one of them is how a tier learns to report a number the others
  * cannot.
  *
- * A ZERO IS NEVER SILENT. `calls: 0` used to mean both "nothing ran" and
- * "nothing was measured", and the behavioural tier printed the second while
- * spending ~584,751 neurons. `episodesUnmeasured` is the difference: a suite that
- * drove work registers it whether or not the spend could be accounted for, so
- * only a suite that genuinely ran nothing reports a clean zero.
+ * A ZERO IS NEVER SILENT. `episodesUnmeasured` is what keeps `calls: 0` from
+ * meaning both "nothing ran" and "nothing was measured" — the ambiguity that let
+ * the behavioural tier print the second while spending ~584,751 neurons. A suite
+ * that drove work registers it whether or not the spend could be accounted for,
+ * so only a suite that genuinely ran nothing reports a clean zero.
  *
  * A call whose usage the provider did not report still increments `calls` and
  * `callsWithoutUsage`, and contributes NOTHING to the token total. That gap is
@@ -467,13 +467,12 @@ export function recordLiveModelEpisode(sql: SqlExecutor, actor: ActorHandle): vo
  * This is the accounting half, shared, and it is why the cloud arm cannot grow a
  * second definition of what a workspace spent.
  *
- * IT NO LONGER HAS A WINDOW TO REFUSE. A truncation guard stood here, and it was
- * load-bearing while the total was read over a bounded window: a windowed figure
- * printed where a reader takes an episode's cost is a floor wearing a
- * measurement's clothes. `workspaceSpend` now aggregates over the whole log, so
- * `complete` and `windowLimit` are gone from the read model and the guard has
- * nothing left to check. Deleted rather than kept as a tautology — a check that
- * cannot fire is the shape this repository keeps finding.
+ * THERE IS NO WINDOW TO REFUSE. `workspaceSpend` aggregates over the whole log
+ * and the read model carries no `complete` or `windowLimit`, so nothing here can
+ * hand back a bounded total — and a windowed figure printed where a reader takes
+ * an episode's cost is a floor wearing a measurement's clothes. A truncation
+ * guard over that has nothing left to check, and this repository does not keep a
+ * check that cannot fire.
  *
  * AN EPISODE ALWAYS COUNTS. A store that accounts for no call at all does not
  * add a silent zero: it increments `episodesUnmeasured`, because an episode that
@@ -525,12 +524,12 @@ export type AdoptedSpendVerdict = 'accounted' | 'unaccounted';
 /**
  * Record what a resumed run ADOPTED rather than drove.
  *
- * A run that spans processes publishes ONE record over every case, and the
- * spend beside those cases used to be whatever the LAST process happened to
- * pay. So the total SHRANK on every resume while the observation list it sat
- * next to stayed whole — a per-process figure printed where a reader takes the
- * run's cost, which is the same shape of error as reporting `0 model call(s)`
- * over an episode that spent hundreds of thousands of neurons.
+ * A run that spans processes publishes ONE record over every case, so the spend
+ * beside those cases must cover every process rather than whatever the LAST one
+ * happened to pay. A per-process figure printed where a reader takes the run's
+ * cost SHRINKS on every resume while the observation list it sits next to stays
+ * whole — the same shape of error as reporting `0 model call(s)` over an episode
+ * that spent hundreds of thousands of neurons.
  *
  * EVIDENCE OR A LABEL, never a silent zero. A record that counted no model step,
  * or that stored no token total, cannot say what its case cost: the call count

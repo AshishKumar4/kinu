@@ -765,7 +765,7 @@ describe('the async checkpoint and stop protocol', () => {
     expect(fixture.publications()).toBe(1);
   });
 
-  test('no minute-scale route is posted as a blocking request any more', () => {
+  test('no minute-scale route is posted as a blocking request', () => {
     const source = readFileSync(new URL('./bench-devbox-strategies.ts', import.meta.url), 'utf8');
     // The two routes travel through the async arm-and-poll protocol; a `call`
     // that posts either of them and then waits out the outcome is a request
@@ -1693,8 +1693,9 @@ describe('the arms are measured in flight together', () => {
       rows = await runArmsInFlight(['snapshot-chain', 'r2fs'], 'isolation-probe', lanes.lane);
     });
 
-    // THE SIBLING SURVIVED. A rejected lane used to take the whole run with it:
-    // every arm behind the thrown one was never measured and never reported.
+    // THE SIBLING SURVIVED. A rejected lane takes only itself down; a lane that
+    // took the run with it would leave every arm behind the thrown one
+    // unmeasured and unreported.
     const sibling = rows.find((row) => row.strategy === 'r2fs');
     expect(sibling?.verifyPassed).toBe(true);
     expect(sibling?.attachColdMs).toBe(1_200);
@@ -1842,7 +1843,7 @@ describe('the preregistered witness cells', () => {
     expect(collapse?.detail).toContain('delta 0B');
   });
 
-  test('one key holding the same bytes twice is no longer a mutable delta', () => {
+  test('one key holding the same bytes twice is not a mutable delta', () => {
     const [mutable] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
       mutableDelta: { ...WITNESSED.mutableDelta!, etagAfter: 'e1' },
@@ -2283,9 +2284,9 @@ describe('the rendered report carries no money', () => {
     // THE ARTIFACT IS THE USER-FACING SURFACE, so the scan is over the WHOLE of
     // it — header, decisive table, decision rule, sqlite finding, lifecycle,
     // ladder, operations and the recommendation — rather than over the one
-    // column the USD cell used to sit in. Red before the strip: the decisive
-    // table's header carried `USD`, its rows `$0.000437`, and the intro
-    // sentence quoted R2's published rates.
+    // column a USD cell would sit in. Money reaches further than that column:
+    // a `USD` table header, `$0.000437` in a row, and R2's published rates
+    // quoted in the intro sentence.
     const report = render(
       [reportArm('snapshot-chain'), reportArm('merkle-pack')],
       reportMeta,
@@ -2299,7 +2300,7 @@ describe('the rendered report carries no money', () => {
   test('a REFUSED run says why with no money in the refusal either', () => {
     // The refusal path is the report a failed run actually publishes, and it
     // renders the admission reasons — so G7's own words are part of the
-    // artifact. `unpriced` was one of them until this strip.
+    // artifact, and a money word in one of them lands in it.
     const report = render(
       [reportArm('snapshot-chain')],
       reportMeta,
@@ -2813,7 +2814,7 @@ describe('arm selection and frozen historical context', () => {
     );
     // ANY strategy may be supplied frozen. "Frozen" says the numbers came from
     // a previous run, never that the arm is one of a set barred from winning,
-    // so the arms this used to reject are exactly the ones it must accept.
+    // so the candidate arms are accepted here exactly like the rest.
     expect(parseOptions(['--control', 'bounded-layers=bench-artifacts/control.json']).controls)
       .toEqual([{ strategy: 'bounded-layers', path: 'bench-artifacts/control.json' }]);
     expect(() => parseOptions(['--control', 'not-a-strategy=bench-artifacts/control.json'])).toThrow(
@@ -3227,12 +3228,12 @@ describe('every challenger is compared against the incumbent', () => {
 
 // ── the candidate lifecycle contract ───────────────────────────────────────
 //
-// Before this contract existed, a candidate arm took the chain's mount checks
-// whenever the box reported `mode: 'chain'`, and otherwise fell through to the
+// Without this contract, a candidate arm takes the chain's mount checks
+// whenever the box reports `mode: 'chain'`, and otherwise falls through to the
 // extraction branch, which asks only that `/workspace` is a plain directory and
-// that `ALLOW_EXTRACTION` is set. The first test below is that exact state: no
-// journal mount, no store mount, no envelope and no closure. It used to be a
-// PASS, and the arm's latency rows were then ranked.
+// that `ALLOW_EXTRACTION` is set. The first test below feeds that exact state:
+// no journal mount, no store mount, no envelope and no closure. It must FAIL,
+// or an arm that attached nothing gets its latency rows ranked.
 
 const CANDIDATE_BOX_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
 const CANDIDATE_PAYLOAD_PREFIX = `boxes/${CANDIDATE_BOX_ID}/candidate/bounded-layers/`;
@@ -3347,10 +3348,11 @@ describe('the candidate lifecycle contract', () => {
     expect(unobserved.detail).toBe('journalReady=unreported');
   });
 
-  test('the extraction shape a candidate used to pass on fails on every clause', () => {
+  test('the extraction shape fails a candidate on every clause', () => {
     // A container that never attached a candidate store at all: no journal
-    // mount, no store mount, no daemon, no envelope, no closure. The old
-    // extraction branch asked only that /workspace was a plain directory.
+    // mount, no store mount, no daemon, no envelope, no closure — the shape an
+    // extraction check passes, since that asks only that /workspace is a plain
+    // directory.
     const bare = candidateFacts({
       store: { envelopes: [], head: null, closure: [] },
       container: {
@@ -3559,7 +3561,7 @@ describe('the candidate lifecycle contract', () => {
   });
 });
 
-describe('a legacy control artifact cannot read as verified', () => {
+describe('a control artifact missing the contract cannot read as verified', () => {
   const currentArm = {
     strategy: 'r2fs',
     verifyPassed: true,
@@ -3653,8 +3655,8 @@ describe('a legacy control artifact cannot read as verified', () => {
     }, cleanFrozenCleanup(), { admitted: true }).status).toBe('refused');
   });
 
-  test('the rendered table prints the legacy status and never VERIFIED beside it', () => {
-    const legacy = JSON.stringify({
+  test('the rendered table prints UNUSABLE and never VERIFIED beside it', () => {
+    const uncontracted = JSON.stringify({
       meta: {
         date: '2026-08-26',
         image: 'docker.io/cloudflare/sandbox:0.12.8',
@@ -3663,7 +3665,7 @@ describe('a legacy control artifact cannot read as verified', () => {
       },
       arms: [{ strategy: 'overlay-cas', verifyPassed: true }],
     });
-    const parsed = parseFrozenControlArtifact('overlay-cas', 'bench-artifacts/legacy.json', legacy);
+    const parsed = parseFrozenControlArtifact('overlay-cas', 'bench-artifacts/uncontracted.json', uncontracted);
 
     expect(parsed.status).toBe('legacy-contract');
     expect(parsed.verifyPassed).toBe(true);
@@ -3808,12 +3810,12 @@ describe('the chain arm asks the store for what its record names', () => {
   });
 
   test('RED PROOF: a REBASED record wants its base and NO delta', () => {
-    // The shape the instrument used to refuse. A quiesce whose delta has
-    // outgrown its base collapses the chain onto a fresh generation, which has
-    // a `data.sqsh` and no `delta.sqsh` — the last commit of run
-    // 20260831184750, whose 71,389,184 bytes are a bare base. Asking for a
-    // delta there failed the arm's verify for holding exactly the shape its
-    // strategy documents, and G1 refused the run for it.
+    // THE SHAPE THIS MUST NOT REFUSE. A quiesce whose delta has outgrown its
+    // base collapses the chain onto a fresh generation, which has a `data.sqsh`
+    // and no `delta.sqsh` — the last commit of run 20260831184750, whose
+    // 71,389,184 bytes are a bare base. Asking for a delta there fails the
+    // arm's verify for holding exactly the shape its strategy documents, and
+    // G1 refuses the run for it.
     const expectations = chainArchiveExpectations(CHAIN, false);
     expect(expectations.map((row) => [row.key, row.present])).toEqual([
       [`backups/${CHAIN}/data.sqsh`, true],
@@ -3843,9 +3845,9 @@ describe('the chain arm asks the store for what its record names', () => {
     const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
     expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
     expect(source).toContain('found.exists !== true,');
-    // And the chain branch no longer asks for a delta whatever the record says:
-    // the only surviving unconditional delta head is the EXTRACTION branch's,
-    // which is about a record that cannot have collapsed onto a fresh base.
+    // And the chain branch never asks for a delta whatever the record says:
+    // the only unconditional delta head is the EXTRACTION branch's, which is
+    // about a record that cannot have collapsed onto a fresh base.
     const chainBranch = source.slice(
       source.indexOf("} else if (mode === 'chain') {"),
       source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),
@@ -3894,11 +3896,11 @@ describe('the run records what it will own before it owns anything', () => {
   });
 
   test('a driver that dies building its fixtures still leaves a complete manifest', async () => {
-    // THE WINDOW THIS CLOSES. The manifest used to be built by `main` from the
-    // fixtures `createFixtureResources` RETURNS, so between "the resource names
-    // are decided" and "the list is durable" sat two bundle builds, a
-    // Dockerfile render and a config write per arm. A driver killed in there —
-    // or one that threw, as here — left a run id nothing had recorded.
+    // THE WINDOW THIS CLOSES. Building the manifest in `main` from the fixtures
+    // `createFixtureResources` RETURNS puts two bundle builds, a Dockerfile
+    // render and a config write per arm between "the resource names are
+    // decided" and "the list is durable". A driver killed in there — or one
+    // that throws, as here — leaves a run id nothing has recorded.
     //
     // Forced by pre-creating a FILE where the build directory belongs, so the
     // `mkdirSync` on the line after the manifest write fails with EEXIST.
@@ -4030,7 +4032,7 @@ describe('the candidate image build context', () => {
 
       expect(staged.journalDaemonSha256)
         .toBe(`sha256:${createHash('sha256').update(canonical).digest('hex')}`);
-      // And it is NOT the single-source digest it used to be.
+      // And it is NOT the digest of `journal-daemon.c` alone.
       expect(staged.journalDaemonSha256).not.toBe(
         `sha256:${createHash('sha256')
           .update(readFileSync(join(daemonDir, 'journal-daemon.c'), 'utf8')).digest('hex')}`,
@@ -4088,10 +4090,10 @@ describe('an abandoned run is deleted from its names alone', () => {
 // lower path: /var/tmp/devbox/cas-lower -> no` — while the same proof's other
 // rows showed the folded tree holding the committed marker and the cursor
 // advanced. The mount graph was healthy; the CHECK was three commits stale.
-// `cas-lower` was the lower's path until the arm moved it inside the store
-// mount (one mount, so a fold and the lower are one object), and the driver
-// kept asking about a path the strategy no longer creates — and demanding it
-// be its own mount line, which the new layout deliberately does not have.
+// `cas-lower` is not a path the strategy creates: the lower lives INSIDE the
+// store mount (one mount, so a fold and the lower are one object). The driver
+// was asking for that path anyway — and demanding it be its own mount line,
+// which the layout deliberately does not have.
 //
 // A hardcoded container path in the driver is the defect class: the strategy
 // owns those paths and exports them. This asserts the driver reads them from
@@ -4143,7 +4145,7 @@ describe('the lifecycle proof names the paths the strategies export', () => {
 // THE FAMILY THIS PINS. Three instrument defects reached deployed runs in one
 // day, all the same shape — a check narrower than the thing it measures:
 //   1. the lifecycle proof asking for a layer path the strategy had moved,
-//   2. a fence reader demanding a manifest version the daemon no longer writes,
+//   2. a fence reader demanding a manifest version the daemon does not write,
 //   3. a startup step admitting only `attached` where the box legitimately
 //      answered `already-attached`, which ended `r2fs` after it had completed
 //      its cold attach, its ladder, its stop and its wake.
@@ -4778,7 +4780,7 @@ describe('the instruments restate nothing unchecked', () => {
     expect(words).toEqual([...(product?.slice(1) ?? [])].sort());
   });
 
-  test('legacy checkpoints have no third kind to hide a barrier in', () => {
+  test('the product checkpoint kinds have no third kind to hide a barrier in', () => {
     const storage = repo('packages', 'devbox', 'src', 'storage.ts');
     const kinds = /type CheckpointKind = ((?:'[^']+'(?: \| )?)+)/.exec(storage)?.[1] ?? '';
     expect([...kinds.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort()).toEqual(['quiesce', 'tick']);

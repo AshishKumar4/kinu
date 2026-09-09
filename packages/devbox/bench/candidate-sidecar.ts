@@ -2,9 +2,9 @@
  * The sidecar process: one per container, started beside the daemon, alive for
  * the life of the box.
  *
- * WHY A PROCESS AT ALL, and why only one. Every checkpoint used to spawn `bun`
- * inside the container to fence once and exit, and every restore spawned
- * another; at a two-second seal cadence that spawn IS the cost. This entry is
+ * WHY A PROCESS AT ALL, and why only one. Spawning `bun` inside the container
+ * per checkpoint to fence once and exit, with another spawn per restore, makes
+ * the spawn itself the cost at a two-second seal cadence. This entry is
  * deliberately thin — argv, ports, loop — because everything that decides
  * anything lives in modules that run in-process under test: `sidecar/core.ts`
  * seals and publishes, `sidecar/seal-loop.ts` owns the cadence, and

@@ -64,14 +64,13 @@ export const TEST_DIRECTORY = /(^|\/)(tests?|__tests__)\//;
  * its own: a package's own `tests/helpers/` holds repo-building code with no test
  * suffix at all.
  *
- * The first version of this rule matched `.test.` only, and its gate scanned
- * `packages` while `bun run lint` scanned the repo. That gap held three real
- * sites. The durable form of that lesson is not "check your denominator" but:
  * THE SET A GATE MEASURES AND THE SET IT GOVERNS MUST BE THE SAME SET, AND THAT
- * EQUALITY HAS TO BE THE ASSERTION. Widening here, widening the gate's live scan
- * to `.`, and naming the arms so a narrower consumer imports one instead of
- * copying it, are all that same equality. `scripts/gate-set-equality.ts` is what
- * now enforces it across every gate rather than in this file alone.
+ * EQUALITY HAS TO BE THE ASSERTION. A `.test.`-only matcher whose gate scans
+ * `packages` while `bun run lint` scans the repo leaves a gap, and that exact
+ * gap held three real sites. Both arms here, the gate's live scan at `.`, and
+ * naming the arms so a narrower consumer imports one instead of copying it, are
+ * all that same equality. `scripts/gate-set-equality.ts` enforces it across
+ * every gate rather than in this file alone.
  */
 export const TEST_FILE = new RegExp(`${TEST_DIRECTORY.source}|${TEST_SUFFIX.source}`);
 

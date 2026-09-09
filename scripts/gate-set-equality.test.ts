@@ -3,7 +3,7 @@
 // Three things have to be true of it, and only the first is about finding
 // violations: it must go RED on the shapes that were shipped fifteen times
 // tonight, it must go GREEN on their corrected form, and it must stay SILENT on
-// the legitimate shapes that its first draft mistook for violations — a URL
+// four legitimate shapes a naive reading mistakes for violations — a URL
 // route, a model id, a specifier rewrite, and a gate that governs exactly one
 // file. A gate that fires on all four teaches people to ignore it, which is worse
 // than not having it.
@@ -136,7 +136,7 @@ describe('green: the corrected form', () => {
   });
 });
 
-describe('silent: the legitimate shapes its first draft mistook for violations', () => {
+describe('silent: the legitimate shapes a naive reading mistakes for violations', () => {
   test('a gate governing exactly ONE named file reports nothing', () => {
     // `tracing-gate.ts`'s real shape. Its governed set is one wrangler config and
     // the tracer call sites in it; there is no set to narrow and nothing to share.
@@ -149,8 +149,8 @@ describe('silent: the legitimate shapes its first draft mistook for violations',
   });
 
   test('a URL route pattern is not a corpus criterion', () => {
-    // `bench-inference-proxy.ts:84`. The first draft called every one of these a
-    // private path pattern, because it looked for a separator in the regex source.
+    // `bench-inference-proxy.ts:84`. A separator in the regex source does not make
+    // it a private path pattern: this one matches a URL route and picks no corpus.
     expect(auditGateProgram('scripts/probe.ts', `
       export const route = (url: string) => /^\\/api\\/user\\/ai\\/v1\\/models$/.test(url);
     `)).toEqual([]);
@@ -197,19 +197,17 @@ describe('the denominator, from both sides', () => {
     // The warning that makes this gate honest: deriving "all gates" from either
     // source alone certifies less than it governs.
     //
-    // ONE DIRECTION IS NOW EMPTY, AND THAT IS THE POINT. Until 2026-08-21
-    // deploy.sh carried gates the LADDER did not declare — `bun run verify:lean`
-    // and the bench command — and `gatesFor('deploy')` synthesized them at a
-    // declared cost of zero. This line used to pin `verify:lean` as an example of
-    // that, which made the defect part of the contract. Both are declared now, and
-    // ladder.test.ts fails naming any deploy gate that is not, so the assertion is
-    // the emptiness rather than the example.
+    // ONE DIRECTION IS EMPTY, AND THAT IS THE POINT. A gate deploy.sh runs that
+    // the LADDER does not declare gets synthesized by `gatesFor('deploy')` at a
+    // declared cost of zero, so pinning one example of that — `bun run
+    // verify:lean`, the bench command — would make the defect part of the
+    // contract. ladder.test.ts fails naming any deploy gate the LADDER does not
+    // declare, so the assertion here is the emptiness rather than an example.
     //
-    // The union is still what the denominator is derived from, for two reasons
-    // that survive the collapse: the LADDER side genuinely carries entries
-    // deploy.sh does not run, and a gate added to deploy.sh tomorrow has to widen
-    // this denominator on the next run rather than be missed by a derivation that
-    // reads one file.
+    // The union is what the denominator is derived from, for two reasons: the
+    // LADDER side genuinely carries entries deploy.sh does not run, and a gate
+    // added to deploy.sh tomorrow has to widen this denominator on the next run
+    // rather than be missed by a derivation that reads one file.
     const ladder = new Set(LADDER.map((gate) => gate.run));
     const deploy = deployGates();
 

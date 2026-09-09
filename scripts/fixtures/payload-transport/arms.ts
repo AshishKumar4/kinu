@@ -108,10 +108,10 @@ export type PayloadSizeMiB = (typeof PAYLOAD_SIZES_MIB)[number];
 /**
  * The tier the concurrency probe runs at: the MIDDLE one.
  *
- * Derived, never retyped. The probe used to spell its size `10` at the call
- * site and again inside its own MiB/s arithmetic, so retiering the instrument
- * would have left it asking for a tier that no longer exists while still
- * dividing by the old number — a row that reads as a throughput and is not one.
+ * Derived, never retyped. A probe that spells its size `10` at the call site
+ * and again inside its own MiB/s arithmetic breaks under retiering: it asks for
+ * a tier that does not exist while still dividing by the number it replaced —
+ * a row that reads as a throughput and is not one.
  * The middle tier because the probe measures CONTENTION, not size: the
  * smallest tier finishes before concurrency can be observed and the largest
  * spends the run on bytes rather than on overlap.
@@ -124,15 +124,15 @@ export const MIB = 1024 * 1024;
  * The owning-DO arm holds no plan and no part geometry, and that absence is
  * the point.
  *
- * This file used to carry `PART_SIZE_BYTES`, `base64ReadPlan` and a chunk/part
- * algebra, because that arm read bounded base64 chunks and welded them into
- * exact 16 MiB R2 multipart parts inside the Durable Object. None of it
- * described devbox: `snapshot-chain.ts` handed the container's byte stream
- * straight to an uploader that did its own routing. The arm calls that
+ * A `PART_SIZE_BYTES`, a `base64ReadPlan` and a chunk/part algebra here would
+ * describe an arm reading bounded base64 chunks and welding them into exact
+ * 16 MiB R2 multipart parts inside the Durable Object — and none of that
+ * describes devbox: `snapshot-chain.ts` hands the container's byte stream
+ * straight to an uploader that does its own routing. The arm calls that
  * uploader, so the geometry is the measured one and not a second copy of a
- * decision this file owns. The uploader now lives in `isolate-relay.ts`,
- * because the chain publishes through a store mount and devbox deleted it —
- * the shape moved to the arm that still prices it, unchanged.
+ * decision this file owns. The uploader lives in `isolate-relay.ts`: the chain
+ * publishes through a store mount, so the arm that prices the isolate route is
+ * the one that holds its shape.
  */
 
 /**

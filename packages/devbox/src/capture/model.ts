@@ -1130,10 +1130,10 @@ export function issueVerifiedJournalCapture(proof: VerifiedJournalCut): AuditedC
  * this" and removals are named explicitly by the WAL's own unlink, rmdir and
  * rename records.
  *
- * Getting this backwards deletes an untouched tree, and both directions were
- * observed before this had a name: v1 buildMerklePack dropped every path a
- * partial capture did not name, and bounded-layers tombstoned them. Both
- * codecs now ask this function instead of reasoning about it locally.
+ * Getting this backwards deletes an untouched tree, and both directions have
+ * been observed in this tree: v1 `buildMerklePack` dropped every path a partial
+ * capture did not name, and bounded-layers tombstoned them. Both codecs ask
+ * this function rather than reasoning about it locally.
  *
  * `parentPaths` is lazy because the answer needs it only for a whole-tree
  * capture: a partial capture's removals are its own, and a codec whose parent

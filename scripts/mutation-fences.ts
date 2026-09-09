@@ -169,30 +169,28 @@ export const FENCES: readonly Fence[] = [
   {
     name: 'core/heads/types#HEAD_UNSETTLED_STATUSES:terminal-classification',
     file: 'packages/core/src/heads/types.ts',
-    // The terminal/resumable split over the head journal. The pre-fix leak was
+    // The terminal/resumable split over the head journal. The leak it fences is
     // the INVERSE reading — `errored` and `budget_exceeded` classified as work
-    // that could still continue, so a head that threw or blew its budget was
-    // never read as finished: the exploration sweep kept its storage for the
-    // life of the workspace, and the cold branch settle owed a report that was
+    // that could still continue, so a head that threw or blew its budget is
+    // never read as finished: the exploration sweep keeps its storage for the
+    // life of the workspace, and the cold branch settle owes a report that is
     // never coming.
     //
-    // RE-POINTED 2026-09-08, from `cf/orchestrator#explorationFacetLedgerStatus`
-    // in `packages/cf-backend/src/orchestrator.ts`. The actor cutover
-    // (f9c0b3847) deleted the owning suite — `unit-facet-reconciliation.test.ts`
-    // — and left that method with NO CALLER anywhere in the tree, so its
-    // mutation could not turn any test red however the owner was re-pointed:
-    // measured, replacing the surviving sweep's whole classification with
-    // `settled = true` (retire every exploration actor unconditionally) left
-    // all 2,936 cf-backend tests reporting exactly as before.
+    // NOT FENCED ON `cf/orchestrator#explorationFacetLedgerStatus` in
+    // `packages/cf-backend/src/orchestrator.ts`: that method has NO CALLER
+    // anywhere in the tree, so its mutation cannot turn any test red however the
+    // owner is pointed — measured 2026-09-08, replacing the surviving sweep's
+    // whole classification with `settled = true` (retire every exploration actor
+    // unconditionally) left all 2,936 cf-backend tests reporting exactly as
+    // before.
     //
-    // The split did not die with the facet, it moved HOME. This tuple pair is
-    // the one place the four statuses are named, `HEAD_REPORT_STATUSES`'s own
-    // docstring records the facet-sweep defect as the reason it is a LIST
-    // rather than a union, and every reader now asks here — the exploration
-    // reclaim, the cold branch settle, the fork tree. So the strip is the
-    // original inverse reading applied at the source: the two terminal
-    // statuses re-join the ones a head is still executing under, and the owner
-    // pins it through real journal rows written by a real branch run.
+    // This tuple pair is the one place the four statuses are named,
+    // `HEAD_REPORT_STATUSES`'s own docstring records the sweep defect as the
+    // reason it is a LIST rather than a union, and every reader asks here — the
+    // exploration reclaim, the cold branch settle, the fork tree. So the strip is
+    // the inverse reading applied at the source: the two terminal statuses
+    // re-join the ones a head is still executing under, and the owner pins it
+    // through real journal rows written by a real branch run.
     snippet: `const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;`,
     mutation: `const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted', 'errored', 'budget_exceeded'] as const;`,
     owner: {

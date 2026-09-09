@@ -102,10 +102,10 @@ export const R2FS_S3FS_OPTIONS: readonly string[] = [
 //
 // `compat_dir` is NOT an option s3fs 1.90 accepts — the version in
 // `cloudflare/sandbox:0.12.8`. Passing it fails the mount outright with
-// `fuse: unknown option 'compat_dir'`, so every attach on this strategy failed
-// and the arm produced nothing. It was there to make a directory that exists
-// only because a key has a slash in it visible, and that behaviour is the
-// DEFAULT in 1.90, so the option was asking for something already true.
+// `fuse: unknown option 'compat_dir'`, so every attach on this strategy fails
+// and the arm produces nothing. What it asks for — making a directory that
+// exists only because a key has a slash in it visible — is the DEFAULT in 1.90,
+// so the option asks for something already true.
 //
 // Its negative, `notsup_compat_dir`, is the one that exists, and it stays out
 // too: it turns that compatibility OFF, which would make a prefix written
@@ -140,7 +140,7 @@ export const R2FS_S3FS_OPTIONS: readonly string[] = [
 // can never overlap a retry. A generation, not a clock.
 //
 // `max_thread_count` is NOT an option 1.90 has — absent from that man page
-// entirely — so passing it would fail the mount the way `compat_dir` did.
+// entirely — so passing it would fail the mount the way `compat_dir` does.
 //
 // EVERY LINE ABOVE IS PINNED TO ONE VERSION. `r2fs.test.ts` asserts the pinned
 // `@cloudflare/sandbox` version alongside these claims, so a bump turns it red:
@@ -269,16 +269,16 @@ export function r2fsStorage(ports: R2fsPorts): DevboxStorage {
    * Release the s3fs mount — from OUTSIDE it, and lazily if it still refuses.
    *
    * ONE HELPER FOR ALL THREE RELEASES, because all three are the same act and
-   * two of them used to get it wrong silently. A stop releases the mount, and
-   * so do both of `attach`'s refusals: a mount already here that fails its
+   * two of them get it wrong silently without one. A stop releases the mount,
+   * and so do both of `attach`'s refusals: a mount already here that fails its
    * read-back, and a fresh mount that reports success and then fails it. Every
    * one of those `fusermount -u` calls travels through the session the SDK
-   * created with `cwd: "/workspace"`, so every one of them was refused EBUSY in
-   * a deployed container — which turned `attach`'s two refusals into the wrong
-   * error entirely: the caller was told the mount was busy instead of being
-   * told what was wrong with it, and the defective mount stayed up for the next
-   * attach to adopt. That is the very laundering the comments at those sites
-   * say they exist to prevent.
+   * created with `cwd: "/workspace"`, so issued from inside, every one is
+   * refused EBUSY in a deployed container — which turns `attach`'s two refusals
+   * into the wrong error entirely: the caller is told the mount was busy
+   * instead of being told what was wrong with it, and the defective mount stays
+   * up for the next attach to adopt. That is the very laundering the comments at
+   * those sites say they exist to prevent.
    *
    * `why` names the release in the log, because a lazy detach is worth reading
    * about and "which release was this" is the first question about one.

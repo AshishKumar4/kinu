@@ -1,9 +1,9 @@
 // In-memory SQL fixture — bun:sqlite + template-tag wrapper that matches the
 // `SqlExecutor` signature used throughout @kinu.run/core.
 //
-// Tests previously each defined this setup inline; centralising it kills ~120
-// lines of duplication across unit-facts / unit-curriculum / unit-sleep-time /
-// unit-eval / etc.
+// One definition rather than one per suite: an inline copy of this setup in each
+// of unit-facts / unit-curriculum / unit-sleep-time / unit-eval / etc. is ~120
+// lines of duplication.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { bindActorHandle, type ActorHandle, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 

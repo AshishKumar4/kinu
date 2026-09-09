@@ -141,12 +141,12 @@ describe('a legitimate product possessive PASSES — the false-positive control'
   test('the list is the measured five, the owner, and two deleted identifiers', () => {
     // The list's whole defence is that it stays short and every entry is a fact
     // someone can check, so its exact contents are the assertion. Two entries are
-    // deleted-class citations the gate's own doc reserves room for: the actor-host
-    // cutover removed `FacetIdentity` and `76936034ba` cites it correctly, and the
-    // actor cutover's completion removed `NodeLoopHost` — the seam a facet ran a
-    // swarm node through, superseded by the required `AgentsForkDeps.hostNode` —
-    // which `9078d528c8` line 3 cites correctly. Both name a type this repository
-    // shipped, so both are checkable at the SHA that cites them.
+    // deleted-class citations the gate's own doc reserves room for: `FacetIdentity`
+    // is out of the tree and `76936034ba` cites it correctly, and `NodeLoopHost` —
+    // the seam a facet ran a swarm node through, now the required
+    // `AgentsForkDeps.hostNode` — is out too, and `9078d528c8` line 3 cites it
+    // correctly. Both name a type this repository shipped, so both are checkable
+    // at the SHA that cites them.
     expect([...NAMES_WITHOUT_CODE].sort()).toEqual([
       'AlphaEvolve', 'AshishKumar4', 'FacetIdentity', 'FunSearch', 'GitHub', 'JavaScript',
       'NodeLoopHost', 'TypeScript',
@@ -278,10 +278,10 @@ describe('a message that narrates the session or argues in the first person is r
 
   test('a commit that QUOTES a shipped product string is not held to its content', () => {
     // `packages/core/src/evolution/engine.ts:678` emits a user-facing digest whose
-    // text contains the words `this session`. A body quoting it accurately was a
-    // finding while misquoting it would have passed, which is backwards. Measured
-    // before carving this out: of 172 narration hits across the 1,898-commit
-    // history, ZERO sit inside a fenced block and ZERO on an indented line, so the
+    // text contains the words `this session`. Without this carve-out a body
+    // quoting it accurately is a finding while misquoting it passes, which is
+    // backwards. Measured over the 1,898-commit history: of 172 narration hits,
+    // ZERO sit inside a fenced block and ZERO on an indented line, so the
     // carve-out costs no coverage.
     const indented = 'evolution: add changelog digest with revert dispatch across surfaces\n\n'
       + 'The digest is emitted as a background event so every entry is revertable.\n\n'

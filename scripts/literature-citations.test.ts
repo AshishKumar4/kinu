@@ -16,9 +16,9 @@
  * reads as the level rather than the delta — and the rule is proven against that.
  *
  * The false positives at the bottom are equally load-bearing, and each one cost a
- * design change: this gate reads prose, and earlier versions demanded a paper
- * locator for an auto-GEPA cadence, for a `criteria 2-5` label, for `GPT-4.1-Mini`'s
- * version number, and for our own confidence bound standing beside a citation.
+ * design change: this gate reads prose, so it must not demand a paper locator for
+ * an auto-GEPA cadence, for a `criteria 2-5` label, for `GPT-4.1-Mini`'s version
+ * number, or for our own confidence bound standing beside a citation.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -278,9 +278,9 @@ describe('a comment block ends where its author ended it', () => {
   });
 
   test("nor does one block comment's citation reach the next block's numbers", () => {
-    // Two members of one interface, documented separately. The closing delimiter left
-    // a bare `/` on its own line, which is not a sentence start either, so these two
-    // docblocks used to arrive as a single sentence.
+    // Two members of one interface, documented separately. The closing delimiter leaves
+    // a bare `/` on its own line, which is not a sentence start either, so a reader that
+    // split on sentence starts would take these two docblocks as one.
     expect(auditSource([
       'export interface RunScaffoldGepaOpts {',
       '  /**',

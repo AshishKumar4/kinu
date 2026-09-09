@@ -300,11 +300,11 @@ let eventIndex = 0;
  *
  * The payload column holds the whole stamped event — `{...input, eventIndex,
  * runId, timestamp}` (events/recorder.ts:112-113, 179-182) — not just the
- * type-specific fields. This fixture used to write only the latter, which every
- * `json_extract`-based scorer read happily while the canonical parse rejected
- * it. That is the write-path/read-path disagreement this module's own docstring
- * warns about, reproduced inside its tests: a fixture that agrees with the
- * hand-rolled query and not with the real writer certifies nothing.
+ * type-specific fields. A fixture writing only the latter is read happily by
+ * every `json_extract`-based scorer and rejected by the canonical parse — the
+ * write-path/read-path disagreement this module's own docstring warns about,
+ * reproduced inside its tests: a fixture that agrees with the hand-rolled query
+ * and not with the real writer certifies nothing.
  */
 function emit(
   sql: SqlExecutor, actor: ActorHandle, runId: string, type: string, payload: JsonObject,
@@ -622,10 +622,10 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     store.close();
   });
 
-  test('missing legacy outcomes remain observed but cannot supply a success rate', () => {
+  test('rows with no producer outcome remain observed but cannot supply a success rate', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't1', result: 'Error (exit 3)' });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't2', error: 'legacy explicit error' });
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't2', error: 'a bare error string, no outcome' });
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);

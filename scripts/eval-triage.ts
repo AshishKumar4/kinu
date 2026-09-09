@@ -30,7 +30,7 @@
  * NOTHING HERE IS GUESSED, and the two places that could have guessed refuse
  * instead. A failure key's part is read back through the census's own policy
  * (`toolFailurePartOfKey`, core/read-models/tool-failures.ts) rather than
- * re-derived from the reason text. And a legacy record whose `tool_outcomes`
+ * re-derived from the reason text. And a record whose `tool_outcomes`
  * detail carries a tool USAGE histogram instead of a failure mix yields NO
  * failure keys at all (`parseFailureMix`) — `flash-a` published `103/126` and
  * cannot say which 23 calls failed, so this reports the gap rather than reading

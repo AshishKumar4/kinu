@@ -166,7 +166,7 @@ trap cleanup EXIT INT TERM
 
 # Read one dotted JSON field from stdin. Prints nothing when the body is not
 # JSON — which is exactly what a smoke test needs, because "not JSON" is how a
-# missing asset used to present itself (the SPA shell under a JSON
+# missing asset presents itself (the SPA shell under a JSON
 # content-type).
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
@@ -184,8 +184,8 @@ fi
 # ── The gate queue ───────────────────────────────────────────────
 #
 # `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
-# waits. The gates used to run one after another for no reason: 400s of
-# declared cost on a 24-thread box that sat idle for all of it.
+# waits. Running them one after another buys nothing: 400s of declared cost on a
+# 24-thread box that sits idle for all of it.
 #
 # Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
 # names them with the reason. They get their own flush, which is what a barrier
@@ -245,15 +245,15 @@ declare -A GATE_DEADLINES=(
 #
 # WHERE A GATE'S VERDICT COMES FROM: `wait -n -p`, which hands back the pid that
 # terminated and its exit status together. That is the whole reaping story, and
-# it is deliberately not a status file. The earlier version published each gate's
-# status into `$dir/$i.status` and counted `jobs -rp | wc -l` between waits, so a
-# gate whose process died before it could write one — an OOM kill, a `kill -9`
-# from outside the gate's own tree — was detected only by probing `kill -0` on a
-# pid the shell had already reaped. A recycled pid answers that probe as somebody
-# else's process, and the loop then has nothing left to wait on: it spins at 100%
-# CPU and the deploy never ends. The kernel already knows every child's fate, so
-# asking it removes the status files, the atomic-rename dance, the liveness probe
-# and the poll in one move.
+# it is deliberately not a status file. A status file is written by the gate, so
+# a gate whose process dies before it can write one — an OOM kill, a `kill -9`
+# from outside the gate's own tree — leaves no verdict at all, and the only way
+# left to notice is probing `kill -0` on a pid the shell has already reaped. A
+# recycled pid answers that probe as somebody else's process, and a loop built
+# that way has nothing left to wait on: it spins at 100% CPU and the deploy
+# never ends. The kernel already knows every child's fate, so asking it removes
+# the status files, the atomic-rename dance, the liveness probe and the poll in
+# one move.
 #
 # A gate killed by a signal therefore settles as 128+signal, a gate past the
 # deadline as `timeout`'s 124, and a gate whose command does not exist as 127.
@@ -812,8 +812,8 @@ fi
 # parses these lines with `^run_required_gate`, so an indented one is invisible
 # to `deployGates`/`deployWaves` — the gate would run on staging while the
 # ladder, the CI-coverage assertion and the deploy contract all reported a tier
-# that does not exist. Measured: indenting it dropped the gate from the parse
-# and left `deploy.test.ts` green over a wave it could no longer see.
+# that does not exist. Measured: indenting it drops the gate from the parse and
+# leaves `deploy.test.ts` green over a wave it cannot see.
 if [ "$KINU_ENV" = "staging" ]; then
 run_required_gate "First-run tier" bun run gate:first-run
 fi

@@ -78,7 +78,7 @@ export class OrchestratorAgent {
   });
 
   test('a comment explaining the method is not a caller', () => {
-    expect(scan('// listDeferredApprovals used to load here; removed with the tab.\nexport const x = 1;'))
+    expect(scan('// listDeferredApprovals is the RPC the approvals tab reads.\nexport const x = 1;'))
       .toEqual([KEY]);
   });
 

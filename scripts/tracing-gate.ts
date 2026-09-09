@@ -50,10 +50,11 @@
  * (verified deployed 2026-08-17 with a sink exporting only `tailStream`: five
  * throws of `Handler does not export a tail() function.`, once per traced
  * invocation, while the observed worker returned HTTP 200 with isTraced true
- * throughout). The legacy `TraceItem` has no `spans` field. Shape is readable
- * only from Cloudflare's own ingestion, which needs an API token scope this
- * account's wrangler session does not hold — so that assertion is `blocked()`,
- * unmeasured on the deployed platform; local span delivery is checked below.
+ * throughout). `TraceItem`, what a `tail()` handler receives, has no `spans`
+ * field. Shape is readable only from Cloudflare's own ingestion, which needs an
+ * API token scope this account's wrangler session does not hold — so that
+ * assertion is `blocked()`, unmeasured on the deployed platform; local span
+ * delivery is checked below.
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

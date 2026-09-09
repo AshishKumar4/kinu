@@ -189,12 +189,12 @@ assert.deepEqual(
  * sentence and the interesting failures are on the edges.
  *
  * Every row is seeded into a real file and run through the real `oxlint`, so this table is measured
- * rather than reasoned about. That distinction is not pedantry here: the first version of this rule
- * knew two of Bun's three spawn spellings and none of the shell family's, and an adversarial pass
- * found the one live site in the tree it could not see — `packages/cli/tests/cc-corpus.test.ts`
- * asking `git check-ignore` whether the owner's mined transcripts are ignored, with `cwd` and
- * nothing else, while this gate asserted zero. `cwd` was not protecting it: with GIT_DIR pointed at
- * another repository the same question answers NOT-IGNORED.
+ * rather than reasoned about. That distinction is not pedantry here: a matcher that knows two of
+ * Bun's three spawn spellings and none of the shell family's certifies zero over the rest, and an
+ * adversarial pass found the one live site in the tree such a matcher could not see —
+ * `packages/cli/tests/cc-corpus.test.ts` asking `git check-ignore` whether the owner's mined
+ * transcripts are ignored, with `cwd` and nothing else. `cwd` does not protect it: with GIT_DIR
+ * pointed at another repository the same question answers NOT-IGNORED.
  *
  * The `caught: false` rows are the limit, on the record so the next reader inherits it. Three need
  * name resolution the rule does not have; the fourth would have to read shell strings inside
@@ -340,7 +340,7 @@ try {
     assert.equal(
       firedIn(green, rule),
       0,
-      `anti-slop/${rule} fires on the corrected form, so the cutover has no green state to reach`,
+      `anti-slop/${rule} fires on the corrected form, so there is no green state to reach`,
     );
   }
 

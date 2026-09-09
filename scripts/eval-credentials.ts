@@ -6,14 +6,13 @@
 // only when a credential names a target it may not reach; that is a refusal, not
 // an absence, and the tier must stop rather than measure something else.
 //
-// WHAT THIS USED TO DO, AND WHY IT STOPPED. It read `~/.kinu/config.json` and
-// promoted the OWNER'S SIGNED-IN SESSION to a live target, on the argument that
-// the tier otherwise had no credential anywhere and reported `TOTAL: 0 model
-// call(s)`. That fixed the false green and created a worse problem: an eval run
-// and the owner working became the same event on the same account. Measured on
-// 2026-08-20, production held 28 workspaces of which 23 were test debris — 22
-// `drill*` rows and one `settle-probe` — and nothing on the account could say
-// which harness had made any of them.
+// WHY NOT THE OWNER'S SIGNED-IN SESSION. Reading `~/.kinu/config.json` and
+// promoting that session to a live target answers the tier having no credential
+// anywhere and reporting `TOTAL: 0 model call(s)` — and buys a worse problem:
+// an eval run and the owner working become the same event on the same account.
+// Measured on 2026-08-20, production held 28 workspaces of which 23 were test
+// debris — 22 `drill*` rows and one `settle-probe` — and nothing on the account
+// could say which harness had made any of them.
 //
 // The credential belongs to the `eval-service` account. It comes from the
 // environment or the isolated `~/.config/kinu/eval-session/config.json`, never

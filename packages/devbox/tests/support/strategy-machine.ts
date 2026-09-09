@@ -1237,7 +1237,7 @@ const NO_AWAIT_POINTS: AwaitPointUse = {
   none: 'the strategy predates the durability contract; its commit seams are its fault map',
 };
 
-/** One namespace keeps await-point faults distinct from legacy commit seams. */
+/** One namespace keeps await-point faults distinct from plain commit seams. */
 function awaitPointSeam(point: DurabilityAwaitPoint): string {
   return `await:${point}`;
 }
@@ -1393,15 +1393,14 @@ function chainExec(
     // The BOUNDED visibility probe: one command that asks the store mount for a
     // layer and, when it never appears, reports what the subtree holds.
     //
-    // WHICH SUBTREE IS OBSERVED, NOT RESTATED. This arm used to carry the
-    // strategy's private mount point — `const CHAIN_STORE_MOUNT = '/backups'`
-    // — so the fake and the strategy agreed by construction, and a strategy
-    // that moved its mount would have been served from the old path forever.
-    // The probe command itself lists the subtree it is waiting on, so the path
-    // is read off the command the container really received.
+    // WHICH SUBTREE IS OBSERVED, NOT RESTATED. Carrying the strategy's private
+    // mount point here — `const CHAIN_STORE_MOUNT = '/backups'` — would have
+    // the fake and the strategy agree by construction, and a strategy that
+    // moved its mount would be served from the stale path forever. The probe
+    // command itself lists the subtree it is waiting on, so the path is read
+    // off the command the container really received.
     //
-    // AND THE MISSING BRANCH IS NOT COVERED HERE, which the deleted comment
-    // claimed for itself and could not deliver:
+    // AND THE MISSING BRANCH IS NOT COVERED HERE:
     // measured 2026-09-02 by throwing inside it, no case in
     // `strategy-conformance.test.ts` or `candidate-attach.test.ts` reaches it,
     // because every layer this battery mounts materialises. The refusal that
@@ -2802,7 +2801,7 @@ function boundedLayersArm(): ConformanceArm {
     },
   };
 
-  /** The shared head CAS and completion mark, with both the legacy commit seams
+  /** The shared head CAS and completion mark, with both the plain commit seams
    *  and the contract's await points at their durable effects. */
   const controlStore: CandidateControlStore = {
     read: async () => await control.read(),

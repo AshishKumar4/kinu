@@ -36,9 +36,9 @@ interface TailFrame {
    * `::after` width on the LAST BLOCK the markdown emitted.
    *
    * A pseudo-element belongs to that block's own inline flow, so a caret with
-   * a width here is a caret after the final character. The shape this replaced
-   * could not satisfy it at all: the caret was a `<span>` SIBLING of the
-   * rendered markdown, which is why it drew on a line of its own.
+   * a width here is a caret after the final character. A caret that is a
+   * `<span>` SIBLING of the rendered markdown cannot satisfy this at all — it
+   * draws on a line of its own.
    */
   readonly caretWidth: string;
   /**
@@ -101,7 +101,7 @@ interface Observed {
    *  device's consented directory rather than on the device root. */
   readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
-  /** File names the TREE pane carries — it used to carry only folders. */
+  /** File names the TREE pane carries, not only its folders. */
   readonly treeFileNames: string[];
   /** Markdown opens rendered, through the app's one markdown renderer. */
   readonly filesMarkdownRendered: { heading: string; showsSource: boolean };
@@ -147,7 +147,7 @@ interface Observed {
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
-const LEGACY_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
+const UNSTAMPED_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
 const STAMPED_GATE_ROW = 'programmatic:completion-gate-1';
 const TYPED_ROW = 'u1';
 const DRAIN_ROW = 'd1';
@@ -280,7 +280,7 @@ async function run(): Promise<Observed> {
     await chatPage.setViewport({ width: 1280, height: 1600 });
     await chatPage.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
     await chatPage.reload({ waitUntil: 'networkidle0' });
-    await chatPage.waitForSelector(`[data-chat-row="${LEGACY_FORK_ROW}"]`);
+    await chatPage.waitForSelector(`[data-chat-row="${UNSTAMPED_FORK_ROW}"]`);
     const chat = await readChatRows(chatPage);
     // Folded by DEFAULT, not folded permanently: the words are still reachable,
     // which is what makes hiding them by default honest rather than lossy.
@@ -290,7 +290,7 @@ async function run(): Promise<Observed> {
     // selector reports the whole file red — including the streaming and file
     // panes, which such a regression does not touch. The named assertions below
     // carry the failure instead, and say which wire broke.
-    const toggle = `[data-chat-row="${LEGACY_FORK_ROW}"] [data-system-event] button`;
+    const toggle = `[data-chat-row="${UNSTAMPED_FORK_ROW}"] [data-system-event] button`;
     if (await chatPage.$(toggle) !== null) {
       await chatPage.click(toggle);
       await chatPage.waitForFunction(
@@ -298,7 +298,7 @@ async function run(): Promise<Observed> {
         { timeout: 10_000 }, toggle,
       );
     }
-    const forkInterruptedAfterClick = (await readChatRows(chatPage))[LEGACY_FORK_ROW]!;
+    const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW]!;
     const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
       (cards) => cards.map((card) => [
@@ -424,9 +424,9 @@ async function run(): Promise<Observed> {
     await waitForRow('user');
     const filesAfterUp = await crumbs();
 
-    // The tree carries FILES, not only folders — it used to drop every file
-    // entry when it recursed, so the sidebar could never reach one. Each level
-    // is expanded through its own caret.
+    // The tree carries FILES, not only folders — a recursion that drops file
+    // entries leaves the sidebar unable to reach one. Each level is expanded
+    // through its own caret.
     await files.click(rowSelector('user'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
@@ -600,7 +600,7 @@ describe('the streaming turn, as a browser lays it out', () => {
 
   test('a turn that went quiet between steps says so at its tail', () => {
     // Prose closed, both calls settled, request still open. This is the state
-    // that used to render nothing at all.
+    // with no active part of its own to draw, and it still has to say so.
     expect(observed.tails[AFTER_TOOLS]!.thinkingRows).toBe(1);
     expect(observed.tails[AFTER_TOOLS]!.caretWidth).toBe('none');
   });
@@ -676,7 +676,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
     // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
-    const fork = observed.chat[LEGACY_FORK_ROW]!;
+    const fork = observed.chat[UNSTAMPED_FORK_ROW]!;
     expect(fork.userBubbles).toBe(0);
     expect(fork.systemEvent).toBe('fork_interrupted');
     expect(Math.abs(fork.offsetFromCentrePx)).toBeLessThan(20);
@@ -693,7 +693,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // Collapsed by default is a measurement here, not a class name: the body
     // holds more than it shows. Clicking it makes the row taller and stops it
     // overflowing, which is the difference between folded and truncated.
-    expect(observed.chat[LEGACY_FORK_ROW]!.folded).toBe(true);
+    expect(observed.chat[UNSTAMPED_FORK_ROW]!.folded).toBe(true);
     expect(observed.forkInterruptedAfterClick.folded).toBe(false);
   });
 
@@ -725,9 +725,9 @@ describe('the drive, browsing the one composite plane', () => {
   });
 
   test('crossing into /pc lands inside the consented device directory', () => {
-    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses, so
-    // the first click used to answer EACCES. The mount point lands on the
-    // directory the owner consented to instead.
+    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses with
+    // EACCES, so the mount point lands on the directory the owner consented to
+    // instead.
     expect(observed.filesInMount.crumbs).toBe('//pc/home/dev');
     expect(observed.filesInMount.entries).toEqual(
       expect.arrayContaining(['quarterly-report.txt', 'shot.png']),
@@ -813,17 +813,17 @@ describe('the Environment tab, as a user reads it', () => {
 
 describe('a node the provider rate-limited, as the run list reads it', () => {
   test('the row says rate limit, not fault', () => {
-    // The seam this reads through is `isRateLimitedTurnError`. Before it was
-    // wired here the row rendered `errorMessage` verbatim in the failure tone,
-    // so a node the provider told us to wait for was indistinguishable from a
-    // wedged one — the distinction the classifier was built for.
+    // The seam this reads through is `isRateLimitedTurnError`. Rendering
+    // `errorMessage` verbatim in the failure tone makes a node the provider
+    // told us to wait for indistinguishable from a wedged one — the
+    // distinction the classifier exists for.
     expect(observed.runNodes[RATE_LIMITED_NODE]?.reason).toBe('rate-limited');
     expect(observed.runNodes[RATE_LIMITED_NODE]?.reasonText).toContain('Rate limited');
   });
 
-  test('its dot agrees with its line, and no longer collides with a working node', () => {
-    // Both halves matter. `warning` is the pacing tone — and while a RUNNING node
-    // wore it too, the one signal that the provider asked us to wait rather than
+  test('its dot agrees with its line, and does not collide with a working node', () => {
+    // Both halves matter. `warning` is the pacing tone; if a RUNNING node wore
+    // it too, the one signal that the provider asked us to wait rather than
     // that the node broke was invisible on the row. Working states wear the
     // accent, here as everywhere else in the product.
     expect(observed.runNodes[RATE_LIMITED_NODE]?.dot).toBe('p-dot-warning');
@@ -1729,9 +1729,9 @@ describe('composer and message continuity at browser boundaries', () => {
 
       await textarea!.evaluate((input) => {
         input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '変換' }));
-        const legacy = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
-        Object.defineProperty(legacy, 'keyCode', { value: 229 });
-        input.dispatchEvent(legacy);
+        const keyCode229 = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        Object.defineProperty(keyCode229, 'keyCode', { value: 229 });
+        input.dispatchEvent(keyCode229);
       });
       expect((await continuityProbe(page)).sends).toBe(0);
 

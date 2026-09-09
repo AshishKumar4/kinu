@@ -111,10 +111,10 @@ export interface RunValidationOptions {
   corpusPath: string;
   manifestHash: string;
   validateRetries: number;
-  /** Where the per-attempt diagnostic document lands. This used to be the run
-   *  root — a throwaway outside the repo — so the one record of WHY a task was
-   *  called bad was swept along with the sandboxes. It is now the run's
-   *  retention directory. */
+  /** Where the per-attempt diagnostic document lands: the run's RETENTION
+   *  directory, never the run root. The run root is a throwaway outside the
+   *  repo, so the one record of WHY a task was called bad would be swept along
+   *  with the sandboxes. */
   diagnosticsDir: string;
   devTasks: readonly BenchTask[];
   sealed: SealedSplit;

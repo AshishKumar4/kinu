@@ -207,9 +207,9 @@ function harness(overrides: {
       return Promise.resolve();
     },
     // THE REFUSAL A REAL fusermount GIVES, and the reference it gives it for.
-    // This stand-in used to unmount unconditionally, which is precisely why
-    // every deployed r2fs stop could refuse while this suite stayed green: the
-    // one thing that actually holds the mount was not modelled at all. A shell
+    // A stand-in that unmounts unconditionally is precisely how every deployed
+    // r2fs stop can refuse while this suite stays green: the one thing that
+    // actually holds the mount would not be modelled at all. A shell
     // standing on a mount is a reference to it — measured on a real mount, and
     // measured again in deployed probe `hp0901170218`, where the identical
     // `fusermount -u` refused with the session inside and returned 0 with it
@@ -322,9 +322,9 @@ describe('s3fs options — the disk cache is the reason this strategy exists', (
 
   test('DEPLOYED DEFECT: neither directory-compatibility option is passed', () => {
     // `compat_dir` is not an option s3fs 1.90 accepts, which is the version in
-    // the shipped image. Passing it failed the mount outright with `fuse:
-    // unknown option 'compat_dir'`, so every r2fs attach failed and the arm
-    // produced nothing. The behaviour it asked for is the default there.
+    // the shipped image. Passing it fails the mount outright with `fuse:
+    // unknown option 'compat_dir'`, so every r2fs attach fails and the arm
+    // produces nothing. The behaviour it asks for is the default there.
     expect(R2FS_S3FS_OPTIONS).not.toContain('compat_dir');
     // And the negative stays out as well: it would turn that default OFF, so a
     // prefix written through the store binding would read as empty.
@@ -488,11 +488,10 @@ describe('attach — the mount must be observed, in the shape claimed', () => {
       .rejects.toThrow(/mounted without its cache directory/);
   });
 
-  // KINU-038. A refusal used to be thrown OVER a live mount. The mount stayed,
-  // /proc/mounts showed it, and the very next attach reported
-  // `already-attached` on the mount the previous one had just rejected — one
-  // broken mount, refused once and then accepted for the rest of the
-  // container's life.
+  // KINU-038. A refusal thrown OVER a live mount leaves the mount standing:
+  // /proc/mounts shows it, and the very next attach reports `already-attached`
+  // on the mount the previous one just rejected — one broken mount, refused
+  // once and then accepted for the rest of the container's life.
   test('a refused mount is unmounted, so nothing is left for a later attach to adopt', async () => {
     const record = harness({ cacheExists: false });
 
@@ -730,11 +729,11 @@ describe('denominator', () => {
 
 // ── the stop order, against the real Devbox class ──────────────────────────
 //
-// MEASURED DEFECT THIS REPAIRS. `quiesce` used to run `storage.detach()` —
-// s3fs's unmount — BEFORE `stop('SIGTERM')`, and fusermount refuses an
-// unmount with an open fd (EBUSY). One open writer therefore made the box
-// UNSTOPPABLE: the refusal landed before `stop()` was ever reached, every
-// later stop died the same way, and no teardown could clean the box up.
+// MEASURED DEFECT THIS REPAIRS. `quiesce` running `storage.detach()` — s3fs's
+// unmount — BEFORE `stop('SIGTERM')` cannot work: fusermount refuses an
+// unmount with an open fd (EBUSY). One open writer therefore makes the box
+// UNSTOPPABLE: the refusal lands before `stop()` is ever reached, every later
+// stop dies the same way, and no teardown can clean the box up.
 //
 // The order has to be: checkpoint (the final commit), release the work
 // directory's holders, detach, stop. The platform stand-in in
@@ -810,13 +809,12 @@ describe('the stop order: holders are released before the mount is detached', ()
     // the session the stop is speaking through, so the command reports that
     // holder instead. Proven against real `/proc` in `decisions.test.ts`.
     //
-    // WHAT CHANGED HERE: naming it used to be the END of the story, and the box
-    // was left unstoppable — mount up, container running, billing, with no
-    // sequence of calls that could ever release it, because the one holder the
-    // scan must never signal is also the one that never goes away. A reference
-    // this strategy may not revoke is exactly what `MNT_DETACH` is for, so the
-    // stop now completes and the holder is named in the log instead of in a
-    // refusal.
+    // NAMING IT IS NOT THE END OF THE STORY. Stopping there leaves the box
+    // unstoppable — mount up, container running, billing, with no sequence of
+    // calls that could ever release it, because the one holder the scan must
+    // never signal is also the one that never goes away. A reference this
+    // strategy may not revoke is exactly what `MNT_DETACH` is for, so the stop
+    // completes and the holder is named in the log instead of in a refusal.
     const { box, container } = devboxHarness(R2fsQuiesceBox);
     container.workdirHolder = { pid: 31, comm: 'sandbox-session', session: true };
     await box.devboxStartup();

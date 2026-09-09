@@ -81,7 +81,7 @@ const isSuiteFile = (file: string): boolean =>
  * the same trade as reading code rather than comments.
  *
  * `packages/test-utils/src/scratch.ts` IS the mint: it holds the one
- * `mkdtempSync` every suite now goes through and defines `scratchDir` in the
+ * `mkdtempSync` every suite goes through and defines `scratchDir` in the
  * same file, which is the half-migrated shape by construction and the opposite
  * of a defect here.
  */
@@ -236,11 +236,11 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
 
     // HALF-MIGRATED. Rule 3 below is FILE-level, so the first mint converted to
     // the helper silences it for every raw mint left in the same file — a
-    // partial conversion that reads as clean. Two files hit this during the
-    // migration that introduced the helper, both with working cleanup for their
-    // raw mints, so the cost of the rule is two honest findings and the benefit
-    // is that a half-finished conversion cannot hide the rest. (Found by review,
-    // as the latent shape: nobody's file was actually leaking through it.)
+    // partial conversion that reads as clean. A file in that shape can still
+    // have working cleanup for its raw mints, so the finding is honest rather
+    // than a leak report, and the benefit is that a half-finished conversion
+    // cannot hide the rest. (The latent shape, found by review: no file is
+    // leaking through it.)
     if (isSuiteFile(path) && USES_HELPER.test(body) && RAW_MINT.test(body)) {
       problems.push({
         rule: 'half-migrated',

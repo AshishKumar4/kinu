@@ -113,12 +113,12 @@ async function chatTurn(
 ): Promise<TurnResult> {
   const start = Date.now();
   const memoryTail = await readMemoryTail(rt.memory);
-  // The PRODUCTION projection, from the production tool surface. This used to
-  // assemble its own option set — no `agentsActions`, no `workMode`, no
-  // `sectionOverrides`, and `soulOverride` which the CLI turn path does not pass
-  // — over a ToolSet that could not contain `agents`. So the prompt the model
-  // read here was one the product never sends, and the delegation ladder
-  // (prompt.ts:236) was absent from every turn this proof measured.
+  // The PRODUCTION projection, from the production tool surface. A hand-assembled
+  // option set — no `agentsActions`, no `workMode`, no `sectionOverrides`, and
+  // `soulOverride` which the CLI turn path does not pass — over a ToolSet that
+  // cannot contain `agents` gives the model a prompt the product never sends, with
+  // the delegation ladder (prompt.ts:236) absent from every turn this proof
+  // measures.
   const system = surface.systemPrompt();
   // The wrapper forwards the call unchanged; it only reads the tool list and the
   // system message the provider actually receives.
@@ -651,7 +651,7 @@ describe('Evolution Proof', () => {
     // PRD §9.3 separates EXPOSURE from reuse, and this is why: a reuse rate over
     // a surface that never exposed the tools is a number about nothing. Three
     // rows, because there are three independent ways the projection can fail and
-    // each one used to be invisible:
+    // a reuse rate sees none of them:
     //
     //   discovery — `workspace.listTools()` is what the prompt tells the agent to
     //     call before building from scratch. Store rows alone do not prove that

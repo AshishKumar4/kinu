@@ -117,16 +117,16 @@ export function renderSpend(lines: readonly SpendLine[]): string {
 
 /**
  * Whether a run PROVED it exercised a model — the assertion this file exists to
- * carry, and the one it used to lack.
+ * carry.
  *
  * WHY. `renderSpend` above already prints the difference between a tier that
- * spent nothing and a tier that measured nothing. It printed
+ * spent nothing and a tier that measured nothing. Printing it is not enough:
  * `TOTAL: 0 model call(s)` for a run of six live suites, over a credential that
- * was present, and the script exited 0 — so `run_required_gate "Behavioural
- * evals"` in scripts/deploy.sh passed a deploy over a tier that had called no
- * model at all. A gate that renders the defect and returns success is the
- * "green over the empty set" shape AGENTS.md § Build & Check records; the render
- * was never the missing half, the exit code was.
+ * was present, still exits 0, and `run_required_gate "Behavioural evals"` in
+ * scripts/deploy.sh then passes a deploy over a tier that called no model at
+ * all. A gate that renders the defect and returns success is the "green over
+ * the empty set" shape AGENTS.md § Build & Check records; the render is not the
+ * missing half, the exit code is.
  *
  * `expected` is whether the tier RESOLVED a target, decided by
  * scripts/eval-tier.sh which is the one place that knows. It is not the same

@@ -539,9 +539,9 @@ const ACCESS_TOKEN_HELP =
   + 'wrangler OAuth login carries no Access scope and answers 403 there.';
 
 /** An Access application, in the only shape this file reads it. `destinations` is
- *  the current field and `domain` the legacy single-destination one; both are
- *  optional in the API response and BOTH are read, because an application
- *  created before destinations existed still protects what it protects. */
+ *  the list field and `domain` the single-destination one; both are optional in
+ *  the API response and BOTH are read, because an application that carries only
+ *  `domain` still protects what it protects. */
 const AccessApp = v.object({
   id: v.optional(v.string()),
   name: v.optional(v.string()),
@@ -615,8 +615,8 @@ export function accessDestinations(app: AccessApplicationView): readonly string[
     .filter((entry) => (entry.type ?? 'public') === 'public')
     .map((entry) => entry.uri ?? entry.hostname ?? '')
     .filter((uri) => uri.length > 0);
-  const legacy = (app.domain ?? '').length > 0 ? [app.domain ?? ''] : [];
-  return [...new Set([...fromList, ...legacy])].map((uri) => uri.replace(/^https?:\/\//u, ''));
+  const fromDomain = (app.domain ?? '').length > 0 ? [app.domain ?? ''] : [];
+  return [...new Set([...fromList, ...fromDomain])].map((uri) => uri.replace(/^https?:\/\//u, ''));
 }
 
 /** The covering application, if any, and everything the AUD's applications
@@ -696,7 +696,7 @@ async function accessGet<TSchema extends v.GenericSchema>(
   schema: TSchema,
 ): Promise<{ readonly body: v.InferOutput<TSchema> } | { readonly failure: string }> {
   // KINU_ACCESS_API_TOKEN first, ON PURPOSE: wrangler honours BOTH generic
-  // names (CLOUDFLARE_API_TOKEN and the legacy CF_API_TOKEN), so exporting the
+  // names (CLOUDFLARE_API_TOKEN and CF_API_TOKEN), so exporting the
   // Access-scoped token under either hijacks every wrangler subcommand this
   // verification also runs — measured: `wrangler vectorize list` refusing
   // under an Access-only token. A name wrangler never reads keeps the two

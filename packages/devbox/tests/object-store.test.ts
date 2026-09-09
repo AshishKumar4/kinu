@@ -1,15 +1,13 @@
 // Asking the store about a prefix.
 //
-// WHAT USED TO BE HERE, AND WHY IT IS NOT. This file existed because a mutant
-// survived: every strategy test stubbed the upload port, so `putStream` — the
-// isolate-side multipart uploader — had no coverage at all while three deployed
-// runs were bricked by a byte count. That function has left the product.
-// Payload now moves container-side through a prefix-scoped store mount, so
-// there is no isolate-side upload left to cover, and its tests went with it
-// rather than standing as coverage of a code path the product no longer has.
-// The code moved to the benchmark that priced it
-// (`scripts/fixtures/payload-transport/isolate-relay.ts`), where the geometry
-// it must keep is held by `scripts/payload-transport.test.ts`.
+// NO ISOLATE-SIDE UPLOAD IS COVERED HERE, because the product has none. Payload
+// moves container-side through a prefix-scoped store mount, so this package
+// holds no isolate-side multipart uploader to test, and coverage of a code path
+// the product does not have is worse than none. The relay lives in the benchmark
+// that priced it (`scripts/fixtures/payload-transport/isolate-relay.ts`), where
+// the geometry it must keep is held by `scripts/payload-transport.test.ts` —
+// three deployed runs were bricked by a byte count there, which is why that
+// geometry is pinned rather than assumed.
 //
 // What remains is the listing work a box really does from its own binding, and
 // the property both helpers exist for: a paged answer, never a first page

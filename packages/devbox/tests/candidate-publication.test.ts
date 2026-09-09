@@ -961,9 +961,9 @@ describe('the candidate container seam answers its own failure', () => {
 
   test('an incident write that fails cannot replace the reason it was filing', async () => {
     // The incident row is a durable write, so it fails exactly as the operation
-    // can. Its rejection used to surface INSTEAD — as a throw out of a method
+    // can. Letting its rejection surface INSTEAD would throw out of a method
     // whose contract is to return its failure, carrying the storage error and
-    // discarding what the checkpoint had actually found.
+    // discarding what the checkpoint actually found.
     const outcome = await candidateContainerStorage(containerPorts({
       begin: notBegun,
       recordFailure: async () => {

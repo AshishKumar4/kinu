@@ -22,7 +22,7 @@ describe('box identity derives from strategy and name', () => {
       .toBe('2c20456c8985722141a11115274afb71b3dc0b002495742b8e6bdab0a550a61a');
     expect(deriveBoxId('bounded-layers', `${RUN}-other`))
       .toBe('6225a1e8af4ab22b5c3248ce8c63a2eee2647fdfc5bc87d3dee6217fede58b90');
-    // And each differs from the legacy fixed id, which is what makes two boxes
+    // And each differs from the shared fixed id, which is what makes two boxes
     // in one test genuinely separate storage rather than one shared row map.
     expect(deriveBoxId('bounded-layers', RUN)).not.toBe(TEST_BOX_ID);
   });
