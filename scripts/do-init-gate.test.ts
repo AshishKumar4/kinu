@@ -626,7 +626,6 @@ describe('DO init-gate purity, against the real tree', () => {
       'ActorAgent.onFiberRecovered:recovery',
       'Devbox.onStart:container-start',
       'OrchestratorAgent.onStart:per-request',
-      'SubordinateAgent.onStart:per-request',
     ]);
   });
 

@@ -546,6 +546,12 @@
       // Staging has the binding for parity but no EMAIL_DOMAIN — the Mission
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
+      // Spelled out here because `version_metadata` is NOT inherited — wrangler
+      // says so itself on a staging dry run ("exists at the top level, but not
+      // on env.staging"). Staging runs the same Durable Object code and writes
+      // the same durable turn claims, so without this binding every staging
+      // claim records its build as unknown while production names it.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "ai": { "binding": "AI" },
       // Staging's OWN datasets. Analytics Engine datasets are account-scoped, so
       // a shared name is an eval run writing into the numbers an operator reads —
