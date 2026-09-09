@@ -1101,6 +1101,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Added `no-vacuous-type-predicate` for explicit guards whose entire body returns literal true. On 2026-09-06, all 26 prior anti-slop rules remained enabled beside the new rule.
 
 - Owners can page retained subordinate history and nested run events without reopening dismissed agents; 16 SDK lifecycle observations and a production cold-read probe passed on 2026-09-08.
+- Snapshot-chain is the decided devbox storage default; the decisive report records the 2026-09-06 gate evidence, the 996-test package proof on 2026-09-08, and the workload OS-boundary follow-up as one measured row.
 
 ## [0.2.0] - 2026-08-07
 
