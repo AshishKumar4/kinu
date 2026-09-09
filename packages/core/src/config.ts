@@ -75,7 +75,7 @@ export interface ScaffoldDefaults {
  *
  *  Four constant tables, read field by field (`DEFAULT_CONFIG.mcts.judgeSamples`
  *  and its like). There is no whole-config value to merge and no caller that
- *  overrides one: per-knob overrides live in the `agent_config` table and are
+ *  overrides one: per-knob overrides live in the `actor_config` table and are
  *  applied at each call site by `??`, which is why `mergeConfig` and the
  *  `AgentConfig` aggregate it took have been deleted rather than kept as the
  *  shape nothing constructs. */

@@ -20,7 +20,7 @@ import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { recoveryBackoffMs } from '../src/utils/recovery-backoff';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
-import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 
@@ -76,14 +76,23 @@ function setup(opts: {
   // database"), and then a LATER process opening the same durable rows.
   const realSql = makeSql(db);
   const storeFault = { closed: false };
+  // The actor is issued over the UNDERLYING handle, never the fault wrapper.
+  // The fault stands in for the registry's database dying under a live fiber,
+  // and only the registry write is that fiber's own — an actor's membership
+  // read is the harness establishing WHO is writing. Bound through the wrapper,
+  // every fault case would fail inside `assertCurrent()` and stop reaching the
+  // settlement path it exists to exercise. Idempotent when `opts.db` is
+  // threaded, so the second process reopens the SAME actor's rows.
+  const actors = createTestActors(realSql, makeExecRaw(db));
+  const actor = actors.main;
   const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
     if (storeFault.closed) throw new Error('Cannot use a closed database');
     return realSql<T>(strings, ...values);
   }) satisfies SqlExecutor;
-  const store = new BackgroundJobStore(sql);
+  const store = new BackgroundJobStore(sql, actor);
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
-  const eventLog = new EventLog(hubSql);
+  const eventLog = new EventLog(hubSql, actor);
   const { fiber, stashes, runs, settled } = fakeFiber();
   const { host, enqueued, setStatus, setRejection } = fakeHost();
   const logs: Array<{ e: string; d?: string }> = [];
@@ -105,7 +114,7 @@ function setup(opts: {
   return {
     runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
-    storeFault, db,
+    storeFault, db, actors,
   };
 }
 
@@ -920,13 +929,40 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(outcome.detached).toBe(false);
     if (outcome.detached) throw new Error('expected the full cap to refuse detach');
     // No ninth job: the cap stays hard, while this call keeps its foreground owner.
-    expect(store.countRunning()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
     expect(controller.signal.aborted).toBe(false);
     expect(outcome.reason).toBe('too many jobs already running');
     expect(logs.some((l) => l.e === 'bg_job_refused')).toBe(true);
 
     work.resolve('completed without an implicit timeout');
     await expect(work.promise).resolves.toBe('completed without an implicit timeout');
+  });
+
+  test("a SIBLING actor's detached jobs fill the cap too — the ceiling is the machine, not the actor", async () => {
+    // The cap's own reason, in the only shape that can tell it apart from an
+    // actor-scoped count: all eight live process trees belong to a subordinate,
+    // and this actor's registry is empty. Narrowed to the owner, each of N
+    // actors would open MAX_CONCURRENT_DETACHED_JOBS trees and the machine
+    // ceiling would be multiplied by the actor count — while every
+    // single-actor case in this file, where the two counts coincide, would go
+    // on passing.
+    const { runner, store, actors, db } = setup();
+    const sibling = new BackgroundJobStore(makeSql(db), actors.sibling('other'));
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      sibling.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+    }
+    // The owner sees none of them — its roster and its history are the actor's
+    // half. That absence is what makes the refusal below attributable to the
+    // workspace count rather than to anything this actor can read.
+    expect(store.listRunning()).toEqual({ items: [], total: 0 });
+    expect(store.list()).toEqual([]);
+    expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+
+    const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
+      .onThreshold('run', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(false);
+    if (outcome.detached) throw new Error('expected a sibling-filled cap to refuse detach');
+    expect(outcome.reason).toBe('too many jobs already running');
   });
 
   test('under the cap a refusal never happens — the boundary is exact', async () => {
@@ -963,7 +999,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       store.reclaim(`owed-${i}`);
       store.deferResume(`owed-${i}`, Date.now() + 60_000);
     }
-    expect(store.countRunning()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
@@ -983,7 +1019,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // have a future `resume_after`.
     await runner.recoverOrphans();
     expect(runner.inFlight).toBe(MAX_CONCURRENT_DETACHED_JOBS);
-    expect(store.resumeOwedIds(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.resumeOwedIdsInWorkspace(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));

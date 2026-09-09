@@ -17,8 +17,13 @@
  * The shape is JSON Lines so it streams in both directions — the cloud export
  * is paged (a DO answers one bounded page per RPC, never materializing a
  * workspace-sized string) and the restore consumes line by line. A trailing
- * `end` record declares both row and file counts, which makes a truncated
- * download detectable rather than a silently short restore.
+ * `end` record declares row, file AND actor counts, which makes a truncated
+ * download detectable rather than a silently short restore. The actor count is
+ * there because one workspace database holds every logical actor of that
+ * workspace — main, hired subordinates, temporaries, heads, nodes and branches
+ * — so a snapshot is only "the workspace" if the roster it rebuilds is the
+ * roster it left with. A retired actor whose history was retained counts: its
+ * rows are workspace state, and dropping them is data loss.
  *
  * What is deliberately NOT in an archive: `workspace_capability`, which holds
  * the secret the owner's UserDO minted to prove which workspace is calling it
@@ -275,6 +280,10 @@ interface EndRecord {
   t: 'end';
   rows: number;
   files: number;
+  /** Actors the exported roster carried, retired ones included: a retained
+   *  dismissal keeps its conversation, so its rows are part of the workspace
+   *  and its absence from a restore is data loss rather than tidiness. */
+  actors: number;
 }
 
 type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | FileRecord | DirectoryRecord | EndRecord;
@@ -305,7 +314,7 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
   }),
   v.object({ t: v.literal('file'), path: v.string(), data: v.string() }),
   v.object({ t: v.literal('directory'), path: v.string() }),
-  v.object({ t: v.literal('end'), rows: v.number(), files: v.number() }),
+  v.object({ t: v.literal('end'), rows: v.number(), files: v.number(), actors: v.number() }),
 ]);
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
@@ -402,6 +411,25 @@ function decodeValue(value: EncodedSqlValue): ArchiveDatabaseValue {
   const encoded = v.safeParse(v.object({ $b64: v.string() }), value);
   if (encoded.success) return bytesAsArrayBuffer(base64ToBytes(encoded.output.$b64));
   return v.parse(v.union([v.string(), v.number(), v.boolean(), v.null()]), value);
+}
+
+/**
+ * Actors this database's roster holds, retired included, or 0 where the roster
+ * table does not exist.
+ *
+ * Zero is a real answer and not an error: an archive may be taken of a database
+ * that predates the roster, and refusing to export it would make the backup
+ * unavailable exactly when it is most wanted. What must not happen is a count
+ * that is right on export and unchecked on restore, which is why both sides
+ * call this one function.
+ */
+function countArchivedActors(sql: SqlExec): number {
+  const present = sql.exec(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_actors'`,
+  ).toArray();
+  if (present.length === 0) return 0;
+  const counted = sql.exec(`SELECT COUNT(*) AS n FROM workspace_actors`).toArray()[0];
+  return v.parse(v.number(), counted?.n);
 }
 
 function quoteIdent(name: string): string {
@@ -610,7 +638,7 @@ export async function readWorkspaceArchivePage(
     throw new Error('Cannot resume this export: its workspace file source is unavailable.');
   }
 
-  emit({ t: 'end', rows, files });
+  emit({ t: 'end', rows, files, actors: countArchivedActors(sql) });
   return { lines, next: null };
 }
 
@@ -633,6 +661,9 @@ export interface ArchiveRestoreResult {
   exportedAt: number;
   tables: number;
   rows: number;
+  /** Actors the restored roster holds — the archive's own declared count,
+   *  verified against the rebuilt roster before this is returned. */
+  actors: number;
   /** Regular files restored (directory records are not included). */
   files: number;
 }
@@ -744,6 +775,16 @@ export async function restoreWorkspaceArchive(
   if (end.files !== fileRecords) {
     throw new Error(`This archive is damaged: it declares ${end.files} file records but carries ${fileRecords}.`);
   }
+  // ACTOR COVERAGE. A workspace holds N logical actors in ONE database, so
+  // "the archive is complete" is not answered by a row count alone: a restore
+  // that dropped every row of one actor and none of another has the right
+  // total and the wrong workspace. The export declares how many actors its
+  // roster carried; the restore counts the roster it rebuilt and refuses a
+  // mismatch, which is the same detectability the row and file counts buy.
+  const restoredActors = countArchivedActors(sql);
+  if (end.actors !== restoredActors) {
+    throw new Error(`This archive is damaged: it declares ${end.actors} actors but restored ${restoredActors}.`);
+  }
 
   for (const record of deferred) sql.exec(record.sql);
   // External-content FTS indexes carry no rows of their own; they are derived
@@ -761,12 +802,47 @@ export async function restoreWorkspaceArchive(
     exportedAt: header.exported_at,
     tables,
     rows,
+    actors: restoredActors,
     files,
   };
 }
 
 /**
- * A cloud export carries the SDK's pane store (`assistant_messages`); the
+ * Which actor owns an imported conversation: the workspace's MAIN actor, read
+ * back out of the directory this restore has just landed.
+ *
+ * `kind = 'main'` is unique per workspace by schema — `workspace_actors` carries
+ * a partial unique index on it (`state/workspace-actors.ts`) — so this is
+ * exactly one row or none. None means an archive that carries a chat pane but
+ * no actor directory to file it under, which cannot be attributed at all.
+ *
+ * Read here rather than taken as a parameter because the caller has nothing to
+ * pass: `restoreWorkspaceArchive` is handed an EMPTY database and the identity
+ * only exists once its rows have landed, which is the moment this runs.
+ */
+function importedConversationActorId(sql: SqlExec): string {
+  const directory = sql.exec(
+    `SELECT name FROM sqlite_master
+     WHERE type = 'table' AND name IN ('workspace_identity', 'workspace_actors')`,
+  ).toArray();
+  const rows = directory.length === 2
+    ? sql.exec(
+      `SELECT a.actor_id AS actor_id FROM workspace_actors a
+       JOIN workspace_identity w ON w.id = a.workspace_id
+       WHERE a.kind = 'main'`,
+    ).toArray()
+    : [];
+  if (rows.length !== 1) {
+    throw new Error(
+      'This archive carries a chat pane but no single main actor to attribute it to, '
+      + 'so the imported conversation cannot be filed.',
+    );
+  }
+  return v.parse(v.object({ actor_id: v.pipe(v.string(), v.nonEmpty()) }), rows[0]).actor_id;
+}
+
+/**
+ * An export may carry the pane store (`assistant_messages`); the
  * workspace this archive was restored into may be LOCAL, where `messages` is
  * the only default-chat store. Normalize once, here — project every pane row
  * into the plain store and drop the pane schema — so "does assistant_messages
@@ -778,21 +854,53 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
   ).toArray();
   if (pane.length === 0) return;
+  // WHOSE rows these are is read from the archive when the archive can say, and
+  // only attributed when it cannot. Two archive vintages reach this line:
+  //
+  //   - Produced by THIS tree: `ForkTargetWriter.ensurePaneTable` creates the
+  //     pane with `actor_id NOT NULL, PRIMARY KEY (actor_id, id)`, so every row
+  //     names its owner. Attributing those to the main actor would collapse a
+  //     hired subordinate's whole transcript onto its parent — the restore half
+  //     of "one snapshot carries every actor".
+  //   - An older cloud export whose pane predates the column: there is no owner
+  //     in the row, so the directory this restore just landed is the only place
+  //     the answer exists, and a workspace with no single main actor is refused
+  //     rather than guessed at.
+  //
+  // The DDL text is the probe, not `PRAGMA table_info`: this runs on both
+  // SQLite backends and the rest of this file already reads `sqlite_master`.
+  const paneDdl = v.parse(
+    v.object({ sql: v.nullable(v.string()) }),
+    sql.exec(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
+    ).toArray()[0],
+  ).sql;
+  const paneCarriesOwner = paneDdl !== null && /\bactor_id\b/.test(paneDdl);
+  const attributedTo = paneCarriesOwner ? null : importedConversationActorId(sql);
   const rows = sql.exec(
-    `SELECT id, parent_id, role, content, created_at FROM assistant_messages ORDER BY rowid ASC`,
+    paneCarriesOwner
+      ? `SELECT actor_id, id, parent_id, role, content, created_at FROM assistant_messages
+         ORDER BY rowid ASC`
+      : `SELECT id, parent_id, role, content, created_at FROM assistant_messages
+         ORDER BY rowid ASC`,
   ).toArray();
   for (const raw of rows) {
     const row = v.parse(v.object({
+      actor_id: v.optional(v.pipe(v.string(), v.nonEmpty())),
       id: v.string(), parent_id: v.nullable(v.string()), role: v.string(),
       content: v.string(), created_at: v.string(),
     }), raw);
+    const owner = row.actor_id ?? attributedTo;
+    if (owner === null || owner === undefined) {
+      throw new Error(`imported pane row ${row.id} has no owner and none could be attributed`);
+    }
     const text = uiMessageText(row.content);
     const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
     if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
     sql.exec(
-      `INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      row.id, 'default', row.parent_id, row.role, text, ms,
+      `INSERT OR IGNORE INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      owner, row.id, 'default', row.parent_id, row.role, text, ms,
     );
   }
   sql.exec(`DROP TABLE assistant_messages`);

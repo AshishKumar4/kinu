@@ -408,10 +408,10 @@ export class BackgroundJobRunner {
    * deferral), and their rows are therefore always counted.
    */
   private liveDetachedCount(): number {
-    const owed = this.deps.store.resumeOwedIds(Date.now());
+    const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
     let idle = 0;
     for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
-    return this.deps.store.countRunning() - idle;
+    return this.deps.store.countRunningInWorkspace() - idle;
   }
 
   /**
@@ -945,12 +945,25 @@ export class BackgroundJobRunner {
    * same six lines in both, which is the twin this repository's own gate refuses:
    * the decision "is an attempt owed" belongs to the thing that owes it.
    *
-   * Nothing re-arms here. A sweep that finds a job still waiting arms its own
-   * next wake through {@link BackgroundJobRunnerDeps.scheduleResume}.
+   * A DUE attempt is re-driven by the sweep. A NOT-YET-DUE one is re-armed here
+   * and nowhere else, and that is the whole reason this branch is not a bare
+   * return. The instant and the schedule row are written by different steps —
+   * `deferResume` records the wait, `deferRecovery` arms the wake — and the row
+   * is the half that can be lost: an isolate evicted between them leaves a
+   * durable instant with nothing to fire at it. `deferRecovery` sits BEHIND this
+   * check, so a bare return meant the only thing that could re-arm a pending
+   * attempt was a sweep that already required the attempt to be due. Nothing
+   * woke at the due instant, so nothing ever did, and the job sat `running`
+   * until an unrelated ingress happened to wake the workspace. The MIN is
+   * already in hand: arming it costs no second read and no registry walk.
    */
   async recoverDueResumes(): Promise<void> {
-    const next = this.deps.store.nextResumeAt();
-    if (next === null || next > Date.now()) return;
+    const next = this.deps.store.nextResumeAtInWorkspace();
+    if (next === null) return;
+    if (next > Date.now()) {
+      await this.deps.scheduleResume?.(next);
+      return;
+    }
     await this.recoverOrphans();
   }
 

@@ -36,6 +36,7 @@ import type { ToolSet } from 'ai';
 import { argumentDigest } from '../safety/argument-digest';
 import { KinuError } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
 import { replayPolicyFor } from './registry';
 
@@ -68,11 +69,12 @@ export type ToolEffectClaim =
 
 export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS tool_effect_claims (
+    actor_id           TEXT NOT NULL,
     turn_id            TEXT NOT NULL,
     normalized_call_id TEXT NOT NULL,
     call_digest        TEXT NOT NULL,
     result_json        TEXT,
-    PRIMARY KEY (turn_id, normalized_call_id, call_digest)
+    PRIMARY KEY (actor_id, turn_id, normalized_call_id, call_digest)
   )`);
 }
 
@@ -87,38 +89,58 @@ export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
  * await in it, which is what makes it atomic on both backends (a Durable
  * Object serializes storage access; a local workspace holds the driver lease).
  */
-export function claimToolEffect(sql: SqlExecutor, key: ToolEffectKey): ToolEffectClaim {
+export function claimToolEffect(
+  sql: SqlExecutor, actor: ActorHandle, key: ToolEffectKey,
+): ToolEffectClaim {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   const existing = sql<{ result_json: string | null }>`
     SELECT result_json FROM tool_effect_claims
-    WHERE turn_id=${key.turnId} AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
+    WHERE actor_id=${actorId} AND turn_id=${key.turnId}
+      AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
     LIMIT 1`[0];
   if (existing) {
     return existing.result_json === null
       ? { kind: 'indeterminate' }
       : { kind: 'settled', result: parseJsonValue(existing.result_json) };
   }
-  void sql`INSERT OR IGNORE INTO tool_effect_claims (turn_id, normalized_call_id, call_digest, result_json)
-    VALUES (${key.turnId}, ${key.callId}, ${key.digest}, ${null})`;
+  void sql`INSERT OR IGNORE INTO tool_effect_claims
+      (actor_id, turn_id, normalized_call_id, call_digest, result_json)
+    VALUES (${actorId}, ${key.turnId}, ${key.callId}, ${key.digest}, ${null})`;
   return { kind: 'claimed' };
 }
 
 /** Record what the claimed call produced. Guarded on the result still being
  *  absent, so a duplicate settle cannot overwrite the first outcome. */
-export function settleToolEffect(sql: SqlExecutor, key: ToolEffectKey, result: string): void {
+export function settleToolEffect(
+  sql: SqlExecutor, actor: ActorHandle, key: ToolEffectKey, result: string,
+): void {
+  actor.assertCurrent();
   void sql`UPDATE tool_effect_claims SET result_json=${result}
-    WHERE turn_id=${key.turnId} AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
+    WHERE actor_id=${actor.actorId} AND turn_id=${key.turnId}
+      AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
       AND result_json IS NULL`;
 }
 
 /** Drop one turn's claims. Called only once that turn's answer is durably
  *  persisted: until then the claims are the only thing standing between a
  *  recovery and a repeated effect. */
-export function releaseTurnEffectClaims(sql: SqlExecutor, turnId: string): void {
-  void sql`DELETE FROM tool_effect_claims WHERE turn_id=${turnId}`;
+export function releaseTurnEffectClaims(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string,
+): void {
+  actor.assertCurrent();
+  void sql`DELETE FROM tool_effect_claims
+    WHERE actor_id=${actor.actorId} AND turn_id=${turnId}`;
 }
 
 export interface EffectClaimDeps {
   readonly sql: SqlExecutor;
+  /** The actor whose turn is making the call. A turn id is minted per actor and
+   *  a provider call id is the provider's, so two actors of one workspace
+   *  present colliding claim keys — and a claim read that crossed actors would
+   *  hand one actor another's recorded output, or refuse its call as
+   *  indeterminate on the strength of a sibling's abandoned row. */
+  readonly actor: ActorHandle;
   /** The durable id of the message the live turn opened on, read at CALL time:
    *  a toolset is built once and used across many turns. */
   readonly turnId: () => string;
@@ -154,13 +176,15 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
         callId: options.toolCallId,
         digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
       };
-      const claim = claimToolEffect(deps.sql, key);
+      const claim = claimToolEffect(deps.sql, deps.actor, key);
       if (claim.kind === 'settled') return claim.result;
       if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
       const output = await execute(input, options);
       // Durable before published: the caller reads this value only after the
       // row that makes a replay return it instead of running the tool again.
-      settleToolEffect(deps.sql, key, JSON.stringify(projectJsonValue({ value: output })));
+      settleToolEffect(
+        deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
+      );
       return output;
     },
   };

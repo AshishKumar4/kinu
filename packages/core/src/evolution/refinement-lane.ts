@@ -56,6 +56,7 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 
 export interface RequestRefinementInput {
@@ -102,14 +103,15 @@ export async function requestRefinement(
   input: RequestRefinementInput,
 ): Promise<RefinementRequestView> {
   const sql = deps.control.sql;
-  const store = createRefinementStore(sql);
-  const turnIds = input.turnIds ?? evolutionDebt(sql).turnIds;
+  const actor = deps.control.rt.actor;
+  const store = createRefinementStore(sql, actor);
+  const turnIds = input.turnIds ?? evolutionDebt(sql, actor).turnIds;
   // The ledger reads newest-first; a trajectory is read forwards. Keep the
   // caller's order and let the ledger only decide which of those turns is
   // actually graded, so the stored trajectory is the one the brief renders and
   // the debt derivation named.
   const graded = new Set(
-    listTurnOutcomes(sql, { turnIds })
+    listTurnOutcomes(sql, actor, { turnIds })
       .map((row) => row.turnId)
       .filter((id): id is string => id !== null),
   );
@@ -154,7 +156,7 @@ export async function requestRefinement(
 export async function refinementDebtRequest(
   deps: RefinementDeps,
 ): Promise<RefinementRequestView | null> {
-  const debt = evolutionDebt(deps.control.sql);
+  const debt = evolutionDebt(deps.control.sql, deps.control.rt.actor);
   if (!debt.owed) return null;
   return requestRefinement(deps, {
     trigger: 'evolution_debt',
@@ -167,7 +169,7 @@ export async function refinementDebtRequest(
 /** The accumulated debt, for the surfaces that show it. Re-exported here so a
  *  host wires one module rather than two for one capability. */
 export function refinementDebt(deps: RefinementDeps): EvolutionDebt {
-  return evolutionDebt(deps.control.sql);
+  return evolutionDebt(deps.control.sql, deps.control.rt.actor);
 }
 
 /** What one step of the lane did. */
@@ -203,7 +205,7 @@ export type RefinementLaneStep =
 export async function advanceRefinementLane(
   deps: RefinementDeps,
 ): Promise<RefinementLaneStep> {
-  const store = createRefinementStore(deps.control.sql);
+  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   store.resetStalePlanning();
   // BOTH stages, and `gated` is the one that matters. A host killed between
   // routing and the settle inside `plan` leaves the row at `gated` with every
@@ -250,9 +252,11 @@ function ownerHasDecided(route: RefinementRoute): boolean {
  * for a trajectory: the refiner is being asked what went wrong over time, and a
  * conversation shown backwards invites a causal story that runs the other way.
  */
-function reviewedTrajectory(sql: SqlExecutor, request: RefinementRequest): TurnOutcomeRow[] {
+function reviewedTrajectory(
+  sql: SqlExecutor, actor: ActorHandle, request: RefinementRequest,
+): TurnOutcomeRow[] {
   const byId = new Map(
-    listTurnOutcomes(sql, { turnIds: request.turnIds })
+    listTurnOutcomes(sql, actor, { turnIds: request.turnIds })
       .map((row) => [row.turnId, row] as const),
   );
   return request.turnIds
@@ -293,7 +297,7 @@ async function plan(
   claim: RefinementClaim,
 ): Promise<RefinementRequestView | null> {
   const { request } = claim;
-  const store = createRefinementStore(deps.control.sql);
+  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   const view = (): RefinementRequestView =>
     refinementRequestView(store.get(request.id) ?? request);
   const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
@@ -330,7 +334,7 @@ async function plan(
   if (request.proposal === null
     && !claim.record({ proposal, detail: proposal.summary })) return null;
 
-  const reviewed = reviewedTrajectory(deps.control.sql, request);
+  const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
   const routes: RefinementRoute[] = [];
   for (const [index, edit] of proposal.edits.entries()) {
     // A DECIDED route is never re-routed. A resumed pass re-runs the plan, and
@@ -451,12 +455,15 @@ async function askRefiner(
  */
 function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
   const sql = deps.control.sql;
-  const split = buildOutcomeEvalSplit(sql, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()));
+  const actor = deps.control.rt.actor;
+  const split = buildOutcomeEvalSplit(
+    sql, actor, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
+  );
   // The split's instances carry the turn's user message as `input`; that is the
   // only handle they share with the ledger rows, and it is what the section
   // metric is scored on, so it is the right thing to withhold by.
   const heldOut = new Set(split.val.map((instance) => instance.input));
-  const reviewed = reviewedTrajectory(sql, request)
+  const reviewed = reviewedTrajectory(sql, actor, request)
     .filter((row) => !heldOut.has(row.userMessage));
   const withheld = request.turnIds.length - reviewed.length;
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
@@ -469,7 +476,7 @@ function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, co
     ? '  (none recorded)'
     : facts.map((fact) => `  - ${fact.key}`).join('\n');
 
-  const history = createRefinementStore(sql).list(5)
+  const history = createRefinementStore(sql, actor).list(5)
     .filter((prior) => prior.id !== request.id)
     .map((prior) => `  - ${prior.id} (${prior.trigger}, ${prior.stage}): ${prior.detail || '(no detail)'}`
       + prior.routes.map((r) => `\n      ${r.kind} → ${r.owner || 'no owner'} ${r.target} [${r.disposition}]`).join(''))
@@ -713,7 +720,7 @@ async function routePromptSection(
 
   // Adoption first: a pending row already carrying these exact bytes IS this
   // route's own earlier write, recovered.
-  const already = getPendingPromptSection(deps.control.sql, edit.sectionId);
+  const already = getPendingPromptSection(deps.control.sql, deps.control.rt.actor, edit.sectionId);
   if (already && already.source === edit.source) {
     return pendingReason(already.version, 'pending held-out trials (adopted from an earlier pass)');
   }
@@ -763,7 +770,7 @@ async function settleRoutes(
   deps: RefinementDeps,
   request: RefinementRequest,
 ): Promise<RefinementRequestView | null> {
-  const versions = listPromptSectionVersions(deps.control.sql, 200);
+  const versions = listPromptSectionVersions(deps.control.sql, deps.control.rt.actor, 200);
   let promoted = 0;
   let rolledBack = 0;
   let rejected = 0;
@@ -801,7 +808,7 @@ async function settleRoutes(
     }
   }
 
-  const store = createRefinementStore(deps.control.sql);
+  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   if (pending > 0) {
     // Still waiting on an owner. From `gated` that is a real transition — the
     // routes are made and the request is now in someone else's hands.

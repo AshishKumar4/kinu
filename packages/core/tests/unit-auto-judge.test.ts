@@ -11,8 +11,9 @@ import {
   type StructuredJudgeFn,
 } from '../src/index';
 import { createTestRuntime } from './helpers';
+import type { ChatEvent } from '../src/chat';
 
-const noOpLlmStream = async function* () { yield ''; };
+const noOpLlmStream = async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; };
 
 /** The live scaffold's output in these tests. Distinctive on purpose: the
  *  pending's output under the mock executor is a scaffold error string, and a
@@ -57,10 +58,10 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   // Bootstrap a pending scaffold v1, current v0.
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'initial', 'current')`;
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
   // Write the pending scaffold's backup file (executor reads this).
   await rt.storage.vfs.writeFile(
     'scaffold/agent.js.v1',
@@ -102,7 +103,7 @@ describe('runAutoShadowEval', () => {
     expect(result.evaluation?.winner).toBe('pending');
 
     // Verify it was recorded.
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     expect(pending.trialsSoFar).toBe(1);
     expect(pending.pendingWins).toBe(1);
   });
@@ -123,10 +124,9 @@ describe('runAutoShadowEval', () => {
     const rt = await setup();
     // Seed 5 prior pending wins so this 6th call crosses the promote threshold.
     for (let i = 0; i < 5; i++) {
-      void rt.storage.sql`INSERT INTO scaffold_evaluations
-        (id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
@@ -140,7 +140,8 @@ describe('runAutoShadowEval', () => {
 
     // v1 should be 'current'; v0 should be 'historical'.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(1)).toBe('current');
     expect(map.get(0)).toBe('historical');
@@ -155,10 +156,9 @@ describe('runAutoShadowEval', () => {
     // gates auto-apply.
     for (let i = 0; i < 6; i++) {
       const winner = i < 5 ? 'pending' : 'current';
-      void rt.storage.sql`INSERT INTO scaffold_evaluations
-        (id, current_version, pending_version, task, current_output, pending_output,
+      void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
-        VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
+        VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
     }
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
@@ -171,7 +171,8 @@ describe('runAutoShadowEval', () => {
     expect(result.applied).toBe('rollback');
 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(0)).toBe('current');      // live scaffold unchanged
     expect(map.get(1)).toBe('rolled_back');  // bad pending discarded
@@ -182,11 +183,12 @@ describe('runAutoShadowEval', () => {
     // a rollback cycle the numbering is non-contiguous (live=v0 while the new
     // pending is v3), so pending-1 pointed at a rolled_back row.
     const rt = await setup();
-    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (2, ${Date.now()}, 'second attempt', 'rolled_back')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (3, ${Date.now()}, 'third attempt', 'pending')`;
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back'
+      WHERE actor_id = ${rt.actor.actorId} AND version = 1`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 2, ${Date.now()}, 'second attempt', 'rolled_back')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 3, ${Date.now()}, 'third attempt', 'pending')`;
     await rt.storage.vfs.writeFile(
       'scaffold/agent.js.v3',
       'async function* run(rt, task) { yield { type: "chunk", data: "v3: " + task }; }',
@@ -201,7 +203,8 @@ describe('runAutoShadowEval', () => {
     expect(result.skipped).toBe(false);
 
     const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
-      SELECT current_version, pending_version FROM scaffold_evaluations`[0]!;
+      SELECT current_version, pending_version FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId}`[0]!;
     expect(row.pending_version).toBe(3);
     expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
   });
@@ -214,10 +217,10 @@ describe('runAutoShadowEval', () => {
     // returns max(scaffold_versions.version)=1 which matches our pending=1,
     // so readScaffoldVersion follows the "read current" path; with no file,
     // it throws ENOENT, caught in the try/catch → returns null.
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'alt', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alt', 'pending')`;
     // Explicitly DO NOT write 'scaffold/agent.js'.
 
     const result = await runAutoShadowEval({
@@ -239,7 +242,8 @@ describe('runAutoShadowEval', () => {
     expect(result).toEqual({ skipped: true, reason: 'pending_unreadable' });
     // Skipping means nothing was judged and nothing was written, so a later
     // trial still sees a clean slate.
-    expect(rt.storage.sql`SELECT COUNT(*) AS n FROM scaffold_evaluations`[0]).toEqual({ n: 0 });
+    expect(rt.storage.sql`SELECT COUNT(*) AS n FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId}`[0]).toEqual({ n: 0 });
   });
 
   test('config defaults honor DEFAULT_AUTO_JUDGE_CONFIG', () => {
@@ -402,10 +406,11 @@ describe('order-swapped double-win judging', () => {
       random: () => 0,
     });
     const row = rt.storage.sql<{ winner: string; current_score: number; pending_score: number }>`
-      SELECT winner, current_score, pending_score FROM scaffold_evaluations`[0]!;
+      SELECT winner, current_score, pending_score FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId}`[0]!;
     expect(row.winner).toBe('pending');
     expect(row.pending_score).toBe(0.8);
     expect(row.current_score).toBe(0.4);
-    expect(getPendingScaffold(rt.storage.sql)!.pendingWins).toBe(1);
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.pendingWins).toBe(1);
   });
 });

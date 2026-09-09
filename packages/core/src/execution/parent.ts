@@ -264,7 +264,7 @@ export function createParentExecutor(deps: {
         supported: false,
         reason:
           `The parent workspace runs in a Worker and cannot expose inbound ports. `
-          + `Use the 'sandbox' executor for any server you want to preview (port ${port}).`,
+          + `Use an available preview-capable executor for a Node/Vite server (port ${port}).`,
       };
     },
     async unexposePort() { /* nothing to do */ },

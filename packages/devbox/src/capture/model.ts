@@ -36,7 +36,7 @@ import * as v from 'valibot';
 import { createHash } from 'node:crypto';
 
 
-import { sha256Hex } from '../cas/hash';
+import { CHUNK_SIZE, sha256Hex } from '../cas/hash';
 import { isCanonicalJournalPath } from '../cas/types';
 import { CapturedCutSchema } from '../durability/contracts';
 import type { CapturedCut } from '../durability/contracts';
@@ -87,8 +87,10 @@ export type FileContent =
   | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] }
   | SealedContent;
 
-/** Matches the bounded-layer fixed chunk size; a range never rehashes a whole file. */
-export const MAX_SEALED_EXTENT_BYTES = 512 * 1024;
+/** A sealed range never rehashes a whole file, so it is bounded by the grid the
+ *  file was chunked on — not a second spelling of it, but {@link CHUNK_SIZE}
+ *  itself, the fixed chunk grid `cas/hash.ts` declares. */
+export const MAX_SEALED_EXTENT_BYTES = CHUNK_SIZE;
 
 /** Logical bytes: sparse holes read back as zeros, like a real read(2). */
 export function expandContent(content: FileContent): Uint8Array {

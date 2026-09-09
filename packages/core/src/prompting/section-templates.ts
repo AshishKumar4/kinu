@@ -166,7 +166,7 @@ Connected external providers expose these tools for this turn. When their names/
  */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   'executors/workspace',
-  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s own durable Nimbus workspace. It provides one filesystem and a real POSIX shell with node and local git history. It holds resident background processes and logs, and it exposes ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate with ~{{memoryMb}} MB shared by everything in it. Use it for editing, small scripts and local git history only. Run repository clones and fetches, package installs and builds in `sandbox.*`.{{/if}}',
+  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s durable Nimbus filesystem and POSIX shell, with local git history, resident processes and logs. Runtime support is listed in live capabilities; a registered node command does not imply this Worker can compile Node programs. The shell shares ~{{memoryMb}} MB with the Worker. Use a capable available environment for clones, package installs, builds and ordinary Node/Vite servers. Authored Worker slates use their own compile-and-preview operation when declared.{{/if}}',
 );
 
 export const SANDBOX_EXECUTOR_LINE = definePromptSection(
@@ -247,11 +247,12 @@ Your own workspace is a durable POSIX filesystem at {{workspaceRoot}}, and the \
 The environments above are separate machines. Run each machine's commands through its own namespace ({{deviceNamespaces}}), in paths native to each machine. A live machine's files also appear in your own file plane under a mount point. The user's device sits at \`/pc\`. When several are live, each sits at \`/pc/<name>\`. A bound container sits at \`/sandbox\`. The \`file\` tool and \`workspace.*\` reach those files directly, and a native path appears whole. \`/pc/home/user/file\` is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other. Your workspace shell sees only your tree. It cannot see mount points.{{/if}}{{#if hasPreview}}
 
 ### Showing a running app
-For a user-visible web app, keep its files and server in one preview-capable environment. Start the server bound to 0.0.0.0 in the background and wait for it to bind, then call {{exposeCalls}} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is listening.{{/if}}
+{{#if workspacePreview}}A request for an interface — a dashboard, a form, a control panel, a live view over workspace data — is a Worker slate: author it in your workspace and preview it through the declared slate operation, which compiles and boots the Worker and needs none of the server workflow below. Reach for a standalone server only when the user asked for a shippable web application of its own.
+{{/if}}For a standalone Node/Vite application, keep its files and server in one capable preview environment. Start the server bound to 0.0.0.0 in the background and wait for it to bind, then call {{exposeCalls}} for that environment. If exposePort fails, inspect its server log and fix the cause.{{/if}}
 
 ### Approvals
-Commands that touch another machine, or reach outside it, need the owner's decision. A force-push, a publish, or reading the user's secrets are examples. Your own workspace and sandbox are not gated. Clean up, install and delete there freely.
-A parked command returns one line, \`NOT RUN — queued for owner approval (<id>)\`, with rules and executor named. Nothing ran, and re-issuing returns the same line. A decision wakes you either way. Carry on with independent work or end your turn.`,
+Follow the current work mode, grants and approval policy for every environment. Workspace ownership does not bypass Plan restrictions or an operation-specific approval.
+Read each command's declared result shape. For workspace.exec, a string is output; an object carries reason, error and optional execution.exitCode. Do not use String(result) or parse ordinary output as a failure. A queued approval means nothing ran. Wait for its decision rather than resubmitting; continue independent work or end the turn.`,
 );
 
 export const PERSISTENCE_SECTION = definePromptSection(
@@ -259,7 +260,7 @@ export const PERSISTENCE_SECTION = definePromptSection(
   `## Persistence
 You are not stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.
 The runtime automatically compacts your context window as it approaches its limit. Work each task through to completion and save durable progress to facts/memory as you go.
-Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line by line. Evolve freely and report honestly. Nothing you change about yourself is hidden or permanent.`,
+Scaffold versions and recorded self-changes can be inspected through the available tools. A stored version does not undo external effects. Keep changes within the current authority and report what actually changed.`,
 );
 
 /**

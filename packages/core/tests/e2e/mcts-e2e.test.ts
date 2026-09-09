@@ -18,7 +18,7 @@ import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import type { SessionWriter, SessionMessage } from '../../src/mcts/record-node';
 import {
-  makeSql,
+  makeSql, createTestActor,
   makeExecRaw,
   createMemoryVFS,
   createMemoryMemory,
@@ -35,13 +35,16 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const memory = createMemoryMemory(db, vfs);
   const craftStore = createMemoryCraftStore(db);
   const executor = createMockExecutor();
-  const schedule = createMemorySchedule(db);
+  // The actor first: `fibers` is actor-scoped, so a lane belongs to somebody.
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test');
+  const schedule = createMemorySchedule(db, actor);
 
   await vfs.mkdir('scaffold', { recursive: true });
   await vfs.writeFile('scaffold/agent.js', 'initial');
 
   function createRealBranch(branchLLM: LLM): BranchHandle {
     return {
+      release: async () => {},
       async explore(priorHistory) {
         const context = priorHistory.map(m => `${m.role}: ${m.content}`).join('\n');
         const text = await branchLLM.complete(
@@ -61,7 +64,8 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   }
 
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    actor,
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory, executor, llm, schedule,
     identity: {
       id: 'e2e-agent', name: 'e2e-test',
@@ -70,14 +74,14 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
         exists: () => vfs.exists('scaffold/agent.js'),
         read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
-        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
+          FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
       },
     },
     craftStore,
     judgeModel: judgeLlm,
     spawnBranch: async () => createRealBranch(llm),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
 
   return { rt, db };

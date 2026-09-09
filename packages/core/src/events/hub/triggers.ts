@@ -35,6 +35,7 @@ import {
 } from './types';
 import { ulid } from './ulid';
 import type { SqlExec, SqlValue } from '../../types/primitives';
+import type { ActorHandle } from '../../state/actor-handle';
 import { parseJsonObject, type JsonObject } from '../../utils/json';
 // The DEFAULT is shared with the gate that enforces it; the RANGE is not. This
 // carried its own `?? 60`, a second copy of the same number, but it deliberately
@@ -102,21 +103,31 @@ export interface AlarmScheduler {
 }
 
 export class TriggerRegistry {
+  private readonly actorId: string;
+
+  /** Bind the registry to ONE actor. A trigger produces events into ITS
+   *  actor's inbox, so a pause, a revoke or a fork plan is that actor's
+   *  question — and `pauseAll`/`revokeAll` mean "everything this actor
+   *  registered", never "everything in the workspace". */
   constructor(
     private readonly sql: SqlExec,
+    private readonly actor: ActorHandle,
     private readonly alarm: AlarmScheduler,
-  ) {}
+  ) {
+    this.actorId = actor.actorId;
+  }
 
   /** Create a new trigger. Returns the trigger id. */
   async register(spec: RegisterSpec, now: number): Promise<TriggerId> {
+    this.actor.assertCurrent();
     const id = ulid();
     const fp = spec.fork_policy ?? null;
     this.sql.exec(
       `INSERT INTO triggers
-         (id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
+         (actor_id, id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
           created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count)
-       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL, ?, NULL, 0)`,
-      id, spec.kind, JSON.stringify(spec.spec), spec.creator_trust, fp,
+       VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL, NULL, ?, NULL, 0)`,
+      this.actorId, id, spec.kind, JSON.stringify(spec.spec), spec.creator_trust, fp,
       spec.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN, now, spec.next_fire_at ?? null,
     );
     if (spec.next_fire_at) await this.alarm.scheduleAt(spec.next_fire_at);
@@ -124,21 +135,23 @@ export class TriggerRegistry {
   }
 
   get(id: TriggerId): TriggerRow | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
               created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count
-       FROM triggers WHERE id = ?`, id,
+       FROM triggers WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray();
     if (rows.length === 0) return null;
     return rowToTrigger(rows[0]);
   }
 
   list(filter?: { kind?: TriggerKind; state?: 'active' | 'paused' | 'revoked' }): TriggerRow[] {
+    this.actor.assertCurrent();
     let sql = `SELECT id, kind, spec, creator_trust, fork_policy, state,
                       rate_limit_per_min, created_at, paused_at, revoked_at,
                       next_fire_at, last_fire_at, fire_count
-               FROM triggers WHERE 1=1`;
-    const bindings: SqlValue[] = [];
+               FROM triggers WHERE actor_id = ?`;
+    const bindings: SqlValue[] = [this.actorId];
     if (filter?.kind) { sql += ` AND kind = ?`; bindings.push(filter.kind); }
     if (filter?.state) { sql += ` AND state = ?`; bindings.push(filter.state); }
     sql += ` ORDER BY created_at DESC`;
@@ -153,8 +166,8 @@ export class TriggerRegistry {
     const before = this.get(id);
     if (!before || before.state !== 'active') return false;
     this.sql.exec(
-      `UPDATE triggers SET state = 'paused', paused_at = ? WHERE id = ?`,
-      now, id,
+      `UPDATE triggers SET state = 'paused', paused_at = ? WHERE actor_id = ? AND id = ?`,
+      now, this.actorId, id,
     );
     return true;
   }
@@ -165,11 +178,12 @@ export class TriggerRegistry {
     const before = this.get(id);
     if (!before || before.state !== 'paused') return false;
     this.sql.exec(
-      `UPDATE triggers SET state = 'active', paused_at = NULL WHERE id = ?`, id,
+      `UPDATE triggers SET state = 'active', paused_at = NULL WHERE actor_id = ? AND id = ?`,
+      this.actorId, id,
     );
     // Re-schedule the trigger if it has a next_fire_at in the future.
     const fire = this.sql.exec(
-      `SELECT next_fire_at FROM triggers WHERE id = ?`, id,
+      `SELECT next_fire_at FROM triggers WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray().map((row) => v.parse(OptionalNextFireRowSchema, row));
     if (fire[0]?.next_fire_at && fire[0].next_fire_at > now) {
       await this.alarm.scheduleAt(fire[0].next_fire_at);
@@ -181,7 +195,8 @@ export class TriggerRegistry {
   pauseAll(now: number): number {
     const before = this.list({ state: 'active' }).length;
     this.sql.exec(
-      `UPDATE triggers SET state = 'paused', paused_at = ? WHERE state = 'active'`, now,
+      `UPDATE triggers SET state = 'paused', paused_at = ?
+       WHERE actor_id = ? AND state = 'active'`, now, this.actorId,
     );
     return before;
   }
@@ -190,12 +205,14 @@ export class TriggerRegistry {
   async resumeAll(now: number): Promise<number> {
     const candidates = this.list({ state: 'paused' });
     this.sql.exec(
-      `UPDATE triggers SET state = 'active', paused_at = NULL WHERE state = 'paused'`,
+      `UPDATE triggers SET state = 'active', paused_at = NULL
+       WHERE actor_id = ? AND state = 'paused'`, this.actorId,
     );
     // Re-arm alarms for triggers whose next_fire_at is in the future.
     const fireRows = this.sql.exec(
-      `SELECT next_fire_at FROM triggers WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at > ?`,
-      now,
+      `SELECT next_fire_at FROM triggers
+       WHERE actor_id = ? AND state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at > ?`,
+      this.actorId, now,
     ).toArray().map((row) => v.parse(NextFireRowSchema, row));
     if (fireRows.length > 0) {
       const soonest = Math.min(...fireRows.map(r => r.next_fire_at));
@@ -210,8 +227,9 @@ export class TriggerRegistry {
     const before = this.get(id);
     if (!before || before.state === 'revoked') return false;
     this.sql.exec(
-      `UPDATE triggers SET state = 'revoked', revoked_at = ?, next_fire_at = NULL WHERE id = ?`,
-      now, id,
+      `UPDATE triggers SET state = 'revoked', revoked_at = ?, next_fire_at = NULL
+       WHERE actor_id = ? AND id = ?`,
+      now, this.actorId, id,
     );
     return true;
   }
@@ -221,7 +239,7 @@ export class TriggerRegistry {
     const before = this.list().filter(t => t.state !== 'revoked').length;
     this.sql.exec(
       `UPDATE triggers SET state = 'revoked', revoked_at = ?, next_fire_at = NULL
-       WHERE state != 'revoked'`, now,
+       WHERE actor_id = ? AND state != 'revoked'`, now, this.actorId,
     );
     return before;
   }
@@ -232,13 +250,15 @@ export class TriggerRegistry {
    *  Timer events (or whatever the trigger kind dictates). After producing,
    *  the caller must call `markFired()`. */
   due(now: number): TriggerRow[] {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state,
               rate_limit_per_min, created_at, paused_at, revoked_at,
               next_fire_at, last_fire_at, fire_count
        FROM triggers
-       WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at <= ?`,
-      now,
+       WHERE actor_id = ? AND state = 'active'
+         AND next_fire_at IS NOT NULL AND next_fire_at <= ?`,
+      this.actorId, now,
     ).toArray();
     return rows.map(rowToTrigger);
   }
@@ -246,13 +266,14 @@ export class TriggerRegistry {
   /** Record that a trigger fired. Recomputes `next_fire_at` for cron;
    *  clears it for one-shot. */
   async markFired(id: TriggerId, now: number, nextFireAt: number | null): Promise<void> {
+    this.actor.assertCurrent();
     this.sql.exec(
       `UPDATE triggers
          SET fire_count = fire_count + 1,
              last_fire_at = ?,
              next_fire_at = ?
-       WHERE id = ?`,
-      now, nextFireAt, id,
+       WHERE actor_id = ? AND id = ?`,
+      now, nextFireAt, this.actorId, id,
     );
     if (nextFireAt) await this.alarm.scheduleAt(nextFireAt);
   }

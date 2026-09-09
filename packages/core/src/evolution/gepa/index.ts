@@ -35,6 +35,6 @@ export {
   persistGepaCandidate,
   updateGepaRunCounters,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront,
-  makePersistingHook,
+  makePersistingHooks,
   type GepaRunSummary, type GepaParetoEntry,
 } from './persistence';

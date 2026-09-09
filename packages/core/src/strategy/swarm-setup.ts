@@ -45,9 +45,10 @@ import type { WorkMode } from '../prompting/surface';
 
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
-import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
+import type { NodeAgentDeps } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { HostedNodeSeat } from './node-agent';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -59,6 +60,7 @@ import { insertSearchNode } from '../mcts/record-node';
 import { reenterSwarm, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { readArtifact, type TreeNode } from './swarm-tree';
+import type { ActorHandle } from '../state/actor-handle';
 import type {
   ExplorationRecord, MeasuredObjective, ObjectiveIdentity, PublishingCarry,
 } from './objective';
@@ -512,15 +514,15 @@ export function initRunLedgers(
   // `head_journal`.
   initHeadsTables(rt.storage.execRaw);
   const journal = announce === undefined
-    ? new HeadJournal(sql)
-    : new LiveHeadJournal(sql, announce);
+    ? new HeadJournal(sql, rt.actor)
+    : new LiveHeadJournal(sql, rt.actor, announce);
   // The run-level ledger every search in this workspace has a row in. Initialised for
   // the same reason the two above are, and written for the reason *Accepted and
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
   // its structure and not one knob it ran under, and the judge clamp it computes and
   // discloses was persisted nowhere at all.
   initMctsSearchTable(rt.storage.execRaw);
-  const searchLedger = new MctsSearchStore(sql);
+  const searchLedger = new MctsSearchStore(sql, rt.actor);
   // The leaderboard *The records store* governs, initialised for the same reason the two
   // above are: a workspace that has never run a search has no `exploration_records`, and
   // the carry-in read immediately below would be a query against a table that does not
@@ -554,6 +556,9 @@ export interface CarryIn {
 
 export function readCarryIn(input: {
   readonly sql: SqlExecutor;
+  /** The RUN's own actor: the carry-in population is the leaderboard of the
+   *  actor that opened the search, never of a node that produced one candidate. */
+  readonly actor: ActorHandle;
   readonly identity: ObjectiveIdentity | null;
   readonly publishing: PublishingCarry | null;
   readonly floor: Floor | null;
@@ -562,9 +567,9 @@ export function readCarryIn(input: {
   readonly metric: string;
   readonly log: Logger;
 }): CarryIn {
-  const { sql, identity, publishing, floor, preset, carryKind, metric, log } = input;
+  const { sql, actor, identity, publishing, floor, preset, carryKind, metric, log } = input;
   const carriedIn = identity !== null && publishing !== null
-    ? recordsFor(sql, { identity, floor })
+    ? recordsFor(sql, actor, { identity, floor })
     : [];
   // Best FIRST, by `recordsFor`'s own ordering in the objective's direction.
   const carriedBest = carriedIn[0] ?? null;
@@ -625,15 +630,16 @@ export function resolveReentry(input: {
   readonly sql: SqlExecutor;
   readonly searchLedger: MctsSearchStore;
   readonly journal: HeadJournal;
+  readonly actor: ActorHandle;
   readonly redrive: boolean | undefined;
   readonly task: string;
   readonly preset: string;
   readonly profile: SwarmProfileSnapshot | null;
   readonly log: Logger;
 }): ReentryResolution {
-  const { sql, searchLedger, journal, redrive, task, preset, profile, log } = input;
+  const { sql, searchLedger, journal, actor, redrive, task, preset, profile, log } = input;
   const reentry = redrive === true
-    ? reenterSwarm({ sql, ledger: searchLedger, journal }, {
+    ? reenterSwarm({ sql, ledger: searchLedger, journal, actor }, {
       task: task, now: Date.now(),
     })
     : null;
@@ -824,6 +830,9 @@ export function refuseContendedRun(input: {
  */
 export async function createRoot(input: {
   readonly sql: SqlExecutor;
+  /** The RUN's own actor. The root node it inserts belongs to the actor that
+   *  opened the search, so the whole tree is keyed to one actor from its root. */
+  readonly actor: ActorHandle;
   readonly reentry: SwarmReentry | null;
   readonly verifier: ResolvedVerifier | null;
   readonly ctx: MeasurementContext | null;
@@ -840,7 +849,7 @@ export async function createRoot(input: {
    *  it was handed and deal with an absence that cannot happen. */
   readonly root: TreeNode;
 }> {
-  const { sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
+  const { actor, sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
   // Recorded so that selection has something to select and so that every child's
   // depth is DERIVED from a row this engine wrote rather than asserted by its author.
@@ -855,7 +864,7 @@ export async function createRoot(input: {
   // an artifact at all.
   const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
   if (!reentry) {
-    insertSearchNode(sql, {
+    insertSearchNode(sql, actor, {
       nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
       task: resolved.task,
       // The root's label is the RUN'S NAME — what the exploration surface
@@ -1043,7 +1052,9 @@ export function seedResumedSearch(input: {
  * which is the one place that knows whether an instrument exists.
  */
 export function buildNodeDeps(input: {
-  readonly rt: AgentRuntime;
+  /** Acquire the hosted logical actor ONE node runs as. Per node, never per
+   *  run: see {@link NodeAgentDeps.hostNode}. */
+  readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   readonly model: LanguageModel;
   readonly journal: HeadJournal;
   readonly logger: Logger;
@@ -1053,14 +1064,13 @@ export function buildNodeDeps(input: {
   readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
-  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
-  readonly host?: NodeLoopHost;
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   readonly executeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
   const nodeDeps: NodeAgentDeps = {
-    rt: deps.rt, model: deps.model, journal: deps.journal, logger: deps.logger,
+    hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
     // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
     // there is no default clock over a node's work. Its turn runs until it is
     // done, cancelled, refused by its mission governor, or fails definitively.
@@ -1072,10 +1082,6 @@ export function buildNodeDeps(input: {
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
-  // Only reached by an agent node: the toolless `thought` branch below never
-  // builds `nodeDeps` at all, which is what makes the split structural rather
-  // than a condition someone has to remember.
-  if (deps.host !== undefined) nodeDeps.host = deps.host;
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
   return nodeDeps;

@@ -62,6 +62,7 @@ import {
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 /** The response every scenario settles. One turn, one assistant message: the
  *  transition's identity is the pair, and the sequence id is derived from it. */
@@ -198,6 +199,10 @@ class Plane {
   private readonly db = new Database(':memory:');
   private readonly sql = makeSql(this.db);
   private readonly execRaw = makeExecRaw(this.db);
+  /** The owner of every row this plane writes. The database outlives each
+   *  process here, so the actor has to as well: a restart that re-issued one
+   *  would read an empty effect ledger and call it a clean boot. */
+  private readonly actor = createTestActors(this.sql, this.execRaw).main;
 
   private clock: number;
   private cut: { readonly phase: TerminalEffectPhase; readonly name: TerminalEffectName } | null = null;
@@ -228,7 +233,7 @@ class Plane {
       payload    TEXT NOT NULL
     )`);
     this.execRaw('CREATE TABLE IF NOT EXISTS conf_held (effect_key TEXT PRIMARY KEY)');
-    claimToolEffect(this.sql, TOOL_CLAIM);
+    claimToolEffect(this.sql, this.actor, TOOL_CLAIM);
   }
 
   close(): void {
@@ -239,6 +244,7 @@ class Plane {
   process(): TerminalTransitions {
     this.live ??= new TerminalTransitions({
       sql: this.sql,
+      actor: this.actor,
       effects: this.effects(),
       now: () => this.clock,
       fault: () => this.fault(),

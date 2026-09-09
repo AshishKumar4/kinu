@@ -17,7 +17,6 @@ const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 const SAMPLE_NOTE = 'flex flex-wrap justify-between gap-2 px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
-/** A section title is one sentence. `Accent` colours a phrase inside it. */
 function SectionTitle({ children, className = '' }: { children: ReactNode; className?: string }): ReactElement {
   return <h2 className={`max-w-[900px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty ${className}`}>{children}</h2>;
 }
@@ -32,12 +31,12 @@ function PlatformSection({ install }: { install: string }): ReactElement {
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · Where agents work</RuleLabel>
-      <SectionTitle>Give your agents a computer, <Accent>in the cloud or on your own machine.</Accent></SectionTitle>
+      <SectionTitle>A computer for your agents. <Accent>Choose where it lives.</Accent></SectionTitle>
       <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">A workspace is where one agent works. It holds the agent's files, tools, memory, and conversations.</p>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
         <article className="flex min-w-0 flex-col p-6 sm:p-8">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud agents</span>
-          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">The agent keeps working after you close the laptop.</h3>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the laptop.<br />The agent keeps working.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Cloud workspaces keep their files, conversations, and memory. Schedules, signed webhooks, and background jobs can start work without an open browser.</p>
           <ul className="mb-8 space-y-3 text-sm leading-[1.65] p-text-2">
             <li>Investigate repository events as they arrive.</li>
@@ -51,7 +50,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
         </article>
         <article className="flex min-w-0 flex-col border-t p-border p-6 sm:p-8 md:border-l md:border-t-0">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Local</span>
-          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Run it in your checkout, from your terminal or editor.</h3>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your checkout.<br />Your terminal or editor.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Local workspaces run on your machine. Use the full-screen TUI, a one-shot CLI task, or an editor that speaks ACP. Model requests go to the provider you configured.</p>
           <div className="rounded-xl border p-border p-recessed p-4">
             <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
@@ -89,10 +88,10 @@ function SlatesSection(): ReactElement {
   return (
     <section id="slates" className={SECTION}>
       <RuleLabel>04 · Slates</RuleLabel>
-      <SectionTitle>The agent builds <Accent>a live app,</Accent> called a slate, over the tools, files and MCP sources connected to the workspace.</SectionTitle>
+      <SectionTitle>Build live apps <Accent>with slates.</Accent></SectionTitle>
       <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">Ask for a dashboard and the agent writes a small Worker. The source lives in the workspace, and its package.json declares what the app may reach. The app opens in its own tab on a preview URL.</p>
       <LandingFrame kind="slate" />
-      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a running app.</span><span>The charts draw once on open. Reload draws them again.</span></p>
+      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a running app.</span><span>The charts draw once on open.</span></p>
       <div className="mt-8 grid gap-4 text-[13px] leading-[1.7] p-text-3 md:grid-cols-2 md:gap-12">
         <p>A binding passes one of the caller's own capabilities: files, an MCP connection narrowed to named tools, or a read model. A declaration is not a permission grant. The owner's existing gates still apply on every call.</p>
         <p>Kinu compiles the source and serves it on its own preview hostname. Credentials never enter the app. Lasting state belongs in workspace files or another allowed capability, and committed versions survive restarts. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/LIVE-UI.md'} target="_blank" rel="noreferrer">How a live app runs</a></p>
@@ -214,7 +213,7 @@ function OpenSourceSection(): ReactElement {
   return (
     <section id="cta" className="border-t p-border bg-[linear-gradient(180deg,var(--c-surface)_0%,var(--c-bg)_100%)]">
       <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-[100px]`}>
-        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>The agent, both backends, and the CLI are <Accent>open source under MIT.</Accent></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">Read the source, run it on your machine, or deploy it to your own Cloudflare account.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
+        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>Open source, <Accent>end to end.</Accent></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
           {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>

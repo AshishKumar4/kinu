@@ -106,8 +106,12 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
     const { harness, userPlane } = warmingActor();
     // Unclaimed, as the durable table says it: `owner_user_id` is NOT NULL, so
     // an unowned workspace is one with NO identity row rather than a row with a
-    // null owner. Deleting it is the real state, not an override of the reader.
+    // null owner. Deleting it is the real state, not an override of the reader —
+    // and the latches go with it, because a live object that already claimed
+    // still holds its memoized owner: what meets the ownerless database is a
+    // cold activation, which drops the memo with the other latches.
     harness.db.prepare("DELETE FROM workspace_identity WHERE id = 'harness-actor'").run();
+    harness.agent.forgetActivationLatches();
 
     await harness.agent.harnessWarmUserMcp();
 

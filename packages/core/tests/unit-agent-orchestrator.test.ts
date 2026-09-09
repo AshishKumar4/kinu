@@ -3,7 +3,7 @@
 // were extracted from the cf-backend OrchestratorAgent's onChatResponse.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import { RUN_END_REASONS } from '../src/orchestrator/turn-lifecycle';
@@ -14,17 +14,15 @@ import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/ev
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
-import type { JsonObject, SqlExec } from '../src/index';
+import type { JsonObject } from '../src/index';
 import { makeSqlExec } from './helpers';
 import type { ToolOutcome } from '../src/tools/outcome';
 
-function makeSql(): SqlExec {
-  return makeSqlExec(new Database(':memory:'));
-}
 function newEventLog(): EventLog {
-  const sql = makeSql();
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
   initEventsHubTables(sql);
-  return new EventLog(sql);
+  return new EventLog(sql, createTestActorsOver(db).main);
 }
 function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescriptor {
   return {
@@ -44,7 +42,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
   const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
-  const store = createCompletedTurnStore(sql);
+  const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
   // The crafted-tool ledger the engine owns in production, over a real store,
   // so the in-episode clock is exercised through the same seam.
   const crafted: string[] = [];
@@ -136,7 +134,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews } = fakeEngine();
     const { host } = fakeHost();
     const { sql, execRaw } = createTestSql();
-    const budget = new MissionGovernor({ storage: { sql, execRaw } });
+    const budget = new MissionGovernor({
+      storage: { sql, execRaw }, actor: createTestActors(sql, execRaw).main,
+    });
     budget.declare('checkout-fixes', { tokens: 1_000_000 }, {});
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), budget });
 

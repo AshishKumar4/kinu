@@ -70,6 +70,7 @@ import {
   type PublicationState, type VerifierSpec,
 } from './objective';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 /**
  * The objective's own identity, denormalised beside the digest it hashes to.
@@ -106,7 +107,8 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
  * best move zero times.
  */
 const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records (
-  record_key        TEXT PRIMARY KEY,
+  actor_id          TEXT NOT NULL,
+  record_key        TEXT NOT NULL,
   objective_id      TEXT NOT NULL,
   floor_digest      TEXT,
   descriptor        TEXT,
@@ -131,7 +133,8 @@ const EXPLORATION_RECORDS_DDL = `CREATE TABLE IF NOT EXISTS exploration_records 
   unit              TEXT,
   direction         TEXT,
   scale             TEXT,
-  verifier_digest   TEXT
+  verifier_digest   TEXT,
+  PRIMARY KEY (actor_id, record_key)
 )`;
 
 export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
@@ -140,7 +143,7 @@ export function initExplorationRecordsTable(execRaw: RawSqlExec): void {
   // by both, so the index is too — a floor-blind index would serve a query nothing
   // here asks.
   execRaw('CREATE INDEX IF NOT EXISTS idx_er_cell ON exploration_records'
-    + '(objective_id, floor_digest, descriptor, value)');
+    + '(actor_id, objective_id, floor_digest, descriptor, value)');
 }
 
 /**
@@ -440,17 +443,22 @@ const NO_LIMIT = -1;
  */
 export function recordsUnder(
   sql: SqlExecutor,
+  actor: ActorHandle,
   handle: RecordObjectiveHandle,
   direction: ObjectiveDirection,
   limit: number,
 ): readonly ExplorationRecord[] {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   const { objectiveId, floorDigest } = handle;
   const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+        WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
+          AND floor_digest IS ${floorDigest}
         ORDER BY value ASC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`
     : sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+        WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
+          AND floor_digest IS ${floorDigest}
         ORDER BY value DESC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`;
   return rows.map(decode);
 }
@@ -468,11 +476,14 @@ export function recordsUnder(
  */
 export function recordsInCell(
   sql: SqlExecutor,
+  actor: ActorHandle,
   handle: RecordCellHandle,
   direction: ObjectiveDirection,
   seek: CellSeek | null,
   limit: number,
 ): readonly ExplorationRecord[] {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   const { objectiveId, floorDigest, descriptor } = handle;
   const from = seek === null ? 0 : 1;
   const value = seek?.value ?? 0;
@@ -480,14 +491,16 @@ export function recordsInCell(
   const artifact = seek?.artifactDigest ?? '';
   const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+        WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
+          AND floor_digest IS ${floorDigest}
           AND descriptor IS ${descriptor}
           AND (${from} = 0 OR value > ${value}
                OR (value = ${value} AND (first_recorded_at > ${at}
                    OR (first_recorded_at = ${at} AND artifact_digest > ${artifact}))))
         ORDER BY value ASC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`
     : sql<Row>`SELECT * FROM exploration_records
-        WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+        WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
+          AND floor_digest IS ${floorDigest}
           AND descriptor IS ${descriptor}
           AND (${from} = 0 OR value < ${value}
                OR (value = ${value} AND (first_recorded_at > ${at}
@@ -525,7 +538,10 @@ const StoredIdentitySchema: v.GenericSchema<ObjectiveIdentity> = v.object({
   verifierDigest: v.string(),
 });
 
-export function describeObjective(sql: SqlExecutor, handle: RecordObjectiveHandle): StoredObjective {
+export function describeObjective(
+  sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
+): StoredObjective {
+  actor.assertCurrent();
   const row = sql<{
     row_count: number; metric: string | null; unit: string | null;
     direction: string | null; scale: string | null; verifier_digest: string | null;
@@ -533,7 +549,8 @@ export function describeObjective(sql: SqlExecutor, handle: RecordObjectiveHandl
             MAX(direction) AS direction, MAX(scale) AS scale,
             MAX(verifier_digest) AS verifier_digest
        FROM exploration_records
-       WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}`[0];
+       WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
+         AND floor_digest IS ${handle.floorDigest}`[0];
   if (!row || row.row_count === 0) return { identity: null, rows: 0 };
   if (row.metric === null) return { identity: null, rows: row.row_count };
   return {
@@ -546,15 +563,19 @@ export function describeObjective(sql: SqlExecutor, handle: RecordObjectiveHandl
 }
 
 /** Every row under this identity and this floor, best FIRST. */
-export function recordsFor(sql: SqlExecutor, scope: RecordScope): readonly ExplorationRecord[] {
-  return recordsUnder(sql, recordHandleOf(scope), scope.identity.direction, NO_LIMIT);
+export function recordsFor(
+  sql: SqlExecutor, actor: ActorHandle, scope: RecordScope,
+): readonly ExplorationRecord[] {
+  return recordsUnder(sql, actor, recordHandleOf(scope), scope.identity.direction, NO_LIMIT);
 }
 
 /** This cell's incumbent, or null when the cell is empty — the head of the cell's own
  *  best-first order, so it cannot disagree with the population read below. */
-export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecord | null {
+export function bestInCell(
+  sql: SqlExecutor, actor: ActorHandle, scope: CellScope,
+): ExplorationRecord | null {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
-  return recordsInCell(sql, handle, scope.identity.direction, null, 1)[0] ?? null;
+  return recordsInCell(sql, actor, handle, scope.identity.direction, null, 1)[0] ?? null;
 }
 
 /**
@@ -581,9 +602,11 @@ export function bestInCell(sql: SqlExecutor, scope: CellScope): ExplorationRecor
  * `read-models/exploration-records.ts` — where a partial answer is a page and not a
  * verdict.
  */
-export function cellOccupants(sql: SqlExecutor, scope: CellScope): readonly ExplorationRecord[] {
+export function cellOccupants(
+  sql: SqlExecutor, actor: ActorHandle, scope: CellScope,
+): readonly ExplorationRecord[] {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
-  return recordsInCell(sql, handle, scope.identity.direction, null, NO_LIMIT);
+  return recordsInCell(sql, actor, handle, scope.identity.direction, null, NO_LIMIT);
 }
 
 /**
@@ -596,12 +619,17 @@ export function cellOccupants(sql: SqlExecutor, scope: CellScope): readonly Expl
  */
 export function recordExploration(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: { readonly publication: PublicationState; readonly write: ExplorationWrite },
 ): RecordVerdict {
   const { write } = input;
   if (admitsPublication(input.publication, 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
+  // AFTER the seal and before anything is read, for the seal's own reason: a
+  // breached run must not inspect the store, and neither must a retired actor.
+  actor.assertCurrent();
+  const actorId = actor.actorId;
 
   const objectiveId = objectiveIdOf(write.identity);
   const floorDigest = floorDigestOf(write.floor);
@@ -613,14 +641,15 @@ export function recordExploration(
   const direction: ObjectiveDirection = write.identity.direction;
 
   const existing = sql<Row>`
-    SELECT * FROM exploration_records WHERE record_key = ${recordKey} LIMIT 1`[0];
+    SELECT * FROM exploration_records
+    WHERE actor_id = ${actorId} AND record_key = ${recordKey} LIMIT 1`[0];
   if (existing && !isBetter(write.value, existing.value, direction)) {
     // The whole rule, and note that a TIE lands here: `isBetter` is strict, a tie
     // carries no signal, and re-recording an unchanged elite moved nothing.
     return { kind: 'refused', cause: 'not-better' };
   }
 
-  const incumbent = bestInCell(sql, {
+  const incumbent = bestInCell(sql, actor, {
     identity: write.identity, floor: write.floor, descriptor: write.descriptor,
   });
   const measuredJson = write.measured === null ? null : JSON.stringify(write.measured);
@@ -643,15 +672,16 @@ export function recordExploration(
         cost_usd = ${write.costUsd}, cost_tokens = ${write.costTokens},
         metric = ${identity.metric}, unit = ${identity.unit}, direction = ${identity.direction},
         scale = ${identity.scale}, verifier_digest = ${identity.verifierDigest}
-      WHERE record_key = ${recordKey}`;
+      WHERE actor_id = ${actorId} AND record_key = ${recordKey}`;
   } else {
     void sql`INSERT INTO exploration_records (
-        record_key, objective_id, floor_digest, descriptor, artifact_digest, artifact,
+        actor_id, record_key, objective_id, floor_digest, descriptor, artifact_digest, artifact,
         value, detail, measured_json, preset, label, root_id, config_digest, depth,
         branches, floor_value, floor_proof, cost_usd, cost_tokens, first_recorded_at,
         displacements, metric, unit, direction, scale, verifier_digest
       ) VALUES (
-        ${recordKey}, ${objectiveId}, ${floorDigest}, ${write.descriptor}, ${artifactDigest},
+        ${actorId}, ${recordKey}, ${objectiveId}, ${floorDigest}, ${write.descriptor},
+        ${artifactDigest},
         ${write.artifact}, ${write.value}, ${write.detail}, ${measuredJson}, ${write.preset},
         ${write.label}, ${write.rootId}, ${write.configDigest}, ${write.depth},
         ${write.branches}, ${write.floor?.value ?? null}, ${write.floor?.proof ?? null},
@@ -667,7 +697,8 @@ export function recordExploration(
     // cell's best has moved since THIS row was written. The row that did the moving
     // has seen no movement since it landed.
     void sql`UPDATE exploration_records SET displacements = displacements + 1
-      WHERE objective_id = ${objectiveId} AND floor_digest IS ${floorDigest}
+      WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
+        AND floor_digest IS ${floorDigest}
         AND descriptor IS ${write.descriptor} AND record_key <> ${recordKey}`;
   }
   return { kind: 'recorded', recordKey, displaced };

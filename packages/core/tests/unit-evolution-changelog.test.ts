@@ -42,13 +42,13 @@ function setup() {
   initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
-  return { rt, facts: createFactsStore(rt.storage.sql) };
+  return { rt, facts: createFactsStore(rt.storage.sql, rt.actor) };
 }
 
 async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   await rt.identity.scaffold.write(V0_CODE);
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                 VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                 VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
   expect(result.ok).toBe(true);
   return result.version!;
@@ -58,18 +58,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('scaffold proposal entry carries the shadow record as evidence', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: version, task: 'task A',
       currentOutput: 'a', pendingOutput: 'b',
       judgeResult: { winner: 'pending', rationale: 'clearer', currentScore: 0.4, pendingScore: 0.8 },
     });
-    recordShadowEvaluation(rt.storage.sql, {
+    recordShadowEvaluation(rt.storage.sql, rt.actor, {
       currentVersion: 0, pendingVersion: version, task: 'task B',
       currentOutput: 'a', pendingOutput: 'b',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.7, pendingScore: 0.5 },
     });
 
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
     const scaffold = entries.find((e) => e.kind === 'scaffold');
     expect(scaffold).toBeDefined();
     expect(scaffold!.summary).toBe('I am testing an improvement to how I work');
@@ -88,12 +88,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('a scaffold entry says which failure the version was written for', async () => {
     const { rt } = setup();
     await rt.identity.scaffold.write(V0_CODE);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);
     expect(result.ok).toBe(true);
 
-    const scaffold = buildChangelog(rt.storage.sql).find((e) => e.kind === 'scaffold');
+    const scaffold = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold');
     expect(scaffold!.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
   });
 
@@ -106,7 +106,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.82, uses = 5, last_used_at = ${Date.now()}
         WHERE name = 'fetch_and_summarize'`;
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
     expect(entry.summary).toBe('Created a tool: fetch and summarize');
     expect(entry.evidence).toContain('Crafted tool fetch_and_summarize');
     expect(entry.evidence).toContain('Fetch a URL and summarize it');
@@ -120,7 +120,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'fact');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact');
     expect(entry.summary).toBe('Learned 1 thing about your environment');
     expect(entry.items).toHaveLength(1);
     expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
@@ -136,13 +136,16 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('old.fact', 'outside');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'old.fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'old.fact'`;
     facts.upsert('sandbox.npm_version', 'npm v10');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000} WHERE key = 'sandbox.npm_version'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
     facts.upsert('project.deploy_target', 'example.workers.dev');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000} WHERE key = 'project.deploy_target'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'project.deploy_target'`;
 
-    const [entry] = buildChangelog(rt.storage.sql, { since: now - 30_000 })
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: now - 30_000 })
       .filter((e) => e.kind === 'fact');
     expect(entry.summary).toBe('Learned 2 things about your environment');
     expect(entry.at).toBe(now - 1000);
@@ -155,24 +158,26 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('same-value re-observation keeps a stable id and does not refresh the digest', () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
-    const original = buildChangelog(rt.storage.sql)[0].items![0];
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
+    const original = buildChangelog(rt.storage.sql, rt.actor)[0].items![0];
 
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
-    expect(buildChangelog(rt.storage.sql)[0].items![0].id).toBe(original.id);
-    expect(buildChangelog(rt.storage.sql)[0].items![0].at).toBe(1000);
-    expect(buildChangelog(rt.storage.sql, { since: 1000 })).toEqual([]);
+    expect(buildChangelog(rt.storage.sql, rt.actor)[0].items![0].id).toBe(original.id);
+    expect(buildChangelog(rt.storage.sql, rt.actor)[0].items![0].at).toBe(1000);
+    expect(buildChangelog(rt.storage.sql, rt.actor, { since: 1000 })).toEqual([]);
   });
 
   test('value change refreshes the stable fact entry', () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v9');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
 
     facts.upsert('sandbox.npm_version', 'npm v10');
 
-    const [entry] = buildChangelog(rt.storage.sql, { since: 1000 });
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: 1000 });
     expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
     expect(entry.items![0].summary).toBe('Your sandbox runs npm v10');
   });
@@ -180,29 +185,30 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('GEPA, replay, and outcome entries are informational (no revert)', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
-    const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
-    finishGepaRun(sql, {
+    const actor = rt.actor;
+    const runId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
+    finishGepaRun(sql, actor, {
       runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
       metricCalls: 12, iterations: 3,
     });
     // An aborted run changed nothing — it must not appear.
-    const abortedId = startGepaRun(sql, { target: 'scaffold', budget: {} });
-    finishGepaRun(sql, {
+    const abortedId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
+    finishGepaRun(sql, actor, {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
       metricCalls: 0, iterations: 0,
     });
-    void sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0.25, 0, '[]')`;
-    recordTurnOutcome(sql, {
+    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${actor.actorId}, 'rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0.25, 0, '[]')`;
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'build it', assistantResponse: 'done',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 0.8, source: 'classifier',
       userMessage: 'fix it', assistantResponse: 'wrong', followup: 'no, the other one',
     });
 
-    const entries = buildChangelog(sql);
+    const entries = buildChangelog(sql, actor);
     const gepa = entries.filter((e) => e.kind === 'gepa');
     expect(gepa).toHaveLength(1);
     expect(gepa[0].summary).toBe('Tuned my own instructions');
@@ -227,23 +233,24 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('the digest attributes each verdict to the source that produced it', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     // `execution` is the runtime's own verdict on a headless turn: no user saw
     // it, let alone followed up. The digest used to report the whole batch as
     // "from real user follow-ups", which invented a person for these two.
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'ship it', assistantResponse: 'shipped',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 1, source: 'execution',
       userMessage: 'again', assistantResponse: 'threw',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 0.9, source: 'classifier',
       userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
     });
 
-    const outcomes = buildChangelog(sql).find((e) => e.kind === 'outcomes')!;
+    const outcomes = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!;
     expect(outcomes.summary).toContain('Graded 3 turns');
     expect(outcomes.summary).toContain('2 by whether their tool calls ran');
     expect(outcomes.summary).toContain('1 from how the user replied');
@@ -256,7 +263,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('each graded turn expands to the reason behind its verdict', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
-    recordTurnOutcome(sql, {
+    const actor = rt.actor;
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 0.75, source: 'classifier',
       userMessage: 'add pagination to the chat list', assistantResponse: 'done',
       followup: 'no, the other list',
@@ -264,12 +272,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     });
     // No reason on record: the source IS the reason, and the item has to read
     // as one rather than as a verdict with its evidence missing.
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
     });
 
-    const items = buildChangelog(sql).find((e) => e.kind === 'outcomes')!.items!;
+    const items = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!.items!;
     expect(items.map((i) => i.summary)).toEqual([
       'accepted — "ship it"',
       'corrected — "add pagination to the chat list"',
@@ -283,41 +291,43 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
 
   test('every ledger present and empty produces an empty digest', () => {
     const { rt } = setup();
-    expect(buildChangelog(rt.storage.sql)).toEqual([]);
+    expect(buildChangelog(rt.storage.sql, rt.actor)).toEqual([]);
   });
 
   test('orders newest first and respects the limit', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('older', 'a');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 10_000} WHERE key = 'older'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 10_000}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'older'`;
     facts.upsert('newer', 'b');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'newer'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'newer'`;
 
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
     expect(entries).toHaveLength(1);
     expect(entries[0].items?.map((item) => item.summary)).toEqual([
       'Your newer is b',
       'Your older is a',
     ]);
-    expect(buildChangelog(rt.storage.sql, { limit: 1 })).toHaveLength(1);
+    expect(buildChangelog(rt.storage.sql, rt.actor, { limit: 1 })).toHaveLength(1);
   });
 
   test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
     for (const [index, winner] of (['pending', 'pending', 'pending', 'current'] as const).entries()) {
-      recordShadowEvaluation(rt.storage.sql, {
+      recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: version, task: `trial-${index}`,
         currentOutput: 'current', pendingOutput: 'pending',
         judgeResult: { winner, rationale: 'evidence', currentScore: 0.5, pendingScore: 0.8 },
       });
     }
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     const now = Date.now();
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
-      void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-          VALUES (${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
+      void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+          VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
     // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
     // this is not a direction and must not be reported as one.
@@ -328,7 +338,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     replayRow('rpl-hi', now + 2, 40, 0.95, version);
     replayRow('rpl-drop', now + 3, 40, 0.30, version);
 
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
     const scaffold = entries.find((entry) => entry.kind === 'scaffold')!;
     expect(scaffold.summary).toBe('I improved how I work (won 3 of 4 trial runs)');
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
@@ -349,29 +359,32 @@ describe('unseen-count logic (the badge)', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('seen_fact', 'x');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'seen_fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'seen_fact'`;
     facts.upsert('fresh_fact', 'y');
-    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'fresh_fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now}
+      WHERE actor_id = ${rt.actor.actorId} AND key = 'fresh_fact'`;
 
-    expect(countUnseenChangelog(rt.storage.sql, 0)).toBe(1);
-    expect(countUnseenChangelog(rt.storage.sql, now - 30_000)).toBe(1);
-    expect(countUnseenChangelog(rt.storage.sql, now)).toBe(0);
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, 0)).toBe(1);
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, now - 30_000)).toBe(1);
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, now)).toBe(0);
   });
 
   test('the turn-outcome aggregate only counts outcomes inside the window', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
+    const actor = rt.actor;
     const now = Date.now();
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'old', assistantResponse: 'old', now: now - 60_000,
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 'new', assistantResponse: 'new', now,
     });
 
-    const windowed = buildChangelog(sql, { since: now - 30_000 });
+    const windowed = buildChangelog(sql, actor, { since: now - 30_000 });
     const agg = windowed.find((e) => e.kind === 'outcomes');
     expect(agg!.summary).toContain('Graded 1 turn');
     expect(agg!.evidence).toBe('1 corrected');
@@ -387,17 +400,18 @@ describe('unseen-count logic (the badge)', () => {
   test('every unseen entry is one the digest itself renders', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
-    recordTurnOutcome(sql, {
+    const actor = rt.actor;
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'hi', assistantResponse: 'hello',
     });
     facts.upsert('sandbox.node_version', 'v22');
 
-    const unseen = listUnseenChangelog(sql, 0);
-    const rendered = new Set(buildChangelog(sql, { limit: 30 }).map((entry) => entry.id));
+    const unseen = listUnseenChangelog(sql, actor, 0);
+    const rendered = new Set(buildChangelog(sql, actor, { limit: 30 }).map((entry) => entry.id));
     expect(unseen.length).toBeGreaterThan(0);
     expect(unseen.filter((entry) => !rendered.has(entry.id))).toEqual([]);
-    expect(countUnseenChangelog(sql, 0)).toBe(unseen.length);
+    expect(countUnseenChangelog(sql, actor, 0)).toBe(unseen.length);
   });
 
   /**
@@ -407,12 +421,12 @@ describe('unseen-count logic (the badge)', () => {
    */
   test('the first turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
     const { rt } = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'hi', assistantResponse: 'hello',
     });
 
-    const unseen = listUnseenChangelog(rt.storage.sql, 0);
+    const unseen = listUnseenChangelog(rt.storage.sql, rt.actor, 0);
     expect(unseen.map((entry) => entry.kind)).toEqual(['outcomes']);
     expect(unseen.filter((entry) => entry.revert !== undefined)).toEqual([]);
   });
@@ -422,10 +436,10 @@ describe('renderChangelogText — the one text form', () => {
   test('numbers entries, shows evidence, marks revertables', () => {
     const { rt, facts } = setup();
     facts.upsert('k', 'v', { confidence: 0.7 });
-    void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, 0.1, NULL, '[]')`;
+    void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, 'rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, 0.1, NULL, '[]')`;
 
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
     const text = renderChangelogText(entries, { unseenCount: 2 });
     expect(text).toContain('2 unseen');
     expect(text).toContain('  1. ');
@@ -461,7 +475,7 @@ describe('reverts — real paths only', () => {
   test('stable child fact id resolves against a fresh aggregate digest', async () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    const id = buildChangelog(rt.storage.sql).find((e) => e.kind === 'fact')!.items![0].id;
+    const id = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!.items![0].id;
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.95 });
 
     const result = await revertChangelogEntryById({ rt, facts }, id);
@@ -474,7 +488,7 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     facts.upsert('editor', 'helix');
     facts.upsert('shell', 'fish');
-    const aggregate = buildChangelog(rt.storage.sql).find((e) => e.kind === 'fact')!;
+    const aggregate = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
 
     const result = await revertChangelogEntryById({ rt, facts }, aggregate.id);
 
@@ -505,22 +519,23 @@ describe('reverts — real paths only', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.detail).toContain(`discarded pending v${version}`);
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE); // live file untouched
     const status = rt.storage.sql<{ status: string }>`
-      SELECT status FROM scaffold_versions WHERE version = ${version}`[0];
+      SELECT status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${version}`[0];
     expect(status.status).toBe('rolled_back');
   });
 
   test('promoted scaffold revert round-trips back to the predecessor', async () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     await applyPromotionDecision(rt, pending, 'promote');
     expect(await rt.identity.scaffold.read()).toBe(V1_CODE);
 
     // The digest now shows the promotion as a revertable entry…
-    const entry = buildChangelog(rt.storage.sql).find((e) => e.kind === 'scaffold')!;
+    const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold')!;
     expect(entry.summary).toContain('I improved how I work');
     expect(entry.evidence).toContain(`Promoted scaffold v${version}`);
     expect(entry.revert).toBeDefined();
@@ -531,7 +546,8 @@ describe('reverts — real paths only', () => {
     expect(result.detail).toContain('rolled back to v0');
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE);
     const rows = rt.storage.sql<{ version: number; status: string }>`
-      SELECT version, status FROM scaffold_versions ORDER BY version`;
+      SELECT version, status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
     expect(rows.find((r) => r.version === 0)!.status).toBe('current');
     expect(rows.find((r) => r.version === version)!.status).toBe('rolled_back');
 
@@ -545,7 +561,7 @@ describe('reverts — real paths only', () => {
 
   test('revertChangelogEntryById: unknown ids and informational entries refuse', async () => {
     const { rt, facts } = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'q', assistantResponse: 'a',
     });
@@ -553,7 +569,7 @@ describe('reverts — real paths only', () => {
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain('not found');
 
-    const info = buildChangelog(rt.storage.sql).find((e) => e.kind === 'outcomes')!;
+    const info = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'outcomes')!;
     const refused = await revertChangelogEntryById({ rt, facts }, info.id);
     expect(refused.ok).toBe(false);
     expect(refused.error).toContain('informational');
@@ -563,10 +579,6 @@ describe('reverts — real paths only', () => {
 describe('session-end digest — assembled when the window closes', () => {
   test('onSessionComplete emits one changelog_digest covering the window', async () => {
     const { rt, facts } = setup();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (
-      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-      type TEXT NOT NULL, message TEXT NOT NULL, data TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
@@ -629,7 +641,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const now = Date.now();
     seedTools(rt, ['t_old', 't_mid', 't_new'], (i) => now - (2 - i) * 10_000);
 
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
     expect(entries.map((e) => e.id.split(':')[1])).toEqual(['t_new', 't_mid', 't_old']);
     for (let i = 1; i < entries.length; i++) {
       expect(entries[i - 1].at).toBeGreaterThan(entries[i].at);
@@ -643,9 +655,9 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const at = Date.now();
     seedTools(rt, ['aaa_tool', 'zzz_tool'], () => at);
 
-    const ids = buildChangelog(rt.storage.sql).map((e) => e.id);
+    const ids = buildChangelog(rt.storage.sql, rt.actor).map((e) => e.id);
     expect(ids).toEqual([`tool:zzz_tool:${at}`, `tool:aaa_tool:${at}`]);
-    expect(buildChangelog(rt.storage.sql).map((e) => e.id)).toEqual(ids);
+    expect(buildChangelog(rt.storage.sql, rt.actor).map((e) => e.id)).toEqual(ids);
   });
 
   test('an explicit limit keeps the NEWEST entries, not the first assembled ones', () => {
@@ -656,11 +668,11 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
     for (let i = 0; i < 6; i++) {
       void rt.storage.sql`INSERT INTO replay_evals
-        (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0.5, 0, '[]')`;
+        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, ${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0.5, 0, '[]')`;
     }
 
-    const entries = buildChangelog(rt.storage.sql, { limit: 3 });
+    const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 3 });
     expect(entries).toHaveLength(3);
     expect(entries.map((e) => e.id)).toEqual([
       `tool:t6:${now}`, `replay:r5`, `tool:t5:${now - 1000}`,
@@ -672,8 +684,8 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const now = Date.now();
     const names = Array.from({ length: 60 }, (_, i) => `tool_${String(i).padStart(2, '0')}`);
     seedTools(rt, names, (i) => now - (59 - i) * 1000);
-    expect(buildChangelog(rt.storage.sql)).toHaveLength(50);
-    expect(buildChangelog(rt.storage.sql, { limit: 60 })).toHaveLength(60);
+    expect(buildChangelog(rt.storage.sql, rt.actor)).toHaveLength(50);
+    expect(buildChangelog(rt.storage.sql, rt.actor, { limit: 60 })).toHaveLength(60);
   });
 
   test('`since` is exclusive — an entry stamped exactly at the marker is already seen', () => {
@@ -681,10 +693,10 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const at = Date.now() - 5_000;
     seedTools(rt, ['boundary_tool'], () => at);
 
-    expect(buildChangelog(rt.storage.sql, { since: at })).toEqual([]);
-    expect(buildChangelog(rt.storage.sql, { since: at - 1 })).toHaveLength(1);
-    expect(countUnseenChangelog(rt.storage.sql, at)).toBe(0);
-    expect(countUnseenChangelog(rt.storage.sql, at - 1)).toBe(1);
+    expect(buildChangelog(rt.storage.sql, rt.actor, { since: at })).toEqual([]);
+    expect(buildChangelog(rt.storage.sql, rt.actor, { since: at - 1 })).toHaveLength(1);
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, at)).toBe(0);
+    expect(countUnseenChangelog(rt.storage.sql, rt.actor, at - 1)).toBe(1);
   });
 });
 
@@ -695,18 +707,18 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     initRunEventTables(rt.storage.execRaw);
     const written = Date.now() - 3_600_000;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (1, ${written}, 'earlier way of working', 'superseded')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (2, ${written}, ${RATIONALE}, 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 1, ${written}, 'earlier way of working', 'superseded')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 2, ${written}, ${RATIONALE}, 'current')`;
     const promotedAt = Date.now() - 1_000;
-    void rt.storage.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-      VALUES ('run-1', 0, 'scaffold_promotion',
+    void rt.storage.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (${rt.actor.actorId}, 'run-1', 0, 'scaffold_promotion',
               ${JSON.stringify({ fromVersion: 1, toVersion: 2 })},
               ${new Date(promotedAt).toISOString()})`;
 
     const byVersion = new Map(
-      buildChangelog(rt.storage.sql).filter((e) => e.kind === 'scaffold')
+      buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'scaffold')
         .map((e) => [e.scaffoldVersion, e] as const),
     );
     // The promotion belongs to the version promoted INTO, not the one left behind.
@@ -719,12 +731,12 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const written = Date.now() - 10_000;
     const statuses = ['current', 'pending', 'rolled_back', 'superseded'] as const;
     statuses.forEach((status, i) => {
-      void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                     VALUES (${i + 1}, ${written + i}, 'r', ${status})`;
+      void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                     VALUES (${rt.actor.actorId}, ${i + 1}, ${written + i}, 'r', ${status})`;
     });
 
     const revertable = new Map(
-      buildChangelog(rt.storage.sql).filter((e) => e.kind === 'scaffold')
+      buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'scaffold')
         .map((e) => [e.scaffoldVersion, e.revert !== undefined] as const),
     );
     // Rolling back something already rolled back or superseded would rewrite
@@ -739,7 +751,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     void rt.storage.sql`UPDATE crafted_tools SET created_at = ${created}, updated_at = ${created - 60_000}
                    WHERE name = 'skewed'`;
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
     expect(entry.at).toBe(created);
     expect(entry.id).toBe(`tool:skewed:${created}`);
   });
@@ -748,7 +760,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     rt.craftStore.create({ name: 'brand_new', description: 'fresh', code: 'async () => 1', params: null, scope: 'local' });
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'tool');
     // Born scored: the column defaults are the EMA line, so a fresh tool
     // reads as unexercised, never as missing.
     expect(entry.evidence).toContain('EMA 0.50 over 0 uses');
@@ -762,7 +774,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt, facts } = setup();
     facts.upsert('project.deploy_target', 'example.workers.dev');
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'fact');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact');
     expect(entry.items![0].summary).toBe('Your project deploy target is example.workers.dev');
   });
 
@@ -773,9 +785,10 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       const { rt, facts } = setup();
       for (const [key, at] of order) {
         facts.upsert(key, 'v');
-        void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${at} WHERE key = ${key}`;
+        void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${at}
+          WHERE actor_id = ${rt.actor.actorId} AND key = ${key}`;
       }
-      return buildChangelog(rt.storage.sql).filter((e) => e.kind === 'fact')[0].id;
+      return buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact')[0].id;
     };
     const now = Date.now();
     expect(idFor([['a.one', now], ['b.two', now - 1000]]))
@@ -784,15 +797,15 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
 
   test('a completed GEPA run is dated by when it ENDED', () => {
     const { rt } = setup();
-    const runId = startGepaRun(rt.storage.sql, { target: 'scaffold' });
+    const runId = startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
     const endedAt = Date.now() + 60_000;
-    finishGepaRun(rt.storage.sql, {
+    finishGepaRun(rt.storage.sql, rt.actor, {
       runId, status: 'completed', stopReason: 'iterations_exhausted',
       winnerId: 'cand-1', metricCalls: 12, iterations: 3,
     });
     void rt.storage.sql`UPDATE gepa_runs SET ended_at = ${endedAt} WHERE run_id = ${runId}`;
 
-    const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'gepa');
+    const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'gepa');
     expect(entry.at).toBe(endedAt);
   });
 
@@ -805,14 +818,14 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const now = Date.now();
     const row = (id: string, at: number, mean: number) => {
       void rt.storage.sql`INSERT INTO replay_evals
-        (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
+        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, ${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
     };
     row('rp-1', now - 2000, 0.30);
     row('rp-2', now - 1000, 0.95);
     row('rp-3', now, 0.30);
 
-    const entries = buildChangelog(rt.storage.sql, { limit: 2 });
+    const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 2 });
     expect(entries.map((e) => e.id)).toEqual(['replay:rp-3', 'replay:rp-2']);
     expect(entries[0].summary).toContain('declined');
     expect(entries[1].summary).toContain('improved');
@@ -823,7 +836,7 @@ describe('renderChangelogText + revert guards', () => {
   test('the header mentions unseen entries only when there are some', () => {
     const { rt } = setup();
     seedTools(rt, ['t_one'], () => Date.now());
-    const entries = buildChangelog(rt.storage.sql);
+    const entries = buildChangelog(rt.storage.sql, rt.actor);
 
     expect(renderChangelogText(entries)).toContain('Evolution changelog (1 entry)');
     expect(renderChangelogText(entries)).not.toContain('unseen');
@@ -846,11 +859,11 @@ describe('renderChangelogText + revert guards', () => {
     // Discarding the stale one through it would restore the wrong file.
     const { rt, facts } = setup();
     const written = Date.now() - 10_000;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (1, ${written}, 'stale proposal', 'pending')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-                   VALUES (2, ${written + 1}, 'live proposal', 'pending')`;
-    expect(getPendingScaffold(rt.storage.sql)!.version).toBe(2);
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 1, ${written}, 'stale proposal', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+                   VALUES (${rt.actor.actorId}, 2, ${written + 1}, 'live proposal', 'pending')`;
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.version).toBe(2);
 
     const result = await executeChangelogRevert({ rt, facts }, { type: 'scaffold_rollback', target: '1' });
     expect(result.ok).toBe(false);

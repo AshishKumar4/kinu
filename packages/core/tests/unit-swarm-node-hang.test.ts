@@ -17,6 +17,7 @@ import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import type { Refusal } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
@@ -256,9 +257,9 @@ interface NodeFixture {
   readonly journal: HeadJournal;
 }
 
-function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixture {
-  const { rt } = createTestRuntime();
-  const journal = new HeadJournal(rt.storage.sql);
+function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runtimeForWorkspace'] }): NodeFixture {
+  const { rt, db } = createTestRuntime();
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1',
     rootId: 'r1',
@@ -275,7 +276,10 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     arbitrate: null,
   };
   const deps: NodeAgentDeps = {
-    rt,
+    // The node's OWN actor, acquired per node id. `rt` is gone from these deps
+    // for the reason the factory exists: one shared handle would give a whole
+    // wave of nodes one claim ledger and one loop pointer.
+    hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: RAISING_MODEL,
     journal,
 
@@ -287,7 +291,7 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
-  if (over?.host !== undefined) deps.host = over.host;
+  if (over?.runtimeForWorkspace !== undefined) deps.runtimeForWorkspace = over.runtimeForWorkspace;
   return { input, deps, journal };
 }
 
@@ -295,10 +299,11 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
 
 describe('a node that failed is not a node still working', () => {
   test('a transport that raises leaves a terminal row with the cause chained', async () => {
-    // A host is an RPC to another Durable Object; a rejection there arrives with no
-    // report behind it, which is the one path that reached neither terminal writer.
+    // A node's own runtime is the backend's to build — a shell and a file plane acting
+    // as the node's credential — and a failure there arrives with no report behind it,
+    // which is the one path that reached neither terminal writer.
     const { input, deps, journal } = nodeFixture({
-      host: () => Promise.reject(new Error(UPSTREAM)),
+      runtimeForWorkspace: () => Promise.reject(new Error(UPSTREAM)),
     });
 
     let failure: Error | null = null;
@@ -356,12 +361,12 @@ async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
 ): Promise<SwarmRunResult> {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger },
+    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger },
     call,
   );
   const rows = rt.storage.sql<HeadJournalRow>`
@@ -369,9 +374,13 @@ async function runWith(
            completed_at, token_input, token_output, token_cache_read, token_cache_write,
            token_cache_write_1h, token_reasoning, neurons, wall_clock_ms, summary,
            error_message, merge_strategy
-    FROM head_journal ORDER BY spawned_at`;
+    FROM head_journal WHERE actor_id = ${rt.actor.actorId} ORDER BY spawned_at`;
+  // Scoped like the journal read above: the run's search ledger is the CALLER's
+  // (`initRunLedgers` binds `rt.actor`), and an unscoped `SELECT *` would fold
+  // in every node actor's rows the moment one starts writing its own tree.
   const tree = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
   return { result, rows, tree };
 }
 

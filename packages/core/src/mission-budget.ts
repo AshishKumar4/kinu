@@ -44,6 +44,7 @@
 
 import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
+import type { ActorHandle } from './state/actor-handle';
 import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
 import type { JsonValue } from './utils/json';
@@ -158,7 +159,8 @@ interface MissionDebit {
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS mission_budget (
-  label TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  label TEXT NOT NULL,
   parent_label TEXT,
   limit_usd REAL,
   limit_tokens INTEGER,
@@ -168,15 +170,25 @@ const DDL = `CREATE TABLE IF NOT EXISTS mission_budget (
   calls INTEGER NOT NULL DEFAULT 0,
   spawns INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  exhausted_at INTEGER
+  exhausted_at INTEGER,
+  PRIMARY KEY (actor_id, label)
 )`;
 
 /** The durable spend ledger. */
 export class MissionBudgetLedger {
+  private readonly actorId: string;
+
+  /** Bind the spend ledger to ONE actor. A mission label is model- or
+   *  caller-authored prose ('nightly-sweep'), so two actors of one workspace
+   *  really do declare the same label — and the cap is enforced against the
+   *  cumulative row, so a shared table would have one actor's spend exhaust
+   *  another's budget. */
   constructor(
     private readonly sql: SqlExecutor,
+    private readonly actor: ActorHandle,
     execRaw: RawSqlExec,
   ) {
+    this.actorId = actor.actorId;
     execRaw(DDL);
   }
 
@@ -187,20 +199,22 @@ export class MissionBudgetLedger {
    * it, which is the entire point of a cumulative governor.
    */
   declare(label: string, limits: MissionBudgetLimits, parent: string | null, now: number): MissionRow {
+    this.actor.assertCurrent();
     const existing = this.get(label);
     if (existing) return existing;
     const effectiveParent = parent !== null && parent !== label && this.get(parent) !== null ? parent : null;
     void this.sql`INSERT INTO mission_budget
-        (label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
-      VALUES (${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
+        (actor_id, label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
+      VALUES (${this.actorId}, ${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
     return this.get(label)!;
   }
 
   get(label: string): MissionRow | null {
+    this.actor.assertCurrent();
     const rows = this.sql<MissionBudgetColumns>`
       SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
              calls, spawns, exhausted_at
-       FROM mission_budget WHERE label = ${label}`;
+       FROM mission_budget WHERE actor_id = ${this.actorId} AND label = ${label}`;
     const row = rows[0];
     return row ? toRow(row) : null;
   }
@@ -229,14 +243,15 @@ export class MissionBudgetLedger {
             blended_tokens = blended_tokens + ${delta.blendedTokens},
             calls = calls + ${delta.calls},
             spawns = spawns + ${delta.spawns}
-        WHERE label = ${row.label}`;
+        WHERE actor_id = ${this.actorId} AND label = ${row.label}`;
     }
   }
 
   /** Stamp the moment a label first ran out, so the run event fires once. */
   markExhausted(label: string, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mission_budget SET exhausted_at = ${now}
-             WHERE label = ${label} AND exhausted_at IS NULL`;
+             WHERE actor_id = ${this.actorId} AND label = ${label} AND exhausted_at IS NULL`;
   }
 }
 
@@ -285,7 +300,8 @@ function toRow(row: MissionBudgetColumns): MissionRow {
  * cumulative, so a windowed slice of the ledger would be a number no cap is
  * read against. The surface states which scope each half of its table is on.
  */
-export function listMissionSpend(sql: SqlExecutor): MissionBudgetSnapshot[] {
+export function listMissionSpend(sql: SqlExecutor, actor: ActorHandle): MissionBudgetSnapshot[] {
+  actor.assertCurrent();
   const present = sql<{ name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mission_budget'`;
   if (present.length === 0) return [];
@@ -293,6 +309,7 @@ export function listMissionSpend(sql: SqlExecutor): MissionBudgetSnapshot[] {
     SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
            calls, spawns, exhausted_at
      FROM mission_budget
+     WHERE actor_id = ${actor.actorId}
      ORDER BY spent_usd DESC, spent_tokens DESC, label ASC`.map((row) => toSnapshot(toRow(row)));
 }
 
@@ -341,6 +358,11 @@ export class MissionBudgetExhausted extends KinuError {
 
 export interface MissionGovernorDeps {
   storage: { sql: SqlExecutor; execRaw: RawSqlExec };
+  /** Whose spend. One governor per actor already (see the class docstring), and
+   *  the ledger it opens is that actor's: a mission label is caller-authored
+   *  prose, so two actors of one workspace declare the same one and a shared row
+   *  would have one actor's spend exhaust the other's cap. */
+  actor: ActorHandle;
   /** Fired ONCE per label, the first time a seam refuses under it — the
    *  backend wires its RunEventRecorder here so exhaustion lands in the run's
    *  durable event log alongside `context_budget`. */
@@ -366,7 +388,7 @@ export class MissionGovernor {
 
   constructor(private readonly deps: MissionGovernorDeps) {
     this.now = deps.now ?? Date.now;
-    this.ledger = new MissionBudgetLedger(deps.storage.sql, deps.storage.execRaw);
+    this.ledger = new MissionBudgetLedger(deps.storage.sql, deps.actor, deps.storage.execRaw);
   }
 
   /** The labels the current turn runs under. Empty = unbudgeted (the default). */

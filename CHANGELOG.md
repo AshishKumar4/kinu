@@ -14,7 +14,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
-- **Landing access and workflow examples.** Cloud sign-in and self-deployment now sit beside local setup in one section. The workspace, Plan mode and slate examples are the product's own components over fixture state, not drawings of them: the Work tab, Run and Supervise, the plan review with its decision rule, and a slate tab with a sample dashboard all act on the page. Smart CI, self-evolution and swarms describe what the documented mechanisms do. The rotating hero text is restored with stable accessible text, responsive layout reservation, reduced-motion support, and offscreen cleanup.
+- **One workspace database holds every agent in the workspace, and every kind of agent is a full agent in it.** A hired subordinate, a temporary helper, a reasoning head and a search node no longer own private databases or private agent objects: each is a logical actor of the workspace it belongs to, with its own conversation, task list, claims, approvals, background jobs, signals, role and promoted program, all in the workspace's one store and none of them able to read or overwrite another's rows — including when two of them use the same turn id. The root owns every actor's lifetime; a client that disconnects no longer cancels hosted work, and work that was admitted before an eviction is rebuilt from the durable rows rather than from a timer that did not survive. Reading a retained agent starts nothing, and retiring one still refuses a stale alias or a stale claim epoch and cleans up consistently.
+- **`kinu actors <name> [actorId]`** lists every logical actor a local workspace holds — retired ones flagged rather than hidden, because their history is retained and the archive carries them — and with an id reads what that one actor did, through the directory row alone, without starting it.
+- A workspace snapshot now DECLARES how many actors its roster carried, and a restore refuses an archive whose rebuilt roster disagrees — including one whose row totals were repaired to match. A restored chat pane keeps every message under the actor that wrote it instead of attributing the whole transcript to the main agent.
+
+- **Slate authoring guidance matches its Worker host.** Preview is the compile-and-boot check, with a precise URL result; absent hosts advertise no slate operation. Ordinary Node/Vite servers remain separate. The first-run check requires the named slate to own its live preview rather than letting the harness start it or accepting an unrelated server. Advisor records retain typed tool outcomes, and compaction guidance no longer advertises unavailable capabilities.
+- Preview applications have one titled, full-height tab each, without a duplicate Output surface. Workspace-wide plan history lives in Work, including retained agents; explicit navigation preserves each actor’s review authority. Refresh failures retain usable history. A plan submitted anywhere in the workspace — including by an agent the history walk has never listed — now opens Work without changing the conversation and without making a decision: the notification carries only a plan reference, which the browser resolves through the same read-only, ownership-checked inspection before showing or focusing it. References the workspace cannot resolve, repeats and malformed ones are reported rather than followed, and a pane holding an undecided plan keeps it. Whether a plan reads as live or retained derives once from the workspace roster. New approval-driven tasks and inherited subtasks atomically retain their plan revision and progress across native and promoted-program execution. Existing unassociated tasks are not retroactively assigned.
+
+- Added root-issued actor identities for scoped configuration and program state. New actor incarnations use immutable physical storage keys. Retained aliases remain reserved. Destructive retirement releases an alias after physical cleanup and removes only the matching roster row. Native bootstrap refuses stale references without inline fallback. Native inspection reads retained current actors without starting work.
+- **Landing access and workflow examples.** Cloud sign-in and self-deployment now sit beside local setup in one section. Smart CI distinguishes one-shot agent completion from passing tests; the old bug-fix movie is replaced by interactive device/live-app examples. Self-evolution and swarms explain their evidence and verification limits. The rotating hero text is restored with stable accessible text, responsive layout reservation, reduced-motion support, and offscreen cleanup.
 - **Resident slate egress follows the shared network policy.** Authored server
   fetch calls use the existing destination classifier and redirect enforcement,
   while permitted public access remains available. Captured caller mode separates
@@ -615,6 +623,16 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- Unavailable GEPA judges no longer produce neutral quality scores. Failed
+  measurements abort scaffold and section optimization with actual attempt
+  counts; they cannot create a pending section or count as a promotion win.
+  Public metrics reject non-finite and out-of-range scores. Fully measured seeds
+  are retained immediately, and rejected proposals count as actual iterations.
+- Local conversational execution state now belongs to a runtime-bound
+  `ActorSession`: history, steering, model context, mode and cancellation are
+  isolated per logical actor. Stale turn leases cannot affect a newer turn.
+  Cancellation also retains tool calls dispatched before the SDK publishes them.
+
 - The Terminal-Bench seeded-sample regression uses a recorded selection-only population and the original sealed expected draw, so it always runs regardless of an optional corpus download. Real-corpus validation and historical seals are unchanged.
 
 - Recovery eval credit requires the authored seeded-test command on the workspace, an observed nonzero process exit, and its later successful rerun; unrelated failed/successful commands cannot substitute.
@@ -1087,6 +1105,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - Added `no-vacuous-type-predicate` for explicit guards whose entire body returns literal true. On 2026-09-06, all 26 prior anti-slop rules remained enabled beside the new rule.
 
 - Owners can page retained subordinate history and nested run events without reopening dismissed agents; 16 SDK lifecycle observations and a production cold-read probe passed on 2026-09-08.
+- Snapshot-chain is the decided devbox storage default; the decisive report records the 2026-09-06 gate evidence, the 996-test package proof on 2026-09-08, and the workload OS-boundary follow-up as one measured row.
 
 ## [0.2.0] - 2026-08-07
 

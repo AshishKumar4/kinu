@@ -16,6 +16,7 @@
 // in the two backend suites; here the surface itself is the subject.
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime } from '@kinu.run/test-utils';
+import { hostedSeatsOver, refuseHostNode } from './helpers-actor-host';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
@@ -117,16 +118,17 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
  *  surface; WHICH model a tier reaches is pinned in
  *  unit-swarm-profile-routing.test.ts. */
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
   const model = new MockLanguageModelV3();
-  return { rt, model, resolveModel: () => model, ...overrides };
+  return {
+    rt, model, resolveModel: () => model,
+    // One hosted actor per node id, all over the one workspace database.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    ...overrides,
+  };
 }
 
-const rosterEntry: SubordinateRosterEntry = {
-  name: 'researcher',
-  createdBy: 'orchestrator', status: 'idle', currentTask: null,
-  createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-};
+const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
 const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
   eventId: `evt-${delivery}`,
@@ -157,10 +159,7 @@ function makeTeam() {
       create: async (input) => ({
         name: input.name ?? 'researcher',
         displayName: 'Researcher',
-        subordinate: {
-          name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => {
         recordCall(calls, 'rename', input);
@@ -362,8 +361,13 @@ describe('agents.* codemode namespace — dispatch', () => {
     let generation = 0;
     const ns = namespaceOf(() => {
       generation += 1;
-      const { rt } = createTestRuntime();
-      return { fork: { rt, model: new MockLanguageModelV3() } };
+      const { rt, testSql } = createTestRuntime();
+      return {
+        fork: {
+          rt, model: new MockLanguageModelV3(),
+          hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+        },
+      };
     });
     // Each call rebuilds the deps, which is what the generation counter proves:
     // two calls, two reads, and the second sees the later binding.
@@ -553,7 +557,12 @@ describe('agents.* codemode namespace — declared types', () => {
     // literal per action rather than text derived from whatever is wired.
     const a = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types;
     const b = createAgentsCodemodeProvider(() => withBuildMode({
-      fork: { rt: createTestRuntime().rt, model: new MockLanguageModelV3() },
+      fork: {
+        rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
+        // This case reads the rendered DECLARATION and runs nothing, so a seat
+        // asked for here would be a node no assertion wanted.
+        hostNode: refuseHostNode('this case renders declarations and runs no node'),
+      },
     })).types;
     expect(a).toBe(b);
   });

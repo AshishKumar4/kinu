@@ -27,9 +27,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 import {
-  ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, NAMES_WITHOUT_CODE, NARRATION, ROSTER,
-  type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest, inspect, subjectOf,
-  proseOnly,
+  ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
+  NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest, inspect,
+  sizeViolations, subjectOf, proseOnly,
 } from './commit-hygiene';
 import { isParseable, readMatching } from './sources';
 
@@ -138,11 +138,29 @@ describe('a legitimate product possessive PASSES — the false-positive control'
     }
   });
 
-  test('a declared external name is clean, and the list is the measured five plus the owner', () => {
-    expect([...NAMES_WITHOUT_CODE].sort())
-      .toEqual(['AlphaEvolve', 'AshishKumar4', 'FunSearch', 'GitHub', 'JavaScript', 'TypeScript']);
+  test('the list is the measured five, the owner, and two deleted identifiers', () => {
+    // The list's whole defence is that it stays short and every entry is a fact
+    // someone can check, so its exact contents are the assertion. Two entries are
+    // deleted-class citations the gate's own doc reserves room for: the actor-host
+    // cutover removed `FacetIdentity` and `76936034ba` cites it correctly, and the
+    // actor cutover's completion removed `NodeLoopHost` — the seam a facet ran a
+    // swarm node through, superseded by the required `AgentsForkDeps.hostNode` —
+    // which `9078d528c8` line 3 cites correctly. Both name a type this repository
+    // shipped, so both are checkable at the SHA that cites them.
+    expect([...NAMES_WITHOUT_CODE].sort()).toEqual([
+      'AlphaEvolve', 'AshishKumar4', 'FacetIdentity', 'FunSearch', 'GitHub', 'JavaScript',
+      'NodeLoopHost', 'TypeScript',
+    ]);
     expect(inspect("chore(deps): move to TypeScript 7\n\nTypeScript's project references now "
       + 'resolve the scripts project.', isCode)).toEqual([]);
+  });
+
+  test('a deleted class is clean only once declared — an undeclared one still fires', () => {
+    expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
+      + "the init RPC before its ack, following FacetIdentity's pattern.", isCode)).toEqual([]);
+    expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
+      + "the init RPC before its ack, following FacetBinding's pattern.", isCode)
+      .map((violation) => violation.rule)).toEqual(['named-actor']);
   });
 });
 
@@ -330,6 +348,22 @@ describe('the subject convention', () => {
     expect(inspect(`${exemplar}s`, isCode)[0]?.rule).toBe('subject-length');
   });
 
+  test('a message is the subject and at most four more lines; blank lines are free', () => {
+    expect(MESSAGE_LINE_CEILING).toBe(5);
+    const four = 'fix(core): widen the bound\n\nOne.\nTwo.\nThree.\nFour.';
+    expect(sizeViolations(four)).toEqual([]);
+    expect(sizeViolations(`${four}\n\n\n`)).toEqual([]);
+    const five = `${four}\nFive.`;
+    expect(sizeViolations(five).map((violation) => [violation.rule, violation.line, violation.quote]))
+      .toEqual([['message-size', 6, 'Five.']]);
+    // A merge subject is exempt from prefix and length, never from size: the
+    // body of a merge is hand-written like any other.
+    expect(sizeViolations(`Merge branch 'x'\n\n${'a\n'.repeat(5)}`)[0]?.rule).toBe('message-size');
+    // The four content rules are unchanged by size: `inspect` is boundary-free
+    // and must keep passing the historical corpus it is proven against.
+    expect(inspect(five, isCode)).toEqual([]);
+  });
+
   test('a subject wrapped across two lines is still one subject', () => {
     // Measured evasion: 034e8bf891's subject is 135 characters and its first
     // physical line is 81. `git log --oneline` shows the joined form.
@@ -446,6 +480,7 @@ describe('the gate states what it does not catch', () => {
       .map((match) => match[1]);
     for (const prefix of ALLOWED_PREFIXES) expect(stated).toContain(prefix);
     expect(section).toContain(`at most ${String(SUBJECT_CEILING)} characters`);
+    expect(section).toContain(`at most ${String(MESSAGE_LINE_CEILING)} non-blank lines`);
     for (const name of ROSTER) expect(section).toContain(name);
   });
 });

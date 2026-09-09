@@ -92,11 +92,11 @@
   <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
   <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">a node runs as</text>
   <text class="xs" x="36" y="457" fill="var(--fg)">cf</text>
-  <text class="xs" x="70" y="457">SubordinateAgent facets — co-located Durable Objects</text>
+  <text class="xs" x="70" y="457">a logical actor of the one workspace — its own seat, its own home</text>
   <text class="xs" x="36" y="472" fill="var(--fg)">cli</text>
-  <text class="xs" x="70" y="472">the search’s own process. A host is a transport: the</text>
+  <text class="xs" x="70" y="472">the same, over the same one database</text>
   <text class="xs" x="36" y="487" fill="var(--fg)"></text>
-  <text class="xs" x="70" y="487">loop body is runNodeLoop either way</text>
+  <text class="xs" x="70" y="487">one loop body, in the isolate that ran the search</text>
   <rect x="24" y="508" width="462" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="36" y="527" text-anchor="start">still running at 30 s?</text>
   <text class="xs" x="36" y="542" text-anchor="start">it detaches into a background job whose completion wakes you</text>

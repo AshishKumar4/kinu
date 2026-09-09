@@ -10,7 +10,7 @@
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary } from '@kinu.run/core';
+import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary } from '@kinu.run/core';
 import type { BackgroundJob, Rpc, SubordinateRosterEntry } from '@/lib/protocol';
 import type { ModelMenuEntry } from '@/lib/user-api';
 
@@ -102,6 +102,11 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   let pending = CHECKOUT_PENDING;
   const rpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+    if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+    if (method === 'inspectSubordinate') {
+      const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+      return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
+    }
     if (method === 'listAgentTasks') return answer(CHECKOUT_TASKS);
     if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
     if (method === 'listBackgroundJobs') return answer(jobs);
@@ -231,7 +236,7 @@ export const PLAN_MESSAGES: UIMessage[] = [
       { type: 'tool-file', toolCallId: 'landing-plan-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/src/apply-coupon.ts' }, output: '…' },
       { type: 'tool-file', toolCallId: 'landing-plan-search', state: 'output-available', input: { action: 'search', path: 'packages/checkout', query: 'coupon_ineligible' }, output: '3 matches' },
       { type: 'tool-submit_plan', toolCallId: 'landing-plan-submit', state: 'output-available', input: { edits: [{ start: 1, content: PLAN_MARKDOWN }] }, output: { ok: true, revision: 1, status: 'pending', message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.' } },
-      { type: 'text', text: 'The plan is in the Output tab. Approve it, or mark the lines that need to change.' },
+      { type: 'text', text: 'The plan is ready for review. Approve it, or mark the lines that need to change.' },
     ],
   },
 ];
@@ -265,6 +270,13 @@ export const PLAN_FIXTURE: PlanReview = {
 export function planRpc(onDecide: (plan: PlanReview) => void): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+    if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+    if (method === 'inspectSubordinate') {
+      const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+      if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
+      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' ? [PLAN_FIXTURE] : [] } });
+    }
+    if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });
     if (method === 'savePlanReviewAnnotations') return answer({ ok: true, plan: PLAN_FIXTURE });
     if (method === 'decidePlanReview') {
       const [, , decision, feedback] = v.parse(DecideArgsSchema, args);

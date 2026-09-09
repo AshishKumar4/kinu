@@ -19,6 +19,7 @@
 import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { ForkFileSource } from './fork-transfer';
 
 /**
@@ -54,6 +55,11 @@ export interface ForkDriverDeps {
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
+  /** The actor whose transcript is being cut. The fork point is looked up in
+   *  THIS actor's rows: a workspace database holds every actor it issued, and
+   *  message ids are minted per actor, so an unscoped preflight would admit a
+   *  cut at a sibling's message and then snapshot an empty chain. */
+  readonly actor: ActorHandle;
   transport: ForkTransport;
   /** The source workspace's name, the stem of a generated fork name. */
   sourceName: string;
@@ -89,7 +95,7 @@ export async function forkWorkspace(
     throw new Error('agent busy, retry when current turn finishes');
   }
 
-  if (!forkPointExists(deps.sql, untilMessageId)) {
+  if (!forkPointExists(deps.sql, deps.actor, untilMessageId)) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
 

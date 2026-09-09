@@ -1009,16 +1009,4 @@ describe('worker wiring', () => {
     expect(wrangler).not.toContain('!/assets/*');
   });
 
-  test('the live Outputs poll includes the canonical workspace and sandbox', () => {
-    const hook = source('src/hooks/use-kinu.ts');
-    expect(hook).toContain('["workspace", "sandbox"].map');
-    expect(hook).toContain('reconcilePreviewPorts(previous, results)');
-    expect(hook).toContain('setPreviewError(next.error)');
-    expect(hook).toContain('generation !== exposedPortsRefreshGeneration.current');
-    expect(hook).not.toContain('ignore transient');
-    expect(source('src/orchestrator.ts')).toContain("provider.kind !== 'workspace'");
-    expect(source('src/orchestrator.ts')).toContain('provider.listExposedPorts');
-    expect(source('src/components/surfaces/OutputSurface.tsx')).toContain('<LoadFailure what="live previews"');
-    expect(source('src/components/surfaces/OutputSurface.tsx')).toContain('<LoadFailure what="the latest change-set"');
-  });
 });

@@ -62,18 +62,24 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
-  test('ActorAgent and its exploration modes wire their distinct settled policies', () => {
+  test('ActorAgent owns the one registry every mode resolves through', () => {
     const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
     const actor = source('actor-agent.ts');
-    const facet = source('subordinate-agent.ts');
+    const orchestrator = source('orchestrator.ts');
+    const hosting = source('exploration-hosting.ts');
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
-    expect(facet).toContain("appTitle: 'Kinu (exploration)',\n    ownerRequired: false,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
     expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
-    expect(facet).not.toContain('createAgentProviderRegistry');
-    expect(facet).not.toMatch(/\n  getModel\(/);
+    // No second registry: the facet's ownerless exploration services died with
+    // the facet class. Exploration runners resolve through the root's owned
+    // services — a hosted head runs in a claimed workspace, so there is no
+    // ownerless mode left to settle a separate policy for.
+    expect(hosting).not.toContain('createAgentProviderRegistry');
+    expect(hosting).not.toContain('ownerRequired');
+    expect(orchestrator).toContain('resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),');
+    expect(actor.match(/new OwnedModelServices\(/g)).toHaveLength(1);
   });
 
   test('required owners fail with ActorAgent\'s established error', () => {

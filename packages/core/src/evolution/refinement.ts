@@ -51,6 +51,7 @@
 import * as v from 'valibot';
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { sqlCheckList } from '../identity/schema';
 import type { FactsStore } from '../memory/facts';
 import type { InstructionApprovalStore } from '../safety/instruction-trust';
@@ -356,7 +357,8 @@ export function refinementRequestView(request: RefinementRequest): RefinementReq
 
 export function initRefinementTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS refinement_requests (
-    id         TEXT PRIMARY KEY,
+    actor_id   TEXT NOT NULL,
+    id         TEXT NOT NULL,
     trigger    TEXT NOT NULL CHECK (trigger IN (${sqlCheckList(REFINEMENT_TRIGGERS)})),
     scope      TEXT NOT NULL CHECK (scope IN (${sqlCheckList(REFINEMENT_SCOPES)})),
     stage      TEXT NOT NULL CHECK (stage IN (${sqlCheckList(REFINEMENT_STAGES)})),
@@ -371,15 +373,19 @@ export function initRefinementTables(execRaw: RawSqlExec): void {
     routes     TEXT NOT NULL,
     detail     TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
   // The automatic trigger's whole idempotency: one batch of unresolved
   // failures is one request, so a restart that re-derives the same batch
   // collides here instead of opening a second refinement over the same turns.
+  // WITHIN one actor: a debt key is a hash of that actor's own unresolved turn
+  // ids, and a table-wide unique index would let one actor's batch block a
+  // sibling that owes a refinement over the very same turns of its own.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_refinement_debt_key
-           ON refinement_requests(debt_key) WHERE debt_key IS NOT NULL`);
+           ON refinement_requests(actor_id, debt_key) WHERE debt_key IS NOT NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_refinement_stage
-           ON refinement_requests(stage, created_at)`);
+           ON refinement_requests(actor_id, stage, created_at)`);
 }
 
 /** How a request is opened. */
@@ -558,18 +564,32 @@ function toRequest(row: Row): RefinementRequest {
  */
 const liveClaims = new Set<string>();
 
-export function createRefinementStore(sql: SqlExecutor): RefinementStore {
+/**
+ * Bind the refinement lane to ONE actor.
+ *
+ * A request is opened over THIS actor's unresolved corrections and routed into
+ * THIS actor's facts, prompt sections and skills — so the row, its debt key and
+ * its planning lease are all the owner's, and a shared table would let one
+ * actor's pass claim a sibling's refinement.
+ */
+export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): RefinementStore {
+  const actorId = actor.actorId;
+  const authorize = actor.assertCurrent;
   const one = (id: string): RefinementRequest | null => {
+    authorize();
     const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
              proposal, routes, detail, created_at, updated_at
-      FROM refinement_requests WHERE id = ${id} LIMIT 1`;
+      FROM refinement_requests WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`;
     return rows[0] ? toRequest(rows[0]) : null;
   };
 
   /** The stage the row is in and the pass holding it, or undefined for no row. */
-  const lease = (id: string): { stage: string; claim: string | null } | undefined =>
-    sql<{ stage: string; claim: string | null }>`
-      SELECT stage, claim FROM refinement_requests WHERE id = ${id} LIMIT 1`[0];
+  const lease = (id: string): { stage: string; claim: string | null } | undefined => {
+    authorize();
+    return sql<{ stage: string; claim: string | null }>`
+      SELECT stage, claim FROM refinement_requests
+      WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`[0];
+  };
 
   /**
    * The one UPDATE every writer here makes, under the guard the caller holds.
@@ -601,24 +621,27 @@ export function createRefinementStore(sql: SqlExecutor): RefinementStore {
         routes = COALESCE(${routes}, routes),
         detail = COALESCE(${patch.detail ?? null}, detail),
         updated_at = ${patch.now ?? nowMs()}
-      WHERE id = ${id} AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
+      WHERE actor_id = ${actorId} AND id = ${id}
+        AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
     return true;
   };
 
   return {
     open(input) {
+      authorize();
       if (input.debtKey !== undefined) {
         const existing = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                  proposal, routes, detail, created_at, updated_at
-          FROM refinement_requests WHERE debt_key = ${input.debtKey} LIMIT 1`;
+          FROM refinement_requests
+          WHERE actor_id = ${actorId} AND debt_key = ${input.debtKey} LIMIT 1`;
         if (existing[0]) return { request: toRequest(existing[0]), created: false };
       }
       const id = `refine-${nanoid()}`;
       const at = input.now ?? nowMs();
       void sql`INSERT INTO refinement_requests
-        (id, trigger, scope, stage, session_id, turn_ids, debt_key, proposal, routes, detail,
+        (actor_id, id, trigger, scope, stage, session_id, turn_ids, debt_key, proposal, routes, detail,
          created_at, updated_at)
-        VALUES (${id}, ${input.trigger}, ${input.scope}, 'requested', ${input.sessionId ?? null},
+        VALUES (${actorId}, ${id}, ${input.trigger}, ${input.scope}, 'requested', ${input.sessionId ?? null},
                 ${JSON.stringify([...input.turnIds])}, ${input.debtKey ?? null}, ${null}, '[]', '',
                 ${at}, ${at})`;
       const opened = one(id);
@@ -635,23 +658,28 @@ export function createRefinementStore(sql: SqlExecutor): RefinementStore {
     get: one,
 
     list(limit = 50) {
+      authorize();
       return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
-        FROM refinement_requests ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toRequest);
+        FROM refinement_requests WHERE actor_id = ${actorId}
+        ORDER BY created_at DESC, id DESC LIMIT ${limit}`.map(toRequest);
     },
 
     nextRequested() {
+      authorize();
       const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
-        FROM refinement_requests WHERE stage = 'requested'
+        FROM refinement_requests WHERE actor_id = ${actorId} AND stage = 'requested'
         ORDER BY created_at ASC, id ASC LIMIT 1`;
       return rows[0] ? toRequest(rows[0]) : null;
     },
 
     settleable() {
+      authorize();
       return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
-        FROM refinement_requests WHERE stage IN ('gated', 'evaluating')
+        FROM refinement_requests
+        WHERE actor_id = ${actorId} AND stage IN ('gated', 'evaluating')
         ORDER BY created_at ASC, id ASC`.map(toRequest);
     },
 
@@ -671,7 +699,7 @@ export function createRefinementStore(sql: SqlExecutor): RefinementStore {
       liveClaims.add(token);
       void sql`UPDATE refinement_requests SET stage = 'planning', claim = ${token},
           updated_at = ${nowMs()}
-        WHERE id = ${id} AND stage = 'requested'`;
+        WHERE actor_id = ${actorId} AND id = ${id} AND stage = 'requested'`;
       const claimed = one(id);
       if (!claimed) {
         liveClaims.delete(token);
@@ -695,8 +723,10 @@ export function createRefinementStore(sql: SqlExecutor): RefinementStore {
     },
 
     resetStalePlanning() {
+      authorize();
       const stale = sql<{ id: string; claim: string | null }>`
-        SELECT id, claim FROM refinement_requests WHERE stage = 'planning'`
+        SELECT id, claim FROM refinement_requests
+        WHERE actor_id = ${actorId} AND stage = 'planning'`
         .filter((row) => row.claim === null || !liveClaims.has(row.claim));
       if (stale.length === 0) return 0;
       const at = nowMs();
@@ -705,15 +735,17 @@ export function createRefinementStore(sql: SqlExecutor): RefinementStore {
         // whatever claim it found could wipe a SUCCESSOR's token instead of the
         // dead one it decided about.
         void sql`UPDATE refinement_requests SET stage = 'requested', claim = NULL, updated_at = ${at}
-          WHERE id = ${row.id} AND stage = 'planning' AND claim IS ${row.claim}`;
+          WHERE actor_id = ${actorId} AND id = ${row.id}
+            AND stage = 'planning' AND claim IS ${row.claim}`;
       }
       return stale.length;
     },
 
     coveredTurnIds() {
+      authorize();
       const covered = new Set<string>();
       for (const row of sql<{ id: string; turn_ids: string }>`
-        SELECT id, turn_ids FROM refinement_requests`) {
+        SELECT id, turn_ids FROM refinement_requests WHERE actor_id = ${actorId}`) {
         for (const turnId of decodeColumn<string[]>(TurnIdsSchema, row.turn_ids, [], row.id)) {
           covered.add(turnId);
         }
@@ -779,14 +811,16 @@ export interface EvolutionDebt {
  * been waiting, and a newest-first cut would starve them forever for the same
  * reason the windowed read did.
  */
-export function evolutionDebt(sql: SqlExecutor, opts: { limit?: number } = {}): EvolutionDebt {
-  const covered = createRefinementStore(sql).coveredTurnIds();
+export function evolutionDebt(
+  sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
+): EvolutionDebt {
+  const covered = createRefinementStore(sql, actor).coveredTurnIds();
   const seen = new Set<string>();
   const unresolved: string[] = [];
   // Unbounded, then filtered: see the note above. `listTurnOutcomes` resolves
   // one effective verdict per turn, so an old classifier `corrected` a later
   // thumb overruled is already gone from this set.
-  for (const row of listTurnOutcomes(sql, { limit: -1, outcomes: NEGATIVE_TURN_OUTCOMES })) {
+  for (const row of listTurnOutcomes(sql, actor, { limit: -1, outcomes: NEGATIVE_TURN_OUTCOMES })) {
     // A row with no turn id cannot be excluded from a later batch, so counting
     // it would make the debt permanent.
     if (row.turnId === null || covered.has(row.turnId) || seen.has(row.turnId)) continue;

@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-09-07",
-  "files": 2102,
-  "functions": 54250,
+  "measuredAt": "2026-09-09",
+  "files": 2139,
+  "functions": 55605,
   "ceiling": 125,
-  "line": 38,
+  "line": 37,
   "inventory": [
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
@@ -56,10 +56,6 @@
     {
       "key": "packages/devbox/src/candidates/merkle-pack/build.ts#buildMerklePack",
       "complexity": 63
-    },
-    {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
-      "complexity": 61
     },
     {
       "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
@@ -126,10 +122,6 @@
       "complexity": 46
     },
     {
-      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
-      "complexity": 46
-    },
-    {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
       "complexity": 46
     },
@@ -142,20 +134,16 @@
       "complexity": 46
     },
     {
+      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 45
+    },
+    {
       "key": "packages/devbox/tests/journal-daemon-runtime-matrix.ts#verifyManifest",
       "complexity": 45
     },
     {
       "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
       "complexity": 44
-    },
-    {
-      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
-      "complexity": 43
-    },
-    {
-      "key": "scripts/wired.ts#findEntrypoints>walk",
-      "complexity": 43
     },
     {
       "key": "scripts/bench-payload-transports.ts#main",
@@ -186,6 +174,10 @@
       "complexity": 40
     },
     {
+      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
+      "complexity": 40
+    },
+    {
       "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
       "complexity": 40
     },
@@ -198,7 +190,7 @@
       "complexity": 40
     },
     {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
       "complexity": 39
     },
     {
@@ -224,6 +216,46 @@
     {
       "key": "packages/devbox/src/cas/overlay-runner.ts#scanUpper",
       "complexity": 38
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/server.ts#route",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cli/src/cc-transcript.ts#mineSession",
+      "complexity": 37
+    },
+    {
+      "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison",
+      "complexity": 37
+    },
+    {
+      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
+      "complexity": 37
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
+      "complexity": 37
+    },
+    {
+      "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
+      "complexity": 37
+    },
+    {
+      "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
+      "complexity": 37
     }
   ]
 }

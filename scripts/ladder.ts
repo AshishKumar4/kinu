@@ -604,7 +604,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
@@ -615,6 +615,14 @@ export const LADDER: readonly Gate[] = [
     // Re-measured 2026-09-05 on the 24-thread box: 23.4/24.4s (in-tier plus solo,
     // 530 tests across 20 files). The 15.4s predates the census suite joining this
     // row. Replaces 15.4s.
+    // `capability-parity.test.ts` joins 2026-09-08: it shipped claimed by no
+    // tier at all, which is the defect ladder.test.ts exists to catch, and a
+    // gate's own self-test belongs beside its twenty siblings here rather than
+    // at a later tier. Measured solo three times on the 24-thread box under
+    // load 12: 0.06/0.06/0.08s wall, 65/65/78ms in-suite, 9 tests. The row
+    // stays 24s — that addition is an order of magnitude inside the 23.4/24.4s
+    // spread already measured for the other twenty, and declaring 24.1s would
+    // claim a resolution these figures do not have.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -647,7 +655,15 @@ export const LADDER: readonly Gate[] = [
       + 'including the `tag@digest` form that pulls correctly and leaves a mutable tag in the '
       + 'file — against the `@cloudflare/sandbox` version that actually ships, and every one of '
       + 'them uploads source maps with the Vite half that produces them, called rather than read '
-      + 'as text.',
+      + 'as text. For capability-parity, the ATTRIBUTION boundary its whole count rests '
+      + 'on: a literal missing a REQUIRED member is a DIFFERENT TYPE, never an adapter '
+      + 'omitting an optional capability — a foreign turn config sharing two '
+      + 'optional-looking names, a fetch options bag sharing `cache` and `signal`, and an '
+      + 'override bag dropping its base requirements are each refused as the contract they '
+      + 'resemble, and every one of those refusals is proven BESIDE a real omission that '
+      + 'stays red, so widening the attribution cannot quietly empty the asymmetry set. A '
+      + 'spread leaves a contract unreadable rather than absent, which is a skip and not a '
+      + 'parity claim.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',

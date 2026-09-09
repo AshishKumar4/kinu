@@ -37,6 +37,7 @@ import {
   type ScaffoldRunOptions, type ScaffoldRunResult,
 } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
+import type { ActorHandle } from '../state/actor-handle';
 import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
@@ -65,9 +66,9 @@ import {
 } from '../prompting/section-store';
 import type { PromptSection } from '../prompting/template';
 import {
-  finishGepaRun, lastGepaRunPerTarget, makePersistingHook, startGepaRun,
+  finishGepaRun, lastGepaRunPerTarget, makePersistingHooks, startGepaRun,
 } from './gepa/persistence';
-import type { EvalInstance, MetricOutcome, ReflectionLM } from './gepa/types';
+import { MetricScoreSchema, type EvalInstance, type MetricOutcome, type ReflectionLM } from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -204,7 +205,7 @@ export async function runScaffoldOnce(
   task: string,
   opts?: { useShadowOverride?: boolean },
 ): Promise<ScaffoldRunResult> {
-  const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql) : null;
+  const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql, control.rt.actor) : null;
   const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
@@ -247,7 +248,7 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
   if (turnKey === '') return null;
   const sampleRate = control.config.getShadowSampleRate();
   if (sampleRate <= 0) return null;
-  const pending = getPendingScaffold(control.sql);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
   if (!pending) return null;
   if (sampleFraction(turnKey) >= sampleRate) return null;
   return pending.version;
@@ -301,6 +302,7 @@ export function queueTurnShadowTrial(
     };
     return queueShadowTrial(
       control.sql,
+      control.rt.actor,
       plan.id === undefined ? trial : { ...trial, id: plan.id },
     );
   } catch (err) {
@@ -328,8 +330,8 @@ export function queueTurnShadowTrial(
  * The same reason stops the loop the moment a decision is applied.
  */
 export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
-  const pending = getPendingScaffold(control.sql);
-  purgeQueuedShadowTrials(control.sql, pending?.version ?? null);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
+  purgeQueuedShadowTrials(control.sql, control.rt.actor, pending?.version ?? null);
   if (!pending) return { trials: 0, applied: null };
 
   let trials = 0;
@@ -340,7 +342,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
   // nothing ends the drain; the ceiling bounds the pathological case, and past
   // it one drain has already run more trials than the gate can consume.
   while (processed < MAX_QUEUED_SHADOW_TRIALS) {
-    const batch = listQueuedShadowTrials(control.sql, pending.version);
+    const batch = listQueuedShadowTrials(control.sql, control.rt.actor, pending.version);
     if (batch.length === 0) break;
     for (const trial of batch) {
       if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
@@ -377,9 +379,9 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           { trialId: trial.id },
         );
       }
-      dropQueuedShadowTrial(control.sql, trial.id);
+      dropQueuedShadowTrial(control.sql, control.rt.actor, trial.id);
       if (applied) {
-        purgeQueuedShadowTrials(control.sql, null);
+        purgeQueuedShadowTrials(control.sql, control.rt.actor, null);
         return { trials, applied };
       }
     }
@@ -423,8 +425,8 @@ export async function proposeScaffold(
     baseVersion !== undefined ? { baseVersion } : undefined,
   );
   if (result.ok) {
-    void control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-      VALUES (${nanoid()}, 'scaffold_proposed',
+    void control.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+      VALUES (${control.rt.actor.actorId}, ${nanoid()}, 'scaffold_proposed',
               ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
               ${null}, ${Date.now()})`;
   }
@@ -447,8 +449,10 @@ export interface ScaffoldVersionView {
   win_rate: number | null;
 }
 
-export function listScaffoldVersions(sql: SqlExecutor, limit = 20): ScaffoldVersionView[] {
-  return listScaffoldArchive(sql, limit).map((e) => ({
+export function listScaffoldVersions(
+  sql: SqlExecutor, actor: ActorHandle, limit = 20,
+): ScaffoldVersionView[] {
+  return listScaffoldArchive(sql, actor, limit).map((e) => ({
     version: e.version,
     written_at: e.writtenAt,
     rationale: e.rationale,
@@ -477,15 +481,15 @@ export type ShadowStatus =
 
 /** The pending scaffold's rollout state — trials so far and what the promotion
  *  gate currently says. With nothing pending, the recent archive instead. */
-export function getShadowStatus(sql: SqlExecutor): ShadowStatus {
-  const pending = getPendingScaffold(sql);
-  if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, 10) };
+export function getShadowStatus(sql: SqlExecutor, actor: ActorHandle): ShadowStatus {
+  const pending = getPendingScaffold(sql, actor);
+  if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, actor, 10) };
   return {
     hasPending: true,
     pending,
     decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
     config: DEFAULT_SHADOW_CONFIG,
-    queuedTrials: countQueuedShadowTrials(sql, pending.version),
+    queuedTrials: countQueuedShadowTrials(sql, actor, pending.version),
   };
 }
 
@@ -504,7 +508,7 @@ export async function applyScaffoldDecision(
   control: ScaffoldControl,
   mode: 'auto' | 'promote' | 'rollback',
 ): Promise<ScaffoldDecisionResult> {
-  const pending = getPendingScaffold(control.sql);
+  const pending = getPendingScaffold(control.sql, control.rt.actor);
   if (!pending) return { ok: false, error: 'no pending scaffold' };
   let decision: 'promote' | 'rollback';
   if (mode === 'auto') {
@@ -552,25 +556,18 @@ function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): Reflec
 // ── GEPA offline scaffold optimisation ──────────────────────────────────────
 
 const GepaScoreSchema = v.object({
-  score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
+  score: MetricScoreSchema,
   feedback: v.pipe(v.string(), v.minLength(1)),
 });
 
-/**
- * One judge call for every GEPA metric, with the one answer an unavailable
- * judge gets: a neutral 0.5. A 0 would read as "this candidate is bad" on
- * evidence nobody gathered.
- */
+/** A metric exists only when the judge answers. Failure aborts the measurement
+ * through the caller's existing failed-run path, never as a numeric quality. */
 async function judgeScore(control: ScaffoldControl, prompt: string): Promise<MetricOutcome> {
-  try {
-    const scored = await control.judge({
-      schema: GepaScoreSchema,
-      prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-    });
-    return { score: scored.score, feedback: scored.feedback };
-  } catch (err) {
-    return { score: 0.5, feedback: `judge unavailable: ${renderThrownChain({ cause: err })}` };
-  }
+  const scored = await control.judge({
+    schema: GepaScoreSchema,
+    prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
+  });
+  return { score: scored.score, feedback: scored.feedback };
 }
 
 export interface GepaOptimizationResult {
@@ -603,7 +600,7 @@ export interface GepaOptimizationResult {
  * the winner to modifyScaffold so it enters the normal shadow-eval → promote
  * pipeline. Persisted to gepa_runs/gepa_candidates for lineage.
  *
- * Cost-bounded: the instance budget comes from agent_config gepa_eval_budget
+ * Cost-bounded: the instance budget comes from actor_config gepa_eval_budget
  * unless `evalSize` overrides it, and each metric call is a full scaffold run
  * plus a judge call. Scores come back as intervals — with a val set this size,
  * a winner inside the seed's interval is not evidence of anything.
@@ -615,7 +612,7 @@ export async function runScaffoldGepaOptimization(
   const evalSize = clampGepaEvalBudget(opts?.evalSize ?? control.config.getGepaEvalBudget());
 
   // 1. Train/val split from outcome-labeled turns (the turn_outcomes ledger).
-  const split = buildOutcomeEvalSplit(control.sql, evalSize);
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
   const { train: trainSet, val: evalSet } = split;
   // Without a failure to optimise toward there is nothing to select on but
   // judge noise over already-accepted turns — and an empty train set would
@@ -641,9 +638,11 @@ export async function runScaffoldGepaOptimization(
   // the recorded outcome — accepted turns are regression checks against the
   // response the user approved; negatives are scored on whether the candidate
   // already addresses the complaint, whoever made it.
+  let metricCalls = 0;
   const metric = async (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
   ): Promise<MetricOutcome> => {
+    metricCalls++;
     let output: string;
     try {
       output = await runScaffoldCaptureText(control, instance.input, candidate);
@@ -664,8 +663,9 @@ export async function runScaffoldGepaOptimization(
   const reflectionLm = reflectionLmFor(control, model);
 
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
-  const runId = startGepaRun(control.sql, { target: 'scaffold', budget });
-  const persisted = new Set<string>();
+  const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold', budget });
+  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
+  let iterations = 0;
   let result;
   try {
     result = await runScaffoldGepa({
@@ -675,17 +675,18 @@ export async function runScaffoldGepaOptimization(
       metric,
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
+      onCandidate: persist.onCandidate,
+      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
-    finishGepaRun(control.sql, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+    finishGepaRun(control.sql, control.rt.actor, {
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: message, runId };
   }
 
-  finishGepaRun(control.sql, {
+  finishGepaRun(control.sql, control.rt.actor, {
     runId,
     status: 'completed',
     stopReason: result.gepa.stopReason,
@@ -789,7 +790,7 @@ async function runPromptSectionGepaOptimization(
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<PromptSectionOptimizationResult> {
   const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
-  const split = buildOutcomeEvalSplit(control.sql, evalSize);
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
     return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
   }
@@ -803,30 +804,35 @@ async function runPromptSectionGepaOptimization(
   };
   const reflectionLm = reflectionLmFor(control, await control.model());
 
-  const runId = startGepaRun(control.sql, {
+  const runId = startGepaRun(control.sql, control.rt.actor, {
     target: 'prompt_section', targetRef: opts.sectionId, budget,
   });
-  const persisted = new Set<string>();
+  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
+  const metric = sectionMetric(control, opts.sectionId);
+  let metricCalls = 0;
+  let iterations = 0;
   let result;
   try {
     result = await runSectionGepa({
       sql: control.sql,
+      actor: control.rt.actor,
       sectionId: opts.sectionId,
       evalSet: split.val,
       trainSet: split.train,
-      metric: sectionMetric(control, opts.sectionId),
+      metric: (candidate, instance) => { metricCalls++; return metric(candidate, instance); },
       reflectionLm,
       budget,
-      onIteration: makePersistingHook({ sql: control.sql, runId, persisted }),
+      onCandidate: persist.onCandidate,
+      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
     });
   } catch (err) {
-    finishGepaRun(control.sql, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
+    finishGepaRun(control.sql, control.rt.actor, {
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: renderThrownChain({ cause: err }), runId };
   }
   const gepa = result.gepa;
-  finishGepaRun(control.sql, {
+  finishGepaRun(control.sql, control.rt.actor, {
     runId,
     status: 'completed',
     stopReason: gepa?.stopReason ?? 'no_improvement_possible',
@@ -880,17 +886,17 @@ async function runPromptSectionTrials(
   sectionId: string,
   opts?: { trials?: number },
 ): Promise<PromptSectionTrialResult> {
-  const pending = getPendingPromptSection(control.sql, sectionId);
+  const pending = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
   if (!pending) return { sectionId, pending: false, trialsRun: 0 };
   const section = findPromptSectionTarget(sectionId);
   if (!section) return { sectionId, pending: false, trialsRun: 0 };
 
-  const incumbent = incumbentSectionSource(control.sql, section);
+  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, sectionId);
   // Drawn fresh each pass, so consecutive passes see the turns that happened in
   // between: the newest failures plus the accepted-turn guards, and never the
   // train half the candidate was written against.
-  const split = buildOutcomeEvalSplit(control.sql, control.config.getGepaEvalBudget());
+  const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, control.config.getGepaEvalBudget());
   const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
 
   let trialsRun = 0;
@@ -899,7 +905,7 @@ async function runPromptSectionTrials(
       metric(incumbent, instance),
       metric(pending.source, instance),
     ]);
-    recordPromptSectionTrial(control.sql, {
+    recordPromptSectionTrial(control.sql, control.rt.actor, {
       sectionId,
       pendingVersion: pending.version,
       instanceId: instance.id,
@@ -912,7 +918,7 @@ async function runPromptSectionTrials(
     trialsRun += 1;
   }
 
-  const settled = getPendingPromptSection(control.sql, sectionId);
+  const settled = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
   if (!settled) return { sectionId, pending: true, trialsRun };
   const verdict = decidePromptSectionPromotion(settled);
   const result: PromptSectionTrialResult = {
@@ -920,7 +926,7 @@ async function runPromptSectionTrials(
     decision: verdict.decision, winRate: verdict.winRate,
   };
   if (verdict.decision === 'continue') return result;
-  const applied = applyPromptSectionDecision(control.sql, settled, verdict.decision);
+  const applied = applyPromptSectionDecision(control.sql, control.rt.actor, settled, verdict.decision);
   result.action = applied.action;
   if (applied.vetoReason) result.vetoReason = applied.vetoReason;
   return result;
@@ -974,7 +980,9 @@ export async function proposeMeasuredPromptSection(
       error: `"${input.sectionId}" is not a registered prompt section`,
     };
   }
-  const split = buildOutcomeEvalSplit(control.sql, clampGepaEvalBudget(control.config.getGepaEvalBudget()));
+  const split = buildOutcomeEvalSplit(
+    control.sql, control.rt.actor, clampGepaEvalBudget(control.config.getGepaEvalBudget()),
+  );
   if (split.degeneracy !== null) {
     return {
       ok: false, sectionId: section.id, code: 'degenerate_split',
@@ -982,7 +990,7 @@ export async function proposeMeasuredPromptSection(
     };
   }
 
-  const incumbent = incumbentSectionSource(control.sql, section);
+  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, section.id);
   // The held-out half, exactly as the trials use it: a candidate measured on the
   // turns whoever wrote it was shown has learned those turns.
@@ -994,7 +1002,7 @@ export async function proposeMeasuredPromptSection(
   const incumbentScore = scoreInterval(scored.map(([current]) => current.score));
   const candidateScore = scoreInterval(scored.map(([, candidate]) => candidate.score));
 
-  const proposal = proposePromptSection(control.sql, {
+  const proposal = proposePromptSection(control.sql, control.rt.actor, {
     section,
     source: input.source,
     rationale: input.rationale,
@@ -1022,8 +1030,8 @@ export async function proposeMeasuredPromptSection(
  * break on the registry's own order, so two never-passed sections resolve the
  * way `PROMPT_SECTIONS` declares them.
  */
-function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
-  const lastPass = lastGepaRunPerTarget(sql, 'prompt_section');
+function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSection<string> | null {
+  const lastPass = lastGepaRunPerTarget(sql, actor, 'prompt_section');
   let next: PromptSection<string> | null = null;
   let nextAt = Number.POSITIVE_INFINITY;
   for (const section of PROMPT_SECTION_TARGETS) {
@@ -1064,11 +1072,11 @@ export type PromptSectionLaneStep =
 export async function advancePromptSectionLane(
   control: ScaffoldControl,
 ): Promise<PromptSectionLaneStep> {
-  const pending = firstPendingPromptSection(control.sql);
+  const pending = firstPendingPromptSection(control.sql, control.rt.actor);
   if (pending !== null) {
     return { step: 'trials', sectionId: pending, trials: await runPromptSectionTrials(control, pending) };
   }
-  const section = nextPromptSectionTarget(control.sql);
+  const section = nextPromptSectionTarget(control.sql, control.rt.actor);
   if (!section) return { step: 'idle' };
   return {
     step: 'pass',

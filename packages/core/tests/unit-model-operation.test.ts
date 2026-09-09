@@ -13,13 +13,14 @@ import {
   WORKSPACE_RUN_ID,
   type RunEvent,
 } from '../src/index';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
-  return { db, recorder: new RunEventRecorder(sql), sql };
+  return { db, recorder: new RunEventRecorder(sql, testActorHandle(sql)), sql };
 }
 
 const operationsOf = (recorder: RunEventRecorder, runId: string) =>

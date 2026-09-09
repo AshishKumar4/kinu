@@ -78,7 +78,14 @@ type RecoveryMetadata = v.InferOutput<typeof RecoveryMetadataSchema>;
 
 /** One admitted event bound to a synthetic drain turn with its recovery lease
  *  OPEN — what a drain leaves behind on its way to a turn. The payload is a
- *  real delivery shape, because the events-hub row schema parses it. */
+ *  real delivery shape, because the events-hub row schema parses it.
+ *
+ *  Filed under the workspace's OWN actor, read off the live runtime rather than
+ *  restated: one database now holds every logical actor's inbox and
+ *  `agent_log`'s key leads with `actor_id`, so a row seeded under any other id
+ *  is a row the resume's actor-scoped reads cannot see. Nothing would error —
+ *  the lease reads would simply come back empty and every assertion here would
+ *  hold for the wrong reason. */
 function boundDelivery(
   harness: ActorHarness<HarnessOrchestratorAgent>,
   eventId: string,
@@ -87,14 +94,14 @@ function boundDelivery(
 ): void {
   harness.db.prepare(
     `INSERT INTO agent_log
-       (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+       (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
         trust, priority, payload_visibility, payload, received_at,
         schema_version, dedupe_key, consumed_at)
-     VALUES (?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+     VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
              'authenticated', 'normal', 'full',
              '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}',
              1, 1, NULL, ?)`,
-  ).run(eventId, drainTurnId, consumedAt);
+  ).run(harness.agent.observeRuntime().actor.actorId, eventId, drainTurnId, consumedAt);
 }
 
 /** The durable transcript pair a resumed reply reads: the queued drain turn's
@@ -106,23 +113,29 @@ function persistedDrainTurn(
 ): void {
   // The SDK's own transcript table, created the way every other suite over it
   // does: the agents base class creates it lazily on first write, and no turn
-  // has run here.
+  // has run here. Its key leads with `actor_id` (the same statement
+  // `ForkTargetWriter.ensurePaneTable` runs), and the answer read this fixture
+  // arms — `answersForDrainTurns` — joins user row to assistant row ON that
+  // column, so a table without it does not read empty, it fails to compile.
+  const actorId = harness.agent.observeRuntime().actor.actorId;
   harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+    actor_id TEXT NOT NULL, id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (actor_id, id))`);
   const append = harness.db.prepare(
-    `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-     VALUES (?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
+    `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+     VALUES (?, ?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
   );
-  append.run(`u-${drainTurnId}`, null, 'user', JSON.stringify({
+  append.run(actorId, `u-${drainTurnId}`, null, 'user', JSON.stringify({
     id: `u-${drainTurnId}`,
     role: 'user',
     parts: [{ type: 'text', text: '1 event arrived while you were idle.' }],
     metadata: { kinuEvent: 'event_drain', drainTurnId },
   }));
   if (answer === null) return;
-  append.run(`a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
+  append.run(actorId, `a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
     id: `a-${drainTurnId}`,
     role: 'assistant',
     parts: [{ type: 'text', text: answer }],
@@ -184,8 +197,19 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     boundDelivery(harness, 'ev-silent', 'evt-silent', RECENT);
     persistedDrainTurn(harness, 'evt-silent', null);
     harness.agent.harnessBeginTerminalTransition('u-silent');
+    // The lease is in the RESUME's OWN view before the resume runs. Both
+    // assertions below are "nothing moved", and a row filed under an actor this
+    // agent is not would read as no row at all rather than as an error — so
+    // without this the case would hold just as well over an empty table.
+    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    await harness.agent.harnessResumeTerminalTransitions();
+    // THE WAKE FRAME, not `resumeAll()` in isolation. `_kinuTerminalRetryTick`
+    // is the public callback the platform's alarm dispatches, and it runs the
+    // stale-lease sweep BEFORE the terminal replay. Both must leave this lease
+    // exactly as it is — the replay because no answer exists to send, the sweep
+    // because `RECENT` is inside its grace — so the assertion below is "nothing
+    // moved" against the whole frame instead of one half of it.
+    await harness.agent._kinuTerminalRetryTick();
 
     expect(lease(harness, 'ev-silent')).toEqual({ turn_id: 'evt-silent', consumed_at: RECENT });
   });
@@ -197,8 +221,10 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     boundDelivery(harness, 'ev-blank', 'evt-blank', RECENT);
     persistedDrainTurn(harness, 'evt-blank', '   ');
     harness.agent.harnessBeginTerminalTransition('u-blank');
+    expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    await harness.agent.harnessResumeTerminalTransitions();
+    // The same public wake frame as above.
+    await harness.agent._kinuTerminalRetryTick();
 
     expect(lease(harness, 'ev-blank')).toEqual({ turn_id: 'evt-blank', consumed_at: RECENT });
   });

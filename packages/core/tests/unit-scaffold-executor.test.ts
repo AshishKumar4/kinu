@@ -12,10 +12,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  runScaffold,
+  runScaffold, scaffoldEventText,
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from '../src/scaffold/executor';
+import type { ChatEvent } from '../src/chat';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
 import type { JsonObject } from '../src/utils/json';
 import { createTestRuntime } from './helpers';
@@ -35,7 +36,7 @@ function hostProvider(
   return host;
 }
 
-async function* asyncOf(...items: string[]): AsyncIterable<string> {
+async function* asyncOf(...items: ChatEvent[]): AsyncIterable<ChatEvent> {
   for (const i of items) yield i;
 }
 
@@ -157,7 +158,7 @@ describe('runScaffold', () => {
     expect(result.ok).toBe(true);
     expect(calls).toEqual([{ name: 'save_note', args: { content: 'hi' } }]);
   });
-  test('host.llmStream forwards llmStream output as text_delta events', async () => {
+  test('host.llmStream preserves the visible text of native model events', async () => {
     const events: ScaffoldEvent[] = [];
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       const host = hostProvider(providers);
@@ -169,10 +170,10 @@ describe('runScaffold', () => {
     await runScaffold({
       rt, task: 'x',
       emit: (e) => { events.push(e); },
-      llmStream: () => asyncOf('one ', 'two ', 'three'),
+      llmStream: () => asyncOf({ type: 'text-delta', delta: 'one ' }, { type: 'text-delta', delta: 'two ' }, { type: 'text-delta', delta: 'three' }),
     });
 
-    const deltas = events.flatMap((event) => event.type === 'text_delta' ? [event.text] : []);
+    const deltas = events.map(scaffoldEventText).filter(text => text !== null);
     expect(deltas).toEqual(['one ', 'two ', 'three']);
   });
 

@@ -159,7 +159,15 @@ kinu spend jarvis      # what the workspace spent, by producer and by mission
 kinu memory jarvis     # read or search what it remembers
 kinu events jarvis     # recent events (email, webhook, timer, peer)
 kinu jobs jarvis       # background jobs, and cancel them
+kinu actors jarvis     # every agent in this workspace, retired ones included
 ```
+
+`kinu actors` answers a question that used to have no answer: a workspace is
+one database, and the agents it hired, the reasoning heads it forked and the
+search nodes it opened all live in it. Dismissed agents are listed and flagged
+rather than dropped, because their transcripts are kept — and `kinu actors
+jarvis <id>` reads what any one of them did without starting it, which is what
+makes a dismissed agent readable at all.
 
 `kinu spend` covers the whole workspace, not just the chat: judges, fast tier,
 evolution engine, exploration heads, search nodes, compaction, embedder,

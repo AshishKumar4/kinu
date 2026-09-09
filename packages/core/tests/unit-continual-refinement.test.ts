@@ -217,9 +217,9 @@ function fixture(): Fixture {
   initPromptSectionTables(rt.storage.execRaw);
   initInstructionApprovalsTable(rt.storage.execRaw);
   initRefinementTables(rt.storage.execRaw);
-  const facts = createFactsStore(rt.storage.sql);
+  const facts = createFactsStore(rt.storage.sql, rt.actor);
   const approvals = new InstructionApprovalStore(
-    rt.storage.sql, 'test-workspace', (body) => body(),
+    rt.storage.sql, rt.actor, 'test-workspace', (body) => body(),
   );
   return {
     rt,
@@ -256,7 +256,7 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
   const seededAccepted: string[] = [];
   for (let i = 0; i < negatives; i += 1) {
     const turnId = `neg-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
       sessionId: 'session-1',
       outcome: 'corrected',
@@ -272,7 +272,7 @@ function seedGradedTurns(rt: AgentRuntime, negatives: number, accepted = 2) {
   }
   for (let i = 0; i < accepted; i += 1) {
     const turnId = `ok-${String((seeded += 1))}`;
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId,
       sessionId: 'session-1',
       outcome: 'accepted',
@@ -429,7 +429,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     seedGradedTurns(fx.rt, 3);
     const { port } = scriptedRefiner('{}');
 
-    const before = activePromptSectionOverrides(fx.rt.storage.sql);
+    const before = activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor);
     const opened = await requestRefinement(fx.deps(port), {
       trigger: 'explicit', scope: 'workspace', sessionId: 'session-1',
     });
@@ -438,10 +438,10 @@ describe('refinement request — durable, and behaviourally inert', () => {
     expect(opened.id).toMatch(/^refine-/);
     expect(opened.turnIds.length).toBeGreaterThan(0);
     // The request is a request. No artifact moved, and no model was called.
-    expect(activePromptSectionOverrides(fx.rt.storage.sql)).toEqual(before);
+    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)).toEqual(before);
     expect(fx.facts.all()).toEqual([]);
 
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     expect(store.get(opened.id)?.stage).toBe('requested');
   });
 
@@ -551,7 +551,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const step = await advanceRefinementLane(deps);
 
     expect(step.step).toBe('planned');
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const row = store.get(opened.id);
     expect(row?.stage).toBe('refused');
     expect(row?.detail).toContain('proposal');
@@ -571,7 +571,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    const row = createRefinementStore(fx.rt.storage.sql).get(opened.id);
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
     expect(row?.stage).toBe('refused');
     expect(row?.detail).toContain('no roster substrate here');
   });
@@ -584,7 +584,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('idle');
-    expect(createRefinementStore(fx.rt.storage.sql).get(opened.id)?.stage).toBe('requested');
+    expect(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)?.stage).toBe('requested');
   });
 });
 
@@ -612,7 +612,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')?.source).toContain(opened.id);
 
-    const row = createRefinementStore(fx.rt.storage.sql).get(opened.id);
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
     const route = routeFor(row!.routes, 'fact');
     expect(route.disposition).toBe('applied');
     expect(route.owner).toBe('agent_facts');
@@ -640,7 +640,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     expect(fx.facts.recall('user.prefers_rust')).toBeNull();
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'fact',
+      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact',
     );
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('not quoted');
@@ -664,7 +664,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const row = store.get(opened.id)!;
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('pending_trials');
@@ -673,9 +673,9 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(row.stage).toBe('evaluating');
 
     // THE LOAD-BEARING ASSERTION: the live prompt is untouched.
-    expect(activePromptSectionOverrides(fx.rt.storage.sql)[TARGET_ID]).toBeUndefined();
+    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
     expect(buildSystemPromptSync(fx.rt, {
-      sectionOverrides: activePromptSectionOverrides(fx.rt.storage.sql),
+      sectionOverrides: activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor),
     })).not.toContain('ASKED.');
   });
 
@@ -701,7 +701,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     });
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql).get(opened.id)!;
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
     const route = routeFor(row.routes, 'prompt_section');
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('no corrected/frustrated turns');
@@ -717,7 +717,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql).get(opened.id)!;
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
     const route = routeFor(row.routes, 'skill');
     expect(route.disposition).toBe('pending_owner_approval');
     expect(route.owner).toBe('instruction_approvals');
@@ -765,7 +765,7 @@ describe('routing — every typed edit lands in the store that already owns it',
       const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
       await advanceRefinementLane(deps);
 
-      const row = createRefinementStore(fx.rt.storage.sql).get(opened.id)!;
+      const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
       const route = routeFor(row.routes, 'skill');
       expect(route.disposition).toBe('refused');
       expect(route.reason).toContain(expected);
@@ -784,7 +784,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const first = occupied.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
     const a = await requestRefinement(first, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(first);
-    const aRoute = routeFor(createRefinementStore(occupied.rt.storage.sql).get(a.id)!.routes, 'skill');
+    const aRoute = routeFor(createRefinementStore(occupied.rt.storage.sql, occupied.rt.actor).get(a.id)!.routes, 'skill');
     expect(aRoute.disposition).toBe('refused');
     expect(aRoute.reason).toContain('already exists');
     expect(await readSkill(occupied.rt, BREVITY_PATH)).toBe(other);
@@ -797,7 +797,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const second = decided.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
     const b = await requestRefinement(second, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(second);
-    const bRoute = routeFor(createRefinementStore(decided.rt.storage.sql).get(b.id)!.routes, 'skill');
+    const bRoute = routeFor(createRefinementStore(decided.rt.storage.sql, decided.rt.actor).get(b.id)!.routes, 'skill');
     expect(bRoute.disposition).toBe('refused');
     expect(bRoute.reason).toContain('standing decision');
     expect(await readSkill(decided.rt, BREVITY_PATH)).toBeNull();
@@ -812,7 +812,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'skill',
+      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'skill',
     );
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('revoked');
@@ -823,7 +823,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -843,7 +843,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -859,7 +859,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -887,7 +887,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'subagent_spec',
+      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'subagent_spec',
     );
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('no writable');
@@ -905,17 +905,20 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     expect(added).toEqual(['refinement_requests']);
     // The names that would betray a second authority for an artifact.
-    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'agent_config']) {
+    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
-    // The whole row, pinned. `claim` is part of the shipped CREATE rather than
-    // something added to a live table afterwards: this row has never been
-    // released, so there is no workspace to reconcile a column into.
+    // The whole row, pinned, `actor_id` FIRST. Both it and `claim` are part of
+    // the shipped CREATE rather than columns added to a live table afterwards:
+    // this row has never been released, so there is no workspace to reconcile a
+    // column into. `actor_id` leads because a refinement request belongs to the
+    // actor that accrued the debt — one workspace database holds several actors'
+    // requests and the routing this test names is per actor, not per workspace.
     expect(bare.sql<{ name: string }>`
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
-        'id', 'trigger', 'scope', 'stage', 'claim', 'session_id', 'turn_ids', 'debt_key',
-        'proposal', 'routes', 'detail', 'created_at', 'updated_at',
+        'actor_id', 'id', 'trigger', 'scope', 'stage', 'claim', 'session_id', 'turn_ids',
+        'debt_key', 'proposal', 'routes', 'detail', 'created_at', 'updated_at',
       ]);
     bare.close();
   });
@@ -923,7 +926,7 @@ describe('routing — every typed edit lands in the store that already owns it',
   test('the request row references its trajectory and never copies a turn', () => {
     const fx = fixture();
     const { negatives } = seedGradedTurns(fx.rt, 3);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     store.open({ trigger: 'explicit', scope: 'workspace', turnIds: negatives });
 
     // The row holds ids. The turn text lives in `turn_outcomes` and is not
@@ -956,7 +959,7 @@ describe('scope — local workspace versus global account, stated rather than as
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    const row = createRefinementStore(fx.rt.storage.sql).get(opened.id)!;
+    const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!;
     expect(row.stage).toBe('refused');
     expect(row.detail).toContain('account');
     expect(fx.facts.recall('user.answer_length')).toBeNull();
@@ -976,7 +979,7 @@ describe('scope — local workspace versus global account, stated rather than as
 describe('the stage machine — restart, retry, and no duplicate work', () => {
   test('a guarded transition is a no-op the second time', () => {
     const fx = fixture();
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const { request } = store.open({
       trigger: 'explicit', scope: 'workspace', turnIds: ['neg-0'],
     });
@@ -988,7 +991,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
 
   test('the same debt batch opens exactly one request, however often it is derived', () => {
     const fx = fixture();
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const input = {
       trigger: 'evolution_debt' as const,
       scope: 'workspace' as const,
@@ -1020,7 +1023,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       settle: () => false,
     };
     const deps = fx.deps(port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     // A host claimed the request and died INSIDE the refiner: the row is
@@ -1071,7 +1074,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       settle: () => false,
     };
     const deps = fx.deps(port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1097,7 +1100,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 4);
     const deps = fx.deps(scriptedRefiner(proposalText(EVERY_OWNER_PROPOSAL)).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1127,13 +1130,13 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
       expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
         .toBe(BREVITY_SKILL);
-      expect(listPromptSectionVersions(fx.rt.storage.sql, 50)).toHaveLength(1);
+      expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
     }
   });
 
   test('no clock bounds a request — recovery is by activation, never by elapsed time', () => {
     const fx = fixture();
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const { request } = store.open({
       trigger: 'explicit', scope: 'workspace', turnIds: ['neg-0'], now: 1,
     });
@@ -1164,7 +1167,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     seedGradedTurns(fx.rt, 4);
     const refiner = deferredRefiner(EVERY_OWNER_PROPOSAL);
     const deps = fx.deps(refiner.port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     // Both drivers, before either can finish: the second one arrives while the
@@ -1184,7 +1187,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(row.routes).toHaveLength(3);
     expect(row.stage).toBe('evaluating');
     expect(fx.facts.all()).toHaveLength(1);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, 50)).toHaveLength(1);
+    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(BREVITY_SKILL);
     // Nothing went live off a proposal: the skill is staged, the section pending.
@@ -1197,7 +1200,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     seedGradedTurns(fx.rt, 4);
     const refiner = deferredRefiner(EVERY_OWNER_PROPOSAL, OTHER_OWNER_PROPOSAL);
     const deps = fx.deps(refiner.port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const inFlight = advanceRefinementLane(deps);
@@ -1219,7 +1222,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.all()).toHaveLength(1);
     expect(store.get(opened.id)!.routes).toHaveLength(3);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, 50)).toHaveLength(1);
+    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
   });
 
   test('a claim another process re-queued writes nothing behind its successor', async () => {
@@ -1227,7 +1230,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     seedGradedTurns(fx.rt, 4);
     const refiner = deferredRefiner(EVERY_OWNER_PROPOSAL, OTHER_OWNER_PROPOSAL);
     const deps = fx.deps(refiner.port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const revoked = advanceRefinementLane(deps);
@@ -1256,7 +1259,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(fx.facts.all()).toHaveLength(1);
     expect(fx.facts.recall('user.answer_shape')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')).toBeNull();
-    const versions = listPromptSectionVersions(fx.rt.storage.sql, 50);
+    const versions = listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50);
     expect(versions).toHaveLength(1);
     expect(versions[0]!.source).toBe(`${INCUMBENT.slice(0, -6)}BRIEF.`);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
@@ -1281,7 +1284,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
       settle: () => false,
     };
     const deps = fx.deps(port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await expect(advanceRefinementLane(deps)).rejects.toThrow('the refiner host went away');
@@ -1299,12 +1302,12 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
     expect(fx.facts.all()).toHaveLength(1);
-    expect(listPromptSectionVersions(fx.rt.storage.sql, 50)).toHaveLength(1);
+    expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
   });
 
   test('a claim is live until the pass ends, and never for a length of time', () => {
     const fx = fixture();
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const { request } = store.open({
       trigger: 'explicit', scope: 'workspace', turnIds: ['neg-0'], now: 1,
     });
@@ -1342,7 +1345,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       }],
     }));
     const deps = fx.deps(port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1354,7 +1357,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       const step = await advancePromptSectionLane(deps.control);
       if (step.step === 'trials' && step.trials.action) break;
     }
-    expect(activePromptSectionOverrides(fx.rt.storage.sql)[TARGET_ID]).toBe(CANDIDATE);
+    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBe(CANDIDATE);
 
     const settled = await advanceRefinementLane(deps);
     expect(settled.step).toBe('settled');
@@ -1381,7 +1384,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       if (!proposed) return candidate === CANDIDATE ? 0.9 : 0.4;
       return candidate === CANDIDATE ? 0.1 : 0.9;
     });
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1392,7 +1395,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       const step = await advancePromptSectionLane(deps.control);
       if (step.step === 'trials' && step.trials.action) break;
     }
-    expect(activePromptSectionOverrides(fx.rt.storage.sql)[TARGET_ID]).toBeUndefined();
+    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
 
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('rolled_back');
@@ -1402,10 +1405,10 @@ describe('promotion — the existing evaluated lane is the only thing that appli
 describe('evolution debt — the automatic trigger, and its visibility', () => {
   test('debt accumulates from unresolved negative outcomes', () => {
     const fx = fixture();
-    expect(evolutionDebt(fx.rt.storage.sql).turnIds).toEqual([]);
+    expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).turnIds).toEqual([]);
 
     seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT - 1);
-    const shallow = evolutionDebt(fx.rt.storage.sql);
+    const shallow = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(shallow.turnIds).toHaveLength(MIN_REFINEMENT_DEBT - 1);
     expect(shallow.owed).toBe(false);
     // The threshold's one public statement. If the module's constant moves and
@@ -1413,7 +1416,7 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     expect(shallow.summary).toContain(`opens at ${String(MIN_REFINEMENT_DEBT)}`);
 
     seedGradedTurns(fx.rt, 1);
-    const owed = evolutionDebt(fx.rt.storage.sql);
+    const owed = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(owed.turnIds.length).toBeGreaterThanOrEqual(MIN_REFINEMENT_DEBT);
     expect(owed.owed).toBe(true);
     expect(owed.key).toMatch(/^[0-9a-f]{16,}$/);
@@ -1426,8 +1429,8 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
       scope: 'workspace', summary: 'none', edits: [],
     }));
     const deps = fx.deps(port);
-    const store = createRefinementStore(fx.rt.storage.sql);
-    const debt = evolutionDebt(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+    const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
 
     const first = await refinementDebtRequest(deps);
     expect(first?.trigger).toBe('evolution_debt');
@@ -1468,13 +1471,13 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     const deps = fx.deps(port);
 
     await refinementDebtRequest(deps);
-    const remaining = evolutionDebt(fx.rt.storage.sql);
+    const remaining = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(remaining.turnIds).toEqual([]);
     expect(remaining.owed).toBe(false);
 
     // Fresh failures accrue fresh debt under a DIFFERENT key.
     seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT, 0);
-    const next = evolutionDebt(fx.rt.storage.sql);
+    const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.key).not.toBe(remaining.key);
   });
@@ -1529,7 +1532,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     })).port);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
-    return routeFor(createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'fact');
+    return routeFor(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact');
   }
 
   test('a short or few-worded fragment is refused however truly it appears', async () => {
@@ -1563,10 +1566,10 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
     await advanceRefinementLane(deps);
 
     const route = routeFor(
-      createRefinementStore(fx.rt.storage.sql).get(opened.id)!.routes, 'fact',
+      createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id)!.routes, 'fact',
     );
     expect(route.reason).toContain('always answer in one line');
-    const card = buildChangelog(fx.rt.storage.sql, { limit: 50 })
+    const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
     expect(card?.items?.[0]?.evidence).toContain('always answer in one line');
     // The child carries the OWNER's revert, not a refinement-shaped one.
@@ -1597,7 +1600,7 @@ describe('mixed outcomes settle honestly', () => {
       if (!proposed) return candidate === CANDIDATE ? 0.9 : 0.4;
       return candidate === CANDIDATE ? 0.1 : 0.9;
     });
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1608,7 +1611,7 @@ describe('mixed outcomes settle honestly', () => {
       const step = await advancePromptSectionLane(deps.control);
       if (step.step === 'trials' && step.trials.action) break;
     }
-    expect(activePromptSectionOverrides(fx.rt.storage.sql)[TARGET_ID]).toBeUndefined();
+    expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
 
     await advanceRefinementLane(deps);
     const settled = store.get(opened.id)!;
@@ -1633,7 +1636,7 @@ describe('the refiner never sees the set its proposal is scored on', () => {
     await advanceRefinementLane(deps);
     const brief = requests[0]!.task;
 
-    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, EVAL_SIZE);
+    const split = buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
     // Every val instance is a turn the section metric will score a candidate
     // against. None of them may appear in the brief.
@@ -1651,7 +1654,7 @@ describe('evolution debt pages, and never loses an older row', () => {
   test('a batch is capped, and the remainder is named rather than dropped', () => {
     const fx = fixture();
     const { negatives } = seedGradedTurns(fx.rt, 20, 0);
-    const debt = evolutionDebt(fx.rt.storage.sql);
+    const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
 
     expect(debt.turnIds).toHaveLength(12);
     // The OLDEST twelve: those are the ones that have been waiting.
@@ -1672,7 +1675,7 @@ describe('evolution debt pages, and never loses an older row', () => {
     // THE REGRESSION THIS GUARDS: a windowed read would look at the newest
     // twelve rows, find them all covered, and report no debt — leaving the
     // eight OLDER failures behind a window that never reaches them again.
-    const next = evolutionDebt(fx.rt.storage.sql);
+    const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.turnIds).toEqual(negatives.slice(12));
     expect(next.key).not.toBe(first!.turnIds.join(''));
@@ -1680,7 +1683,7 @@ describe('evolution debt pages, and never loses an older row', () => {
     const second = await refinementDebtRequest(deps);
     expect(second?.id).not.toBe(first!.id);
     expect(second?.turnIds).toEqual(negatives.slice(12));
-    expect(evolutionDebt(fx.rt.storage.sql).owed).toBe(false);
+    expect(evolutionDebt(fx.rt.storage.sql, fx.rt.actor).owed).toBe(false);
   });
 
   test('a covered batch newer than an uncovered one does not hide it', () => {
@@ -1688,11 +1691,11 @@ describe('evolution debt pages, and never loses an older row', () => {
     const { negatives: older } = seedGradedTurns(fx.rt, 3, 0);
     const { negatives: newer } = seedGradedTurns(fx.rt, 14, 0);
     // A request takes the NEWEST rows explicitly, jumping the queue.
-    createRefinementStore(fx.rt.storage.sql).open({
+    createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({
       trigger: 'explicit', scope: 'workspace', turnIds: newer,
     });
 
-    const debt = evolutionDebt(fx.rt.storage.sql);
+    const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(debt.turnIds).toEqual(older);
     expect(debt.owed).toBe(true);
   });
@@ -1722,7 +1725,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     return { fx, deps, store, id: opened.id, staged: refinementStagingPath(opened.id, 'brevity') };
@@ -1947,7 +1950,7 @@ describe('a hard kill at `gated` is still settled', () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
@@ -1985,7 +1988,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
-    const store = createRefinementStore(fx.rt.storage.sql);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
     return { fx, deps, store, id: opened.id, path: refinementStagingPath(opened.id, 'brevity') };
@@ -2110,7 +2113,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
       expect(shown.view.target).toBe(BREVITY_PATH);
     }
     // The CARD is bounded — it is for scanning, not for deciding.
-    const card = buildChangelog(fx.rt.storage.sql, { limit: 50 })
+    const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
     expect(card?.items?.[0]?.evidence.length).toBeLessThan(long.length);
     expect(card?.items?.[0]?.evidence).toContain('chars');

@@ -36,6 +36,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { formatScoreInterval, seededRandom } from '../utils/stats';
 import {
   goldLabels, isNegativeOutcome, recordOutcomeLabels, TURN_OUTCOMES,
@@ -97,14 +98,15 @@ export interface UniverseRow {
  * report and the ensemble check (ensemble.ts) must all speak for the same rows
  * or their numbers are about different things.
  */
-export function calibrationUniverse(sql: SqlExecutor): UniverseRow[] {
+export function calibrationUniverse(sql: SqlExecutor, actor: ActorHandle): UniverseRow[] {
+  actor.assertCurrent();
   return sql<{
     id: string; outcome: TurnOutcome; scaffold_version: number | null;
     user_message: string; assistant_response: string; followup: string | null; created_at: number;
   }>`
     SELECT id, outcome, scaffold_version, user_message, assistant_response, followup, created_at
     FROM turn_outcomes
-    WHERE source = 'classifier' AND outcome != 'abandoned'
+    WHERE actor_id = ${actor.actorId} AND source = 'classifier' AND outcome != 'abandoned'
     ORDER BY created_at, id`
     .map((r) => ({
       id: r.id, predicted: r.outcome, scaffoldVersion: r.scaffold_version,
@@ -229,9 +231,11 @@ function spread<T>(rows: ReadonlyArray<T>, n: number): T[] {
  * Turns that already carry a gold label are excluded, so running this again
  * tops the set up rather than re-asking questions already answered.
  */
-export function sampleForLabeling(sql: SqlExecutor, opts: { size?: number } = {}): LabelingItem[] {
-  const already = goldLabels(sql);
-  const universe = calibrationUniverse(sql).filter((row) => !already.has(row.id));
+export function sampleForLabeling(
+  sql: SqlExecutor, actor: ActorHandle, opts: { size?: number } = {},
+): LabelingItem[] {
+  const already = goldLabels(sql, actor);
+  const universe = calibrationUniverse(sql, actor).filter((row) => !already.has(row.id));
   if (universe.length === 0) return [];
 
   const byVerdict = new Map<TurnOutcome, UniverseRow[]>();
@@ -396,15 +400,16 @@ export interface LabelIngestResult {
  */
 export function ingestOutcomeLabels(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>; now?: number },
 ): LabelIngestResult {
-  const predicted = new Map(calibrationUniverse(sql).map((row) => [row.id, row.predicted]));
+  const predicted = new Map(calibrationUniverse(sql, actor).map((row) => [row.id, row.predicted]));
   const known = input.labels.filter((entry) => predicted.has(entry.outcomeId));
   const unknown = input.labels
     .filter((entry) => !predicted.has(entry.outcomeId))
     .map((entry) => entry.outcomeId);
 
-  recordOutcomeLabels(sql, { labeler: input.labeler, labels: known, now: input.now });
+  recordOutcomeLabels(sql, actor, { labeler: input.labeler, labels: known, now: input.now });
   return {
     stored: known.length,
     unknown,
@@ -472,9 +477,9 @@ export interface CalibrationReport {
  * error. The two rates therefore answer slightly different questions and are
  * rendered side by side rather than one replacing the other.
  */
-export function calibrationReport(sql: SqlExecutor): CalibrationReport {
-  const universe = calibrationUniverse(sql);
-  const gold = goldLabels(sql);
+export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): CalibrationReport {
+  const universe = calibrationUniverse(sql, actor);
+  const gold = goldLabels(sql, actor);
   const byId = new Map(universe.map((row) => [row.id, row]));
 
   let unclear = 0;

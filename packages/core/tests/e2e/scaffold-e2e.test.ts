@@ -16,7 +16,7 @@ import { initScaffoldTables } from '../../src/scaffold/schemas';
 import type { AgentRuntime } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import {
-  makeSql, makeExecRaw, createMemoryVFS, createMemoryMemory,
+  makeSql, makeExecRaw, createTestActor, createMemoryVFS, createMemoryMemory,
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
 } from '../helpers';
 
@@ -26,11 +26,13 @@ function createScaffoldTestRuntime(llm: LLM) {
   const execRaw = makeExecRaw(db);
   const vfs = createMemoryVFS(db);
 
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test');
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    actor,
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
-    llm, schedule: createMemorySchedule(db),
+    llm, schedule: createMemorySchedule(db, actor),
     identity: {
       id: 'scaffold-test', name: 'scaffold-test',
       scaffold: {
@@ -38,13 +40,13 @@ function createScaffoldTestRuntime(llm: LLM) {
         exists: () => vfs.exists('scaffold/agent.js'),
         read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
-        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
+          FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }) }),
+    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
   return { rt };
 }

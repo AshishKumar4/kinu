@@ -32,18 +32,26 @@ import {
   type ModelOperationSink,
   type ResolvedTurnProfile,
 } from "@kinu.run/core";
-import { spawnHeadFacet, type ExplorationFacetIdentity, type FacetHost } from "./facet-spawn";
+import { hostHead, type ExplorationHostSeams } from "./exploration-hosting";
 import type { OwnedModelServices } from "./owned-model-services";
 
 interface HeadRuntimeDeps {
-  /** The facet substrate children are spawned on: the workspace DO for a
-   *  top-level split, the head itself for a recursive one. */
-  readonly host: FacetHost;
-  /** Owner, capability token and ROOT workspace every child facet is seeded with.
-   *  A thunk, and resolved per spawn: the token is reissued out of band, and the
-   *  root must be propagated UNCHANGED so an intermediate head never becomes the
-   *  tree's workspace. */
-  readonly identity: () => Promise<ExplorationFacetIdentity>;
+  /**
+   * The exploration substrate children are acquired from: the workspace's ONE
+   * actor host, whether the splitter is the main actor or a head splitting
+   * further.
+   *
+   * The old shape took a `FacetHost` plus an `identity()` thunk that carried
+   * the owner, the capability token and the ROOT workspace name down to each
+   * child, because a facet was a separate Durable Object that had to be TOLD
+   * whose credentials to run as and which workspace it was forking. A hosted
+   * child is a row in the workspace it already belongs to: the owner, the token
+   * and the workspace are the root's own, read from the seams, and there is
+   * nothing to propagate and nothing that can disagree. That is what stopped an
+   * intermediate head from ever becoming its subtree's workspace — not a rule
+   * about passing a value unchanged, but the absence of a second value.
+   */
+  readonly host: ExplorationHostSeams;
   /** The owner-scoped model services this actor already owns. Never a second
    *  registry — that was the duplication. The merge's only use of them is
    *  binding the route core resolved. */
@@ -70,7 +78,7 @@ interface HeadRuntimeDeps {
 
 export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
-    spawnHead: async (input) => spawnHeadFacet(deps.host, input, await deps.identity()),
+    spawnHead: (input) => hostHead(deps.host, input),
     mergeLLM: headMergeLLM({
       profile: deps.profile,
       // The one backend-local decision: a spec is normalised against the

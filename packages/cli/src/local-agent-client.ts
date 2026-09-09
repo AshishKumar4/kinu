@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
-import { applyWorkspaceTitle, canonicalConversationId, createAgentConfigStore, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
+import { applyWorkspaceTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, invalidateConversationSearchIndex, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
@@ -159,7 +159,7 @@ export async function autoTitleLocalWorkspace(
   opts: SuggestAgentIdentityOptions,
 ): Promise<void> {
   initAgentConfigTable(rt.storage.execRaw);
-  const config = createAgentConfigStore(rt.storage.sql);
+  const config = rt.actor.config;
   await applyWorkspaceTitle({
     slug: name,
     displayName: config.getDisplayName(),
@@ -244,7 +244,7 @@ export class LocalAgentClient implements AgentClient {
   readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
-  /** Workspace-level agent_config, read straight off the same database the
+  /** Workspace-level actor_config, read straight off the same database the
    *  session uses. Config outlives the session, so a walk-back fork's session
    *  swap does not invalidate this. */
   private readonly config: AgentConfigStore;
@@ -282,7 +282,7 @@ export class LocalAgentClient implements AgentClient {
     this.deps = deps;
     this.agentName = deps.agentName;
     initAgentConfigTable(deps.rt.storage.execRaw);
-    this.config = createAgentConfigStore(deps.rt.storage.sql);
+    this.config = deps.rt.actor.config;
     this.canonicalConversation = canonicalConversationId(this.config);
     // Every artifact records which durable conversation it observed, so a
     // diagnostic export stays interpretable outside the workspace database.
@@ -456,10 +456,12 @@ export class LocalAgentClient implements AgentClient {
    *  this process records — the fork reads the durable store, never JSONL. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
+    const { actorId } = this.deps.rt.actor;
     const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
       FROM messages
-      WHERE session_id = ${this.canonicalConversation} AND role IN ('user', 'assistant')
+      WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
+        AND role IN ('user', 'assistant')
       ORDER BY created_at ASC, rowid ASC`;
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) {
@@ -469,7 +471,8 @@ export class LocalAgentClient implements AgentClient {
     const archivedConversation = `archive-${crypto.randomUUID()}`;
     for (const row of rows.slice(pivot)) {
       void this.deps.rt.storage.sql`
-        UPDATE messages SET session_id = ${archivedConversation} WHERE id = ${row.id}`;
+        UPDATE messages SET session_id = ${archivedConversation}
+        WHERE actor_id = ${actorId} AND id = ${row.id}`;
     }
     // Session reassignment is invisible to the search index's rowid watermark;
     // its entries now name conversations the rows left.
@@ -605,7 +608,7 @@ export class LocalAgentClient implements AgentClient {
 
   async searchNodes(): Promise<AgentSearchNode[]> {
     // The latest search only — the same projection the cloud getMctsTree serves.
-    const nodes = readLatestSearchTree(this.deps.rt.storage.sql);
+    const nodes = readLatestSearchTree(this.deps.rt.storage.sql, this.deps.rt.actor);
     return nodes.map((node) => ({
       depth: node.depth,
       status: node.status,

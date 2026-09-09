@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import { createTestRuntime } from './helpers';
 import { modifyScaffold } from '../src/scaffold/modify';
@@ -140,8 +140,8 @@ describe('Scaffold rollback', () => {
     // Write initial version — source file plus its metadata row, since a
     // version without a row cannot be the current pointer.
     await rt.storage.vfs.writeFile('scaffold/agent.js.v0', 'original code');
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale)
-                   VALUES (0, ${Date.now()}, ${'original'})`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale)
+                   VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'original'})`;
 
     const result = await rollbackScaffold(rt, 0);
     expect(result.ok).toBe(true);
@@ -169,7 +169,9 @@ describe('scaffold host callTool ids', () => {
     // claim IS the row.
     const { sql, execRaw } = createTestSql();
     initToolEffectClaimTable(execRaw);
-    const deps: EffectClaimDeps = { sql, turnId: () => 'turn-1' };
+    const deps: EffectClaimDeps = {
+      sql, actor: createTestActors(sql, execRaw).main, turnId: () => 'turn-1',
+    };
     const calls: string[] = [];
     const entry = tool({
       description: 'send the invoice',

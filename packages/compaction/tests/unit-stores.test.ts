@@ -13,6 +13,7 @@ import {
   type SqlValue,
   type VFS,
 } from '@kinu.run/core';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
@@ -61,10 +62,15 @@ function sqliteBinding(value: SqlValue): SQLQueryBindings {
   return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 }
 
+/** The state store and the ONE actor whose rows it holds. `initWorkspaceSchema`
+ *  above creates the actor tables but registers nobody, so the handle is issued
+ *  over that same database through the production directory — a store bound to
+ *  any other actor would read its own writes back as an empty set. */
 function stateRig() {
   const db = new Database(':memory:');
   initCompactionStateTable(db);
-  return { db, store: createCompactionStateStore(sqliteSql(db)) };
+  const actor = createTestActorsOver(db).main;
+  return { db, actor, store: createCompactionStateStore(sqliteSql(db), actor) };
 }
 
 function snapshot(sessionId: string): PlanSnapshot {
@@ -207,8 +213,9 @@ describe('createCompactionStateStore', () => {
   // an absent plan: returning null told the caller "no plan yet", so the row
   // stayed corrupt and every load silently re-planned from scratch.
   test('a corrupt plan_json row surfaces instead of reading as no plan', () => {
-    const { db, store } = stateRig();
-    db.prepare(`INSERT INTO compaction_state (session_key, plan_json) VALUES ('s1', 'not json')`).run();
+    const { db, actor, store } = stateRig();
+    db.prepare(`INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, 's1', 'not json')`)
+      .run(actor.actorId);
     expect(() => store.plans.load('s1')).toThrow(SyntaxError);
   });
 

@@ -31,6 +31,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
@@ -65,6 +66,10 @@ const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;
 /** The stores a workspace publishes from. */
 export interface PublishSources {
   sql: SqlExecutor;
+  /** Whose artifacts these are. The scaffold pointer and its trial record are
+   *  per-actor, so "the version this workspace runs" is a question only an
+   *  actor-scoped read can answer. */
+  actor: ActorHandle;
   craftStore: CraftStore;
   facts: FactsStore;
   /** One scaffold version's source, as `scaffold/shadow.ts` reads it. A seam
@@ -128,7 +133,7 @@ function craftCandidate(
 }
 
 function lessonCandidate(src: PublishSources, id: string): PublishableCandidate | PublishRefusal {
-  const lesson = getLesson(src.sql, id);
+  const lesson = getLesson(src.sql, src.actor, id);
   if (!lesson) return { refused: `no lesson with id "${id}" in this workspace` };
   if (lesson.status !== 'corroborated') {
     return {
@@ -172,10 +177,14 @@ const VetoSurfaceSchema = v.object({ surface: v.optional(v.string()) });
  *  persisted. Vetoes on the `import` surface are excluded: those are another
  *  workspace's text refused at this boundary, which says nothing about the loop
  *  that was running when it arrived. */
-function ownMisevolutionFlags(sql: SqlExecutor, from: number, to: number): number {
+function ownMisevolutionFlags(
+  sql: SqlExecutor, actor: ActorHandle, from: number, to: number,
+): number {
+  actor.assertCurrent();
   const rows = sql<{ data: string | null }>`
     SELECT data FROM evolution_events
-    WHERE type = 'misevolution_veto' AND created_at BETWEEN ${from} AND ${to}`;
+    WHERE actor_id = ${actor.actorId} AND type = 'misevolution_veto'
+      AND created_at BETWEEN ${from} AND ${to}`;
   return rows.filter((row) => {
     // `data` is recordMisevolutionVeto's own write, so a payload that will not
     // parse is corruption in our row rather than a foreign format to shrug at —
@@ -209,9 +218,10 @@ async function scaffoldCandidate(
   if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
     return { refused: `"${key}" is not a scaffold version — a scaffold is published by its version number` };
   }
+  src.actor.assertCurrent();
   const row = src.sql<ScaffoldVersionRow>`
     SELECT version, status, rationale, written_at FROM scaffold_versions
-    WHERE version = ${version} LIMIT 1`[0];
+    WHERE actor_id = ${src.actor.actorId} AND version = ${version} LIMIT 1`[0];
   if (!row) return { refused: `no scaffold version v${version} in this workspace` };
   if (row.status !== 'current') {
     return {
@@ -224,7 +234,7 @@ async function scaffoldCandidate(
   // through the gate that decides promotions, rather than restating its rule:
   // the v0 bootstrap (never tried) and a hand-forced promote (thin record) both
   // carry status='current' and neither earned it.
-  const record = readShadowVerdict(src.sql, version).summary;
+  const record = readShadowVerdict(src.sql, src.actor, version).summary;
   const gate = decidePromotion({
     trialsSoFar: record.trials,
     pendingWins: record.pendingWins,
@@ -245,7 +255,8 @@ async function scaffoldCandidate(
   // turn through now rather than ending at the Nth turn: a veto drawn after
   // probation still says what is running here evolves unsafe artifacts.
   const turns = src.sql<{ created_at: number }>`
-    SELECT created_at FROM turn_outcomes WHERE scaffold_version = ${version}
+    SELECT created_at FROM turn_outcomes
+    WHERE actor_id = ${src.actor.actorId} AND scaffold_version = ${version}
     ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
   if (turns.length < EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS) {
     return {
@@ -255,7 +266,7 @@ async function scaffoldCandidate(
         + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
     };
   }
-  const flags = ownMisevolutionFlags(src.sql, turns[0]?.created_at ?? now, now);
+  const flags = ownMisevolutionFlags(src.sql, src.actor, turns[0]?.created_at ?? now, now);
   if (flags > 0) {
     return {
       refused: `scaffold v${version} drew ${flags} misevolution veto${flags === 1 ? '' : 'es'} during its `
@@ -313,7 +324,7 @@ export async function listPublishable(
     .map((tool) => craftCandidate(src, tool.name, scores, now))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
-  const lessons = listLessons(src.sql, { status: 'corroborated', limit })
+  const lessons = listLessons(src.sql, src.actor, { status: 'corroborated', limit })
     .map((lesson) => lessonCandidate(src, lesson.id))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
@@ -325,7 +336,7 @@ export async function listPublishable(
   // At most one scaffold: the live version is the only publishable one and
   // there is exactly one of it. Listed first because it can never be crowded
   // out of a limit by a workspace with many crafts.
-  const live = getCurrentScaffoldVersion(src.sql);
+  const live = getCurrentScaffoldVersion(src.sql, src.actor);
   const scaffold = live === null ? null : await scaffoldCandidate(src, String(live), now);
   const scaffolds = scaffold !== null && !isRefusal(scaffold) ? [scaffold] : [];
 

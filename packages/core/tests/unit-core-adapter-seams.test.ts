@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { jsonSchema, tool, type FinishReason } from 'ai';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import {
   EVENT_VARIANTS, type EventVariant,
   buildModelCallEvent, type ModelCallReport,
@@ -264,7 +264,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
   const recorded: CompletedTurn[] = [];
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
-  const store = createCompletedTurnStore(sql);
+  const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
     sessionWindow: store,
@@ -296,9 +296,11 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     turnInFlight: () => false,
     setTimer: () => {},
   };
-  const eventSql: SqlExec = makeSqlExec(new Database(':memory:'));
+  const eventDb = new Database(':memory:');
+  const eventSql: SqlExec = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
-  const orch = new AgentOrchestrator({ host, engine, eventLog: new EventLog(eventSql) });
+  const eventActor = createTestActorsOver(eventDb).main;
+  const orch = new AgentOrchestrator({ host, engine, eventLog: new EventLog(eventSql, eventActor) });
   return { orch, recorded };
 }
 

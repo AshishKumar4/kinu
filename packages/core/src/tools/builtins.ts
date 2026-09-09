@@ -74,7 +74,6 @@ import {
 } from './registry';
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
-import { createAgentConfigStore } from '../config/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
 import { dispatchReport, type ReportToolInput } from './report-tool';
 import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
@@ -603,7 +602,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
   const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
+    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
   });
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
@@ -653,8 +652,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // neither TaskListStore nor ConversationSearchStore holds process state.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
-  const taskList = new TaskListStore(rt.storage.sql);
-  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql), deps.roleAuthority);
+  const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({

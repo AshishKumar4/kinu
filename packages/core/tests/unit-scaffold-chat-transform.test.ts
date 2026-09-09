@@ -12,7 +12,7 @@
  *     and its responseMessages survive onto this seam's single `done`.
  */
 import { describe, test, expect } from 'bun:test';
-import { scaffoldChatTransform, type ChatEvent } from '../src/index';
+import { scaffoldChatTransform, prepareActorProgram, type ChatEvent } from '../src/index';
 import type { ScaffoldRunOptions } from '../src/scaffold/executor';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Executor, ResolvedProvider } from '../src/types/primitives';
@@ -59,19 +59,19 @@ function runtime(): AgentRuntime {
   return rt;
 }
 
-function runOpts(
-  rt: AgentRuntime,
-  scaffoldCode: string,
-  callTool?: (n: string, a: JsonObject) => Promise<JsonValue | undefined>,
-): Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'> {
-  const options: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'> = {
-    rt,
-    task: 'the task',
-    llmStream: async function* () { yield ''; },
-    scaffoldCodeOverride: scaffoldCode,
+async function selected(version: number, scaffoldCode: string,
+  callTool?: (name: string, args: JsonObject) => Promise<JsonValue | undefined>) {
+  const rt = runtime();
+  const files = rt.agentStateVfs ?? rt.storage.vfs;
+  await files.mkdir('scaffold', { recursive: true });
+  await files.writeFile(rt.identity.scaffold.path + '.v' + version, scaffoldCode);
+  const program = await prepareActorProgram({ runtime: rt, mode: 'build', version });
+  const run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'> = {
+    rt, task: 'the task',
+    llmStream: () => { throw new Error('this fixture must not start a model'); },
   };
-  if (callTool) options.callTool = callTool;
-  return options;
+  if (callTool) run.callTool = callTool;
+  return { program, run };
 }
 
 /** A default turn, plus a flag recording whether anything ever started it. */
@@ -100,17 +100,15 @@ async function collect(stream: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 }
 
 describe('scaffoldChatTransform', () => {
-  test('version <= 0 → the default turn passes through untouched (same object)', () => {
+  test('version <= 0 → the default turn passes through untouched (same object)', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
-    expect(scaffoldChatTransform({ currentVersion: 0, chat, run: runOpts(runtime(), CUSTOM_SCAFFOLD) }))
+    expect(scaffoldChatTransform({ chat, ...await selected(0, CUSTOM_SCAFFOLD) }))
       .toBe(chat);
   });
 
   test('a promoted scaffold DRIVES the turn: its output replaces the default', async () => {
     const { chat, started } = defaultTurn(DEFAULT_EVENTS);
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 3, chat, run: runOpts(runtime(), CUSTOM_SCAFFOLD),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(3, CUSTOM_SCAFFOLD) }));
 
     const text = events.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []).join('');
     expect(text).toBe('scaffold answer for: the task');
@@ -130,9 +128,7 @@ describe('scaffoldChatTransform', () => {
 
   test('delegating scaffold is faithful: the default events pass through verbatim', async () => {
     const { chat, started } = defaultTurn(DEFAULT_EVENTS);
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 2, chat, run: runOpts(runtime(), DELEGATING_SCAFFOLD),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(2, DELEGATING_SCAFFOLD) }));
 
     expect(started()).toBe(true);
     // Every non-done default event, verbatim and in order; exactly one done.
@@ -162,11 +158,7 @@ describe('scaffoldChatTransform', () => {
       { type: 'done', text: 'default answer', responseMessages: [responseMessage] },
     ]);
 
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 2,
-      chat,
-      run: runOpts(runtime(), DELEGATING_SCAFFOLD),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(2, DELEGATING_SCAFFOLD) }));
 
     expect(events).toEqual([
       { type: 'step-finish', stepIndex: 1, responseMessages: [{ role: 'assistant', content: 'default answer' }] },
@@ -180,11 +172,7 @@ describe('scaffoldChatTransform', () => {
 
   test('scaffold tool calls surface as tool-call / tool-result pairs', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 1,
-      chat,
-      run: runOpts(runtime(), TOOL_SCAFFOLD, async () => ({ hits: 2 })),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, TOOL_SCAFFOLD, async () => ({ hits: 2 })) }));
 
     const call = events.find(
       (event): event is Extract<ChatEvent, { type: 'tool-call' }> => event.type === 'tool-call',
@@ -206,11 +194,7 @@ describe('scaffoldChatTransform', () => {
 
   test('a failing tool dispatch is reported as an unsuccessful tool-result', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 1,
-      chat,
-      run: runOpts(runtime(), TOOL_SCAFFOLD, async () => { throw new Error('boom'); }),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, TOOL_SCAFFOLD, async () => { throw new Error('boom'); }) }));
 
     const result = events.find((e) => e.type === 'tool-result');
     expect(result).toMatchObject({ type: 'tool-result', toolName: 'search', success: false, error: 'boom' });
@@ -218,9 +202,7 @@ describe('scaffoldChatTransform', () => {
 
   test('an unrunnable scaffold surfaces one error event and still closes the turn', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
-    const events = await collect(scaffoldChatTransform({
-      currentVersion: 1, chat, run: runOpts(runtime(), 'this is not javascript {'),
-    }));
+    const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, 'this is not javascript {') }));
 
     expect(events.some((e) => e.type === 'error')).toBe(true);
     expect(events.at(-1)?.type).toBe('done');

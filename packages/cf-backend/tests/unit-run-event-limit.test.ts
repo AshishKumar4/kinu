@@ -16,6 +16,7 @@ import {
   getRunEvents, initRunEventTables, RunEventRecorder,
   RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX, type RunEventQuery,
 } from '@kinu.run/core';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from '../../core/tests/helpers';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -31,7 +32,8 @@ const SEEDED_EVENTS = 700;
 function runEventsEnv() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
-  const recorder = new RunEventRecorder(makeSql(db));
+  const sql = makeSql(db);
+  const recorder = new RunEventRecorder(sql, testActorHandle(sql));
   for (let i = 0; i < SEEDED_EVENTS; i++) {
     recorder.emit('run-1', { type: 'error', message: `event ${i}` });
   }

@@ -10,13 +10,15 @@ import {
   USAGE_FIELDS, WORKSPACE_RUN_ID,
   type RunEvent, type Usage,
 } from '../src/index';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
-  return { recorder: new RunEventRecorder(sql), sql };
+  const actor = testActorHandle(sql);
+  return { recorder: new RunEventRecorder(sql, actor), sql, actor };
 }
 
 /** One run with `count` events already in the log — the corpus a bound is
@@ -52,17 +54,18 @@ describe('RunEventRecorder.emit', () => {
   });
 
   test('persists events to the run_events table', () => {
-    const { recorder, sql } = setup();
+    const { recorder, sql, actor } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-1', { type: 'error', message: 'x' });
     const rows = sql<{ event_index: number; type: string }>`
-      SELECT event_index, type FROM run_events WHERE run_id = 'run-1' ORDER BY event_index`;
+      SELECT event_index, type FROM run_events
+      WHERE actor_id = ${actor.actorId} AND run_id = 'run-1' ORDER BY event_index`;
     expect(rows.length).toBe(2);
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
   });
   test('a colliding index raises instead of replacing a live row', () => {
-    const { recorder, sql } = setup();
+    const { recorder, sql, actor } = setup();
     recorder.emit('run-1', { type: 'error', message: 'first' });
     recorder.emit('run-1', { type: 'error', message: 'second' });
     // A second writer claims the recorder's cached next index out from under
@@ -70,11 +73,12 @@ describe('RunEventRecorder.emit', () => {
     const runId = 'run-1';
     const live = '{"type":"error","eventIndex":2,"runId":"run-1","timestamp":"2026-09-05T00:00:00.000Z","message":"live"}';
     const ts = '2026-09-05T00:00:00.000Z';
-    void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-      VALUES (${runId}, 2, 'error', ${live}, ${ts})`;
+    void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (${actor.actorId}, ${runId}, 2, 'error', ${live}, ${ts})`;
     expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow(/UNIQUE constraint failed: run_events/);
     const rows = sql<{ payload: string }>`
-      SELECT payload FROM run_events WHERE run_id = ${runId} AND event_index = 2`;
+      SELECT payload FROM run_events
+      WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND event_index = 2`;
     expect(rows.length).toBe(1);
     expect(rows[0]?.payload).toBe(live);
   });
@@ -356,7 +360,7 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
   });
 
   test('runs whose latest events share a timestamp still have a decidable window', () => {
-    const { recorder, sql } = setup();
+    const { recorder, sql, actor } = setup();
     // The defect this ordering replaced: `ORDER BY MAX(ts) DESC` with no
     // tiebreak over a TEXT column. When two runs' latest events carry the same
     // stamp there is no answer to which one a LIMIT 1 contains, so a two-page
@@ -364,8 +368,8 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     // directly, because the recorder cannot be made to collide on purpose.
     const same = '2026-08-17T00:00:00.000Z';
     for (const runId of ['run-A', 'run-B', 'run-C']) {
-      void sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-        VALUES (${runId}, 0, 'error', '{}', ${same})`;
+      void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+        VALUES (${actor.actorId}, ${runId}, 0, 'error', '{}', ${same})`;
     }
 
     const first = recorder.listRunsBefore(null, 1);
@@ -441,12 +445,12 @@ describe('integration: after restart, indices resume correctly', () => {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
     const sql = makeSql(db);
-    const r1 = new RunEventRecorder(sql);
+    const r1 = new RunEventRecorder(sql, testActorHandle(sql));
     r1.emit('run-1', { type: 'run_start', agentId: 'a' });
     r1.emit('run-1', { type: 'error', message: 'x' });
 
     // Simulate process restart — new recorder, same SQLite.
-    const r2 = new RunEventRecorder(sql);
+    const r2 = new RunEventRecorder(sql, testActorHandle(sql));
     const next = r2.emit('run-1', { type: 'turn_end', turnIndex: 0 });
     expect(next.eventIndex).toBe(2);
   });
@@ -631,7 +635,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
 describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
   test('counts completed non-plan turns after the boundary, across runs, and only those', () => {
-    const { recorder, sql } = setup();
+    const { recorder, sql, actor } = setup();
     // Twenty-five qualifying completed turns across twenty-five runs — the
     // shape the cadence contract is stated over: one run fires exactly once.
     // The first ten are backdated below an explicit boundary: emit stamps
@@ -639,7 +643,8 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
     for (let i = 0; i < 10; i++) {
       recorder.emit(`run-a${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
     }
-    void sql`UPDATE run_events SET ts = '2026-01-01T00:00:00.000Z' WHERE run_id LIKE 'run-a%'`;
+    void sql`UPDATE run_events SET ts = '2026-01-01T00:00:00.000Z'
+      WHERE actor_id = ${actor.actorId} AND run_id LIKE 'run-a%'`;
     const boundary = '2026-06-01T00:00:00.000Z';
     for (let i = 0; i < 15; i++) {
       recorder.emit(`run-b${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });

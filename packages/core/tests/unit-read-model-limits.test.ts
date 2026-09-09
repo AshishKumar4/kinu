@@ -21,7 +21,7 @@ import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { getRunSummaries, listRuns } from '../src/read-models/runs';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { initAllTables } from '../src/identity/schema';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 
 /** `count` distinct runs in the log, one event each, so a page bound is
  *  observable as a row count. */
@@ -30,11 +30,15 @@ function seededRuns(count: number) {
   initAllTables(execRaw, sql);
   initRunEventTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const recorder = new RunEventRecorder(sql);
+  // The job store is actor-private, so the timeline's jobs spine needs a real
+  // owner — and the run-event log is scoped by the same actor, so the recorder
+  // writes under the one the spine reads.
+  const actor = createTestActors(sql, execRaw).main;
+  const recorder = new RunEventRecorder(sql, actor);
   for (let i = 0; i < count; i++) {
     recorder.emit(`run-${String(i).padStart(4, '0')}`, { type: 'run_start', agentId: 'a' });
   }
-  return { recorder, sql };
+  return { recorder, sql, actor };
 }
 
 describe('the run list page is closed against every caller value', () => {
@@ -98,15 +102,15 @@ describe('the merged timeline is closed against every caller value', () => {
   /** The four spines the timeline merges, each seeded so a bound is visible in
    *  the span count rather than only in the SQL. */
   function timelineDeps(runs: number) {
-    const { recorder, sql } = seededRuns(1);
+    const { recorder, sql, actor } = seededRuns(1);
     for (let i = 0; i < runs; i++) {
       recorder.emit('run-0000', { type: 'error', message: `e${i}` });
-      void sql`INSERT INTO evolution_events (id, type, message, created_at)
-        VALUES (${`ev-${i}`}, ${'note'}, ${`m${i}`}, ${1000 + i})`;
+      void sql`INSERT INTO evolution_events (actor_id, id, type, message, created_at)
+        VALUES (${actor.actorId}, ${`ev-${i}`}, ${'note'}, ${`m${i}`}, ${1000 + i})`;
     }
     return {
       deps: {
-        sql, events: recorder, jobs: new BackgroundJobStore(sql), currentRunId: 'run-0000',
+        sql, actor, events: recorder, jobs: new BackgroundJobStore(sql, actor), currentRunId: 'run-0000',
       },
       recorder,
     };

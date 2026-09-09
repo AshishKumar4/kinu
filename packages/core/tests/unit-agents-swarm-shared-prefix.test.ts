@@ -19,7 +19,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import type { Database } from 'bun:sqlite';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import {
   createAgentsTool,
   type AgentRuntime,
@@ -82,8 +84,16 @@ function capturingModel(prompts: TurnPrompt[]) {
 
 type CapturingModel = ReturnType<typeof capturingModel>;
 
-function forkDeps(rt: AgentRuntime, model: CapturingModel, overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
-  return { rt, model, ...overrides };
+/** The fork deps a caller hands the agents tool. Takes the caller's DATABASE as
+ *  well as its runtime, because `unit:'answer'` makes every child an agent node
+ *  and each acquires its own actor of that one workspace — one seat per node,
+ *  never one shared handle. */
+function forkDeps(
+  world: { rt: AgentRuntime; db: Database },
+  model: CapturingModel,
+  overrides: Partial<AgentsForkDeps> = {},
+): AgentsForkDeps {
+  return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model, ...overrides };
 }
 
 function agentsTool(deps: AgentsToolDeps) {
@@ -122,13 +132,13 @@ function forkCall(branches: number) {
 
 describe('compactShared wiring through runSwarmAction', () => {
   test('context:fork carries the caller conversation through the agents tool bridge', async () => {
-    const { rt } = createTestRuntime();
+    const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps(rt, capturingModel(prompts), {
+      fork: forkDeps({ rt, db }, capturingModel(prompts), {
         originContext: () => origin,
       }),
     });
@@ -140,7 +150,7 @@ describe('compactShared wiring through runSwarmAction', () => {
   }, 120_000);
 
   test('a fork parent past the threshold reaches its child compacted, not verbatim', async () => {
-    const { rt } = createTestRuntime();
+    const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const compacted: ReadonlyArray<ModelMessage>[] = [];
@@ -150,7 +160,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps(rt, capturingModel(prompts), { compactShared }),
+      fork: forkDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
     await tool.execute(forkCall(1));
@@ -175,7 +185,7 @@ describe('compactShared wiring through runSwarmAction', () => {
   }, 120_000);
 
   test('siblings of one branch point share the one compacted prefix, byte-identical', async () => {
-    const { rt } = createTestRuntime();
+    const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     let compactions = 0;
@@ -185,7 +195,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps(rt, capturingModel(prompts), { compactShared }),
+      fork: forkDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
     await tool.execute(forkCall(2));

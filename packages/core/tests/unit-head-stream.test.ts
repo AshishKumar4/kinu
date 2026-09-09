@@ -14,14 +14,17 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
-import type { LanguageModel } from 'ai';
+import { createTestRuntime, scriptedTurnModel, type ModelStreamPart } from '@kinu.run/test-utils';
+import type { LanguageModel, ModelMessage } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import { runHeadInference, HeadCapture, type HeadInferenceDeps } from '../src/heads/head-inference';
 import type { HeadStreamKind } from '../src/heads/head-stream';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { LiveHeadJournal } from '../src/heads/live-journal';
 import { initHeadsTables } from '../src/heads/schema';
 import type { HeadInput, HeadStep } from '../src/heads/types';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { hostedSeatsOver } from './helpers-actor-host';
 
 /** One published frame, as a transport would see it. */
 interface Frame { readonly kind: HeadStreamKind; readonly delta: string }
@@ -111,11 +114,23 @@ function headInput(): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 
-function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInferenceDeps {
+/**
+ * A head's deps over a REAL hosted actor.
+ *
+ * The frames under test are produced inside a claimed turn on the actor's own
+ * `ActorSession`, so the fixture supplies the actor that turn belongs to —
+ * through the production directory, host and session `hostedSeatsOver` builds —
+ * rather than the bare runtime a head used to be handed.
+ */
+async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
+  const { rt, testSql } = createTestRuntime();
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'head');
   return {
+    ...seat,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     workspaceLayout: 'shared-workspace', ...over,
   };
@@ -124,7 +139,7 @@ function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInfe
 describe('a running head publishes what it is producing', () => {
   test('both halves of a step reach the channel, each tagged with its own kind', async () => {
     const frames: Frame[] = [];
-    const report = await runHeadInference(headInput(), deps(
+    const report = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'weighing the two lexers', text: 'the lexer handles UTF-8' }),
       { reportDelta: (kind, delta) => { frames.push({ kind, delta }); } },
     ));
@@ -145,7 +160,7 @@ describe('a running head publishes what it is producing', () => {
     // is merged with its neighbour, dropped, reordered or reshaped on the way.
     const chunks = ['The ', 'lexer ', 'handles ', 'UTF', '-8 ', 'correctly.'];
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), deps(chunkedHead(chunks), {
+    await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
     }));
 
@@ -158,7 +173,7 @@ describe('a running head publishes what it is producing', () => {
     // The turn body drops empty text deltas before they are yielded, so a
     // provider that emits keep-alive chunks cannot make a reader repaint nothing.
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), deps(chunkedHead(['', 'answer', '']), {
+    await runHeadInference(headInput(), await deps(chunkedHead(['', 'answer', '']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
     }));
     expect(frames).toEqual([{ kind: 'text', delta: 'answer' }]);
@@ -173,7 +188,7 @@ describe('a running head publishes what it is producing', () => {
     const frames: Frame[] = [];
     const steps: HeadStep[] = [];
 
-    const report = await runHeadInference(headInput(), deps(chunkedHead(chunks), {
+    const report = await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (_seq, step) => { steps.push(step); },
     }));
@@ -192,15 +207,17 @@ describe('a running head publishes what it is producing', () => {
     // screen forever.
     const database = new Database(':memory:');
     const sql = makeSql(database);
-    initHeadsTables(makeExecRaw(database));
+    const execRaw = makeExecRaw(database);
+    initHeadsTables(execRaw);
+    const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'head-stream-test');
     const announced: string[] = [];
-    const journal = new LiveHeadJournal(sql, (headId) => { announced.push(headId); });
+    const journal = new LiveHeadJournal(sql, actor, (headId) => { announced.push(headId); });
     const frames: Frame[] = [];
 
     const input = headInput();
     journal.insertSpawn(input);
     announced.length = 0;
-    await runHeadInference(input, deps(chunkedHead(['a ', 'settled ', 'answer']), {
+    await runHeadInference(input, await deps(chunkedHead(['a ', 'settled ', 'answer']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (seq, step) => { journal.appendStep(input.id, seq, step); },
     }));
@@ -216,15 +233,53 @@ describe('a running head publishes what it is producing', () => {
     // The frames are best effort and subordinate, so their absence must be
     // unobservable in everything durable — which is what lets a backend with
     // nothing watching wire none.
-    const withSink = await runHeadInference(headInput(), deps(
+    const withSink = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
       { reportDelta: () => { /* published nowhere */ } },
     ));
-    const without = await runHeadInference(headInput(), deps(
+    const without = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
     ));
     expect(without.status).toBe(withSink.status);
     expect(without.summary).toBe(withSink.summary);
     expect(without.stepCount).toBe(withSink.stepCount);
   });
+});
+
+test('a cancelled head retains its already-settled SDK tool conversation', async () => {
+  const pending = Promise.withResolvers<never>();
+  const secondStarted = Promise.withResolvers<void>();
+  const abort = new AbortController();
+  const produced: ModelMessage[] = [];
+  const value = { retained: 'structured payload' };
+  let calls = 0;
+  const model = scriptedTurnModel({ doGenerate: options => {
+    if (calls++ === 0) return {
+      content: [{ type: 'tool-call', toolCallId: 'kept-call', toolName: 'probe', input: '{}' }],
+      finishReason: { unified: 'tool-calls', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+    const signal = options.abortSignal;
+    if (signal !== undefined) signal.addEventListener('abort', () => { pending.reject(signal.reason); }, { once: true });
+    secondStarted.resolve();
+    return pending.promise;
+  } });
+  const running = runHeadInference(headInput(), await deps(model, {
+    signal: abort.signal, isAborted: () => abort.signal.aborted,
+    tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+      execute: async () => value,
+    }) },
+    reportMessages: messages => { produced.push(...messages); },
+  }));
+  await secondStarted.promise;
+  abort.abort(new Error('stopped after the evidence step'));
+  try {
+    expect((await running).status).toBe('aborted');
+    expect(produced.flatMap(message => message.role === 'tool' ? message.content : []))
+      .toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'kept-call', output: { type: 'json', value } }));
+  } finally {
+    pending.reject(new Error('release the test provider'));
+    await running;
+  }
 });

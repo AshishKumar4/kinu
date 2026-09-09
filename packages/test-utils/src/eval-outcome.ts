@@ -32,7 +32,7 @@
  * it is checkable.
  */
 import * as v from 'valibot';
-import type { ExecOutcome, VFS } from '@kinu.run/core';
+import type { EvalBudget, ExecOutcome, VFS } from '@kinu.run/core';
 import type { EvalScoreRow } from './eval-run';
 
 /**
@@ -217,4 +217,122 @@ export function ratioOutcome(
  */
 export function isCovariateRow(name: string): boolean {
   return name !== TASK_OUTCOME;
+}
+
+/**
+ * The budget covariate's row name. A covariate by construction, because
+ * {@link isCovariateRow} is total and only `task_outcome` is the metric — which
+ * is the right classification: an episode that solved the task over budget
+ * solved the task, and one that stayed under budget without solving it solved
+ * nothing. Cost explains an outcome; it is never the outcome.
+ */
+export const BUDGET_ADHERENCE = 'budget_adherence';
+
+/**
+ * What one episode actually cost, in the four dimensions a budget can name.
+ *
+ * `toolErrorRate` is NULLABLE and the others are not, and the asymmetry is the
+ * point: steps, tokens and wall time are counted off the ledger and off the
+ * clock, so they always exist, whereas an error rate needs producer-attributed
+ * tool outcomes and an episode whose calls carry none has no rate — as opposed
+ * to a rate of zero. Handing this a `0` for "unmeasured" would report a perfect
+ * error rate for an episode nobody measured, which is the one failure the
+ * eligible/passed convention exists to prevent.
+ */
+export interface BudgetMeasurement {
+  readonly steps: number;
+  readonly tokens: number;
+  /** Failed tool calls over attributed tool calls, or null when attribution is
+   *  absent or the episode made no tool call at all. */
+  readonly toolErrorRate: number | null;
+  readonly wallMs: number;
+}
+
+/** One dimension's verdict, rendered into the row's detail line. */
+function budgetLine(name: string, limit: number, actual: number, unit: string): string {
+  const verdict = actual <= limit ? 'ok' : 'OVER';
+  return `${name} ${verdict} ${String(actual)}${unit}/${String(limit)}${unit}`;
+}
+
+/**
+ * Score one episode's cost against the ceilings its case declared.
+ *
+ * ELIGIBLE IS THE DECLARED-AND-MEASURABLE COUNT, not four. A case that names
+ * two ceilings is scored out of two, and a case that names an error-rate
+ * ceiling for an episode with no attributed tool outcomes is scored out of the
+ * other ones — the same "absent, not zero" rule every mechanism scorer here
+ * follows. A budget with nothing declared therefore yields `eligible: 0` and a
+ * `null` rate, which reads in the record as "cost measured, held to nothing"
+ * rather than as a perfect score.
+ *
+ * IT DOES NOT THROW on an over-budget episode, unlike {@link outcomeRow} on a
+ * malformed verdict. Over budget is a MEASUREMENT — the finding this row exists
+ * to make — whereas a verdict of 7-out-of-5 is a broken verifier. Only the
+ * second is a defect in the instrument.
+ */
+export function budgetRow(budget: EvalBudget, measured: BudgetMeasurement): EvalScoreRow {
+  const lines: string[] = [];
+  let eligible = 0;
+  let passed = 0;
+  const hold = (within: boolean, line: string): void => {
+    eligible += 1;
+    if (within) passed += 1;
+    lines.push(line);
+  };
+  if (budget.steps !== undefined) {
+    hold(measured.steps <= budget.steps, budgetLine('steps', budget.steps, measured.steps, ''));
+  }
+  if (budget.tokens !== undefined) {
+    hold(measured.tokens <= budget.tokens, budgetLine('tokens', budget.tokens, measured.tokens, ''));
+  }
+  if (budget.toolErrorRate !== undefined) {
+    if (measured.toolErrorRate === null) {
+      lines.push('toolErrorRate UNMEASURED — no attributed tool outcome to take a rate over');
+    } else {
+      const rate = measured.toolErrorRate;
+      hold(rate <= budget.toolErrorRate,
+        `toolErrorRate ${rate <= budget.toolErrorRate ? 'ok' : 'OVER'} `
+        + `${rate.toFixed(3)}/${budget.toolErrorRate.toFixed(3)}`);
+    }
+  }
+  if (budget.wallMs !== undefined) {
+    hold(measured.wallMs <= budget.wallMs, budgetLine('wall', budget.wallMs, measured.wallMs, 'ms'));
+  }
+  const quantities = {
+    steps: measured.steps,
+    tokens: measured.tokens,
+    wallMs: measured.wallMs,
+  };
+  const row: EvalScoreRow = {
+    name: BUDGET_ADHERENCE,
+    asserts: 'the episode stayed inside the ceilings its case declared for steps, tokens, '
+      + 'tool error rate and wall time',
+    eligible,
+    passed,
+    rate: eligible === 0 ? null : passed / eligible,
+    detail: lines.length === 0 ? 'no ceiling declared — cost measured, held to nothing' : lines.join('; '),
+    measured: quantities,
+  };
+  if (measured.toolErrorRate === null) return row;
+  return { ...row, measured: { ...quantities, toolErrorRate: measured.toolErrorRate } };
+}
+
+/**
+ * The error rate the `tool_outcomes` scorer already measured, for a budget's
+ * tool-error-rate ceiling.
+ *
+ * Read OFF THE SCORED ROW rather than recomputed from the ledger, because the
+ * row is the canonical rate: it knows which calls carry producer attribution
+ * and which are historical unmeasured rows, and a second computation here is
+ * how two denominators start disagreeing. Null when the row is missing,
+ * unmeasured or eligible-zero — the same "absent, not zero" the budget row
+ * renders as UNMEASURED rather than as a perfect zero.
+ */
+export function measuredToolErrorRate(rows: readonly EvalScoreRow[]): number | null {
+  // The literal is owned by the scorer in agent-evals.ts (`toolOutcomes.name`);
+  // the suite's judge panel already selects scorers by these literals, so this
+  // follows that convention rather than importing the scorer module here.
+  const row = rows.find((candidate) => candidate.name === 'tool_outcomes');
+  if (row === undefined || row.eligible === 0 || row.rate === null) return null;
+  return 1 - row.rate;
 }

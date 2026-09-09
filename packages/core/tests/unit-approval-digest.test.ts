@@ -13,7 +13,16 @@ import {
 
 describe('argumentDigest', () => {
   test('is deterministic and order-independent over object keys', () => {
-    expect(argumentDigest({ a: 1, b: 2 })).toBe(argumentDigest({ b: 2, a: 1 }));
+    // BOTH SPELLINGS AGAINST ONE PINNED VALUE, never against each other.
+    // `expect(argumentDigest(x)).toBe(argumentDigest(y))` computes its own
+    // expected side, so it moves with the defect: it is satisfied by
+    // `() => 'x'`, and by a digest that hashes the KEY SET and drops the
+    // values — a stable stringifier that sorts keys and forgets to emit them
+    // beside their values passes it. The pin is external, so neither does.
+    // Computed apart from this repo: printf '{"a":1,"b":2}' | sha256sum.
+    const KEYED_A1_B2 = '43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777';
+    expect(argumentDigest({ a: 1, b: 2 })).toBe(KEYED_A1_B2);
+    expect(argumentDigest({ b: 2, a: 1 })).toBe(KEYED_A1_B2);
   });
 
   test('is a full-strength (64-hex / 256-bit) SHA-256, not a truncated fingerprint', () => {
@@ -34,8 +43,12 @@ describe('argumentDigest', () => {
 describe('deployApprovalDigest', () => {
   const base = { approvalType: 'deploy_production' as const, patch: 'diff X', command: 'bunx wrangler deploy' };
   test('stable for identical deploy identity', () => {
-    expect(deployApprovalDigest(base)).toBe(deployApprovalDigest({ ...base }));
-    // A stored approval must keep matching, so the digest itself is pinned.
+    // Pinned, not self-compared. `deployApprovalDigest(base) ===
+    // deployApprovalDigest({...base})` is true of any pure function of its
+    // argument, including a constant, and it is implied by the pin below: a
+    // stored approval only keeps matching if the digest is BOTH deterministic
+    // and this exact value. Computed once and recorded, so drift in the
+    // serialization fails here rather than agreeing with itself.
     expect(deployApprovalDigest(base)).toBe('5fce46126467ba99c1e9ba275c7c9c7f86310cc15a6d3e51ed0ccbe16aea0101');
   });
 

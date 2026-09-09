@@ -169,7 +169,7 @@ describe('grants are the workspace set, or a subset', () => {
   ];
 
   test('a facet that has recorded nothing inherits the whole root set', () => {
-    // The live bug: a facet reads its own empty agent_config and re-asks for
+    // The live bug: a facet reads its own empty actor_config and re-asks for
     // consent the owner already gave on the workspace.
     expect(resolveInheritedGrants({ root, own: null })).toEqual(root);
     expect(resolveInheritedGrants({ root, own: [] })).toEqual(root);

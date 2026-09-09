@@ -13,7 +13,6 @@ import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestRuntime } from '@kinu.run/test-utils';
-import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { z } from 'zod';
 import {
@@ -60,10 +59,15 @@ function newTurn(): AgentOrchestrator {
     turnInFlight: () => false,
     setTimer: () => {},
   };
-  const { rt } = createTestRuntime();
-  const sql = makeSqlExec(new Database(':memory:'));
+  const { rt, testSql } = createTestRuntime();
+  // The orchestrator's inbox over the runtime's OWN database and actor: a log
+  // bound to a second database would drain an inbox no turn ever writes to.
+  const sql = makeSqlExec(testSql.db);
   initEventsHubTables(sql);
-  return new AgentOrchestrator({ host, engine: new EvolutionEngine(rt, { enabled: false }), eventLog: new EventLog(sql) });
+  return new AgentOrchestrator({
+    host, engine: new EvolutionEngine(rt, { enabled: false }),
+    eventLog: new EventLog(sql, rt.actor),
+  });
 }
 
 /** The step the model would see: whatever the turn extension hands back (or the

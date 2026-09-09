@@ -173,11 +173,43 @@ describe('the config lock is held by a process, not by a path', () => {
     expect(ran).toBe(true);
   });
 
+  test('a nested take of a lock this call already holds refuses, sync and async', async () => {
+    const { configPath, lockPath } = scratchConfig();
+    // The holder's `finally` runs when this call returns, so the call waiting
+    // is the call that would release. Nothing ends that wait, on either path.
+    expect(() => withConfigLock(configPath, () => withConfigLock(configPath, () => undefined)))
+      .toThrow('this call already holds it');
+    await expect(withConfigLockAsync(configPath, async () => withConfigLockAsync(configPath, async () => 'inner')))
+      .rejects.toThrow('this call already holds it');
+    // A refusal never removes a lock; both outer holds released on the way out.
+    expect(lockHeld(lockPath)).toBe(false);
+  });
+
+  test('a concurrent independent caller in the same process waits, it is not refused', async () => {
+    const { configPath } = scratchConfig();
+    const order: string[] = [];
+    const gate = Promise.withResolvers<void>();
+    const first = withConfigLockAsync(configPath, async () => {
+      order.push('first in');
+      await gate.promise;
+      order.push('first out');
+    });
+    await Promise.resolve();
+    // Started outside the holder's async context: same pid, different call, so
+    // the holder WILL release and this one has to wait rather than refuse. Its
+    // first attempt is synchronous, so it has already been refused once here.
+    const second = withConfigLockAsync(configPath, async () => { order.push('second in'); });
+    expect(order).toEqual(['first in']);
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first in', 'first out', 'second in']);
+  });
+
   test('a lock this program did not write is waited out, never stolen', async () => {
     const { configPath, lockPath } = scratchConfig();
     // A regular file at the lock path carries no owner record, so no process can
     // be proven to hold it or to have abandoned it. Breaking it is how two
-    // processes both proceed; acquisition waits, and the timeout names the path.
+    // processes both proceed; acquisition waits for it to go away instead.
     writeFileSync(lockPath, 'not a record\n');
 
     let ran = false;

@@ -59,7 +59,7 @@ function workspace() {
     ...rt,
     llm: { stream: rt.llm.stream.bind(rt.llm), complete: async (p) => { completions++; return inner(p); } },
   };
-  const governor = new MissionGovernor({ storage: rt.storage });
+  const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
   return {
     rt: counted,
     governor,
@@ -86,7 +86,7 @@ describe('evolution spend under a mission budget', () => {
     const spent = ws.governor.snapshot('checkout-fixes')[0]!;
     // Both graded turns produced the same verdict, so the difference in the
     // ledger is attributable to the label and to nothing else.
-    expect(listTurnOutcomes(ws.rt.storage.sql).map((r) => r.turnId).sort())
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId).sort())
       .toEqual(['scoped', 'unscoped']);
     expect(spent.calls).toBeGreaterThan(0);
     expect(spent.spent.tokens).toBeGreaterThan(0);
@@ -103,7 +103,7 @@ describe('evolution spend under a mission budget', () => {
 
     // The review ran, and the one declared mission is untouched: an undeclared
     // label charges its own absent row, never the nearest real one.
-    expect(listTurnOutcomes(ws.rt.storage.sql)).toHaveLength(1);
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     expect(ws.governor.snapshot('checkout-fixes')[0]!.calls).toBe(0);
   });
 
@@ -120,7 +120,7 @@ describe('evolution spend under a mission budget', () => {
 
     expect(ws.calls()).toBe(before);
     // No verdict was written from a call that never happened.
-    expect(listTurnOutcomes(ws.rt.storage.sql)).toEqual([]);
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
   });
 
   test('an ungoverned turn still runs its review with a mission fully spent beside it', async () => {
@@ -130,7 +130,7 @@ describe('evolution spend under a mission budget', () => {
 
     await ws.engine.reviewTurn(makeTurn(), FOLLOWUP);
 
-    expect(listTurnOutcomes(ws.rt.storage.sql)).toHaveLength(1);
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     // The exhausted label was never consulted: nothing bound this turn to it.
     expect(ws.governor.snapshot('someone-elses-mission')[0]!.calls).toBe(1);
   });
@@ -165,11 +165,12 @@ describe('a deferred review carries its mission across processes', () => {
     // Re-queued, explicitly: the turn is sound and the evidence is not thrown
     // away because the mission happens to be out of money right now.
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
-    expect(listTurnOutcomes(ws.rt.storage.sql)).toEqual([]);
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
     // And nothing recorded the review as HAVING RUN. A governor declining is a
     // decision, not a completion: a tombstone here would make activation
     // recovery settle the row and the raised cap below would find nothing owed.
-    expect(ws.rt.storage.sql`SELECT key FROM effect_tombstones WHERE scope = 'turn_review'`)
+    expect(ws.rt.storage.sql`SELECT key FROM effect_tombstones
+      WHERE actor_id = ${ws.rt.actor.actorId} AND scope = 'turn_review'`)
       .toEqual([]);
     expect(ws.engine.sessionWindow.resetStaleClaims()).toBe(0);
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
@@ -178,10 +179,10 @@ describe('a deferred review carries its mission across processes', () => {
     // — the same row now runs.
     ws.governor.declare('checkout-fixes', { tokens: 1_000_000 }, {});
     void ws.rt.storage.sql`UPDATE mission_budget SET limit_tokens = 1000000, exhausted_at = NULL
-      WHERE label = 'checkout-fixes'`;
+      WHERE actor_id = ${ws.rt.actor.actorId} AND label = 'checkout-fixes'`;
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(0);
-    expect(listTurnOutcomes(ws.rt.storage.sql)).toHaveLength(1);
+    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
   });
 });

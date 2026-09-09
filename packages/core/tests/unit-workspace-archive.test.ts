@@ -21,8 +21,10 @@ import {
   type ArchiveCursor,
   type SqlValue,
 } from '../src/index';
-import { createWorkspaceBundle, makeExecRaw, makeSql, SDK_SESSION_DDL } from './helpers';
+import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql, SDK_SESSION_DDL } from './helpers';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
+import { openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { testActorHandle } from '@kinu.run/test-utils';
 
 function fresh() {
   const db = new Database(':memory:');
@@ -39,10 +41,13 @@ function fresh() {
 async function seeded() {
   const ws = fresh();
   initAllTables(ws.execRaw, ws.sql);
-  void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'w1'}, ${'scout'}, ${100})`;
+  // The identity AND the actor directory row: an archive is restored into a
+  // database whose `messages` rows name an actor, and the restore resolves the
+  // main actor out of the directory it just landed.
+  const actor = createTestActor(ws.sql, ws.execRaw, 'w1', 'scout');
   for (let i = 0; i < 5; i++) {
-    void ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-           VALUES (${`m${i}`}, ${'default'}, ${null}, ${'user'}, ${`hello sqlite ${i}`}, ${100 + i})`;
+    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+           VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${null}, ${'user'}, ${`hello sqlite ${i}`}, ${100 + i})`;
   }
   // Binary content through the canonical VFS writer — the chunked BLOB path.
   const bytes = new Uint8Array(300);
@@ -52,8 +57,8 @@ async function seeded() {
   await ws.vfs.mkdir('notes', { recursive: true });
   await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   // External-content FTS5 over `messages`, maintained by triggers.
-  new ConversationSearchStore(ws.sql).search('sqlite');
-  return { ...ws, bytes };
+  new ConversationSearchStore(ws.sql, actor).search('sqlite');
+  return { ...ws, bytes, actor };
 }
 
 describe('workspace archive', () => {
@@ -90,7 +95,10 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
 
-    const hits = new ConversationSearchStore(target.sql).search('sqlite');
+    // The restore landed the source's actor directory too, so the target's own
+    // main actor is who the restored transcript belongs to.
+    const restored = openWorkspaceMainActor(target.sql);
+    const hits = new ConversationSearchStore(target.sql, restored).search('sqlite');
     expect(hits.length).toBe(5);
     // The FTS shadow tables are the index's private storage: rebuilt on the
     // target, never carried as rows.
@@ -99,9 +107,9 @@ describe('workspace archive', () => {
     // A local archive carries none of the disposable trigger/state pair; its
     // next durable message mutation therefore remains valid after import.
     void target.sql`
-      INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'m5'}, ${'default'}, ${null}, ${'user'}, ${'local post-import'}, ${200})`;
-    expect(new ConversationSearchStore(target.sql).search('post-import').map((hit) => hit.messageId))
+      INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${restored.actorId}, ${'m5'}, ${'default'}, ${null}, ${'user'}, ${'local post-import'}, ${200})`;
+    expect(new ConversationSearchStore(target.sql, restored).search('post-import').map((hit) => hit.messageId))
       .toEqual(['m5']);
   });
   test('the workspace capability secret is never in an archive', async () => {
@@ -292,18 +300,23 @@ describe('workspace archive', () => {
   test('omits derived conversation revision triggers and restores a cloud pane into a mutable local transcript', async () => {
     const source = fresh();
     initAllTables(source.execRaw, source.sql);
+    // A cloud export always carries its workspace identity and actor directory,
+    // and a pane produced by THIS tree names the actor that wrote each row —
+    // so the projection on restore keeps that owner rather than attributing the
+    // transcript to whoever the archive's main actor turns out to be.
+    const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     source.execRaw(SDK_SESSION_DDL);
     void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u1'}, ${''}, ${null}, ${'user'},
+      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${cloudActor.actorId}, ${'u1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud question' }] })},
               ${'2026-08-26 12:00:00'})`;
     void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'a1'}, ${''}, ${'u1'}, ${'assistant'},
+      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${cloudActor.actorId}, ${'a1'}, ${''}, ${'u1'}, ${'assistant'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud answer' }] })},
               ${'2026-08-26 12:00:01'})`;
-    new ConversationSearchStore(source.sql).search('cloud');
+    new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql)).search('cloud');
 
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'cloud', source: 'cloud' });
     expect(lines.some((line) => line.includes('conversation_fts'))).toBe(false);
@@ -314,10 +327,21 @@ describe('workspace archive', () => {
     const pane = target.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'assistant_messages'}`;
     expect(pane).toEqual([]);
+    // …and every pane row landed in `messages` under the actor that WROTE it,
+    // not under whoever the restore would have attributed it to. Read UNSCOPED
+    // on purpose: a row filed under a different owner shows up here as a wrong
+    // `actor_id`, where an actor-predicated read would answer an empty set and
+    // pass for the wrong reason.
+    expect(target.sql<{ id: string; actor_id: string; content: string }>`
+      SELECT id, actor_id, content FROM messages ORDER BY id`).toEqual([
+      { id: 'a1', actor_id: cloudActor.actorId, content: 'cloud answer' },
+      { id: 'u1', actor_id: cloudActor.actorId, content: 'cloud question' },
+    ]);
+    const landed = openWorkspaceMainActor(target.sql);
     void target.sql`
-      INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u2'}, ${'default'}, ${'a1'}, ${'user'}, ${'local continuation'}, ${1_000})`;
-    expect(new ConversationSearchStore(target.sql).search('local continuation').map((hit) => hit.messageId))
+      INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${landed.actorId}, ${'u2'}, ${'default'}, ${'a1'}, ${'user'}, ${'local continuation'}, ${1_000})`;
+    expect(new ConversationSearchStore(target.sql, landed).search('local continuation').map((hit) => hit.messageId))
       .toEqual(['u2']);
   });
 });
@@ -326,9 +350,14 @@ describe('the table set an export walks is pinned by its first page', () => {
   test('a table born mid-export never joins it, so the archive stays restorable', async () => {
     const source = fresh();
     initAllTables(source.execRaw, source.sql);
+    // A bare bound handle, not a directory row: this test counts the rows an
+    // archive carries, and a fixture that registered an actor would add two of
+    // its own to the number under assertion. The restore's pane projection is
+    // the only path that resolves a directory, and there is no pane here.
+    const actor = testActorHandle(source.sql);
     for (let i = 0; i < 5; i++) {
-      void source.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${'m'+i}, ${'default'}, ${null}, ${'user'}, ${`page boundary ${i}`}, ${100+i})`;
+      void source.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${'m'+i}, ${'default'}, ${null}, ${'user'}, ${`page boundary ${i}`}, ${100+i})`;
     }
 
     // Drive page by page with a budget that forces several pages, and between

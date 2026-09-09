@@ -13,9 +13,10 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
 function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
   return frame.kind === 'file';
 }
-
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/state/workspace-actors';
 async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
+  const actor = new WorkspaceActorDirectory(ws.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
   await writeSoul(ws.vfs, ws.sql, 'carry this purpose');
   const messages = [
     { id: 'm1', parent: null, role: 'user', text: 'first' },
@@ -23,30 +24,35 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
     { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
   ] as const;
   for (const [index, message] of messages.entries()) {
-    void ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${message.id}, ${'default'}, ${message.parent}, ${message.role}, ${message.text}, ${1000 + index})`;
+    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${message.id}, ${'default'}, ${message.parent}, ${message.role},
+              ${message.text}, ${1000 + index})`;
   }
   if (pane) {
     ws.execRaw(SDK_SESSION_DDL);
     for (const message of messages) {
       const content = JSON.stringify({ id: message.id, role: message.role, parts: [{ type: 'text', text: message.text }] });
-      void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
+      void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
     }
   }
   void ws.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
     VALUES (${'tool'}, ${'description'}, ${null}, ${'return 1'}, ${'local'}, ${10}, ${11})`;
   void ws.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
     VALUES (${'chunk'}, ${'memory/MEMORY.md'}, ${1}, ${2}, ${'hash'}, ${'remember this'}, ${12})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'model'}, ${'test-model'})`;
-  void ws.sql`INSERT INTO agent_config (key, value) VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
+  actor.config.setModel('test-model');
+  actor.config.setShellApprovalMode('allow_all');
   await ws.vfs.mkdir('memory', { recursive: true });
   await ws.vfs.writeFile('memory/MEMORY.md', 'remember this');
 }
 
 async function framesFor(ws: TestWorkspace, frameBytes = 2048): Promise<ForkFrame[]> {
   return Array.fromAsync(forkTransferFrames({
-    sql: ws.sql, vfs: ws.vfs, untilMessageId: 'm3', transferId: 'transfer',
+    // The OWNER of the conversation being forked: the pane and message rows are
+    // keyed on it, so a snapshot taken under any other handle carries a
+    // sibling's transcript — or, here, none at all.
+    sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.vfs,
+    untilMessageId: 'm3', transferId: 'transfer',
     targetAuthority: 'plain', frameBytes,
   }));
 }
@@ -181,15 +187,18 @@ describe('forkTransferFrames source streamer', () => {
     const missing = createTestWorkspace();
     await seedSource(missing);
     await expect(Array.fromAsync(forkTransferFrames({
-      sql: missing.sql, vfs: missing.vfs, untilMessageId: 'absent', transferId: 'missing', targetAuthority: 'plain', frameBytes: 2048,
+      sql: missing.sql, actor: openWorkspaceMainActor(missing.sql), vfs: missing.vfs,
+      untilMessageId: 'absent', transferId: 'missing', targetAuthority: 'plain', frameBytes: 2048,
     }))).rejects.toThrow('fork point not found: message id "absent" does not exist in source');
 
     const cycle = createTestWorkspace();
     await seedSource(cycle);
-    void cycle.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'loop'}, ${'default'}, ${'loop'}, ${'user'}, ${'self-parented'}, ${9})`;
+    void cycle.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${openWorkspaceMainActor(cycle.sql).actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'},
+              ${'self-parented'}, ${9})`;
     const frames = await Array.fromAsync(forkTransferFrames({
-      sql: cycle.sql, vfs: cycle.vfs, untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
+      sql: cycle.sql, actor: openWorkspaceMainActor(cycle.sql), vfs: cycle.vfs,
+      untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
     }));
     const messages = frames.filter((frame) => frame.kind === 'messages').flatMap((frame) => frame.rows);
     expect(messages.length).toBeGreaterThan(0);

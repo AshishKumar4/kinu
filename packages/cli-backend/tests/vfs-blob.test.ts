@@ -8,9 +8,9 @@ import { createCLIRuntime } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
 
 function freshVfs() {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('vfs-blob', 'agent.db'), { create: true });
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('vfs-blob', 'agent.db'),
+    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
   return rt.storage.vfs;

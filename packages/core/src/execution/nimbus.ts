@@ -255,7 +255,8 @@ const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace
 
 const WORKSPACE_NODE_REFUSAL =
   `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
-  + `Use the 'sandbox' executor for any server you want to preview.`;
+  + `Run Node/Vite programs in an available capable executor, such as sandbox. `
+  + `Worker slates compile separately; use the declared slate preview operation when available, without a node precheck.`;
 
 /** Whether `command` reaches the workspace `node` shim. */
 function invokesWorkspaceNode(command: string): boolean {
@@ -280,8 +281,9 @@ function workspaceExecFailure(input: { doing: string; cause: unknown; command?: 
 const NO_LISTENER_MARK = 'No process is listening';
 
 function workspaceNoListenerReason(port: number): string {
-  return `workspace port ${port} has no server listening: node programs cannot start on this host, so nothing here will answer it. `
-    + `Use the 'sandbox' executor for any server you want to preview.`;
+  return `workspace port ${port} has no server listening. `
+    + `Start an ordinary Node/Vite server in an available capable executor. `
+    + `For an authored Worker slate, use its declared preview operation when available.`;
 }
 
 function workspacePortFailure(input: { port: number; cause: unknown }): KinuError {

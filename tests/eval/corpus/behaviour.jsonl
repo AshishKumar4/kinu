@@ -18,9 +18,22 @@
 #   multipart   genuinely independent halves, so delegating is correct not a trick
 #   edit        the task cannot be completed without a successful file edit
 #   failure     the first obvious command fails, so recovery is on the path
-{"id":"ws-inventory","task":"List every .ts file under src/ in this workspace and write the count to report.txt.","tags":["workspace","edit"]}
-{"id":"ws-edit-rename","task":"In src/greet.ts, rename the exported function from greet to welcome and update the call in src/main.ts so the program still runs.","tags":["workspace","edit"]}
-{"id":"ws-find-todo","task":"Find every TODO comment under src/ and write one line per TODO to todos.txt in the form path:line.","tags":["workspace","edit"]}
-{"id":"ws-split-audit","task":"Do two independent things: write the total line count of src/ to lines.txt, and separately write the list of exported symbol names in src/ to exports.txt.","tags":["workspace","multipart","edit"]}
-{"id":"ws-fix-broken","task":"Run the test in src/broken.test.ts, then fix src/broken.ts so it passes.","tags":["workspace","edit","failure"]}
-{"id":"ws-recover-cmd","task":"Determine the number of lines in src/main.ts and append it to report.txt, using whatever tool works.","tags":["workspace","edit","failure"]}
+#
+# BUDGETS. Every row declares what the episode may spend: steps (model steps
+# closed), tokens (in+out over the episode), toolErrorRate (largest tolerable
+# share of failed tool calls), wallMs (send to settled). One shape for all six
+# rows, because all six are one turn over the same seeded tree — per-row
+# ceilings would pretend to a sizing precision nobody has measured yet. The
+# error ceiling is 0.5 rather than 0 because the two `failure`-tagged rows are
+# ABOUT a failure: a test that fails before it passes is a failed tool call on
+# a correct trajectory. These ceilings catch a runaway episode (a loop that
+# never lands, forty steps for a three-step task), they do not rank efficiency:
+# a competent episode closes far fewer than 40 steps, and the `measured` beside
+# every budget verdict is what a later tightening sizes from. The judges record
+# rather than gate, so a ceiling that fires is a finding, never a red.
+{"id":"ws-inventory","task":"List every .ts file under src/ in this workspace and write the count to report.txt.","tags":["workspace","edit"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}
+{"id":"ws-edit-rename","task":"In src/greet.ts, rename the exported function from greet to welcome and update the call in src/main.ts so the program still runs.","tags":["workspace","edit"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}
+{"id":"ws-find-todo","task":"Find every TODO comment under src/ and write one line per TODO to todos.txt in the form path:line.","tags":["workspace","edit"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}
+{"id":"ws-split-audit","task":"Do two independent things: write the total line count of src/ to lines.txt, and separately write the list of exported symbol names in src/ to exports.txt.","tags":["workspace","multipart","edit"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}
+{"id":"ws-fix-broken","task":"Run the test in src/broken.test.ts, then fix src/broken.ts so it passes.","tags":["workspace","edit","failure"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}
+{"id":"ws-recover-cmd","task":"Determine the number of lines in src/main.ts and append it to report.txt, using whatever tool works.","tags":["workspace","edit","failure"],"budget":{"steps":40,"tokens":200000,"toolErrorRate":0.5,"wallMs":600000}}

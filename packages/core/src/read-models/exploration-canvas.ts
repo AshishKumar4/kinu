@@ -25,6 +25,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
@@ -71,10 +72,11 @@ const DEFAULT_CANVAS_PAGE = 30;
  */
 export function readExplorationCanvas(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_CANVAS_PAGE,
 ): Page<ExplorationCanvasRun> {
-  return mapPage(listForkRuns(sql, cursor, limit), (runs) => composeRuns(sql, runs));
+  return mapPage(listForkRuns(sql, actor, cursor, limit), (runs) => composeRuns(sql, actor, runs));
 }
 
 /**
@@ -86,20 +88,21 @@ export function readExplorationCanvas(
  * clamp meant fetching thirty runs and their trees to render one. Through the same
  * composer, so the two reads cannot come to disagree about one run.
  */
-export function readExplorationRun(sql: SqlExecutor, rootId: string): ExplorationCanvasRun | null {
-  const run = readForkRun(sql, rootId);
-  return run === null ? null : composeRuns(sql, [run])[0] ?? null;
+export function readExplorationRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ExplorationCanvasRun | null {
+  const run = readForkRun(sql, actor, rootId);
+  return run === null ? null : composeRuns(sql, actor, [run])[0] ?? null;
 }
 
 /** Both halves and the parameters of each named run, in one read per store. */
 function composeRuns(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runs: readonly ForkRunSummary[],
 ): ExplorationCanvasRun[] {
   const params = new Map(
-    readForkRunParams(sql, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
+    readForkRunParams(sql, actor, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
   );
-  const journal = new HeadJournal(sql);
+  const journal = new HeadJournal(sql, actor);
   return runs.map((run) => ({
     run,
     params: params.get(run.id) ?? null,
@@ -108,18 +111,20 @@ function composeRuns(
     // settlement tag: the tag admitted one half per run, so the swarm's tree — four
     // rows and a winner — was dropped before the response was serialised, and no
     // client could recover what the server never sent.
-    tree: run.hasSearchTree ? readSearchTree(sql, run.id) : [],
+    tree: run.hasSearchTree ? readSearchTree(sql, actor, run.id) : [],
     head: run.hasNodeTranscripts ? journal.readRun(run.id) : null,
-    frontier: readParetoFrontier(sql, run.id),
+    frontier: readParetoFrontier(sql, actor, run.id),
   }));
 }
 
 
-function readParetoFrontier(sql: SqlExecutor, rootId: string): ParetoFrontier | null {
+function readParetoFrontier(
+  sql: SqlExecutor, actor: ActorHandle, rootId: string,
+): ParetoFrontier | null {
   const table = sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
   if (table.length === 0) return null;
-  const candidates = readSwarmNodeRecords(sql, rootId).flatMap(({ nodeId, record }) =>
+  const candidates = readSwarmNodeRecords(sql, actor, rootId).flatMap(({ nodeId, record }) =>
     record.outcome?.kind === 'pareto'
       ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]
       : []);

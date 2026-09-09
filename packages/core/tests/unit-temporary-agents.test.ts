@@ -43,11 +43,12 @@ import {
   type CodemodeResult,
   BUILTIN_PROFILE_CATALOG,
   profileCatalogDigest,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, WorkspaceActorDirectory, recoverSubordinateLifecycles,
 } from '../src/index';
 import { dispatchAgentsAction } from '../src/tools/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSqlExec } from './helpers';
+import { makeSql, makeExecRaw, makeSqlExec, createTestActor } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -97,6 +98,7 @@ interface Scene {
   deps: AgentsToolDeps;
   temporary: TemporaryAgentPort;
   roster: SubordinateRosterStore;
+  recover(clearFailure?: boolean): Promise<boolean>;
   /** Every child-substrate operation, in order — the proof that a temporary run
    *  rides the SAME runtime a hire does. */
   calls: string[];
@@ -123,9 +125,14 @@ interface Scene {
   files: VFS;
 }
 
+/** The HIRING actor's roster. A subordinate name is the parent's choice, so
+ *  `actor_subordinates` leads with that parent: without the handle, one actor
+ *  could dismiss or re-point another's child by name alone. */
 function makeRosterStore(): SubordinateRosterStore {
   const db = new Database(':memory:');
-  return new SubordinateRosterStore(makeSqlExec(db));
+  const sql = makeSql(db);
+  const parent = createTestActors(sql, makeExecRaw(db)).main;
+  return new SubordinateRosterStore(makeSqlExec(db), parent);
 }
 
 function makeScene(options: {
@@ -148,11 +155,21 @@ function makeScene(options: {
   const eventDb = new Database(':memory:');
   const eventSql = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
-  const log = new EventLog(eventSql);
+  createTestActor(makeSql(eventDb), makeExecRaw(eventDb), 'temporary-workspace', 'main');
+  const directory = new WorkspaceActorDirectory(makeSql(eventDb), { workspaceId: 'temporary-workspace', ownerUserId: '' });
+  // The inbox belongs to the actor whose events these are — the workspace main
+  // that hires the temporaries below, over the same database it was issued on.
+  const log = new EventLog(eventSql, directory.main());
   const runtime: SubordinateRuntime = {
     async spawn(input) {
       calls.push(`spawn:${input.name}`);
       if (options.fail === 'spawn') throw new Error('the facet substrate is unavailable');
+      return directory.apply(directory.main(), [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference;
+    },
+    async cancelBirth(input) {
+      const actor = directory.apply(directory.main(), [], { action: 'cancelCreation', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime });
+      if (actor.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: actor.reference });
+      return actor.reference;
     },
     async assign(name, input) {
       calls.push(`assign:${name}`);
@@ -203,6 +220,7 @@ function makeScene(options: {
     profile: () => testProfile(),
   };
   return {
+    recover: async (clearFailure) => { if (clearFailure) { delete options.fail; delete options.failRelease; } return recoverSubordinateLifecycles(roster, runtime); },
     deps,
     temporary,
     roster,
@@ -471,19 +489,17 @@ describe('the roster shows a temporary agent while it runs and keeps its history
       .rejects.toMatchObject({ code: 'bad_input' });
   });
 
-  test('a run that could not start is released, not left listed as running', async () => {
+  test('a lost spawn acknowledgement retains its admitted birth for recovery', async () => {
     const scene = makeScene({ fail: 'spawn' });
-    const failed = v.parse(FailedOutcome, await scene.call({
-      action: 'ask', role: 'auditor', message: 'Audit the ledger.',
-    }));
+    const failed = v.parse(FailedOutcome, await scene.call({ action: 'ask', role: 'auditor', message: 'Audit the ledger.' }));
     expect(failed.status).toBe('failed');
-    expect(failed.answer).toContain('could not be created');
-    // No child was born, so there is no transcript to claim and no archived row
-    // naming an agent that never existed.
-    expect(failed.transcript).toBe('none');
-    expect(scene.roster.listAll()).toEqual([]);
-    expect(await scene.call({ action: 'list' })).toMatchObject({ subordinates: [] });
-    expect(scene.roster.list()).toEqual([]);
+    expect(failed.reason).toBe('unavailable');
+    expect(failed.answer).toContain('the facet substrate is unavailable');
+    const birth = scene.roster.requireExisting(TEMP_NAME).birth;
+    expect(birth?.seed.mission).toBe('Audit the ledger.');
+    await scene.recover(true);
+    expect(scene.roster.requireExisting(TEMP_NAME).birth).toBeNull();
+    expect(scene.roster.requireExisting(TEMP_NAME).taskEventId).toBe(HANDOFF.eventId);
   });
 
   /**
@@ -520,36 +536,30 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(scene.calls).toEqual([]);
   });
 
-  test('a run whose work could not be admitted releases BOTH the row and the child', async () => {
+  test('a lost first-assignment acknowledgement retains the same issued actor', async () => {
     const scene = makeScene({ fail: 'assign' });
-    const failed = v.parse(FailedOutcome, await scene.call({
-      action: 'ask', role: 'auditor', message: 'Audit the ledger.',
-    }));
-    expect(failed.answer).toContain('could not be given the work');
-    expect(scene.roster.list()).toEqual([]);
-    expect(scene.calls).toEqual([
-      `spawn:${TEMP_NAME}`,
-      `assign:${TEMP_NAME}`,
-      `dismiss:${TEMP_NAME}:true`,
-    ]);
+    const failed = v.parse(FailedOutcome, await scene.call({ action: 'ask', role: 'auditor', message: 'Audit the ledger.' }));
+    expect(failed.reason).toBe('unavailable');
+    expect(failed.answer).toContain('admission refused');
+    const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
+    await scene.recover(true);
+    expect(scene.roster.requireExisting(TEMP_NAME).actorReference).toEqual(actor);
+    expect(scene.roster.requireExisting(TEMP_NAME).birth).toBeNull();
+    expect(scene.roster.requireExisting(TEMP_NAME).taskEventId).toBe(HANDOFF.eventId);
   });
 
-  test('a run whose release also fails keeps BOTH errors in the answer', async () => {
+  test('a failed recovery cleanup preserves both failure evidence and deletion intent', async () => {
     const scene = makeScene({ fail: 'assign', failRelease: true });
-    const failed = v.parse(FailedOutcome, await scene.call({
-      action: 'ask', role: 'auditor', message: 'Audit the ledger.',
-    }));
-    expect(failed.status).toBe('failed');
-    // The assignment failure that caused the release, not the release failure
-    // that a throwing cleanup would have replaced it with.
-    expect(failed.answer).toContain('could not be given the work');
+    const failed = v.parse(FailedOutcome, await scene.call({ action: 'ask', role: 'auditor', message: 'Audit the ledger.' }));
     expect(failed.answer).toContain('admission refused');
-    expect(failed.answer).toContain('the release failed');
-    expect(scene.calls).toEqual([
-      `spawn:${TEMP_NAME}`,
-      `assign:${TEMP_NAME}`,
-      `dismiss:${TEMP_NAME}:true`,
-    ]);
+    const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
+    if (!actor) throw new Error('The acknowledged seed has no actor reference.');
+    scene.roster.requestDeletion(TEMP_NAME, actor, NOW);
+    await expect(scene.recover()).rejects.toThrow('the release failed');
+    expect(scene.roster.requireExisting(TEMP_NAME).actorReference).toEqual(actor);
+    expect(scene.roster.requireExisting(TEMP_NAME).deleteRequested).toBe(true);
+    await scene.recover(true);
+    expect(scene.roster.get(TEMP_NAME)).toBeNull();
   });
 });
 
@@ -579,16 +589,7 @@ describe('an answer that outlives its waiter', () => {
     // Re-open the row to stand in for the assignment the evicted activation had
     // already made — the ingress must handle a report for a task row nobody
     // awaits, however that row came to be.
-    scene.roster.restore({
-      name: TEMP_NAME,
-      createdBy: 'orchestrator',
-      status: 'working',
-      currentTask: 'Audit the ledger.',
-      createdAt: NOW,
-      dismissedAt: null,
-      lifetime: 'task',
-      taskEventId: 'evt-1',
-    });
+    scene.roster.restore({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
 
     const delivered = await scene.report({ content: 'Totals reconcile.' });
     // ADMITTED TO THE RAIL this time, with a real event id — not swallowed.
@@ -614,16 +615,7 @@ describe('an answer that outlives its waiter', () => {
    */
   test('a turn_end answer with no waiter releases the row too, not just a terminal report', async () => {
     const scene = makeScene();
-    scene.roster.create({
-      name: TEMP_NAME,
-      createdBy: 'orchestrator',
-      status: 'working',
-      currentTask: 'Audit the ledger.',
-      createdAt: NOW,
-      dismissedAt: null,
-      lifetime: 'task',
-      taskEventId: 'evt-1',
-    });
+    scene.roster.create({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     // `progress` + `turn_end` — exactly what a finished child turn relays.
     const delivered = await scene.report({
       status: 'progress', origin: 'turn_end', content: 'Totals reconcile.',
@@ -639,16 +631,7 @@ describe('an answer that outlives its waiter', () => {
   /** And a deliberate mid-work note still does NOT release it: the run is open. */
   test('a mid-work report_tool progress note leaves the task row working', async () => {
     const scene = makeScene();
-    scene.roster.create({
-      name: TEMP_NAME,
-      createdBy: 'orchestrator',
-      status: 'working',
-      currentTask: 'Audit the ledger.',
-      createdAt: NOW,
-      dismissedAt: null,
-      lifetime: 'task',
-      taskEventId: 'evt-1',
-    });
+    scene.roster.create({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     await scene.report({ status: 'progress', origin: 'report_tool', content: 'Reading March.' });
     expect(scene.roster.list()).toMatchObject([{
       name: TEMP_NAME, lifetime: 'task', status: 'working',

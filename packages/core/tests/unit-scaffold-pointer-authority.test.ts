@@ -39,14 +39,17 @@ function reopen(rt: AgentRuntime): AgentRuntime {
     identity: {
       id: rt.identity.id,
       name: rt.identity.name,
-      scaffold: createScaffoldSurface({ vfs, sql: rt.storage.sql, path: rt.identity.scaffold.path }),
+      scaffold: createScaffoldSurface({
+      vfs, sql: rt.storage.sql, actor: rt.actor, path: rt.identity.scaffold.path,
+    }),
     },
   };
 }
 
 async function currentCount(rt: AgentRuntime): Promise<number> {
   return rt.storage.sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM scaffold_versions WHERE status = 'current'`[0]?.n ?? 0;
+    SELECT COUNT(*) AS n FROM scaffold_versions
+    WHERE actor_id = ${rt.actor.actorId} AND status = 'current'`[0]?.n ?? 0;
 }
 
 /** Seed v0 canonically through the real bootstrap, then propose V1. */
@@ -71,7 +74,7 @@ describe('bootstrap seeds the canonical source', () => {
 
     expect(await rt.storage.vfs.exists(scaffoldVfsPath(rt, '.v0'))).toBe(true);
     expect(await readScaffoldVersion(rt, 0)).toBe(INITIAL_SCAFFOLD_SOURCE);
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     // The live view materialises from the same canonical source.
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
   });
@@ -86,7 +89,7 @@ describe('bootstrap seeds the canonical source', () => {
 
     expect(await rt.storage.vfs.exists(scaffoldVfsPath(rt, '.v0'))).toBe(true);
     expect(await readScaffoldVersion(rt, 0)).toBe(V0);
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     // One-shot: re-running changes nothing.
     await bootstrapScaffold(rt);
     expect(await readScaffoldVersion(rt, 0)).toBe(V0);
@@ -96,9 +99,11 @@ describe('bootstrap seeds the canonical source', () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
     void rt.storage.sql`
-      UPDATE scaffold_versions SET status = 'historical' WHERE version = 0`;
+      UPDATE scaffold_versions SET status = 'historical'
+      WHERE actor_id = ${rt.actor.actorId} AND version = 0`;
     void rt.storage.sql`
-      UPDATE scaffold_versions SET status = 'current' WHERE version = ${pendingVersion}`;
+      UPDATE scaffold_versions SET status = 'current'
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${pendingVersion}`;
     // The view was never rewritten (the crash window) — it still holds v0's seed.
 
     await bootstrapScaffold(rt);
@@ -131,9 +136,10 @@ describe('proposal boundary — source lands before the pending row', () => {
     )).rejects.toThrow('injected disk failure');
 
     // No row without its source: the proposal never happened.
-    expect(getPendingScaffold(rt.storage.sql)).toBeNull();
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect((rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM scaffold_versions`)[0]?.n).toBe(1); // only v0
+      SELECT COUNT(*) AS n FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId}`)[0]?.n).toBe(1); // only v0
 
     // A retry succeeds cleanly once the disk recovers.
     rt.agentStateVfs = undefined;
@@ -151,7 +157,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('promote commits the pointer even when the view write dies', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
 
     const realWrite = rt.identity.scaffold.write.bind(rt.identity.scaffold);
     let viewWrites = 0;
@@ -166,7 +172,7 @@ describe('promotion boundary — one current pointer, executed source follows it
     // Exactly one current pointer, and it names the promoted version.
     expect(viewWrites).toBe(1);
     expect(currentCount(rt)).resolves.toBe(1);
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(pendingVersion);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(pendingVersion);
 
     // Cold reopen executes the pointer's version file, not the stale view.
     expect(await reopen(rt).identity.scaffold.read()).toBe(V1);
@@ -181,7 +187,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('rollback decision retires the pending without touching the pointer', async () => {
     const { rt } = createTestRuntime();
     await seedAndPropose(rt);
-    const pending = getPendingScaffold(rt.storage.sql)!;
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
 
     rt.identity.scaffold.write = async () => {
       throw new Error('injected view-write failure');
@@ -190,24 +196,26 @@ describe('promotion boundary — one current pointer, executed source follows it
       .rejects.toThrow('injected view-write failure');
 
     expect((rt.storage.sql<{ status: string }>`
-      SELECT status FROM scaffold_versions WHERE version = ${pending.version}`)[0]?.status)
+      SELECT status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`)[0]?.status)
       .toBe('rolled_back');
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     expect(await reopen(rt).identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
   });
 
   test('manual rollback flips the pointer first and refreshes the view', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
-    const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+    const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     expect(promo.action).toBe('promote');
 
     const rb = await rollbackScaffold(rt, 0);
     expect(rb.ok).toBe(true);
 
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(0);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     expect((rt.storage.sql<{ status: string }>`
-      SELECT status FROM scaffold_versions WHERE version = ${pendingVersion}`)[0]?.status)
+      SELECT status FROM scaffold_versions
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${pendingVersion}`)[0]?.status)
       .toBe('rolled_back');
     expect(currentCount(rt)).resolves.toBe(1);
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
@@ -224,15 +232,15 @@ describe('promotion boundary — one current pointer, executed source follows it
       const mod = await modifyScaffold(rt, `Cycle ${i} proposal carrying a rationale well past the gate.`, code);
       expect(mod.ok).toBe(true);
       if (i % 2 === 1) {
-        const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
+        const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
         expect(promo.action).toBe('promote');
         expect(await reopen(rt).identity.scaffold.read()).toBe(code);
       } else {
-        const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
+        const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
         expect(rb.action).toBe('rollback');
       }
       expect(currentCount(rt)).resolves.toBe(1);
     }
-    expect(getCurrentScaffoldVersion(rt.storage.sql)).toBe(3);
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(3);
   });
 });

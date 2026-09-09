@@ -9,18 +9,12 @@
  * not pay for the workspace's renderers (Markdown, code highlighting, the plan
  * viewer), which arrive with this chunk.
  *
- * ENROLLED IN `scripts/wired.lock.json`. `gate:wired` cannot see this
- * module's consumer, and the absence is the gate's, not the code's:
- * `LandingFrame` reaches it through `lazy(() => import('./LandingWorkspaceFrame'))`,
- * and a dynamic `import()` is an expression that binds no name, so there is
- * no named edge to follow. The split is deliberate, for the reason above.
- *
  * Three frames share the shell:
  *   checkout: a Build turn mid-fix, Work tab open, Run/Supervise live
- *   plan:     a Plan turn: the plan sits in Output, one annotation on it
+ *   plan:     a Plan turn: one annotation in the product's Plans view
  *   slate:    a slate the agent wrote, open in its own tab, drawn in the page
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import type { UIMessage } from 'ai';
 import { planReviewAwaitingDecision, type PlanReview } from '@kinu.run/core';
@@ -57,38 +51,21 @@ interface FrameSpec {
 
 const FRAME = {
   checkout: { title: 'Checkout coupon bug', messages: CHECKOUT_MESSAGES, surface: 'Work', mode: 'build' },
-  plan: { title: 'Checkout coupon bug', messages: PLAN_MESSAGES, surface: 'Output', mode: 'plan' },
+  plan: { title: 'Checkout coupon bug', messages: PLAN_MESSAGES, surface: 'Work', mode: 'plan' },
   slate: { title: 'Support queue', messages: SLATE_MESSAGES, surface: `${SLATE_PREFIX}${SLATE_SUMMARY.id}`, mode: 'build' },
 } satisfies Record<LandingFrameKind, FrameSpec>;
 
-/**
- * The app's surfaces keep their selected tab in view with `scrollIntoView`.
- * Inside the app nothing else can move; on a page that scrolls, a frame
- * mounting below the fold would carry the document down to itself. The layout
- * effect reads the position before any child effect runs, and the passive
- * effect, which runs after every child's, puts it back.
- */
-function useHeldDocumentScroll(): void {
-  const held = useRef(0);
-  useLayoutEffect(() => { held.current = window.scrollY; });
-  useEffect(() => {
-    if (window.scrollY !== held.current) window.scrollTo(0, held.current);
-  });
-}
-
 function SlateBody(): ReactElement {
-  const [reload, setReload] = useState(0);
   return (
-    <div className="flex h-[480px] flex-col overflow-hidden rounded-lg border p-border">
-      <PreviewChrome url={SLATE_PREVIEW_URL} label={SLATE_SUMMARY.id} onReload={() => setReload((count) => count + 1)} />
-      <SlateDashboard key={reload} />
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <PreviewChrome url={SLATE_PREVIEW_URL} />
+      <SlateDashboard />
     </div>
   );
 }
 
 export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind }): ReactElement {
   const frame = FRAME[kind];
-  useHeldDocumentScroll();
   const [altitude, setAltitude] = useState<Altitude>('run');
   const [surface, setSurface] = useState<SurfaceKind>(frame.surface);
   const [draft, setDraft] = useState('');
@@ -170,7 +147,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
               <WorkSurface
                 surface={surface} onSurface={onSurface}
                 pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
-                plan={plan} planRpc={decidePlan}
+                plan={plan} planRpc={rpc}
                 snapshot={{ status: 'loading' }} onRetryLoad={() => {}} tools={[]} memory={[]} memoryContent="" onSearchMemory={() => {}}
                 mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={kind === 'checkout'}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}

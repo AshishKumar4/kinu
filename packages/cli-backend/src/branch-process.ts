@@ -1,14 +1,20 @@
 /**
  * Branch isolation via child processes for Linux CLI.
- * Each MCTS branch gets its own SQLite file — structural isolation.
+ *
+ * A branch is a LOGICAL actor of kind `branch` on the workspace's ONE database
+ * — a `workspace_actors` row like every other actor — that happens to run its
+ * rollouts in a separate OS process. What a branch needs isolated is the
+ * PROCESS (an unbounded LLM loop that must not share this event loop), never
+ * the store: it used to open `<agent>/branches/<key>.db`, which gave one
+ * logical actor two state stores and left the parent unable to read what its
+ * own branch had written.
  *
  * On CF: subAgent to a SubordinateAgent facet in branch mode uses Facets (co-located DOs)
- * On Linux: child_process.fork(branch-worker.ts) with its own SQLite DB
+ * On Linux: child_process.fork(branch-worker.ts) over the root's database
  */
 
-import type { BranchExploration, BranchHandle, JsonValue, SpawnBranch, AbortBranch, LLMProviderConfig } from '@kinu.run/core';
+import { explorationActorKey, type ActorHandle, type BranchExploration, type BranchHandle, type JsonValue, type SpawnBranch, type AbortBranch, type LLMProviderConfig } from '@kinu.run/core';
 import { fork, type ChildProcess } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import * as v from 'valibot';
@@ -18,8 +24,8 @@ import {
   type BranchCall, type BranchCallReply, type BranchMethod,
 } from './branch-protocol';
 import type { LocalProviderCredentials } from './model-resolver';
+import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from './actor-identity';
 
-const activeBranches = new Map<string, ChildProcess>();
 
 /**
  * A branch RPC carries NO wall clock any more.
@@ -53,6 +59,7 @@ interface PendingCall {
 }
 
 export interface BranchSpawnerConfig {
+  readonly parent: ActorHandle;
   /** The parent's default endpoint for bare ids — null when nothing derives
    *  one. The child then resolves explicit specs through its own registry and
    *  has no default, exactly like the parent. */
@@ -67,36 +74,26 @@ export interface BranchSpawner {
 }
 
 /**
- * `basePath` is the agent database's path with `.db` removed — the directory a
- * branch's own store goes next to. NULL when this runtime has no such
- * directory: an in-memory agent database is a SQLite sentinel, not a path, and
- * a branch child process needs a real file to open (`KINU_PARENT_DB` below).
- * Joining onto the sentinel is what created a literal `:memory:/branches`
- * directory in the primary checkout and 15 worktrees — and an empty directory
- * is invisible to `git status`, which is why sixteen "clean" trees held one.
+ * `rootDbPath` is the workspace's ONE database — the file a branch's own
+ * process opens to bind its actor row and write its rollout traces. NULL when
+ * this runtime has no such file: an in-memory agent database is a SQLite
+ * sentinel rather than a path, and no second process can reach it.
  */
 export function createBranchSpawner(
-  basePath: string | null,
+  rootDbPath: string | null,
   config: BranchSpawnerConfig,
 ): BranchSpawner {
-  const branchRoot = basePath === null ? null : `${basePath}/branches`;
+  const activeBranches = new Map<string, ChildProcess>();
 
   const spawn: SpawnBranch = async (branchId: string): Promise<BranchHandle> => {
-    if (branchRoot === null || basePath === null) {
+    if (rootDbPath === null) {
       throw new Error(
-        'Branch isolation needs a file-backed agent database: each branch opens its own '
-        + 'SQLite store beside it and reads the parent\'s. This runtime\'s database is '
-        + 'in-memory, so there is nowhere to put one.',
+        'Branch isolation needs a file-backed agent database: a branch runs in its own '
+        + 'process and binds its actor row over the workspace database. This runtime\'s '
+        + 'database is in-memory, so no second process can reach it.',
       );
     }
-    // Created HERE, by the first branch that needs somewhere to put its
-    // database — not when the spawner is built. Building one is what every
-    // `createCLIRuntime` does, MCTS or not, so the eager mkdir wrote a
-    // directory per runtime: measured 107 new `/tmp/kinu-test-<n>/branches`
-    // from one `bun test packages/cli-backend/` run, none of them ever used and
-    // none of them removed.
-    mkdirSync(branchRoot, { recursive: true });
-    const dbPath = `${branchRoot}/${branchId}.db`;
+    const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'branch', lifetime: 'task' });
 
     // Locate the worker script relative to this file
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
@@ -109,17 +106,19 @@ export function createBranchSpawner(
       KINU_MODEL: config.llm?.model ?? '',
       KINU_LLM_HEADERS: JSON.stringify(config.llm?.headers ?? {}),
       KINU_PROVIDER_CREDENTIALS: JSON.stringify(config.providerCredentials ?? {}),
-      KINU_PARENT_DB: `${basePath}.db`,
+      KINU_ROOT_DB: rootDbPath,
+      KINU_ACTOR_BOOTSTRAP: JSON.stringify(localActorProcessBootstrap(config.parent, binding)),
     };
     if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
 
-    const child = fork(workerPath, [dbPath], {
+    const child = fork(workerPath, [], {
       stdio: 'pipe',
       // Pass LLM credentials through env vars so the child can initialize its LLM
       env,
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
     activeBranches.set(branchId, child);
+    const exited = Promise.withResolvers<void>();
     let nextId = 1;
     const pending = new Map<number, PendingCall>();
     const startup = Promise.withResolvers<void>();
@@ -169,8 +168,8 @@ export function createBranchSpawner(
     // cause, not timekeeping.
     child.once('exit', (code) => {
       child.off('message', onMessage);
-      activeBranches.delete(branchId);
-      disposeBranchFiles(dbPath);
+      if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
+      exited.resolve();
       startup.reject(code === 0 || code === null
         ? new Error('Branch worker exited before sending ready')
         : new Error(`Branch worker exited with code ${code}`));
@@ -191,17 +190,26 @@ export function createBranchSpawner(
       child.send({ method, id, args });
       return promise;
     };
+    // The ONLY thing a branch owns outside the workspace's database: its own
+    // OS process. Retiring the actor row and ending the process that holds it
+    // are one act, so both arms below present the same teardown — and it is
+    // idempotent, because a child that already exited leaves `exited` settled.
+    const teardown = async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await exited.promise;
+    };
     try {
       await startup.promise;
     } catch (error) {
-      child.kill('SIGTERM');
+      await retireLocalActor(config.parent, binding.name, binding.reference, teardown);
       throw error;
     }
 
     return {
-      // The handle still takes tools because BranchHandle names them. They
-      // never reach the wire: the worker reads crafted tools from the parent
-      // database.
+      release: () => retireLocalActor(config.parent, binding.name, binding.reference, teardown),
+      // The handle retains the parent-defined tools contract. Crafted tools
+      // never reach the wire: the worker reads them from the workspace's own
+      // database, which is now the database it is already bound to.
       explore: (history, _tools, languages, mode, siblings = []) =>
         call(BRANCH_EXPLORE, { history, languages: [...languages], mode, siblings: [...siblings] })
           .then((reply) => resultOf(reply, BRANCH_EXPLORE)),
@@ -215,18 +223,13 @@ export function createBranchSpawner(
     const child = activeBranches.get(branchId);
     if (child) {
       child.kill('SIGTERM');
-      activeBranches.delete(branchId);
+      if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
     }
   };
 
   return { spawn, abort };
 }
 
-/** The branch database is live-worker trace state, including every possible
- * SQLite sidecar. No post-exit reader exists, so its worker's exit releases it. */
-function disposeBranchFiles(dbPath: string): void {
-  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(dbPath + suffix, { force: true });
-}
 
 /**
  * What a call reply carries for the method that was called. Presence, not

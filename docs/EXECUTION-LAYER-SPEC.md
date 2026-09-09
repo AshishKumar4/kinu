@@ -130,9 +130,17 @@ backend label.
 files, POSIX shell, code/runtime execution, processes, and ports. `run`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but retain a `shellId` across reconstruction:
-`agent:<name>` (`cf-backend/src/actor-agent.ts:700`),
-`subordinate:<name>` (`cf-backend/src/subordinate-agent.ts:220`), or
-`<scope>:<name>` (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`).
+`agent:<name>` for the main actor (`cf-backend/src/actor-agent.ts:700`) and
+`<kind>:<storage-key>` for every hosted logical actor —
+`hostedActorShellId(record)` in `cf-backend/src/actor-hosting.ts`, one function
+for all four kinds. It is keyed on the IMMUTABLE storage key rather than the
+registered name, because a rename must not move an actor's cwd and exported
+environment, and two actors that briefly share a name across a retirement must
+not share shell state. The same key owns the state subtree
+(`.kinu/agents/<storage-key>/`) and the promoted-loop path inside it, so one
+actor means one subtree and one program. The shell key is per ACTOR and not per
+database: every one of these actors' rows lives in the one workspace SQLite, so
+the shell id is what keeps their mutable shell state apart.
 `createAgentNimbusHandle` passes it to `exec`, `startProcess`, and `runCode`.
 The CLI implements the same contract locally. It refuses programmatic Plan
 turns because it has no plan-review surface. `enqueueTurn` rejects them

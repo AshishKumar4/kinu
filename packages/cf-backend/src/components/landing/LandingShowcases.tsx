@@ -219,8 +219,8 @@ export function LandingShowcases(): ReactElement {
       </section>
       <section id="local" data-showcase="cli" className="border-t p-border py-20 lg:py-24">
         <div className="mb-9 grid items-end gap-6 md:grid-cols-2 md:gap-[52px]">
-          <div><RuleLabel>02 · Smart CI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Your pipeline runs the agent as one step, and <span className="p-accent">your tests still decide what merges.</span></h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Ask for a diff review, a look at a failed build, or a prepared change. kinu exec runs the task headlessly and exits, and --json streams its events to your runner.</p>
+          <div><RuleLabel>02 · Smart CI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Give CI an agent.</h2></div>
+          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Run the agent as a step in your CI pipeline with kinu exec. Your existing tests and pipeline rules still decide what merges.</p>
         </div>
         <CliPreview />
       </section>

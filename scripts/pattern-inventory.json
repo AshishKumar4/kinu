@@ -372,6 +372,13 @@
       "decision": "traversal"
     },
     {
+      "file": "packages/core/src/prompting/message-codec.ts",
+      "kind": "hand-parser",
+      "owner": "decodeValue",
+      "sourceSha256": "1c64632eb1333d03ef55ee6a9763a7e93e9c015217c2e099795be10656c9b665",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/core/src/prompts/structured.ts",
       "kind": "hand-parser",
       "owner": "extractBalancedJson",
@@ -579,27 +586,6 @@
       "kind": "regex-literal",
       "owner": "segments",
       "sourceSha256": "d6c1fe6d126597f07fc9dc85817d6b91ed34d7792f980d39a2d6bf1094ac55c7",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "packages/core/tests/contract-workspace-schema.test.ts",
-      "kind": "regex-literal",
-      "owner": "ownedInitializers",
-      "sourceSha256": "94faf6f54cc7cc66d8ad8fafd73fc943d64077d6288c6215c622a208365bc029",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "packages/core/tests/contract-workspace-schema.test.ts",
-      "kind": "regex-literal",
-      "owner": "callableSource",
-      "sourceSha256": "a81994554bbed86b3822c249213a17aff0efdf86f2d172d2fc830cd928fbd2a6",
-      "decision": "sourceGate"
-    },
-    {
-      "file": "packages/core/tests/contract-workspace-schema.test.ts",
-      "kind": "regex-literal",
-      "owner": "callableSource",
-      "sourceSha256": "9149ec376b582535afed4221335baef0324a129d79484dd297862497a826c3c9",
       "decision": "sourceGate"
     },
     {

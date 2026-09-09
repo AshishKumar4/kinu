@@ -9,6 +9,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SearchNode } from '../types/mcts';
 import type { ConvergenceResult } from '../types/evaluation';
@@ -31,7 +32,8 @@ export async function converge(
 ): Promise<ConvergenceResult> {
   const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
-    WHERE root_id = ${rootId} AND status IN ('terminal', 'open')
+    WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
+      AND status IN ('terminal', 'open')
     ORDER BY value DESC, depth DESC`;
   const argmaxWinner = population[0];
 
@@ -83,7 +85,7 @@ export async function converge(
       );
       await rt.memory.index('memory/MEMORY.md');
     }
-    abandonSearchTree(rt.storage.sql, rootId);
+    abandonSearchTree(rt.storage.sql, rt.actor, rootId);
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -104,7 +106,7 @@ export async function converge(
       await rt.memory.index('memory/MEMORY.md');
       await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     }
-    abandonSearchTree(rt.storage.sql, rootId);
+    abandonSearchTree(rt.storage.sql, rt.actor, rootId);
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -130,7 +132,8 @@ export async function converge(
     await rt.memory.index('memory/MEMORY.md');
 
     const winnerCode = rt.storage.sql<{ code_used: string | null; code_language: string | null }>`
-      SELECT code_used, code_language FROM search_nodes WHERE id = ${winner.id}
+      SELECT code_used, code_language FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
     `[0];
     if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
         && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
@@ -140,7 +143,7 @@ export async function converge(
     // The near-tied rivals of the answer the user is about to see. Capturing
     // them is the only preference signal this turn produces, so a capture that
     // fails settles nothing quietly.
-    captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
+    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
   }
 
   // Close the tree: the winner becomes terminal and every other open node in
@@ -148,10 +151,12 @@ export async function converge(
   void rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
-    WHERE root_id = ${rootId} AND status = 'open' AND id != ${winner.id}
+    WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
+      AND status = 'open' AND id != ${winner.id}
   `;
   void rt.storage.sql`
-    UPDATE search_nodes SET status = 'terminal' WHERE id = ${winner.id}
+    UPDATE search_nodes SET status = 'terminal'
+    WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
   `;
   if (mode === 'build') await recordTaskOutcome(rt, winner.task, 'success', winner.value);
 
@@ -169,9 +174,10 @@ export async function converge(
  * threw. A search is settled exactly when its tree has no open nodes left, so
  * this is what makes the durable 'failed' record honest.
  */
-export function abandonSearchTree(sql: SqlExecutor, rootId: string): void {
+export function abandonSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): void {
+  actor.assertCurrent();
   void sql`UPDATE search_nodes SET status = 'failed'
-      WHERE root_id = ${rootId} AND status = 'open'`;
+      WHERE actor_id = ${actor.actorId} AND root_id = ${rootId} AND status = 'open'`;
 }
 
 /** Record the task outcome into task_history — the per-task ledger behind the
@@ -186,8 +192,9 @@ async function recordTaskOutcome(
   score: number,
 ): Promise<void> {
   const scaffoldVersion = await rt.identity.scaffold.version();
+  rt.actor.assertCurrent();
   void rt.storage.sql`
-    INSERT INTO task_history (task, scaffold_version, outcome, score)
-    VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
+    INSERT INTO task_history (actor_id, task, scaffold_version, outcome, score)
+    VALUES (${rt.actor.actorId}, ${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
   `;
 }

@@ -5,9 +5,9 @@ import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
-  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
+  SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
-  type SlateBindingRoute, type SlateCallResult, type SlateSummary, type SlateProblem,
+  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -27,6 +27,7 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
 
 interface RunningSlate {
   readonly key: string;
+  readonly revision: number;
   readonly caller: SlateCaller;
   readonly id: string;
   readonly process: ResidentSlateProcess;
@@ -114,7 +115,14 @@ export class SlateHost {
       if (entry.type !== 'directory') continue;
       try {
         const project = await this.project(caller.cred, entry.name);
-        slates.push({ id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings) });
+        const running = this.running.get(`${slateCallerKey(caller)}#${entry.name}`);
+        const live = running !== undefined && await running.process.isRunning()
+          && running === this.running.get(`${slateCallerKey(caller)}#${entry.name}`)
+          && running.revision === (this.revisions.get(entry.name) ?? 0);
+        const summary = {
+          id: entry.name, title: project.slate.title ?? project.name ?? entry.name, bindings: Object.keys(project.slate.bindings),
+        };
+        slates.push(live && running !== undefined ? { ...summary, port: running.process.port } : summary);
       } catch (cause) {
         problems.push({ id: entry.name, ...refusalOf(toKinuError({ doing: 'slate ' + entry.name, cause, otherwise: 'io' })) });
       }
@@ -140,13 +148,44 @@ export class SlateHost {
     }
   }
 
+  /**
+   * The app invocations this host is running right now, by the id it issued.
+   *
+   * A guest never sends a chain: it sends the id of the invocation it is
+   * serving, and this map is what turns that into a lineage. An entry lives
+   * exactly as long as the call it names, so a slate that keeps an older
+   * request's bindings and replays them holds an id that has been retired.
+   */
+  private readonly invocations = new Map<string, SlateInvocation>();
+
+  /**
+   * An invocation for a request this host did not originate — a browser hitting
+   * the preview. The lineage is the root, but it is a NAMED root: without one,
+   * a slate could keep a preview request's bindings and present them from
+   * inside a hop to get an empty chain, which is the same replay the hop path
+   * refuses. Released when the routed request settles.
+   *
+   * `null` when no running slate serves that port; there is then nothing whose
+   * bindings could be kept.
+   */
+  previewInvocation(port: number): { readonly value: string; release: () => void } | null {
+    for (const running of this.running.values()) {
+      if (running.process.port !== port) continue;
+      const value = crypto.randomUUID();
+      this.invocations.set(value, { id: running.id, chain: [] });
+      return { value, release: () => { this.invocations.delete(value); } };
+    }
+    return null;
+  }
+
   /** Re-read the slate field on every call: a held stub proves its name, not today's reach. */
   async bindingCall(caller: SlateCaller, id: string, name: string, request: JsonValue): Promise<SlateCallResult> {
     try {
       const parsed = v.safeParse(SlateBindingRequestSchema, request);
-      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], depth }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
+      const chain = resolveSlateChain({ invocations: this.invocations, id, invocation: parsed.output.invocation });
       const project = await this.project(caller.cred, id);
-      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output }));
+      return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} binding ${name}`, cause, otherwise: 'io' })) };
     }
@@ -165,12 +204,16 @@ export class SlateHost {
       case 'mcp':
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
-      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.depth + 1);
+      case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain);
     }
   }
 
   /** App members are POST routes on the same authored fetch handler that serves the preview. */
-  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], depth = 0): Promise<SlateCallResult> {
+  async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], chain: readonly string[] = []): Promise<SlateCallResult> {
+    // Issued before the request leaves and retired when it settles, so the id
+    // the callee carries names a live call and nothing else.
+    const invocation = crypto.randomUUID();
+    this.invocations.set(invocation, { id, chain });
     try {
       requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
       if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
@@ -178,7 +221,8 @@ export class SlateHost {
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
       const process = await this.ensure(caller, id);
       const response = await process.request(new Request(`https://slate.invalid/${method}`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-depth': String(depth) }, body: JSON.stringify(parsed.output),
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-call': invocation },
+        body: JSON.stringify(parsed.output),
       }));
       if (!response.ok) {
         const body = await response.text();
@@ -193,6 +237,8 @@ export class SlateHost {
       return { ok: true, value: value.output };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
+    } finally {
+      this.invocations.delete(invocation);
     }
   }
 
@@ -221,7 +267,10 @@ export class SlateHost {
       // must not reuse an image created before outbound mediation was supplied.
       const key = `slate:mediated:${this.deps.workspace}:${held}:${source.digest.value}`;
       const running = this.running.get(held);
-      if (running?.key === key && await running.process.isRunning()) return running.process;
+      if (running?.key === key && await running.process.isRunning()) {
+        this.running.set(held, { ...running, revision });
+        return running.process;
+      }
       if (running !== undefined) {
         this.running.delete(held);
         await running.process.stop();
@@ -236,7 +285,7 @@ export class SlateHost {
       const owner = JSON.stringify([this.deps.workspace, id, slateCallerKey(caller)]);
       const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings, globalOutbound });
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
-      this.running.set(held, { key, caller, id, process });
+      this.running.set(held, { key, revision, caller, id, process });
       return process;
     }
   }
