@@ -1,11 +1,12 @@
 /**
  * WHAT a failed episode was, and WHETHER a restart still owes it.
  *
- * One concept in one file, because three answers in three places have to agree:
- * the observation's outcome, the durable phase, and the INFRA marker the tier's
- * ratchet counts. Derive them separately at the call site and a run that loses
- * four of thirty-four cases to an upstream 500 reports "17 behavioural, 0
- * infrastructure".
+ * One concept in one file: the observation's outcome, the durable phase, and the
+ * INFRA marker the tier's ratchet counts share one classification, so they
+ * cannot disagree. The recorded counterexample is a run with four of thirty-four
+ * cases lost to an upstream 500 but a report of "17 behavioural, 0
+ * infrastructure", demonstrating the consequence of deriving those answers
+ * separately.
  *
  * The distinction this file exists to keep is between:
  *
