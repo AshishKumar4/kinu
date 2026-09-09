@@ -1821,6 +1821,33 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
 
 
 /**
+ * Fields this hire cannot act on, refused naming the field that does the job.
+ * WITHOUT `role` the hire hands the workstream to an agent that exists, so
+ * `mission`, `tier` and `lifetime` belong to the CREATE variant only — an
+ * agent that exists was briefed at its birth and already runs at its own tier
+ * for its own lifetime. WITH `role` at `lifetime:"task"` the hire runs at its
+ * role's tier, so `tier` is refused there too. One whole-input boundary both
+ * arms call, so the variant tables above and the dispatch below cannot drift.
+ */
+function assertHireVariant(input: AgentsToolInput): void {
+  if (!input.role) {
+    if (input.mission !== undefined) {
+      return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
+    }
+    if (input.tier !== undefined) {
+      return badInput('field "tier" is not available on a hire that names an existing agent — it already runs at its own tier');
+    }
+    if (input.lifetime !== undefined) {
+      return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
+    }
+    return;
+  }
+  if (input.lifetime === 'task' && input.tier !== undefined) {
+    return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
+  }
+}
+
+/**
  * The one delegation dispatch. Both surfaces that can delegate — the `agents`
  * tool the model calls directly, and the `agents.*` namespace its codemode
  * script calls — run this exact function over the exact same deps, so there is
@@ -1947,20 +1974,7 @@ export async function dispatchAgentsAction(
               ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
               : 'hire requires agent and message');
           }
-          // Variant boundary: WITHOUT `role` this hire hands the workstream to
-          // an agent that exists. `mission`, `tier` and `lifetime` belong to
-          // the CREATE variant only — an agent that exists was briefed at its
-          // birth and already runs at its own tier for its own lifetime — so
-          // naming them here would be knobs that cannot move.
-          if (input.mission !== undefined) {
-            return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
-          }
-          if (input.tier !== undefined) {
-            return badInput('field "tier" is not available on a hire that names an existing agent — it already runs at its own tier');
-          }
-          if (input.lifetime !== undefined) {
-            return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
-          }
+          assertHireVariant(input);
           spawnGuard();
           const asked = requestedTopic(input);
           if (team && await isSubordinate(input.agent)) {
@@ -2021,13 +2035,7 @@ export async function dispatchAgentsAction(
             throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
               + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
           }
-          // A `task` hire uses the same resolver and the same precedence as a
-          // durable one. No `tier`: it runs at its ROLE's tier, which is the one
-          // routing input this rung has, and a second knob would be a model spec
-          // by another name — so the field is refused here rather than dropped.
-          if (input.tier !== undefined) {
-            return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
-          }
+          assertHireVariant(input);
           const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
           if ('error' in delegatedTask) return badInput(delegatedTask.error);
           const request: TemporaryRunRequest = {
