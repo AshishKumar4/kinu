@@ -52,7 +52,7 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
  * one of them behind its declared replay policy (tools/effect-claim.ts), which
  * is why both backends assemble here and neither wraps tools of its own.
  * Per-action gating (fork / team / peers) lives in `createAgentsTool`, so an
- * actor with only `team` sees hire/ask/send and no swarm.
+ * actor with only `team` sees hire/msg/list/dismiss and no swarm.
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   let extra: ToolSet | undefined;

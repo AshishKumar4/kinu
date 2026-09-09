@@ -989,16 +989,10 @@ function agentsJsonSchemaVariants(
 /**
  * The model-facing parse. `strictObject`, not `object`: valibot's `object`
  * EXCLUDES an unrecognised entry rather than rejecting it, which on this surface
- * is not a cosmetic difference. Measured against the flat `object` this replaces:
- *
- *   parseAgentsToolInput({ action:'fork', task:'x', budgetUsd:5, wallClockMs:1000 })
- *     -> { action:'fork', task:'x' }
- *
- * Both caps gone. A model that spelled a cap camelCase asked for a $5 ceiling,
- * got no ceiling, and nothing in the error, the result or the run record said its
- * request had vanished. `fork` has since left the picklist, so that exact call is
- * refused twice over — but the shape the surface provokes is unchanged, because
- * every cap on it is still snake_case and camelCase is the expected mistake.
+ * is not a cosmetic difference — a spend cap spelled in the wrong case asked for
+ * a ceiling, got no ceiling, and nothing said its request had vanished. Every cap
+ * on this surface is snake_case and camelCase is the expected mistake, so the
+ * refusal names the field meant instead of dropping it.
  */
 const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
 
@@ -1765,7 +1759,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: the catalog role to create the helper under, exclusive with `agent`. One of the ids listed below.'
           + roleSummaryText(deps),
       },
-      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role`: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
+      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role` at the default durable lifetime: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier. A lifetime:"task" hire runs at its role\'s tier and refuses this field.' },
       deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });
@@ -1893,9 +1887,7 @@ export async function dispatchAgentsAction(
   // money. A hire naming an `agent` that EXISTS is not a spawn and stays
   // available: handing work to an agent that already exists adds no depth, and
   // an actor at the cap still has to be able to use its team. The guard lives on
-  // the same read the arm routes on — `if (input.role)` IS the spawn predicate,
-  // so the seam and the dispatcher can no longer disagree about what a spawn is
-  // (they once did, on exactly `role: ''`, which the schema permits).
+  // the same read the arm routes on — `if (input.role)` IS the spawn predicate.
   const spawnDepthRefusal = () =>
     team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
   try {
@@ -1954,6 +1946,20 @@ export async function dispatchAgentsAction(
             return badInput(team
               ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
               : 'hire requires agent and message');
+          }
+          // Variant boundary: WITHOUT `role` this hire hands the workstream to
+          // an agent that exists. `mission`, `tier` and `lifetime` belong to
+          // the CREATE variant only — an agent that exists was briefed at its
+          // birth and already runs at its own tier for its own lifetime — so
+          // naming them here would be knobs that cannot move.
+          if (input.mission !== undefined) {
+            return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
+          }
+          if (input.tier !== undefined) {
+            return badInput('field "tier" is not available on a hire that names an existing agent — it already runs at its own tier');
+          }
+          if (input.lifetime !== undefined) {
+            return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
           }
           spawnGuard();
           const asked = requestedTopic(input);
@@ -2018,7 +2024,10 @@ export async function dispatchAgentsAction(
           // A `task` hire uses the same resolver and the same precedence as a
           // durable one. No `tier`: it runs at its ROLE's tier, which is the one
           // routing input this rung has, and a second knob would be a model spec
-          // by another name — so the field is not in this variant at all.
+          // by another name — so the field is refused here rather than dropped.
+          if (input.tier !== undefined) {
+            return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
+          }
           const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
           if ('error' in delegatedTask) return badInput(delegatedTask.error);
           const request: TemporaryRunRequest = {
