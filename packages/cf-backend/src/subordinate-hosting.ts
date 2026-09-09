@@ -78,6 +78,34 @@ export interface HostedReportLedger {
   settled: boolean;
 }
 
+/**
+ * ONE DELEGATED TURN, as everything that is decided before it runs.
+ *
+ * Assembled once by {@link runHostedTask} and handed whole to the tool
+ * builder, because every member of it is a decision the turn must not make
+ * twice: the turn is CLAIMED under `input` and TOOLED from it, `model` and
+ * `profile` are the one resolution this turn ran under — a second lookup can
+ * land a different provider revision and a different digest from the claim —
+ * `reports` is the ledger the `report` lane writes while the loop runs and the
+ * relay reads after it, and `capture` is the run's one findings accumulator,
+ * whose snapshot IS the report the caller gets back.
+ */
+export interface HostedTaskTurn {
+  /** The hosted actor whose turn this is. Its handle keys every effect claim
+   *  and every store the surface reaches. */
+  readonly actor: HostedActor;
+  /** That actor's runtime, narrowed to this backend's own. */
+  readonly runtime: CFRuntime;
+  readonly reports: HostedReportLedger;
+  readonly input: HeadInput;
+  readonly capture: HeadCapture;
+  /** The model this turn reasons with, already bound. */
+  readonly model: LanguageModel;
+  /** The profile this turn resolved under, with the authority inputs beside
+   *  it — what the delegation rungs narrow by and what the claim recorded. */
+  readonly profile: ExplorationProfile;
+}
+
 /** What the root lends the subordinate rung. Deliberately the same host and
  *  directory the exploration rung uses: there is one actor host per workspace
  *  and every kind is acquired from it. */
@@ -103,11 +131,11 @@ export interface SubordinateHostSeams {
     readonly workMode: WorkMode;
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
-  /** The tool surface this hosted actor's delegated turn admits, built over its
-   *  own runtime: its role's tools, its `report` lane, its own hires. The
-   *  ledger is handed in rather than returned, because the `report` tool writes
-   *  it while the loop is still running and the relay decision reads it after. */
-  taskTools(actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger, input: HeadInput): ToolSet;
+  /** The tool surface this hosted actor's delegated turn admits, built over
+   *  {@link HostedTaskTurn} — the whole turn, because the surface is a
+   *  function of every part of it and a builder that took only some would
+   *  resolve the rest a second time. */
+  taskTools(turn: HostedTaskTurn): ToolSet;
   /** The per-step live plane the turn reports. */
   dynamic(actor: HostedActor): DynamicContext;
   /** The mission ledger a delegated turn charges, or null. */
@@ -129,8 +157,8 @@ export interface SubordinateHostSeams {
  *  kept it in memory would reset and rebuild the whole tree beneath itself. The
  *  directory row is that durability now, and it cannot disagree with the roster
  *  because it IS the roster. */
-function hostedDelegationBudget(
-  seams: SubordinateHostSeams, actor: BoundActor,
+export function hostedDelegationBudget(
+  seams: Pick<SubordinateHostSeams, 'host'>, actor: BoundActor,
 ): DelegationBudget {
   let depth = 0;
   let current: WorkspaceActor | null = actor.record;
@@ -335,13 +363,31 @@ export async function runHostedTask(
     // backend's own runtime shape to satisfy a cf read is the wrong direction.
     const runtime = actor.runtime as CFRuntime;
     const reports: HostedReportLedger = { spoke: false, settled: false };
-    const { profile } = await seams.profile({ actor, availableTools: [], workMode: task.mode });
+    const resolved = await seams.profile({ actor, availableTools: [], workMode: task.mode });
     const mission = seams.mission(actor);
     // BUILT HERE, ONCE, and handed to both the runner and the tool surface. The
     // turn is claimed under this value and recovery verifies that claim, so the
     // caller does not supply it: a caller-supplied `HeadInput` is a second shape
     // that can disagree with the one the tools were built from.
     const input = delegatedHeadInput(actor.record, task);
+    // THE RUN'S ONE FINDINGS ACCUMULATOR, built here beside the input and for
+    // the same reason: the tools write it while the turn runs and
+    // `runHeadInference` reads it into the report this call returns, so a
+    // second instance is a working record nothing reads. With two, a delegated
+    // turn's decisions, evidence, artifacts and tool calls all landed in the
+    // tool surface's own copy, and the report came back with none of them —
+    // which the caller sees as an answer synthesised from nothing when the
+    // turn produced no closing prose.
+    const capture = new HeadCapture();
+    // THE TURN, assembled once. Every member is a decision already made above,
+    // and the tool builder gets all of them rather than resolving any again:
+    // the model and the profile in particular are this turn's own resolution,
+    // which the claim recorded.
+    const turn: HostedTaskTurn = {
+      actor, runtime, reports, input, capture,
+      model: seams.resolveModel(resolved.profile.tier.model),
+      profile: resolved,
+    };
     // Annotated with the NAMED interface and assembled in statements: `mission`
     // is added only when this turn is budgeted, so an UNBUDGETED turn carries no
     // key at all rather than a spread of nothing. Absent and present are
@@ -350,9 +396,9 @@ export async function runHostedTask(
     const inference: HeadInferenceDeps = {
       actor,
       runId: crypto.randomUUID(),
-      model: seams.resolveModel(profile.tier.model),
-      tools: seams.taskTools(actor, runtime, reports, input),
-      capture: new HeadCapture(),
+      model: turn.model,
+      tools: seams.taskTools(turn),
+      capture,
       workspaceLayout: 'shared-workspace',
       // Cancellation is the session's. A delegated turn is not cancelled by the
       // parent hanging up, by a socket closing or by an eviction: an interrupted
