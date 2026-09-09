@@ -1,5 +1,5 @@
 {
-  "measured": "13d800895: 962 test files, 867 runnable suites, 12218 tests, 36 runners, 64 non-public product members",
+  "measured": "9a8b98760: 962 test files, 868 runnable suites, 12234 tests, 36 runners, 64 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -134,10 +134,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-actor-facet-substrate.test.ts :: the parent facet gate admits only active, registered subordinate facets :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-additional-agent-naming.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 1
     },
@@ -147,6 +143,14 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a beyond-budget stale backlog drains across maintenance wakes, not the gate :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a hired child deferred job is restored by the workspace wake :: harness bridge to a non-public member",
+      "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a hired child shares the workspace wake, and its backlog drains through it :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -160,14 +164,6 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a live swarm ledger row created after activation survives the tick :: harness bridge to a non-public member",
       "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation arms the same wake, and the inherited tick serves it :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: a subordinate activation restores the wake of a deferred job whose row was lost :: harness bridge to a non-public member",
-      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-alarm-wake-chain.test.ts :: an activation restores a wake row that went missing :: harness bridge to a non-public member",
@@ -350,20 +346,12 @@
       "count": 2
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: an unreachable subordinate counts, because unknown is not idle :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the evolution lane leaves a durable row and hands the re-entry to a carrier :: harness bridge to a non-public member",
       "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the recovery hands the re-drive to a carrier and terminalizes the old fiber :: harness bridge to a non-public member",
       "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-facet-reconciliation.test.ts :: every terminal head loses its facet; only the executing ones keep theirs :: harness bridge to a non-public member",
-      "count": 8
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-files-route-authority.test.ts :: (file scope) :: harness bridge to a non-public member",
@@ -427,10 +415,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 2
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: a roster row whose facet the SDK no longer holds resolves missing, and the read does not re-register it :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -447,6 +431,10 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a redial mid-turn is told the queued steer and the running branch :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-slate-composition.test.ts :: source capture does not retain a previous caller supplementary group :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -482,14 +470,6 @@
       "count": 1
     },
     {
-      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: between() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: catches the on-connect terminal-error replay frame in the raw onMessage handler :: expect(<source text>).toContain",
-      "count": 4
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: clears the error on the next send and on workspace switch; exposes retry + clear + state :: between() over source text",
       "count": 2
     },
@@ -514,35 +494,7 @@
       "count": 1
     },
     {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a head reports every step back to the parent journal :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a head reports every step back to the parent journal :: memberBody() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a hosted node reports its steps to the same journal :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: a hosted node reports its steps to the same journal :: memberBody() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: the parent journal is written in exactly one place :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-exploration-containment.test.ts :: the parent journal is written in exactly one place :: memberBody() over source text",
-      "count": 1
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-facet-grant-inheritance.test.ts :: every root method the facet policy calls is on the RPC surface :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-facet-grant-inheritance.test.ts :: the root/facet split is decided by the container-ownership test :: reads a source file",
       "count": 1
     },
     {
@@ -630,18 +582,6 @@
       "count": 6
     },
     {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).not.toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: facet-spawned heads inherit the registered parent workspace identity :: memberBody() over source text",
-      "count": 1
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: expect(<source text>).not.toContain",
       "count": 1
     },
@@ -651,18 +591,6 @@
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: memberBody() over source text",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: expect(<source text>).not.toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: expect(<source text>).toContain",
-      "count": 4
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects :: memberBody() over source text",
       "count": 1
     },
     {
@@ -683,18 +611,6 @@
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-workers-ai-auth.test.ts :: UserDO refreshes expiring Cloudflare credentials and persists the rotation :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: expect(<source text>).not.toContain",
-      "count": 5
-    },
-    {
-      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: expect(<source text>).toContain",
-      "count": 2
-    },
-    {
-      "key": "source_text :: packages/cli/tests/device-connect.test.ts :: desktop.ts keeps zero duplicated daemon/registration logic :: reads a source file",
       "count": 1
     },
     {
@@ -974,10 +890,6 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-combobox-clear-affordance.test.ts :: the stylesheet still has a rule to hide it :: weak-only test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-head-delta.test.ts :: step ids are per step, so the trace is stable while it grows :: expected side computed by the code under test",
       "count": 1
     },
@@ -1006,15 +918,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: is deterministic and order-independent over object keys :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: null command and null patch are bound distinctly (not conflated) :: expected side computed by the code under test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-approval-digest.test.ts :: stable for identical deploy identity :: expected side computed by the code under test",
       "count": 1
     },
     {

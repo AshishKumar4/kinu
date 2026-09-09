@@ -647,7 +647,7 @@ describe('createAttemptSandbox', () => {
     mkdirSync(join(donor, 'node_modules', 'third-party'), { recursive: true });
     writeFileSync(join(donor, 'node_modules', 'third-party', 'package.json'), manifest('third-party'));
     // Hoisted exactly as bun installs them: relative to the DONOR's own root, so
-    // an absolute mirror of the scope directory resolves back into the donor.
+    // an absolute link to the scope directory resolves back into the donor.
     mkdirSync(join(donor, 'node_modules', '@alpha'), { recursive: true });
     mkdirSync(join(donor, 'node_modules', '@beta'), { recursive: true });
     symlinkSync('../../packages/alpha', join(donor, 'node_modules', '@alpha', 'core'));
