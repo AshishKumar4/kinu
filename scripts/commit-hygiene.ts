@@ -635,11 +635,22 @@ export function sizeRuleBoundary(): string | undefined {
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
 }
 
-/** Short SHAs of every commit from `boundary` (inclusive) to HEAD, so the size
- *  rule can be applied to exactly the commits written under it. */
+/**
+ * Short SHAs of every commit WRITTEN under the size rule: reachable from HEAD
+ * past `boundary`, and authored no earlier than the boundary commit itself.
+ * Topology alone is not authorship: a lane commit written before the rule and
+ * merged after it sits inside `boundary^..HEAD`, and sizing it would demand a
+ * rewrite of history somebody else wrote. Author date survives rebase and
+ * cherry-pick, which is why it is the date compared rather than the committer's.
+ */
 export function commitsFrom(boundary: string): ReadonlySet<string> {
-  const log = git('log', '--format=%H', `${boundary}^..HEAD`);
-  return new Set(log.trim().split('\n').filter((line) => line.length > 0).map((sha) => sha.slice(0, 10)));
+  const since = Number(git('log', '-1', '--format=%at', boundary).trim());
+  const log = git('log', '--format=%H%x1f%at', `${boundary}^..HEAD`);
+  return new Set(log.trim().split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => line.split('\u001f'))
+    .filter(([, authored]) => Number(authored) >= since)
+    .map(([sha]) => (sha ?? '').slice(0, 10)));
 }
 
 export interface GovernedCommit {
