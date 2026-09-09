@@ -209,7 +209,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
   });
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
-    `oversize: hand ${path} to a temporary agent as \`context_ref\` on an agents ask). The first ${head.length} chars follow.]\n\n${head}`;
+    `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
 /** True when a natively-acceptable document is large enough that carrying it

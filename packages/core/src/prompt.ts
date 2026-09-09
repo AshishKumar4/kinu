@@ -278,7 +278,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
     const has = (action: (typeof actions)[number]) => actions.includes(action);
     parts.push(render(DELEGATION_SECTION, {
       hasActions: actions.length > 0,
-      hasTemporaryAsk: surface.temporaryAsk && has('ask'),
+      hasTemporaryAsk: surface.temporaryAsk && has('hire'),
       hasSwarm: has('swarm'),
       hasHire: has('hire'),
       // Both backends build the `agents.*` codemode provider from the deps that

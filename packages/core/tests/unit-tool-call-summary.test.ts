@@ -18,12 +18,14 @@ describe('tool call summaries — the unified agents tool', () => {
     expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');
     expect(summarizeToolCall('agents', { action: 'hire', scope: 'workspace', mission: 'summarize papers' }))
       .toBe('hire workspace — "summarize papers"');
-    expect(summarizeToolCall('agents', { action: 'ask', agent: 'scout', message: 'Audit the CLI surface' }))
-      .toBe('ask scout — "Audit the CLI surface"');
-    expect(summarizeToolCall('agents', { action: 'send', agent: 'scout', topic: 'fyi' }))
-      .toBe('send scout — "fyi"');
-    expect(summarizeToolCall('agents', { action: 'reply', message: 'here you go' }))
-      .toBe('reply — "here you go"');
+    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }))
+      .toBe('hire scout — "Audit the CLI surface"');
+    expect(summarizeToolCall('agents', { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }))
+      .toBe('hire (task) auditor');
+    expect(summarizeToolCall('agents', { action: 'msg', agent: 'scout', topic: 'fyi' }))
+      .toBe('msg scout — "fyi"');
+    expect(summarizeToolCall('agents', { action: 'msg', event_id: 'ev-1', message: 'here you go' }))
+      .toBe('msg — "here you go"');
     expect(summarizeToolCall('agents', { action: 'dismiss', agent: 'arch-auditor' })).toBe('dismiss arch-auditor');
     expect(summarizeToolCall('agents', { action: 'list' })).toBe('list');
   });
@@ -129,7 +131,7 @@ describe('tool call summaries — builtins', () => {
     expect(describeToolCall('run', { command: 'bun test packages/core' })).toBe('Ran tests');
     expect(describeToolCall('web', { action: 'fetch', url: 'https://example.com' })).toBe('Fetched a page');
     expect(describeToolCall('memory', { action: 'search', query: 'deployment' })).toBe('Searched memory');
-    expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
+    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
   });
 
   test('release distinguishes its thirteen actions', () => {

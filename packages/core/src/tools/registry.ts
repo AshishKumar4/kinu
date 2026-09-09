@@ -336,15 +336,14 @@ export interface BuiltinToolSpec {
 }
 
 // ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder with THREE rungs, and they differ on lifetime
-// and on who decides: swarm = an ephemeral search whose candidates are MEASURED
-// against a number the caller declares and which settles into this turn; a
-// role-targeted ask = one full agent for one question, released the moment it
-// answers; hire = a persistent subordinate that outlives the turn and starts
-// from a blank context; ask/send by `agent` = talking to what already exists.
-// The tool docstring renders these rungs verbatim and the prompt's Delegation
-// section indexes them, so editing them here is the only place delegation
-// doctrine changes.
+// The `agents` tool is ONE ladder with TWO rungs, and they differ on who
+// decides: swarm = an ephemeral search whose candidates are MEASURED against a
+// number the caller declares and which settles into this turn; hire = one agent
+// engaged on one workstream, whose `lifetime` says whether it answers once and
+// retires or stays in the roster across turns. msg = talking to what already
+// exists. The tool docstring renders these rungs verbatim and the prompt's
+// Delegation section indexes them, so editing them here is the only place
+// delegation doctrine changes.
 //
 // TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. Every configured
 // search of any depth is `action:'swarm'`, whose candidates are scored against
@@ -361,28 +360,42 @@ export interface BuiltinToolSpec {
 //     is exactly the information the ladder is keyed on, removed.
 //   `staff` carries the lifetime signal but takes the wrong OBJECT: you staff
 //     an organisation and you hire a person, and this action's object is one
-//     person (`role` + `mission` → one subordinate). Subordinates hire their own
-//     helpers, and a subordinate has no organisation to staff.
-//   `hire` keeps the lifetime signal (nobody hires for one turn), takes the
-//     object the call actually has, matches the workplace vocabulary the rest
-//     of this surface already uses (role, mission, roster, dismiss), and pairs
-//     with `dismiss` — hire/dismiss is a matched pair on the enum, staff/dismiss
-//     is not.
-// AGENTS_TOOL_ACTIONS below is the whole vocabulary: `hire` is the only spelling
-// of the persistent rung, and no second action reaches it.
+//     person (`role` + `mission` → one subordinate). It was defensible only
+//     while the caller was the workspace orchestrator, where "staff the
+//     workspace" was a readable elision; a subordinate hiring its own helper
+//     has no organisation to staff, and subordinates hire now.
+//   `hire` takes the object the call actually has, matches the workplace
+//     vocabulary the rest of this surface already uses (role, mission, roster,
+//     dismiss), and pairs with `dismiss` — hire/dismiss is a matched pair on the
+//     enum, staff/dismiss was not.
+//
+// LIFETIME IS A FIELD, NOT A VERB, settled 2026-08-28 on the owner's own
+// question: "Do we really need a '.query'? What would happen if 'hire' were
+// itself made to be served for that? we could just have an 'ephemeral' flag or
+// something?". The temporary rung was its own action (`ask` with a `role`); it
+// is now `hire` with `lifetime:'task'`, over the SAME roster and the same
+// `SUBORDINATE_LIFETIMES` the row has always carried. One primitive, and the
+// lifetime says how long the helper lives — which is the only thing the two
+// spellings ever differed on.
+//
+// ADDRESSING IS ONE VERB. `send` named an `agent` and `reply` named an
+// `event_id` of an inbound question; nothing else separated them. That is one
+// action with two ways to say WHO — `msg`, which takes one or the other and
+// refuses both.
+// The cutover is total: no alias, no accepted-legacy action.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see
  *  agentsActionsFor in tools/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
-  'swarm', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
+  'swarm', 'hire', 'msg', 'list', 'dismiss',
 ] as const;
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, three rungs, keyed on lifetime: a search is ephemeral and settles into this turn, a temporary agent lives for one question, and a subordinate persists across turns.';
+  'One delegation ladder, two rungs: a search is ephemeral and settles into this turn, and a hire is one agent whose `lifetime` decides whether it answers one question and retires or stays in your roster across turns.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
@@ -429,7 +442,7 @@ export const DELEGATION_INHERITANCE = {
   },
   hire: {
     rung:
-      'A subordinate starts FRESH: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
+      'A hire starts FRESH at either lifetime: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
     brief:
       'It did not watch this conversation and gets only a short digest of your recent messages, so state the goal, the constraints and what finished looks like here rather than assuming shared ground.',
   },
@@ -463,31 +476,27 @@ export const DELEGATION_RUNGS = {
     // The delivery contract, stated because it changes how a caller plans the turn.
     + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you; never poll a backgrounded job or spawn it twice. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
-  // The rung between the two, and it is defined by what it COSTS the caller
-  // rather than by what it is: the work happens in somebody else's window and
-  // only the answer comes back into this one. Stated before the persistent rung
-  // because it is the cheaper mistake to make — a temporary agent that should
-  // have been a hire wastes one question, while a hire that should have been a
-  // temporary agent leaves a roster row nobody retires.
-  temporary:
-    'Ask a ROLE (action=ask with `role` instead of `agent`) when you want an answer, not a colleague: it creates a full agent for that one question — its own context window, its own tool loop, this same workspace — waits for it to finish, and returns its answer here. '
-    + 'It is the rung for work that is bounded and self-contained: reading a large file or a spill path to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. '
-    + 'Name material by `context_ref` (workspace paths) rather than pasting it: the agent reads those bytes itself and they never enter your window, which is the whole saving. '
-    + 'It is not in your roster, you cannot send it a follow-up, and it is released the moment it answers — its transcript is kept. So state the whole question once; a second exchange is a hire.',
+  // ONE rung, and `lifetime` is the whole choice inside it. It used to be two
+  // actions, and the two differed on exactly one fact — how long the helper
+  // lives — so the caller had to pick a VERB to express a duration. Stating the
+  // cheap lifetime first because it is the cheaper mistake to make: a `task`
+  // hire that should have been `durable` wastes one question, while a `durable`
+  // hire that should have been `task` leaves a roster row nobody retires.
   hire:
-    'Hire a subordinate (action=hire), creating one subordinate per independent workstream and running them in parallel. A subordinate outlives this turn and keeps its own context; it starts fresh, so its mission is the whole brief. ' +
+    'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace, and `lifetime` decides how long it lives. '
+    + 'lifetime:"task" is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted "durable". '
+    + 'lifetime:"durable" (the default) outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished durable hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
-    `${DELEGATION_INHERITANCE.hire.rung} ` +
-    'It then keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
-    'A finished subordinate reports and STAYS, resumable with its context intact — dismiss only a subordinate whose role is permanently over.',
+    + `${DELEGATION_INHERITANCE.hire.rung} `
+    + 'Naming an `agent` that already exists instead of a `role` hands that agent the workstream rather than creating one, with `deliverable` saying what finished looks like.',
 } as const;
 
-/** How ask/send/reply address existing agents — the converse half of the
- *  `agents` docstring. */
+/** How `msg` addresses an agent or an inbound question — the converse half of
+ *  the `agents` docstring. */
 export const DELEGATION_CONVERSE =
-  'ask/send message any agent by name — a subordinate in this workspace or one of the owner\'s other workspace agents (ask expects the answer back, send is fire-and-forget); ' +
-  'reply answers an incoming agent message event by its event_id; hire scope=workspace creates a specialist workspace of its own. ' +
+  'msg says something to an agent without handing it a workstream: `agent` names one — a subordinate in this workspace or one of the owner\'s other workspace agents — and `event_id` answers an incoming agent message event instead. One or the other, never both. ' +
+  'hire scope=workspace creates a specialist workspace of its own. ' +
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
@@ -763,8 +772,8 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.temporary} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
-    // The same three facts as positives. This field's LABEL still frames them
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+    // The same facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
     // prohibitions, and this was the one delegation surface that read as one.
@@ -774,8 +783,8 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'A single short coherent change is yours to make directly. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'hire/dismiss return roster state. '
-      + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
+      'A durable hire and dismiss return roster state; a lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. '
+      + 'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
       // The result half is stated because a swarm's answer is not the only thing it
       // carries, and the two extra fields are the ones a caller must not skip: the
@@ -823,7 +832,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse: 'Do not use for things you already know. Do not fetch private or internal addresses; they are blocked.',
     result:
       'search returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected). '
-      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file in ranges, or hand its path to a temporary agent as `context_ref` on agents ask.',
+      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file in ranges, or name the path in the message of a lifetime:"task" hire so that agent reads it instead of you.',
     example: "web({action:'search', query:'durable objects sqlite storage limits'})",
   },
   report: {

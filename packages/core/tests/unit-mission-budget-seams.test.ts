@@ -201,11 +201,11 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     for (const [member, input] of [
       ['swarm', { task: 'x', ...TWO_BRANCHES }],
       ['hire', { role: 'r', mission: 'm' }],
-      ['ask', { agent: 'helper', message: 'm' }],
-      // Both ask TARGETS spend, and the guard runs before either is resolved:
-      // an exhausted label must not be able to mint a temporary agent either.
-      ['ask', { role: 'auditor', message: 'm' }],
-      ['send', { agent: 'helper', message: 'm' }],
+      ['hire', { agent: 'helper', message: 'm' }],
+      // Both hire TARGETS spend, and both lifetimes: an exhausted label must
+      // not be able to mint a task-lifetime agent either.
+      ['hire', { lifetime: 'task', role: 'auditor', mission: 'm' }],
+      ['msg', { agent: 'helper', message: 'm' }],
     ] as const) {
       const refusal = v.parse(BudgetRefusalSchema, await ns[member]!(input));
       expect(refusal.error).toBe('budget_exhausted');

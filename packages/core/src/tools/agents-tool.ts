@@ -5,26 +5,27 @@
  *   swarm   — a configured search over ephemeral nodes of the calling agent,
  *             each a full multi-step tool loop on the same workspace, whose
  *             candidates are MEASURED against the caller's own objective.
- *   hire    — a persistent named subordinate that keeps its own context
- *             across turns and stays in the roster until dismissed;
- *             scope=workspace creates a specialist peer workspace instead.
- *   ask     — TWO targets, one action, and the target decides the lifetime.
- *             `agent` hands an EXISTING agent work: a subordinate's report (or
- *             a peer's reply) arrives as an event that wakes you. `role`
- *             creates a temporary full agent for this one question, waits for
- *             its single answer, returns it here, and releases it — it never
- *             enters the roster, and its transcript is kept.
- *   send    — fire-and-forget message to any agent.
- *   reply   — answer an incoming agent message event by event_id.
+ *   hire    — ONE agent engaged on ONE workstream, and `lifetime` is the whole
+ *             choice inside it. `durable` (the default) keeps its own context
+ *             across turns and stays in the roster until dismissed; `task`
+ *             creates a full agent for one question, waits for its single
+ *             answer, returns it here, and archives the row — its transcript is
+ *             kept. Naming an `agent` that already exists hands that agent the
+ *             workstream instead of creating one, and its report arrives as an
+ *             event that wakes you. scope=workspace creates a specialist peer
+ *             workspace instead.
+ *   msg     — say something to an agent WITHOUT handing it a workstream:
+ *             `agent` names one, `event_id` answers an inbound agent message
+ *             event. One or the other, never both.
  *   list    — the unified roster: subordinates, peer workspaces, and the
- *             temporary agents running right now.
+ *             task-lifetime agents running right now.
  *   dismiss — retire a subordinate (archived by default; context kept).
  *
  * The machinery underneath: swarm dispatches through `strategy/swarm-run.ts`,
- * whose nodes are real tool-using agents on the heads runtime; hire/ask/send
- * ride TeamToolDeps' facet substrate — a role-targeted ask through the very
- * same `SubordinateRuntime`, which is why a temporary agent is a REAL agent and
- * not a bare model call — and peer messaging rides PeersToolDeps' EventsHub
+ * whose nodes are real tool-using agents on the heads runtime; hire and msg
+ * ride TeamToolDeps' facet substrate — a `lifetime:'task'` hire through the
+ * very same `SubordinateRuntime`, which is why it is a REAL agent and not a
+ * bare model call — and peer messaging rides PeersToolDeps' EventsHub
  * transport. Which actions exist is decided structurally by which deps the
  * backend wires — see agentsActionsFor.
  *
@@ -83,10 +84,11 @@ import {
   delegationExhausted,
   type DelegationBudget,
 } from '../subordinates/depth';
-import type {
-  SubordinateLifetime,
-  TemporaryAgentPort,
-  TemporaryRunRequest,
+import {
+  SUBORDINATE_LIFETIMES,
+  type SubordinateLifetime,
+  type TemporaryAgentPort,
+  type TemporaryRunRequest,
 } from '../subordinates/temporary';
 import {
   parseJsonObject,
@@ -98,7 +100,7 @@ import {
 // The deps implementation rides the workspace's ONE actor host: spawn =
 // `ActorHost.acquire` over a `workspace_actors` row + roster row, which binds
 // the child's session and stores over the SAME workspace database rather than
-// giving it one of its own; assign / message publish `subordinate_task` events
+// giving it one of its own; assign and message publish `subordinate_task` events
 // into the subordinate's own actor-scoped EventLog (drained as its programmatic
 // turn); reports come back as `subordinate_report` events on the parent.
 
@@ -119,7 +121,7 @@ export interface SubordinateRosterEntry {
   createdAt: number;
   dismissedAt: number | null;
   /**
-   * How long this helper is MEANT to live — the one fact a role-targeted `ask`
+   * How long this helper is MEANT to live — the one fact a `lifetime:'task'` hire
    * adds to this roster, and the one nothing else can derive: a task-lifetime
    * row working on its question and a durable row working on an assignment are
    * the same shape, and only the first is released when it answers.
@@ -234,18 +236,18 @@ export interface TeamToolDeps {
     name: string; displayName: string;
   }>;
   /** Enqueue a task on the subordinate (drained as its next turn). */
-  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string; mode: WorkMode }): Promise<
+  assign(input: { name: string; task: string; deliverable?: string; mode: WorkMode }): Promise<
     { ok: true; name: string } & SubordinateHandoff
   >;
   /**
    * Does this roster hold `name` AT ALL — including a row it has archived?
    *
    * Separate from {@link list} because the two questions differ on exactly the
-   * rows that matter here. `list` is the WORKING SET, and ask/send route on it:
-   * a dismissed agent must not be handed new work. This is PROVENANCE, which
-   * `list`'s answer cannot serve — a released temporary agent's own result names
-   * it, and a `list` detail lookup on that name falls through to the peer path
-   * and dead-ends. Archived rows are readable, never addressable.
+   * rows that matter here. `list` is the WORKING SET, and hire/msg route on it:
+   * a dismissed agent must not be handed new work. This is PROVENANCE, and
+   * `list`'s answer was wrong for it — a released task-lifetime agent's own
+   * result names it, and a `list` detail lookup on that name fell through to the
+   * peer path and dead-ended. Archived rows are readable, never addressable.
    */
   knows(name: string): Promise<boolean>;
   /** Roster row and live state. Archived rows have no live state; retained
@@ -267,19 +269,20 @@ export interface TeamToolDeps {
     ok: true; name: string; historyKept: boolean;
   }>;
   /**
-   * The TEMPORARY rung: one full child agent, run to completion inside the
-   * call, its single answer returned as the tool result, and ARCHIVED in the
-   * roster above the moment it answers. It is a row in that one roster while it
-   * works, under `lifetime:'task'` — the rung adds a lifetime, never a register.
+   * The `lifetime:'task'` half of `hire`: one full child agent, run to
+   * completion inside the call, its single answer returned as the tool result,
+   * and ARCHIVED in the roster above the moment it answers. It is a row in that
+   * one roster while it works — the lifetime is a field on the row, never a
+   * register of its own.
    *
    * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever a backend wires a child
    * substrate at all — the same shape {@link AgentsForkDeps.resolveModel}
    * carries. It is a port and not a deps GROUP because it is not a capability
    * an actor can hold independently: it rides this roster's own
    * `SubordinateRuntime`, so an actor with a roster has the substrate for it by
-   * construction and one without has nothing to build it from. Unwired, `ask`
-   * takes only an existing agent — structurally, in the schema, in the sandbox
-   * declaration and in the prompt.
+   * construction and one without has nothing to build it from. Unwired, `hire`
+   * has no `lifetime` field at all — structurally, in the schema, in the sandbox
+   * declaration and in the prompt — and every hire is durable.
    */
   readonly temporary?: TemporaryAgentPort;
 }
@@ -454,7 +457,7 @@ export interface AgentsForkDeps {
  * against, its own active role, and the action surface role narrowing applies
  * to. Wired under {@link AgentsToolDeps.profile} by every backend that has an
  * authority — signed in (account catalog) or signed out (local catalog).
- * Absent means hire and ask refuse and swarm needs an explicit preset.
+ * Absent means a role-targeted hire refuses and swarm needs an explicit preset.
  */
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   /** The actor's own active role — what a swarm or hire without an explicit
@@ -514,15 +517,15 @@ export interface AgentsToolDeps {
   budget?: MissionGovernor;
   /** The actor's profile authority — the one resolver input set role/tier/
    *  precedence reads. A thunk because a backend may sign in (or load its
-   *  local catalog) after the toolset was built. Absent means hire and ask
-   *  refuse and swarm needs an explicit preset. */
+   *  local catalog) after the toolset was built. Absent means a role-targeted
+   *  hire refuses and swarm needs an explicit preset. */
   profile?: () => AgentsProfileContext | null;
 }
 
 interface UnifiedRosterResult {
-  /** ONE roster. A temporary agent is a row in it while it works, carrying
-   *  `lifetime:'task'`; a released one is the archived row this same roster
-   *  keeps, readable through `list` with an `agent` name. */
+  /** ONE roster. A `lifetime:'task'` hire is a row in it while it works; a
+   *  released one is the archived row this same roster keeps, readable through
+   *  `list` with an `agent` name. */
   subordinates?: SubordinateRosterEntry[];
   peers?: Array<{ name: string; displayName?: string }>;
   note?: string;
@@ -542,9 +545,7 @@ export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: o
     // search, and one without it has no search rung at all.
     swarm: !!deps.fork,
     hire: converse,
-    ask: converse,
-    send: converse,
-    reply: !!deps.peers,
+    msg: converse,
     list: converse,
     dismiss: !!deps.team,
   } satisfies Record<AgentsToolAction, boolean>;
@@ -559,12 +560,11 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const use = [
     DELEGATION_FRAME,
     ...(deps.fork ? [DELEGATION_RUNGS.swarm] : []),
-    ...(deps.team?.temporary ? [DELEGATION_RUNGS.temporary] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.peers
       ? [DELEGATION_CONVERSE]
       : deps.team
-        ? ['ask/send message a subordinate by name (ask hands it work and expects its report back, send is fire-and-forget); list shows the roster.']
+        ? ['msg says something to a subordinate by name without handing it a workstream; list shows the roster.']
         : []),
   ].join(' ');
   return [
@@ -620,13 +620,12 @@ export interface AgentsToolInput {
    * {@link SwarmInput.models} for the assignment rule and the routing seam.
    */
   models?: readonly string[];
-  /** The role a delegation runs under — the swarm's nodes, the hired
-   *  subordinate, or the TEMPORARY agent a role-targeted `ask` creates.
-   *  Explicit wins; omitted, a swarm rides the caller's own active role. One
-   *  swarm is ROLE-HOMOGENEOUS — mixed-role candidates confound comparison, so
-   *  there is one role per call, never a list. On `ask` it is the target: it is
-   *  mutually exclusive with `agent`, and naming it is what asks for a helper
-   *  that does not exist yet. */
+  /** The role a delegation runs under — the swarm's nodes, or the agent a hire
+   *  creates at either lifetime. Explicit wins; omitted, a swarm rides the
+   *  caller's own active role. One swarm is ROLE-HOMOGENEOUS — mixed-role
+   *  candidates confound comparison, so there is one role per call, never a
+   *  list. On `hire` it is the DISCRIMINANT: naming it is what asks for an agent
+   *  that does not exist yet, and omitting it hands the workstream to `agent`. */
   role?: RoleId;
   /** The inference tier the delegation runs at: `tiny|fast|default|slow|deep`.
    *  Explicit wins; omitted resolves through the role's default tier, then
@@ -640,20 +639,18 @@ export interface AgentsToolInput {
   message?: string;
   topic?: string;
   deliverable?: string;
-  deadline_hint?: string;
   event_id?: string;
   keep_history?: boolean;
   /**
-   * Material a role-targeted `ask` answers over, BY WORKSPACE PATH.
+   * How long the hire lives — the whole difference between the two helpers this
+   * action used to be two actions for.
    *
-   * The paths are authorized against this workspace's file plane and handed to
-   * the temporary agent, which reads them itself — in ranges when they are
-   * large, because it is a real agent with real file tools. The bytes never
-   * enter YOUR window, which is the whole reason to name a spill file here
-   * instead of pasting it into `message`. A path this workspace cannot resolve
-   * is refused by name; nothing is truncated and nothing is guessed.
+   * `durable` (the default) stays in the roster across turns and is dismissed
+   * when its role is over. `task` is created for one question: the call waits
+   * for its single answer, returns it here, and the row is archived. Both are
+   * rows in the ONE roster, under the lifetime the row already carries.
    */
-  context_ref?: readonly string[];
+  lifetime?: SubordinateLifetime;
 }
 
 /** Every input field except the discriminant. */
@@ -694,17 +691,18 @@ export const AGENTS_ACTION_FIELDS = {
     'role', 'tier',
     'budget_usd', 'budget_tokens', 'budget_label',
   ],
-  hire: ['agent', 'role', 'mission', 'tier', 'scope', 'message'],
-  // Two TARGETS, one action. `agent` names one that exists; `role` asks for one
-  // that does not and gets a temporary agent for the question. `context_ref`
-  // belongs to the second only — an existing agent already has this workspace,
-  // so naming paths at it would be advice, not a channel.
-  // Ordered by VARIANT, existing target first: the codemode declaration renders
+  // Two TARGETS, one action, and the lifetime is a FIELD rather than a second
+  // verb. `role` asks for an agent that does not exist yet and `lifetime` says
+  // how long it lives; `agent` names one that already does and hands it the
+  // workstream. `lifetime` and `tier` belong to the first only — an agent that
+  // exists already has both — and `deliverable`/`topic` to the second.
+  // Ordered by VARIANT, created target first: the codemode declaration renders
   // one object per variant and the union of those objects is held to this list,
   // so the order here is the order a reader meets the fields in.
-  ask: ['agent', 'message', 'topic', 'deliverable', 'deadline_hint', 'role', 'context_ref'],
-  send: ['agent', 'message', 'topic'],
-  reply: ['event_id', 'message'],
+  hire: ['role', 'mission', 'agent', 'tier', 'lifetime', 'scope', 'message', 'deliverable', 'topic'],
+  // ONE addressing action. `agent` names an agent, `event_id` names an inbound
+  // question — the only thing `send` and `reply` ever differed on.
+  msg: ['agent', 'event_id', 'message', 'topic'],
   list: ['agent'],
   dismiss: ['agent', 'keep_history'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
@@ -751,10 +749,11 @@ const AgentsInputEntries = {
   message: v.optional(v.string()),
   topic: v.optional(v.string()),
   deliverable: v.optional(v.string()),
-  deadline_hint: v.optional(v.string()),
   event_id: v.optional(v.string()),
   keep_history: v.optional(v.boolean()),
-  context_ref: v.optional(v.array(v.pipe(v.string(), v.minLength(1)))),
+  // A picklist for the same reason `tier` is one: an unrecognised lifetime is a
+  // caller error worth naming the two slots over, never a value to guess at.
+  lifetime: v.optional(v.picklist(SUBORDINATE_LIFETIMES)),
 };
 
 /**
@@ -790,10 +789,9 @@ export const AGENTS_FIELD_TS_TYPES = {
   message: 'string',
   topic: 'string',
   deliverable: 'string',
-  deadline_hint: 'string',
   event_id: 'string',
   keep_history: 'boolean',
-  context_ref: 'string[]',
+  lifetime: `"${SUBORDINATE_LIFETIMES.join('" | "')}"`,
 } as const satisfies Record<AgentsToolInputField, string>;
 
 /**
@@ -804,24 +802,28 @@ export const AGENTS_FIELD_TS_TYPES = {
  */
 export const AGENTS_ACTION_REQUIRED_FIELDS = {
   swarm: ['task'],
+  // The CREATE variant's, which is the one a bare `hire` means. The other two
+  // (an agent that exists, a workspace) state their own below; this entry is
+  // read only by the single-variant path.
   hire: ['role', 'mission'],
-  ask: ['agent', 'message'],
-  send: ['agent', 'message'],
-  reply: ['event_id', 'message'],
+  msg: ['message'],
   list: [],
   dismiss: ['agent'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
-const HIRE_SUBORDINATE_FIELDS = [
-  'agent', 'role', 'mission', 'tier',
+/** Creating a helper. `lifetime` joins only where the port that runs a
+ *  `task` one is wired, and `scope` only beside `peers`. */
+const HIRE_CREATE_FIELDS = [
+  'role', 'mission', 'agent', 'tier',
 ] as const satisfies readonly AgentsToolInputField[];
 const HIRE_WORKSPACE_FIELDS = [
   'agent', 'mission', 'scope', 'message',
 ] as const satisfies readonly AgentsToolInputField[];
-/** The temporary rung's own fields. `tier` is deliberately absent: a temporary
- *  agent runs at its ROLE's tier, which is the one routing input this surface
- *  has, and a second knob here would be a model spec by another name. */
-const ASK_ROLE_FIELDS = [
-  'role', 'message', 'context_ref',
+/** Handing the workstream to an agent that already exists — the target `ask`
+ *  used to be a separate action for. No `lifetime` and no `tier`: an agent that
+ *  exists already has both, and offering them here would be two knobs that
+ *  cannot move. Selected by the ABSENCE of `role`. */
+const HIRE_EXISTING_FIELDS = [
+  'agent', 'message',
 ] as const satisfies readonly AgentsToolInputField[];
 
 export interface AgentsActionInputVariant {
@@ -833,12 +835,13 @@ export interface AgentsActionInputVariant {
    * Fields that must be ABSENT for this variant — the XOR half of a choice with
    * no discriminant field to be `const` on.
    *
-   * `hire` has one: `scope` is a literal, so exactly one branch matches and the
-   * variants separate themselves. `ask` has none — its two targets are two
-   * different FIELDS, so without this the two branches overlap and a call
-   * naming both would satisfy each of them. Stated here, the schema TELLS the
-   * model the targets are exclusive; the dispatch below is what enforces it,
-   * with a message a caller can correct itself from.
+   * `hire`'s workspace branch needs none: `scope` is a literal, so that branch
+   * separates itself. Its other two targets are two different FIELDS (`role`
+   * asks for an agent that does not exist, `agent` names one that does), and
+   * `msg`'s are as well (`agent` against `event_id`), so without this the
+   * branches overlap and a call naming both would satisfy each of them. Stated
+   * here, the schema TELLS the model the targets are exclusive; the dispatch
+   * below is what enforces it, with a message a caller can correct itself from.
    */
   readonly excludes?: readonly AgentsToolInputField[];
 }
@@ -849,16 +852,24 @@ export function agentsActionInputVariantsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,
 ): readonly AgentsActionInputVariant[] {
-  if (action === 'ask') return askInputVariants(deps);
-  if (action !== 'hire') {
-    return [{
-      fields: agentsActionFieldsFor(deps, action),
-      required: AGENTS_ACTION_REQUIRED_FIELDS[action],
-    }];
-  }
+  if (action === 'hire') return hireInputVariants(deps);
+  if (action === 'msg') return msgInputVariants(deps);
+  return [{
+    fields: agentsActionFieldsFor(deps, action),
+    required: AGENTS_ACTION_REQUIRED_FIELDS[action],
+  }];
+}
+
+/** `hire`'s targets: a helper to CREATE (whose `lifetime` says how long it
+ *  lives), an agent that already EXISTS, and a whole workspace. */
+function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
   const variants: AgentsActionInputVariant[] = [];
   if (deps.team) {
-    const fields: AgentsToolInputField[] = [...HIRE_SUBORDINATE_FIELDS];
+    const fields: AgentsToolInputField[] = [...HIRE_CREATE_FIELDS];
+    // Deps-gated exactly as the rung is: with no port to run a `task` hire on,
+    // the field that would ask for one is in neither the schema nor the sandbox
+    // declaration, so absence is structural rather than a runtime refusal.
+    if (deps.team.temporary) fields.push('lifetime');
     if (deps.peers) fields.push('scope');
     variants.push({
       fields,
@@ -867,6 +878,16 @@ export function agentsActionInputVariantsFor(
       scopeOptional: true,
     });
   }
+  const existing: AgentsToolInputField[] = [...HIRE_EXISTING_FIELDS];
+  if (deps.team) existing.push('deliverable');
+  if (deps.peers) existing.push('topic');
+  variants.push({
+    fields: existing,
+    required: ['agent', 'message'],
+    // The XOR the schema states and the dispatch enforces: `role` asks for an
+    // agent that does not exist, and this variant is the one that does.
+    excludes: deps.team?.temporary ? ['role', 'lifetime'] : ['role'],
+  });
   if (deps.peers) {
     variants.push({
       fields: HIRE_WORKSPACE_FIELDS,
@@ -877,24 +898,24 @@ export function agentsActionInputVariantsFor(
   return variants;
 }
 
-/** `ask`'s targets: the existing-agent handoff always, and the temporary agent
- *  only where the port that runs one is wired. */
-function askInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
-  const existing: AgentsToolInputField[] = ['agent', 'message'];
-  if (deps.peers) existing.push('topic');
-  if (deps.team) existing.push('deliverable', 'deadline_hint');
-  const existingTarget: AgentsActionInputVariant = {
-    fields: existing,
+/** `msg`'s two ways to say WHO: an agent by name, or the inbound event being
+ *  answered. Exactly one — the second exists only beside the peer transport
+ *  that issues the events it cites. */
+function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
+  const named: AgentsToolInputField[] = ['agent', 'message'];
+  if (deps.peers) named.push('topic');
+  const byName: AgentsActionInputVariant = {
+    fields: named,
     required: ['agent', 'message'],
   };
-  // The exclusion only exists when the other target does: with no temporary port
-  // there is no `role` on this action to be exclusive WITH.
-  if (deps.team?.temporary) Object.assign(existingTarget, { excludes: ['role'] });
-  const variants: AgentsActionInputVariant[] = [existingTarget];
-  if (deps.team?.temporary) {
+  // The exclusion only exists when the other target does: with no peer
+  // transport there is no `event_id` on this action to be exclusive WITH.
+  if (deps.peers) Object.assign(byName, { excludes: ['event_id'] });
+  const variants: AgentsActionInputVariant[] = [byName];
+  if (deps.peers) {
     variants.push({
-      fields: ASK_ROLE_FIELDS,
-      required: ['role', 'message'],
+      fields: ['event_id', 'message'],
+      required: ['event_id', 'message'],
       excludes: ['agent'],
     });
   }
@@ -904,12 +925,12 @@ function askInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
 /**
  * Fields one action actually reads under the transports this actor wires.
  *
- * `hire` and `ask` are the two multi-variant actions, and theirs are DERIVED
+ * `hire` and `msg` are the two multi-variant actions, and theirs are DERIVED
  * from their own variant tables rather than filtered a second time here. Which
- * fields those two carry depends on which transports are wired — `scope` only
- * beside `peers`, the temporary rung's `role` and `context_ref` only beside the
- * port that runs one, a subordinate's `deliverable` only beside a roster — and
- * that dependency was stated TWICE: once in the variants the JSON Schema and the
+ * fields those two carry depends on which transports are wired — `scope` and
+ * `topic` only beside `peers`, `lifetime` only beside the port that runs a
+ * `task` hire, a subordinate's `deliverable` only beside a roster — and that
+ * dependency was stated TWICE: once in the variants the JSON Schema and the
  * codemode declaration project, and once as a filter here. Two spellings of one
  * transport policy is how a field comes to be advertised in a variant whose
  * handler cannot read it. The union of an action's variants IS what it reads.
@@ -923,18 +944,13 @@ export function agentsActionFieldsFor(
     case 'swarm':
       return deps.fork ? fields : [];
     case 'hire':
-    case 'ask':
+    case 'msg':
       // Each field once, in variant order — which is the order
-      // AGENTS_ACTION_FIELDS itself lists them in, existing target before
-      // temporary target, so the sentence a refusal prints is unchanged.
+      // AGENTS_ACTION_FIELDS itself lists them in, created target before
+      // existing target, so the sentence a refusal prints is unchanged.
       return [...new Set(
         agentsActionInputVariantsFor(deps, action).flatMap((variant) => variant.fields),
       )];
-    case 'send':
-      return fields.filter(field =>
-        field === 'agent' || field === 'message' || (field === 'topic' && deps.peers !== undefined));
-    case 'reply':
-      return deps.peers ? fields : [];
     case 'list':
       return deps.team || deps.peers ? fields : [];
     case 'dismiss':
@@ -958,8 +974,9 @@ function agentsJsonSchemaVariants(
         required: ['action', ...variant.required],
       };
       // Exclusivity as JSON Schema: the fields this branch REFUSES. Without it
-      // the two `ask` targets overlap and a call naming both matches each, so
-      // `oneOf` would be decorative on exactly the mistake it is here for.
+      // the two `hire` targets (and the two `msg` ones) overlap and a call
+      // naming both matches each, so `oneOf` would be decorative on exactly the
+      // mistake it is here for.
       if (variant.excludes && variant.excludes.length > 0) {
         Object.assign(branch, {
           not: { anyOf: variant.excludes.map((field) => ({ required: [field] })) },
@@ -1710,24 +1727,23 @@ type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 's
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
-  const askTargets = deps.team && deps.peers
+  const targets = deps.team && deps.peers
     ? 'a subordinate here or a peer workspace agent (subordinate names win a collision)'
     : deps.team ? 'a subordinate' : 'a peer workspace agent';
   const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
-      description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for hire (auto-generated from the role when omitted) and detail filter for list.`
-        + (deps.team?.temporary ? ' On ask it is EXCLUSIVE with `role`: name one or the other.' : ''),
+      description: `Agent name: ${targets}. On hire, WITHOUT \`role\` it names an agent that already exists and hands it the workstream; WITH \`role\` it is the optional name to create the helper under (auto-generated from the role when omitted). Also the target for msg/dismiss and the detail filter for list.`,
     },
     // Says what a mission is FOR, because the hire rung's context fact makes it
     // load-bearing: this text plus a bounded digest of the caller's recent
     // messages is the subordinate's whole starting knowledge. The sentence is
     // DELEGATION_INHERITANCE.hire.brief — the fork brief's opposite, from the
     // same per-action source, so neither field can be handed the other's rule.
-    mission: { type: 'string', maxLength: 20000, description: `For action=hire: the helper's mission — it seeds its identity and runs as its first turn. ${DELEGATION_INHERITANCE.hire.brief}` },
+    mission: { type: 'string', maxLength: 20000, description: `For action=hire with \`role\`: the helper's mission — it seeds its identity and runs as its first turn, and at lifetime:"task" it IS the question. ${DELEGATION_INHERITANCE.hire.brief}` },
     message: {
       type: 'string', maxLength: 20000,
-      description: 'The work or note for ask/send, the answer for reply, or the first delegated task for hire scope=workspace.',
+      description: 'The workstream for a hire naming an `agent` that already exists, the note or answer for msg, or the first delegated task for hire scope=workspace.',
     },
   };
   if (deps.peers) {
@@ -1737,8 +1753,8 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         enum: ['subordinate', 'workspace'],
         description: 'For action=hire: subordinate (default) hires into THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
-      topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
-      event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
+      topic: { type: 'string', maxLength: 80, description: 'Optional short label for a message to a peer workspace agent (default "message").' },
+      event_id: { type: 'string', description: 'For action=msg: the agent message event id you were given, to answer that question instead of naming an `agent`. Exclusive with `agent`.' },
     });
   }
   if (deps.team) {
@@ -1746,24 +1762,23 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
     Object.assign(properties, {
       role: {
         type: 'string', maxLength: 64,
-        description: (temporary
-          ? 'The catalog role — for action=hire the role to hire, and for action=ask the role of a TEMPORARY agent created for that one question (exclusive with `agent`; it answers here, then is released). One of the ids listed below.'
-          : 'For action=hire: the catalog role to hire — one of the ids listed below.')
+        description: 'For action=hire: the catalog role to create the helper under, exclusive with `agent`. One of the ids listed below.'
           + roleSummaryText(deps),
       },
-      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
-      deliverable: { type: 'string', maxLength: 2000, description: 'For ask to a subordinate: what the finished result should be (optional).' },
-      deadline_hint: { type: 'string', maxLength: 200, description: 'For ask to a subordinate: optional urgency/deadline hint.' },
+      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role`: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
+      deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });
     if (temporary) {
       Object.assign(properties, {
-        context_ref: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'For a role-targeted ask: workspace paths the temporary agent reads ITSELF. '
-            + 'The bytes never enter your own window — name a spill file here instead of pasting it '
-            + 'into `message`. An unresolvable path is refused by name.',
+        lifetime: {
+          type: 'string',
+          enum: [...SUBORDINATE_LIFETIMES],
+          description: 'For action=hire with `role`: how long the helper lives. '
+            + '"durable" (the default) stays in your roster across turns. '
+            + '"task" is created for this one question — the call waits for its answer, returns it '
+            + 'here and archives the row, and there is no follow-up, so put the whole question in '
+            + '`mission` and name any bulk material by workspace path so that agent reads it itself.',
         },
       });
     }
@@ -1779,11 +1794,11 @@ function agentsInputProperties(deps: AgentsToolDeps) {
 }
 
 /**
- * The peer topic an ask/send rides, or the refusal when the caller claimed the
+ * The peer topic a hire or a msg rides, or the refusal when the caller claimed the
  * transport's reserved one.
  *
- * Read inside the two arms that use it rather than once for all seven actions:
- * `topic` is a field of ask and send, and reading it for every action made it
+ * Read inside the two arms that use it rather than once for all five actions:
+ * `topic` is a field of hire and msg, and reading it for every action made it
  * read like a field of every action — the exact shape that lets a field be
  * accepted where nothing acts on it.
  */
@@ -1795,14 +1810,19 @@ function requestedTopic(input: AgentsToolInput): { topic: string } {
 }
 /**
  * Whether this actor may run the requested action now: absent from its wiring is
- * `unsupported`, and a durable roster change under Plan is `denied`. A Plan turn
- * keeps its temporary research rungs.
+ * `unsupported`, and a durable roster change under Plan is `denied`.
+ *
+ * `hire` is NOT decided here, because under Plan the answer depends on its
+ * `lifetime`: a `task` hire is a research rung a Plan turn keeps, and a durable
+ * one is a roster change it does not. That read belongs in the arm that routes
+ * on the same field, so the bar and the dispatch cannot come to disagree about
+ * which hire is durable.
  */
 function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: WorkMode, action: AgentsToolInput['action']): Refusal | null {
   if (!actions.includes(action)) {
     return { reason: 'unsupported', error: `action "${action}" is not available here. Available: ${actions.join(', ')}` };
   }
-  return workModeRefusal(mode, action !== 'hire' && action !== 'dismiss', 'agents.' + action);
+  return action === 'hire' ? null : workModeRefusal(mode, action !== 'dismiss', 'agents.' + action);
 }
 
 
@@ -1849,13 +1869,15 @@ export async function dispatchAgentsAction(
   if (admission) throw new KinuError(admission.reason, admission.error);
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
-  // creates or wakes an agent. `list`, `dismiss` and `reply` spend nothing and
-  // stay available so a stopped run can still wind itself up.
-  if (input.action === 'swarm' || input.action === 'hire'
-    || input.action === 'ask' || input.action === 'send') {
+  // creates or wakes an agent. `list` and `dismiss` spend nothing and stay
+  // available so a stopped run can still wind itself up, and so does the
+  // `event_id` half of `msg`, which answers a question already asked (that
+  // half is guarded inside the arm, on the same read it routes on).
+  const spawnGuard = () => {
     const refusal = deps.budget?.guard('spawn');
     if (refusal) throw new MissionBudgetExhausted(refusal);
-  }
+  };
+  if (input.action === 'swarm' || input.action === 'hire') spawnGuard();
   // The DEPTH seam, and the second half of a containment that is already
   // structural: an actor at the cap is not wired `team` deps at all, so `hire`
   // is absent from its enum. This covers the one window build-time gating
@@ -1864,16 +1886,16 @@ export async function dispatchAgentsAction(
   // not have known the depth. Depth is fixed for an actor's whole life, so
   // reaching this is a stale build rather than a budget that ran out mid-turn.
   //
-  // BOTH SPAWNING RUNGS, not just `hire`. A role-targeted `ask` births a child
-  // through the identical substrate and therefore adds a level exactly as a hire
-  // does — so a cap covering only `hire` is a cap the other rung walks straight
-  // past, one call per level, each spending real money. `ask` by NAME is not a
-  // spawn and stays available: talking to an agent that already exists adds no
-  // depth, and an actor at the cap still has to be able to use its team.
-  // The guard lives INSIDE each spawning arm, on the same read that arm routes
-  // on — the ask arm's `if (input.role)` IS its spawn predicate, so the seam
-  // and the dispatcher cannot disagree about what a spawn is, not even on
-  // `role: ''`, which the schema permits.
+  // BOTH LIFETIMES, not just the durable one. A `lifetime:'task'` hire births a
+  // child through the identical substrate and therefore adds a level exactly as
+  // a durable hire does — so a cap keyed on the lifetime would be a cap the
+  // cheap rung walked straight past, one call per level, each spending real
+  // money. A hire naming an `agent` that EXISTS is not a spawn and stays
+  // available: handing work to an agent that already exists adds no depth, and
+  // an actor at the cap still has to be able to use its team. The guard lives on
+  // the same read the arm routes on — `if (input.role)` IS the spawn predicate,
+  // so the seam and the dispatcher can no longer disagree about what a spawn is
+  // (they once did, on exactly `role: ''`, which the schema permits).
   const spawnDepthRefusal = () =>
     team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
   try {
@@ -1882,9 +1904,16 @@ export async function dispatchAgentsAction(
         return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
       case 'hire': {
-        const hireDepth = spawnDepthRefusal();
-        if (hireDepth) throw new KinuError(hireDepth.reason, hireDepth.error);
+        // A durable roster change is barred under Plan and a `task` hire is
+        // not: it is the research rung a Plan turn keeps. Read here, on the
+        // same field the routing below reads, rather than in `actionAdmission`
+        // where the two could drift.
+        const lifetime = input.lifetime ?? 'durable';
+        const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
+        if (planBar) throw new KinuError(planBar.reason, planBar.error);
         if ((input.scope ?? 'subordinate') === 'workspace') {
+          const workspaceDepth = spawnDepthRefusal();
+          if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
           // Classified, not a bare `{error}`: this is the escape route the depth
           // cap closes — a fresh workspace is the root of its own tree with the
           // whole cap below it — so the one refusal that has to hold must land
@@ -1909,18 +1938,62 @@ export async function dispatchAgentsAction(
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
           return await peers.spawnWorkspace(request);
         }
+        if (!peers && input.scope !== undefined) {
+          return badInput('field "scope" is not available for action "hire" on this actor');
+        }
+        // `role` IS the discriminator, and it is a presence test rather than an
+        // exclusion: with a role this hire CREATES (and `agent`, given, is the
+        // name to create under), without one it hands the workstream to an agent
+        // that already exists. There is nothing to refuse as ambiguous, because
+        // the two readings of `agent` never both apply.
+        //
+        // A hire naming an agent that exists spends no depth and no birth: its
+        // report arrives as an event that wakes you.
+        if (!input.role) {
+          if (!input.agent || !input.message) {
+            return badInput(team
+              ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
+              : 'hire requires agent and message');
+          }
+          spawnGuard();
+          const asked = requestedTopic(input);
+          if (team && await isSubordinate(input.agent)) {
+            const assignment: Parameters<TeamToolDeps['assign']>[0] = {
+              name: input.agent,
+              task: input.message,
+              mode,
+            };
+            if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
+            const handoff = await team.assign(assignment);
+            return {
+              status: 'working',
+              agent: input.agent,
+              ...renderHandoff(handoff),
+              note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+            };
+          }
+          if (peers) {
+            const request: Parameters<PeersToolDeps['ask']>[0] = {
+              agent: input.agent, topic: asked.topic, message: input.message, mode,
+            };
+            if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+            return await peers.ask(request);
+          }
+          return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
+        }
+        // From here the hire CREATES, which is what spends a level of tree.
+        const createDepth = spawnDepthRefusal();
+        if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
         if (!team) {
           // Capability absence, and `denied` is what that is: the call is
           // well-formed and this actor does not wire the surface it needs.
           throw new KinuError('denied', 'hiring subordinates is not available on this actor');
         }
-        if (!peers && input.scope !== undefined) {
-          return badInput('field "scope" is not available for action "hire" on this actor');
-        }
         if (input.message !== undefined) {
-          return badInput('field "message" is not available for action "hire" on this actor');
+          return badInput('field "message" is not available for a hire that creates an agent — its brief is `mission`');
         }
-        if (!input.role || !input.mission) return badInput('hire requires role and mission');
+        if (!input.mission) return badInput('hire requires role and mission');
+        // `agent`, here, is the NAME to create under rather than a target.
         // The role is a catalog id here. It is validated and spawn-checked, then carried
         // onto the subordinate's durable identity with its tier override.
         // Without a catalog the hire is refused rather than seeded onto an
@@ -1928,6 +2001,34 @@ export async function dispatchAgentsAction(
         const ctx = deps.profile?.();
         if (!ctx) {
           throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
+        }
+        if (lifetime === 'task') {
+          // A name would be accepted and ignored: a task agent is archived the
+          // moment it answers, so the name never becomes addressable and the
+          // roster row it would carry is gone before anyone could use it.
+          if (input.agent !== undefined) {
+            return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
+              + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
+          }
+          const temporary = team.temporary;
+          if (!temporary) {
+            throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
+              + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
+          }
+          // A `task` hire uses the same resolver and the same precedence as a
+          // durable one. No `tier`: it runs at its ROLE's tier, which is the one
+          // routing input this rung has, and a second knob would be a model spec
+          // by another name — so the field is not in this variant at all.
+          const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
+          if ('error' in delegatedTask) return badInput(delegatedTask.error);
+          const request: TemporaryRunRequest = {
+            role: delegatedTask.resolved.role.id,
+            roleLabel: input.role,
+            task: input.mission,
+            mode,
+          };
+          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+          return await temporary.run(request);
         }
         const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
         if ('error' in delegated) return badInput(delegated.error);
@@ -1945,90 +2046,36 @@ export async function dispatchAgentsAction(
         return await team.spawn(request);
       }
 
-      case 'ask': {
-        // A role-targeted ask SPAWNS (see the rung note above the dispatch);
-        // ask by name talks to an agent that exists and stays available at the cap.
-        if (input.role) {
-          const askDepth = spawnDepthRefusal();
-          if (askDepth) throw new KinuError(askDepth.reason, askDepth.error);
-        }
-        // The XOR, enforced where a caller can be told about it. The schema
-        // states the two targets are exclusive (`AgentsActionInputVariant.excludes`);
+      case 'msg': {
+        // ONE action, two ways to say WHO — and they are exclusive, because a
+        // call naming both has not said which agent it means: `event_id`
+        // addresses whoever asked that question, which is not necessarily
+        // `agent`. The schema states it (`AgentsActionInputVariant.excludes`);
         // the sandbox namespace has no schema at all, so this is the one place
         // both surfaces meet the rule.
-        const temporary = team?.temporary;
-        if (input.agent && input.role) {
+        if (input.agent && input.event_id) {
           return badInput(
-            'ask takes ONE target: `agent` to hand work to an agent that exists, or `role` to get a '
-            + 'temporary agent for this question. Naming both leaves it undecided which lifetime you '
-            + 'asked for, and they answer differently — an existing agent reports back later, a '
-            + 'temporary one answers here.',
+            'msg takes ONE target: `agent` to name an agent, or `event_id` to answer the agent '
+            + 'message event you were given. Naming both leaves it undecided who this is for — '
+            + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
           );
         }
-        if (input.role) {
-          if (!input.message) return badInput('ask requires role and message');
-          if (!temporary) {
-            throw new KinuError('denied', 'ask by `role` creates a temporary agent, which this actor has no substrate for — '
-              + 'name an existing agent with `agent` instead (action:"list" shows the roster).');
+        if (!input.message) return badInput('msg requires a message');
+        if (input.event_id) {
+          if (!peers) {
+            throw new KinuError('denied', 'answering an event by `event_id` needs the peer transport, which this actor does not have');
           }
-          const ctx = deps.profile?.();
-          if (!ctx) {
-            throw new KinuError('denied', 'This actor wires no role catalog. Ask cannot resolve a role without one.');
-          }
-          // The ask arm uses the same resolver and the same precedence as a hire.
-          // A role this catalog cannot resolve is refused rather than seeded onto
-          // a child whose first turn could not read it.
-          const delegated = resolveDelegatedProfile(ctx, input.role, undefined);
-          if ('error' in delegated) return badInput(delegated.error);
-          const request: TemporaryRunRequest = {
-            role: delegated.resolved.role.id,
-            roleLabel: input.role,
-            task: input.message,
-            mode,
-          };
-          if (input.context_ref && input.context_ref.length > 0) {
-            Object.assign(request, { contextRefs: input.context_ref });
-          }
-          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-          return await temporary.run(request);
+          return await peers.reply({ eventId: input.event_id, message: input.message });
         }
-        // The existing-agent target's refusal is UNCHANGED — same words, same
-        // classification — because nothing about it changed. Only a caller that
-        // named no target at all reads the two-target sentence.
-        if (!input.agent || !input.message) {
-          return badInput(temporary && !input.agent && !input.message
-            ? 'ask requires a target and a message: `agent` for an agent that exists, or `role` for a temporary one.'
-            : 'ask requires agent and message');
+        if (!input.agent) {
+          return badInput(peers
+            ? 'msg requires a target: `agent` to name an agent, or `event_id` to answer the agent message event you were given.'
+            : 'msg requires agent and message');
         }
-        const asked = requestedTopic(input);
-        if (team && await isSubordinate(input.agent)) {
-          const assignment: Parameters<TeamToolDeps['assign']>[0] = {
-            name: input.agent,
-            task: input.message,
-            mode,
-          };
-          if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
-          if (input.deadline_hint) Object.assign(assignment, { deadlineHint: input.deadline_hint });
-          const handoff = await team.assign(assignment);
-          return {
-            status: 'working',
-            agent: input.agent,
-            ...renderHandoff(handoff),
-            note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
-          };
-        }
-        if (peers) {
-          const request: Parameters<PeersToolDeps['ask']>[0] = {
-            agent: input.agent, topic: asked.topic, message: input.message, mode,
-          };
-          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-          return await peers.ask(request);
-        }
-        return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
-      }
-
-      case 'send': {
-        if (!input.agent || !input.message) return badInput('send requires agent and message');
+        // Waking an agent is a spawn-shaped spend; answering a question already
+        // asked is not, which is why this guard is here and not before the
+        // switch.
+        spawnGuard();
         const sent = requestedTopic(input);
         if (team && await isSubordinate(input.agent)) {
           const handoff = await team.message({ name: input.agent, content: input.message, mode });
@@ -2047,25 +2094,18 @@ export async function dispatchAgentsAction(
         return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
       }
 
-      case 'reply':
-        if (!peers) {
-          throw new KinuError('denied', 'reply needs the peer transport, which this actor does not have');
-        }
-        if (!input.event_id || !input.message) return badInput('reply requires event_id and message');
-        return await peers.reply({ eventId: input.event_id, message: input.message });
-
       case 'list': {
         // PROVENANCE, not addressing: `knows` includes archived rows, so the name
-        // a released temporary agent reported still resolves to its record. The
-        // ask/send arms keep routing on the ACTIVE roster (`isSubordinate`), so
-        // nothing dismissed can be handed work.
+        // a released task-lifetime agent reported still resolves to its record.
+        // The hire and msg arms keep routing on the ACTIVE roster
+        // (`isSubordinate`), so nothing dismissed can be handed work.
         if (input.agent && team && await team.knows(input.agent)) {
           return await team.status({ name: input.agent });
         }
-        // ONE roster read. A temporary agent appears here while it works,
-        // under `lifetime:'task'` — an agent spending the owner's money right
-        // now is a helper, and a roster that called itself empty while one ran
-        // was the defect this rung had to not repeat.
+        // ONE roster read. A `lifetime:'task'` hire appears here while it
+        // works — an agent spending the owner's money right now is a helper, and
+        // a roster that called itself empty while one ran was the defect this
+        // lifetime had to not repeat.
         const subordinates = team ? await team.list() : undefined;
         const peerRoster = peers ? await peers.listPeers() : undefined;
         const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
@@ -2118,11 +2158,11 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
               'swarm = run a configured search over ephemeral nodes of yourself — `preset` and `task` are the whole call, and naming an `objective` upgrades its judged sweep to a search measured by your own verifier.',
             ] : []),
             ...(team || peers ? [
-              'hire = create a persistent named helper. ask = hand work to an agent and get the answer back'
+              'hire = put one workstream in front of one agent'
               + (team?.temporary
-                ? ' — `agent` for one that exists (it reports back later), or `role` for a temporary agent created for that one question, whose finished answer comes straight back here.'
-                : '.')
-              + ' send = fire-and-forget message. list = the unified roster.'
+                ? ' — `role` creates it and `lifetime` says how long it lives (durable stays in your roster, task answers this one question here and retires), or `agent` hands it to one that already exists.'
+                : ' — `role` creates a persistent named helper, or `agent` hands it to one that already exists.')
+              + ' msg = say something to an agent without handing it a workstream. list = the unified roster.'
               // How much tree is left, stated the way head-tools states nesting
               // room ("You may nest N more level(s)") — the same fact from the
               // same kind of derived budget, so a caller near the cap can plan
@@ -2134,7 +2174,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
                   : ' A subordinate you hire lands on the depth cap and cannot hire its own.'
                 : ''),
             ] : []),
-            ...(peers ? ['reply = answer an incoming agent message event.'] : []),
+            ...(peers ? ['On msg, `event_id` answers an incoming agent message event instead of naming an `agent`.'] : []),
             ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),
           ].join(' '),
         },

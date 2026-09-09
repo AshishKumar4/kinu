@@ -100,14 +100,14 @@ describe('buildDrainBatch — peer messages', () => {
     expect(batch.text).toContain('What changed upstream?');
     // The tool is `agents`. Naming anything else here hands the model a call it
     // cannot make: there is no `peers` tool on any backend.
-    expect(batch.text).toContain("agents({action:'reply', event_id:'pe1'");
+    expect(batch.text).toContain("agents({action:'msg', event_id:'pe1'");
     expect(batch.text).not.toContain('peers({');
   });
 
   test('a fire-and-forget message carries no reply instruction', () => {
     const batch = buildDrainBatch([peer('pe2')])!;
     expect(batch.text).toContain('[peer_agent]');
-    expect(batch.text).not.toContain("action:'reply'");
+    expect(batch.text).not.toContain("action:'msg'");
   });
 });
 

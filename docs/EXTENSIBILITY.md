@@ -34,10 +34,9 @@ objects. To make another policy model-facing, add it to the closed swarm
 preset and validity system, then dispatch the resolved tuple to its engine.
 An adapter alone reaches only callers that import it.
 
-The `agents` tool has seven actions: `swarm`, `hire`, `ask`, `send`, `reply`,
-`list`, and `dismiss`. `fork` remains a swarm context axis, workspace copy
-operation and durable-conversation branch command. It is not a delegation
-action.
+The `agents` tool has five actions: `swarm`, `hire`, `msg`, `list`, and
+`dismiss`. `fork` remains a swarm context axis, workspace copy operation and
+durable-conversation branch command. It is not a delegation action.
 
 `toolSurfacing` makes the same point. It is a `buildBuiltinTools` option, but
 no backend passes it. A caller must wire it before the policy affects an
@@ -397,16 +396,18 @@ Core owns these six turn parts. Check it before writing one in a backend.
 One `model_call` builder gives a spend census one row shape. One
 `DEFAULT_ROLE_ID` stops a hardcoded `'general'` drifting from its catalog.
 
-## Worked example: a temporary agent per question
+## Worked example: a lifetime per question
 
-`agents({action:'ask', role, message})` adds a lifetime to the delegation
-ladder. It adds no table, no loop, and no facet builder:
+`agents({action:'hire', lifetime:'task', role, mission})` adds a lifetime to the
+delegation ladder. It adds no action, no table, no loop, and no facet builder:
 
-1. Declare the rung once. `DELEGATION_RUNGS.temporary`
+1. Declare the rung once. `DELEGATION_RUNGS.hire`
    (`core/src/tools/registry.ts`) is the selection doctrine every surface
-   renders; `ASK_ROLE_FIELDS` and `AgentsActionInputVariant.excludes`
-   (`core/src/tools/agents-tool.ts`) make `agent` and `role` exclusive in the
-   advertised JSON Schema, the sandbox declaration and the dispatch.
+   renders, and it states both lifetimes; `HIRE_CREATE_FIELDS`,
+   `HIRE_EXISTING_FIELDS` and `AgentsActionInputVariant.excludes`
+   (`core/src/tools/agents-tool.ts`) separate creating an agent from handing the
+   work to one that exists, in the advertised JSON Schema, the sandbox
+   declaration and the dispatch.
 2. Reuse the child substrate. `createTemporaryAgentPort`
    (`core/src/subordinates/temporary.ts`) drives the same `SubordinateRuntime`
    a hire drives through spawn, assign and dismiss. The child is a real actor

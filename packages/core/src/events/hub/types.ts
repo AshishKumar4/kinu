@@ -212,7 +212,6 @@ export interface SubordinateTaskPayload {
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  deadline_hint?: string;
   inherited_context?: string;
   kinu_mode: WorkMode;
   creation_id?: string;

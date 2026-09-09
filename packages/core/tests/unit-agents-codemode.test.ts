@@ -236,9 +236,9 @@ describe('agents.* codemode namespace — dep gating', () => {
     expect(Object.keys(namespaceOf(() => deps))).toEqual([...AGENTS_TOOL_ACTIONS]);
   });
 
-  test('team-without-peers drops reply, keeps the subordinate verbs', () => {
+  test('team-without-peers keeps the subordinate verbs', () => {
     const deps = withBuildMode({ team: makeTeam().deps });
-    expect(Object.keys(namespaceOf(() => deps))).toEqual(['hire', 'ask', 'send', 'list', 'dismiss']);
+    expect(Object.keys(namespaceOf(() => deps))).toEqual(['hire', 'msg', 'list', 'dismiss']);
   });
 
   test('the namespace members ARE the tool action enum — one gate, never two', () => {
@@ -257,7 +257,7 @@ describe('agents.* codemode namespace — dep gating', () => {
   test('an ungated action is structurally absent, not a runtime refusal', () => {
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
     expect(ns.hire).toBeUndefined();
-    expect(ns.ask).toBeUndefined();
+    expect(ns.msg).toBeUndefined();
   });
 });
 
@@ -270,7 +270,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     const provider = createAgentsCodemodeProvider(() => ({ mode: currentMode, team: team.deps }));
     currentMode = 'build';
 
-    await member(provider.tools, 'send').execute({ agent: 'researcher', message: 'inspect only' });
+    await member(provider.tools, 'msg').execute({ agent: 'researcher', message: 'inspect only' });
 
     expect(team.calls[0]).toMatchObject({
       action: 'message',
@@ -326,7 +326,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(refused.error).toMatch(/`ideate` is flat and has no value signal/);
   });
 
-  test('hire / ask / send / reply / list / dismiss reach the same transports', async () => {
+  test('hire / msg / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
     const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps, profile: profileDeps().profile });
@@ -334,11 +334,11 @@ describe('agents.* codemode namespace — dispatch', () => {
 
     expect(await member(ns, 'hire').execute({ role: 'researcher', mission: 'Map the landscape' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
-    expect(await member(ns, 'ask').execute({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
+    expect(await member(ns, 'hire').execute({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
       .toMatchObject({ status: 'working', agent: 'researcher' });
-    expect(await member(ns, 'send').execute({ agent: 'researcher', message: 'also check the CLI' }))
+    expect(await member(ns, 'msg').execute({ agent: 'researcher', message: 'also check the CLI' }))
       .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
-    expect(await member(ns, 'reply').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
+    expect(await member(ns, 'msg').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
     expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await member(ns, 'dismiss').execute({ agent: 'researcher' }))
       .toEqual({ ok: true, name: 'researcher', historyKept: true });
@@ -347,10 +347,10 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(peers.calls.map((c) => c.action)).toEqual(['reply']);
   });
 
-  test('a peer ask from the sandbox rides the peer transport without a deadline', async () => {
+  test('a peer hire from the sandbox rides the peer transport without a deadline', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));
-    expect(await member(ns, 'ask').execute({ agent: 'scout', message: 'What changed?', topic: 'research' }))
+    expect(await member(ns, 'hire').execute({ agent: 'scout', message: 'What changed?', topic: 'research' }))
       .toEqual({ status: 'replied', from: 'scout', reply: 'answer' });
     expect(peers.calls[0].input).toEqual({
       agent: 'scout', topic: 'research', message: 'What changed?', mode: 'build',
@@ -413,10 +413,10 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const team = makeTeam();
     const peers = makePeers();
     const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
-    const result = v.parse(ErrorResultSchema, await member(ns, 'ask').execute({
+    const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
       agent: 'researcher', message: 'go', timeout_seconds: 30,
     }));
-    expect(result.error).toContain('agents.ask: unknown field "timeout_seconds"');
+    expect(result.error).toContain('agents.hire: unknown field "timeout_seconds"');
     expect(team.calls).toEqual([]);
   });
 
@@ -438,7 +438,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const ns = namespaceOf(() => ({ peers: peers.deps }));
     // Sandbox input carries none of the tool schema's validation, so a field of
     // the wrong type has to come back as a value the script can read.
-    const result = v.parse(ErrorResultSchema, await member(ns, 'send').execute({ agent: 'scout', message: 'hi', topic: 42 }));
+    const result = v.parse(ErrorResultSchema, await member(ns, 'msg').execute({ agent: 'scout', message: 'hi', topic: 42 }));
     expect(result.error).toMatch(/Expected string/);
     expect(peers.calls).toEqual([]);
   });
@@ -475,8 +475,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
   test('missing required fields stay the tool\'s own sharp errors', async () => {
     const ns = namespaceOf(() => fullDeps());
-    expect(await member(ns, 'ask').execute({ agent: 'researcher' }))
-      .toEqual({ reason: 'bad_input', error: 'ask requires agent and message' });
+    expect(await member(ns, 'msg').execute({ agent: 'researcher' }))
+      .toEqual({ reason: 'bad_input', error: 'msg requires a message' });
     // The refusal carries its classification, exactly as the declared type promises.
     expect(await member(ns, 'swarm').execute({})).toEqual({ reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
   });
@@ -576,7 +576,7 @@ describe('agents.* codemode namespace — declared types', () => {
   test('hire declares only the routes and requirements the native actor wires', () => {
     const hireType = (types: string): string => {
       const start = types.indexOf('hire(input:');
-      const end = types.indexOf('ask(input:', start);
+      const end = types.indexOf('msg(input:', start);
       return types.slice(start, end);
     };
 
@@ -586,13 +586,16 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(teamOnly).toContain('role: string;');
     expect(teamOnly).toContain('mission: string;');
     expect(teamOnly).not.toContain('scope');
-    expect(teamOnly).not.toContain('message');
+    // `message` reaches this actor only on the existing-agent variant, never the
+    // create one.
+    expect(teamOnly).toContain('agent: string;');
 
     const peersOnly = hireType(createAgentsCodemodeProvider(
       () => withBuildMode({ peers: makePeers().deps }),
     ).types ?? '');
     expect(peersOnly).not.toContain('role');
     expect(peersOnly).not.toContain('tier');
+    expect(peersOnly).not.toContain('lifetime');
     expect(peersOnly).toContain('mission: string;');
     expect(peersOnly).toContain('scope: "workspace";');
     expect(peersOnly).toContain('message: string;');
@@ -631,15 +634,24 @@ describe('agents surface — one action-field source', () => {
     expect(teamOnly).toEqual([{
       properties: { action: { const: 'hire' }, scope: { const: 'subordinate' } },
       required: ['action', 'role', 'mission'],
+    }, {
+      properties: { action: { const: 'hire' }, scope: false },
+      required: ['action', 'agent', 'message'],
     }]);
 
     const peersOnly = hireVariants({ peers: makePeers().deps });
     expect(peersOnly).toEqual([{
+      properties: { action: { const: 'hire' }, scope: false },
+      required: ['action', 'agent', 'message'],
+    }, {
       properties: { action: { const: 'hire' }, scope: { const: 'workspace' } },
       required: ['action', 'mission', 'scope', 'message'],
     }]);
 
-    expect(hireVariants(fullDeps())).toEqual([...teamOnly, ...peersOnly]);
+    // The existing-agent variant is ONE branch on a full actor, not one per
+    // transport: `agent` names whichever roster holds it, so the two gated
+    // surfaces above contribute the same branch and the union carries it once.
+    expect(hireVariants(fullDeps())).toEqual([teamOnly[0], teamOnly[1], peersOnly[1]]);
   });
 
   test('native and codemode hide fields whose transport is not wired', () => {
@@ -650,12 +662,12 @@ describe('agents surface — one action-field source', () => {
 
     const teamOnly = advertised({ team: makeTeam().deps });
     for (const field of ['scope', 'topic', 'event_id']) expect(teamOnly.has(field)).toBe(false);
-    for (const field of ['role', 'tier', 'deliverable', 'deadline_hint', 'keep_history']) {
+    for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
       expect(teamOnly.has(field)).toBe(true);
     }
 
     const peersOnly = advertised({ peers: makePeers().deps });
-    for (const field of ['role', 'tier', 'deliverable', 'deadline_hint', 'keep_history']) {
+    for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
       expect(peersOnly.has(field)).toBe(false);
     }
     for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);

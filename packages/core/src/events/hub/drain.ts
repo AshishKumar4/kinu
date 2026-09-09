@@ -89,7 +89,7 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
       && e.variant === 'peer_agent'
       && e.payload.reply_expected
     )
-      ? ` [the sender awaits your answer — reply with agents({action:'reply', event_id:'${e.id}', message:...})]`
+      ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
     // ONE LINE PER EVENT, and the boundary is ours rather than the sender's.
     // These entries are joined with '\n' below, and several briefs embed

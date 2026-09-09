@@ -142,7 +142,7 @@ describe('what a call does, from its own arguments', () => {
       .toBe('Delegated to 3 parallel forks');
     expect(describeToolCall('agents', { action: 'fork', forks: [{}] })).toBe('Delegated to 1 parallel fork');
     expect(describeToolCall('agents', { action: 'fork' })).toBe('Delegated to a fork');
-    expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
+    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
     expect(describeToolCall('agents', { action: 'hire', scope: 'workspace' })).toBe('Hired a workspace');
   });
 

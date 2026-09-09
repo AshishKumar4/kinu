@@ -1220,10 +1220,6 @@ export abstract class ActorAgent extends Think<Env> {
       now: () => Date.now(),
       renderInheritedContext: () => renderSubordinateInheritedContext(this.readInheritedContext()),
       createName: mintSubordinateName,
-      // Existence only. The temporary rung's whole point is that the material
-      // reaches the CHILD's window and not this one, so this side authorizes the
-      // path through the workspace VFS and never reads the bytes.
-      statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,
     });
     return this._temporaryAgentPort;
   }
