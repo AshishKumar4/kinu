@@ -115,7 +115,8 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   // Message count reflects the canonical conversation store — the workspace's
   // default-chat authority, whichever table owns it.
   const messageCount = conversationCount(sql, actor);
-  const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
+  const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
+    WHERE actor_id = ${actor.actorId}`;
   const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
   return {
     name: identity[0]?.name ?? deps.name,

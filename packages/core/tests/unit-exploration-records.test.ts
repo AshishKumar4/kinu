@@ -24,6 +24,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   bestInCell, initExplorationRecordsTable, objectiveIdOf, recordExploration, recordsFor,
   verifierDigestOf,
@@ -36,12 +37,21 @@ import type {
   Floor, FloorBreach, ObjectiveIdentity, PublicationState,
 } from '../src/strategy/objective';
 import type { SqlExecutor } from '../src/types/primitives';
+import type { ActorHandle } from '../src/state/actor-handle';
 
-function store(): SqlExecutor {
+/** One records store and the ONE actor whose rows it holds. The handle is real
+ *  and bound through the production directory: every read here is now scoped by
+ *  `actor_id`, so a fabricated id would be a store nobody can write to. */
+interface Store {
+  readonly sql: SqlExecutor;
+  readonly actor: ActorHandle;
+}
+
+function store(): Store {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initExplorationRecordsTable(makeExecRaw(db));
-  return sql;
+  return { sql, actor: createTestActorsOver(db).main };
 }
 
 const CHEAPER: ObjectiveIdentity = {
@@ -119,10 +129,10 @@ describe('the seal gates the write, checked in the writer and not assumed of the
     // `recorded` and the row appears. That is *The publication seal* at this surface,
     // and it is stated here rather than at the barrier because the barrier's own gate is
     // a SECOND check: either one alone leaves the other path reachable.
-    const sql = store();
-    expect(recordExploration(sql, { publication: SEALED, write: write() }))
+    const { sql, actor } = store();
+    expect(recordExploration(sql, actor, { publication: SEALED, write: write() }))
       .toEqual({ kind: 'refused', cause: 'sealed' });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(0);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(0);
   });
 
   test('a seal is not a boolean: a RECORDED re-derivation publishes again', () => {
@@ -130,16 +140,16 @@ describe('the seal gates the write, checked in the writer and not assumed of the
     // writer asks `admitsPublication` rather than testing `kind === 'sealed'` itself. A
     // writer that read the tag would refuse this row forever, which is retroactive
     // publication silently deleted.
-    const sql = store();
-    const verdict = recordExploration(sql, { publication: REDERIVED, write: write() });
+    const { sql, actor } = store();
+    const verdict = recordExploration(sql, actor, { publication: REDERIVED, write: write() });
     expect(verdict.kind).toBe('recorded');
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
   test('an open run writes, so the two tests above are not passing on a store that never writes', () => {
-    const sql = store();
-    expect(recordExploration(sql, { publication: OPEN, write: write() }).kind).toBe('recorded');
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    const { sql, actor } = store();
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write() }).kind).toBe('recorded');
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 });
 
@@ -152,38 +162,38 @@ describe("a cell's best never falls, and the store says which way it refused", (
     //
     // REFUSED rather than ignored, which is the choice this test pins: a silent no-op
     // leaves the caller unable to tell "nothing moved" from "the write happened".
-    const sql = store();
-    expect(recordExploration(sql, { publication: OPEN, write: write() }).kind).toBe('recorded');
+    const { sql, actor } = store();
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write() }).kind).toBe('recorded');
 
-    const verdict = recordExploration(sql, { publication: OPEN, write: write({ value: 40 }) });
+    const verdict = recordExploration(sql, actor, { publication: OPEN, write: write({ value: 40 }) });
     expect(verdict).toEqual({ kind: 'refused', cause: 'not-better' });
 
     // And the stored measurement STANDS. Asserted over the row rather than over the
     // verdict, because a writer that refused and wrote anyway would satisfy the line above.
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
   test('a TIE does not displace: `isBetter` is strict and a re-record of the same number moved nothing', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write() });
-    expect(recordExploration(sql, { publication: OPEN, write: write() }))
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write() }))
       .toEqual({ kind: 'refused', cause: 'not-better' });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
   test('a BETTER re-record of the same artifact updates it and keeps its first-recorded time', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write() });
-    const verdict = recordExploration(sql, {
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
+    const verdict = recordExploration(sql, actor, {
       publication: OPEN, write: write({ value: 20, at: 1_700_000_999_999 }),
     });
     expect(verdict.kind).toBe('recorded');
-    const best = bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: null });
+    const best = bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null });
     expect(best?.value).toBe(20);
     // Identity within a cell is the artifact's own bytes, so this is an UPDATE and there
     // is one row — a second row would make the cell hold the same program twice.
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
     // When the artifact FIRST entered the store, not when it was last measured.
     expect(best?.firstRecordedAt).toBe(1_700_000_000_000);
   });
@@ -193,39 +203,39 @@ describe("a cell's best never falls, and the store says which way it refused", (
     // FunSearch's program database, and a single incumbent is its own "W/O Evolution"
     // arm. So a worse program is ADMITTED, and `best(cell)` is a maximum over the rows
     // rather than the last thing written.
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write() });
-    const verdict = recordExploration(sql, {
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
+    const verdict = recordExploration(sql, actor, {
       publication: OPEN, write: write({ artifact: 'export function solve() { return 2; }', value: 40 }),
     });
     expect(verdict).toEqual({ kind: 'recorded', recordKey: expect.any(String), displaced: false });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
   });
 
   test('the DIRECTION decides which way is better, so a maximise objective is not silently inverted', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ identity: HIGHER, value: 0.6 }) });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ identity: HIGHER, value: 0.6 }) });
     // Lower is WORSE here, so this is the refusal — and on a minimise identity the same
     // pair would have been an improvement, which is what makes this test load-bearing.
-    expect(recordExploration(sql, { publication: OPEN, write: write({ identity: HIGHER, value: 0.4 }) }))
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write({ identity: HIGHER, value: 0.4 }) }))
       .toEqual({ kind: 'refused', cause: 'not-better' });
-    expect(recordExploration(sql, { publication: OPEN, write: write({ identity: HIGHER, value: 0.9 }) }).kind)
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write({ identity: HIGHER, value: 0.9 }) }).kind)
       .toBe('recorded');
-    expect(bestInCell(sql, { identity: HIGHER, floor: FLOOR, descriptor: null })?.value).toBe(0.9);
+    expect(bestInCell(sql, actor, { identity: HIGHER, floor: FLOOR, descriptor: null })?.value).toBe(0.9);
   });
 });
 
 describe("displacements count what happened to a cell's best after a row was written", () => {
   test("every earlier row in the cell is bumped when the best moves, and the mover is not", () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'b', value: 40 }) });
-    const moved = recordExploration(sql, { publication: OPEN, write: write({ artifact: 'c', value: 20 }) });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'b', value: 40 }) });
+    const moved = recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'c', value: 20 }) });
     expect(moved).toEqual({ kind: 'recorded', recordKey: expect.any(String), displaced: true });
 
     const byArtifact = new Map(
-      recordsFor(sql, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
+      recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
     );
     // Both rows that were already there have seen the cell's best move once.
     expect(byArtifact.get('a')?.displacements).toBe(1);
@@ -235,19 +245,19 @@ describe("displacements count what happened to a cell's best after a row was wri
   });
 
   test('a refused write bumps nothing — a displacement is a movement, not an attempt', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'a', value: 40 }) });
-    recordExploration(sql, { publication: SEALED, write: write({ artifact: 'z', value: 1 }) });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })[0]?.displacements).toBe(0);
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'a', value: 40 }) });
+    recordExploration(sql, actor, { publication: SEALED, write: write({ artifact: 'z', value: 1 }) });
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })[0]?.displacements).toBe(0);
   });
 
   test('a worse new member does not bump: the best did not move', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
-    recordExploration(sql, { publication: OPEN, write: write({ artifact: 'b', value: 40 }) });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'b', value: 40 }) });
     const byArtifact = new Map(
-      recordsFor(sql, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
+      recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
     );
     expect(byArtifact.get('a')?.displacements).toBe(0);
     expect(byArtifact.get('b')?.displacements).toBe(0);
@@ -260,11 +270,11 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
     // program; they were admitted under DIFFERENT bounds, and a floor-blind key would
     // have made the second displace the first — after which nobody could say which
     // numbers had trusted the wrong bound.
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ floor: FLOOR }) });
-    recordExploration(sql, { publication: OPEN, write: write({ floor: CORRECTED }) });
-    const underWrong = recordsFor(sql, { identity: CHEAPER, floor: FLOOR });
-    const underCorrected = recordsFor(sql, { identity: CHEAPER, floor: CORRECTED });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ floor: FLOOR }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ floor: CORRECTED }) });
+    const underWrong = recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR });
+    const underCorrected = recordsFor(sql, actor, { identity: CHEAPER, floor: CORRECTED });
     expect(underWrong).toHaveLength(1);
     expect(underCorrected).toHaveLength(1);
     // And a reader need not resolve a digest to see what was claimed.
@@ -274,13 +284,13 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
   });
 
   test('NO FLOOR is its own comparable set, and null is not a floor of zero', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ floor: null }) });
-    recordExploration(sql, { publication: OPEN, write: write({ floor: FLOOR }) });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: null })).toHaveLength(1);
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ floor: null }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ floor: FLOOR }) });
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: null })).toHaveLength(1);
     // NULL together, by construction rather than by a rule someone remembers: the writer
     // is handed the bound, not three fields it could set inconsistently.
-    const [unbounded] = recordsFor(sql, { identity: CHEAPER, floor: null });
+    const [unbounded] = recordsFor(sql, actor, { identity: CHEAPER, floor: null });
     expect(unbounded?.floorDigest).toBeNull();
     expect(unbounded?.floorValue).toBeNull();
     expect(unbounded?.floorProof).toBeNull();
@@ -291,32 +301,32 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
     // key would have failed silently: SQLite treats NULLs as distinct inside a UNIQUE
     // index, so the same program would have been insertable forever, and every read
     // scoped with `= NULL` would have returned nothing.
-    const sql = store();
-    expect(recordExploration(sql, {
+    const { sql, actor } = store();
+    expect(recordExploration(sql, actor, {
       publication: OPEN, write: write({ floor: null, descriptor: null }),
     }).kind).toBe('recorded');
-    expect(recordExploration(sql, {
+    expect(recordExploration(sql, actor, {
       publication: OPEN, write: write({ floor: null, descriptor: null }),
     })).toEqual({ kind: 'refused', cause: 'not-better' });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: null })).toHaveLength(1);
-    expect(bestInCell(sql, { identity: CHEAPER, floor: null, descriptor: null })?.value).toBe(23);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: null })).toHaveLength(1);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: null, descriptor: null })?.value).toBe(23);
   });
 
   test('two DESCRIPTOR cells hold the same program independently, each with its own best', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ descriptor: 'sorting', value: 23 }) });
-    recordExploration(sql, { publication: OPEN, write: write({ descriptor: 'hashing', value: 40 }) });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: 'sorting' })?.value).toBe(23);
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: 'hashing' })?.value).toBe(40);
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ descriptor: 'sorting', value: 23 }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ descriptor: 'hashing', value: 40 }) });
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: 'sorting' })?.value).toBe(23);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: 'hashing' })?.value).toBe(40);
     // The unpartitioned cell is a THIRD thing and holds neither.
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: null })).toBeNull();
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null })).toBeNull();
   });
 
   test('a different INSTRUMENT is a different objective, so nothing is pooled across it', () => {
     // The identity *Comparability* requires, completed: two runs whose `kind` resolved
     // to different code are not comparable, and `argumentDigest({kind, spec})` cannot tell.
-    const sql = store();
+    const { sql, actor } = store();
     const other: ObjectiveIdentity = {
       ...CHEAPER,
       verifierDigest: verifierDigestOf(
@@ -328,19 +338,19 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
     expect(objectiveIdOf(other)).not.toBe(
       '26ce2d9c78bf36bec03eff2aac483340f6c7739d81ffd5eaa55a3e25a1e09cc4',
     );
-    recordExploration(sql, { publication: OPEN, write: write() });
-    recordExploration(sql, { publication: OPEN, write: write({ identity: other, value: 20 }) });
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
+    recordExploration(sql, actor, { publication: OPEN, write: write({ identity: other, value: 20 }) });
     // The better number under the other instrument does not become this one's best.
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 });
 
 describe('a row reads back as what was written', () => {
   test('every declared field survives the round trip, and absent stays absent', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ measured: null, costTokens: null }) });
-    const [row] = recordsFor(sql, { identity: CHEAPER, floor: FLOOR });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ measured: null, costTokens: null }) });
+    const [row] = recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR });
     expect(row).toMatchObject({
       objectiveId: objectiveIdOf(CHEAPER),
       descriptor: null,
@@ -362,25 +372,25 @@ describe('a row reads back as what was written', () => {
   });
 
   test('the raw quantities a value was derived from come back as numbers', () => {
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write() });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })[0]?.measured)
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })[0]?.measured)
       .toEqual({ refOps: 276, candOps: 23 });
   });
 
   test('`recordsFor` orders best FIRST in the objective\'s own direction', () => {
-    const sql = store();
+    const { sql, actor } = store();
     for (const value of [40, 23, 31]) {
-      recordExploration(sql, { publication: OPEN, write: write({ artifact: `a${String(value)}`, value }) });
+      recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: `a${String(value)}`, value }) });
     }
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR }).map((row) => row.value))
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => row.value))
       .toEqual([23, 31, 40]);
     for (const value of [0.4, 0.9, 0.6]) {
-      recordExploration(sql, {
+      recordExploration(sql, actor, {
         publication: OPEN, write: write({ identity: HIGHER, artifact: `b${String(value)}`, value }),
       });
     }
-    expect(recordsFor(sql, { identity: HIGHER, floor: FLOOR }).map((row) => row.value))
+    expect(recordsFor(sql, actor, { identity: HIGHER, floor: FLOOR }).map((row) => row.value))
       .toEqual([0.9, 0.6, 0.4]);
   });
 
@@ -389,9 +399,10 @@ describe('a row reads back as what was written', () => {
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
     initExplorationRecordsTable(execRaw);
-    recordExploration(sql, { publication: OPEN, write: write() });
+    const actor = createTestActorsOver(db).main;
+    recordExploration(sql, actor, { publication: OPEN, write: write() });
     initExplorationRecordsTable(execRaw);
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 });
 
@@ -474,10 +485,10 @@ describe('the novelty distance, in the direction the threshold reads it', () => 
 
 describe('the archive admits by cell and refuses by novelty', () => {
   test('an empty cell admits — there is no occupant to be too close to', () => {
-    const sql = store();
-    expect(admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 }).kind)
+    const { sql, actor } = store();
+    expect(admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 }).kind)
       .toBe('recorded');
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.artifact)
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.artifact)
       .toBe(OCCUPANT);
   });
 
@@ -488,13 +499,13 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // finding — and an archive with no rejection test collapses onto one answer per cell
     // while still reporting coverage, which is why *The archive* admits by a rejection
     // test and never by a score.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
-    const occupant = bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: CELL });
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
+    const occupant = bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: CELL });
     // The cell IS occupied before the collision, so the digest below is a real row's and
     // not an `undefined` matching an absent field.
     expect(occupant?.artifact).toBe(OCCUPANT);
-    const verdict = admitToArchive(sql, {
+    const verdict = admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
     });
     expect(verdict).toEqual({
@@ -506,18 +517,18 @@ describe('the archive admits by cell and refuses by novelty', () => {
     });
     // And nothing landed: a refusal that still wrote the row would report coverage it did
     // not have.
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
   test('a novel artifact joins the cell as a second occupant', () => {
     // NOT VACUOUS: without this the test above passes on an archive that refuses
     // everything, which is the other half of the inverted threshold.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
-    expect(admitToArchive(sql, {
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
+    expect(admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ artifact: FAR, value: 31 }), novelty: 0.5,
     }).kind).toBe('recorded');
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
   });
 
   test('THE THRESHOLD IS READ AS A FLOOR: 0 admits the near-copy, 1 refuses the far one', () => {
@@ -526,21 +537,21 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // suite that only ever asserts one threshold. These two ends disagree under the
     // inversion: at 0 nothing can be too close, and at 1 only an answer sharing no
     // vocabulary at all clears the floor.
-    const permissive = store();
-    admitToArchive(permissive, { publication: OPEN, write: cellWrite(), novelty: 0 });
-    expect(admitToArchive(permissive, {
+    const { sql: permissive, actor } = store();
+    admitToArchive(permissive, actor, { publication: OPEN, write: cellWrite(), novelty: 0 });
+    expect(admitToArchive(permissive, actor, {
       publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0,
     }).kind).toBe('recorded');
 
-    const strict = store();
-    admitToArchive(strict, { publication: OPEN, write: cellWrite(), novelty: 1 });
-    const verdict = admitToArchive(strict, {
+    const { sql: strict } = store();
+    admitToArchive(strict, actor, { publication: OPEN, write: cellWrite(), novelty: 1 });
+    const verdict = admitToArchive(strict, actor, {
       publication: OPEN, write: cellWrite({ artifact: FAR, value: 31 }), novelty: 1,
     });
     // Distance exactly 1 CLEARS a floor of 1 — the candidate has to reach the floor, not
     // beat it — so the far answer is the one thing a threshold of 1 still admits.
     expect(verdict.kind).toBe('recorded');
-    expect(admitToArchive(strict, {
+    expect(admitToArchive(strict, actor, {
       publication: OPEN, write: cellWrite({ artifact: `${OCCUPANT} const answer = 42;`, value: 17 }),
       novelty: 1,
     })).toMatchObject({ kind: 'refused', cause: 'too-close' });
@@ -552,11 +563,11 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // occupant a refusal names has to be a fact about the candidate rather than about the
     // sort: here the far answer scores BEST and the near-copy is what the refusal is
     // actually about.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite({ artifact: FAR, value: 11 }), novelty: 0.5 });
-    admitToArchive(sql, { publication: OPEN, write: cellWrite({ artifact: OCCUPANT, value: 40 }), novelty: 0.5 });
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.artifact).toBe(FAR);
-    const verdict = admitToArchive(sql, {
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite({ artifact: FAR, value: 11 }), novelty: 0.5 });
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite({ artifact: OCCUPANT, value: 40 }), novelty: 0.5 });
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.artifact).toBe(FAR);
+    const verdict = admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
     });
     expect(verdict).toMatchObject({
@@ -570,13 +581,13 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // are written against. An admission test that read the whole comparable set instead of
     // one partition would make the archive a leaderboard with extra steps: covering a new
     // behaviour would be refused for resembling an answer in a different cell.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
-    expect(admitToArchive(sql, {
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
+    expect(admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ descriptor: 'candOps=40', artifact: NEAR, value: 40 }),
       novelty: 0.5,
     }).kind).toBe('recorded');
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: 'candOps=40' })?.artifact)
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: 'candOps=40' })?.artifact)
       .toBe(NEAR);
   });
 
@@ -585,15 +596,15 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // addressing would refuse every re-measurement as a duplicate of itself — and the
     // monotone rule, which is the thing that decides a re-record, would become
     // unreachable through the archive.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
-    expect(admitToArchive(sql, {
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
+    expect(admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ value: 23 }), novelty: 0.5,
     })).toEqual({ kind: 'refused', cause: 'not-better' });
-    expect(admitToArchive(sql, {
+    expect(admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ value: 11 }), novelty: 0.5,
     }).kind).toBe('recorded');
-    expect(bestInCell(sql, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.value).toBe(11);
+    expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.value).toBe(11);
   });
 });
 
@@ -606,18 +617,18 @@ describe('the seal gates the archive too, and it is checked BEFORE the cell is r
     // checks the seal as well), which is exactly why the CAUSE is the assertion: a sealed
     // run refused for duplicating something is told the wrong thing about itself, and the
     // remedy it names — write something more novel — is not the one that clears a seal.
-    const sql = store();
-    admitToArchive(sql, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
-    expect(admitToArchive(sql, {
+    const { sql, actor } = store();
+    admitToArchive(sql, actor, { publication: OPEN, write: cellWrite(), novelty: 0.5 });
+    expect(admitToArchive(sql, actor, {
       publication: SEALED, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
     })).toEqual({ kind: 'refused', cause: 'sealed' });
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
   test('a recorded re-derivation admits again, so the gate is the verdict and not the tag', () => {
-    const sql = store();
-    expect(admitToArchive(sql, { publication: REDERIVED, write: cellWrite(), novelty: 0.5 }).kind)
+    const { sql, actor } = store();
+    expect(admitToArchive(sql, actor, { publication: REDERIVED, write: cellWrite(), novelty: 0.5 }).kind)
       .toBe('recorded');
-    expect(recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 });

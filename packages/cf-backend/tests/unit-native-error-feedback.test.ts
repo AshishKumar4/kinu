@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
-import { driveNode } from './helpers/three-kinds';
+import { createProviderRegistry } from '@kinu.run/core';
+import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 function modelCallingFile() {
   return scriptedTurnModel({ doGenerate: options => {
@@ -34,8 +34,8 @@ function assertNativeFeedback(model: MockLanguageModelV3) {
   })]));
 }
 
-test.each(['orchestrator', 'subordinate'])('Think %s sends typed native error feedback in the NEXT provider request', async kind => {
-  const agent = kind === 'orchestrator' ? orchestratorHarness().agent : subordinateHarness().agent;
+test('Think orchestrator sends typed native error feedback in the NEXT provider request', async () => {
+  const agent = orchestratorHarness().agent;
   const model = modelCallingFile();
   agent.modelFactory = () => model;
   await agent.onStart();
@@ -43,8 +43,26 @@ test.each(['orchestrator', 'subordinate'])('Think %s sends typed native error fe
   assertNativeFeedback(model);
 });
 
-test('the shared head loop sends the same typed native error feedback in its NEXT provider request', async () => {
+test('a delegated turn sends the same typed native error feedback in its NEXT provider request', async () => {
+  // A hired child running the production delegated runner — admission,
+  // confined tools, report relay — with an injected model. A builtin loop
+  // needs no parent versions, so this reaches the shared inference loop
+  // without the seeding the node path requires. The `file` tool it calls is
+  // the child's own, built over the child's runtime by the production
+  // builder, which is what makes the refusal the loop's own rather than a
+  // fixture's.
+  const workspace = orchestratorHarness();
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'error-prover', displayName: 'Error prover', nameOrigin: 'user',
+    mission: 'Try the file operation.',
+  });
   const model = modelCallingFile();
-  await driveNode({ steps: [] }, { model });
+  workspace.agent.overrideProviderRegistry({
+    registry: createProviderRegistry(),
+    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
+    resolveModel: () => model,
+    normalizeSpecSync: (spec) => spec ?? 'test/model',
+  });
+  await workspace.agent.runHostedTaskTurn(child.actor, 'Try the file operation.');
   assertNativeFeedback(model);
 });

@@ -12,6 +12,7 @@
 // hubs; deps here are recorders.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
@@ -115,9 +116,18 @@ const HandoffResultSchema = v.object({
   note: v.string(),
 });
 
+/** The fork substrate over a REAL hosted actor per node.
+ *
+ *  A delegated node is its own actor of the ONE workspace database now, so
+ *  `hostNode` seats one per node id rather than sharing a single actor across
+ *  the fan-out — which is what the seat map in `hostedSeatsOver` holds. */
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
-  const { rt } = createTestRuntime();
-  return { rt, model: testModel, ...overrides };
+  const { rt, testSql } = createTestRuntime();
+  return {
+    rt, model: testModel,
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    ...overrides,
+  };
 }
 
 function actionEnum(input: { value: unknown }): string[] {

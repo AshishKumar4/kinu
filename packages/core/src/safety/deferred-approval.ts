@@ -47,6 +47,7 @@
 
 import type { DynamicApproval } from '../prompting/volatile-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SignalDeliverer } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
@@ -168,23 +169,36 @@ function toAction(r: Row): DeferredApproval {
  *  later attempt already holds. */
 export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
-    id           TEXT PRIMARY KEY,
+    actor_id     TEXT NOT NULL,
+    id           TEXT NOT NULL,
     command      TEXT NOT NULL,
     executor     TEXT NOT NULL DEFAULT '',
     reason       TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'queued',
     requested_at INTEGER NOT NULL,
     decided_at   INTEGER,
-    spend_seq    INTEGER NOT NULL DEFAULT 0
+    spend_seq    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (actor_id, id)
   )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status ON deferred_approvals(status)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status
+    ON deferred_approvals(actor_id, status, requested_at)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
+    ON deferred_approvals(actor_id, command, executor, requested_at DESC)`);
 }
 /**
  * The durable rows. Pure storage — what the words say and who gets woken is
  * {@link DeferredApprovalQueue}'s.
  */
 export class DeferredApprovalStore {
-  constructor(private readonly sql: SqlExecutor) {}
+  private readonly actorId: string;
+
+  /** Bind the parked-action table to ONE actor. The owner answers a specific
+   *  agent's ask: a standing 'always' for `rm -rf` given to the root is not a
+   *  grant a hired subordinate may spend, and a denial parked against one actor
+   *  must not answer for another. */
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   /** The live row for this exact command ON THIS EXECUTOR, if there is one.
    *  'queued' (waiting) and 'approved' (grant unspent) are the two live
@@ -204,10 +218,11 @@ export class DeferredApprovalStore {
    *  still wins, so the owner's latest word governs.
    */
   standing(command: string, executor: string, now: number): DeferredApproval | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals
-      WHERE command = ${command} AND executor = ${executor}
+      WHERE actor_id = ${this.actorId} AND command = ${command} AND executor = ${executor}
         AND (status IN ('queued','approved')
           OR (status = 'denied' AND decided_at > ${now - DENIAL_STANDING_MS}))
       ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, requested_at DESC
@@ -219,16 +234,19 @@ export class DeferredApprovalStore {
    *  paths, so the table holds at most a day of refusals plus whatever is
    *  still live; reports how many rows went. */
   sweepDenials(now: number): number {
+    this.actor.assertCurrent();
     return this.sql<{ id: string }>`
       DELETE FROM deferred_approvals
-      WHERE status = 'denied' AND decided_at <= ${now - DENIAL_STANDING_MS}
+      WHERE actor_id = ${this.actorId} AND status = 'denied'
+        AND decided_at <= ${now - DENIAL_STANDING_MS}
       RETURNING id`.length;
   }
 
   create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>): DeferredApproval {
+    this.actor.assertCurrent();
     void this.sql`INSERT INTO deferred_approvals
-        (id, command, executor, reason, status, requested_at, decided_at)
-      VALUES (${action.id}, ${action.command}, ${action.executor}, ${action.reason},
+        (actor_id, id, command, executor, reason, status, requested_at, decided_at)
+      VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.reason},
         'queued', ${action.requestedAt}, NULL)`;
     return { ...action, status: 'queued', decidedAt: null };
   }
@@ -243,12 +261,13 @@ export class DeferredApprovalStore {
    * the `status='queued'` guard on the write is the belt to that's braces.
    */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
+    this.actor.assertCurrent();
     if (this.get(id)?.status !== 'queued') return null;
     // 'always' is 'approved' plus a grant the QUEUE records; the row only ever
     // holds a status this module can honestly write about this one command.
     const status = answer === 'always' ? 'approved' : answer;
     void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
-      WHERE id=${id} AND status='queued'`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND status='queued'`;
     return this.get(id);
   }
 
@@ -267,9 +286,10 @@ export class DeferredApprovalStore {
    * call got there first.
    */
   spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
+    this.actor.assertCurrent();
     const rows = this.sql<SpendRow>`
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
-      WHERE id = ${id} AND status = 'approved'
+      WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
       RETURNING id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
     const row = rows[0];
     if (!row) return null;
@@ -292,31 +312,36 @@ export class DeferredApprovalStore {
    * once.
    */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
+    this.actor.assertCurrent();
     const rows = outcome === 'did-not-run'
       ? this.sql<{ id: string }>`
           UPDATE deferred_approvals SET status='approved'
-          WHERE id = ${spent.approvalId} AND status='spent' AND spend_seq = ${spent.spend}
+          WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
+            AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`
       : this.sql<{ id: string }>`
           DELETE FROM deferred_approvals
-          WHERE id = ${spent.approvalId} AND status='spent' AND spend_seq = ${spent.spend}
+          WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
+            AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`;
     return rows.length > 0;
   }
 
   get(id: string): DeferredApproval | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
-      FROM deferred_approvals WHERE id = ${id} LIMIT 1`;
+      FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
     return rows[0] ? toAction(rows[0]) : null;
   }
 
   /** Everything still parked on the owner, oldest first — the one that has
    *  been blocked longest matters most. */
   listQueued(limit = 100): DeferredApproval[] {
+    this.actor.assertCurrent();
     return this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
-      FROM deferred_approvals WHERE status='queued'
+      FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
 }

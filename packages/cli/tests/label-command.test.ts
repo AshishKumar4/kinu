@@ -14,6 +14,7 @@ import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
@@ -63,6 +64,13 @@ function seedWorkspace(name: string, size = 600): World {
   const db = new Database(join(home, name, 'agent.db'));
   const sql = makeSql(db);
   initTurnOutcomeTables((ddl: string) => { db.exec(ddl); });
+  // The actor these outcome rows belong to, and the one `kinu label` resolves
+  // when it reopens this workspace: the MAIN actor, issued through the
+  // production directory. `openLocalRootActor` reads the registered main row,
+  // so the seed has to register a real workspace identity rather than only
+  // create tables — rows under any other id would leave the command drawing
+  // from an empty ledger.
+  const actor = createTestActorsOver(db, { name }).main;
 
   const random = seededRandom(4242);
   const truthByTurn = new Map<string, 'accepted' | 'corrected'>();
@@ -70,7 +78,7 @@ function seedWorkspace(name: string, size = 600): World {
     const reallyNegative = random() < 0.22;
     const flagged = reallyNegative ? random() < 0.65 : random() >= 0.96;
     truthByTurn.set(`turn-${i}`, reallyNegative ? 'corrected' : 'accepted');
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: `turn-${i}`,
       outcome: flagged ? (random() < 0.25 ? 'frustrated' : 'corrected') : 'accepted',
       confidence: 0.8,

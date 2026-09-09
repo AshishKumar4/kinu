@@ -402,18 +402,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
-    // The Agents SDK's facet registry: created by the first `subAgent()` call.
-    // The orchestrator makes one during workspace boot — the hosted runtime
-    // facet host registers through the SDK — so the table exists the moment
-    // the workspace opens, which every turn does. A subordinate reaches the
-    // shared workspace over the owner's box RPC instead and registers a facet
-    // of its own only when it first delegates.
-    cf_agents_sub_agents: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': LAZY_ON_FIRST_USE('subAgent'),
-      cli: { absent: 'the Agents SDK\'s Durable Object base is what creates this registry, and a '
-        + 'local session has no Durable Object; local facets run in-process' },
-    },
+    // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
+    // removal is the entry. It was the Agents SDK's facet registry, created by
+    // the first `subAgent()` call and therefore present the moment a workspace
+    // opened. No Kinu actor spawns a facet any more: a hired subordinate, a
+    // temporary, a head, a swarm node and an MCTS branch are all logical actors
+    // bound over the ONE workspace object's SQLite (`state/actor-host.ts`), so
+    // nothing calls `subAgent()` and the table is never created on any root.
+    // Declaring it `absent` with a reason would say the product could have it
+    // and chose not to; declaring it `wired` said it existed. Neither is true,
+    // so it is not a plane member — the registry enumerates what a workspace
+    // HAS, and the comparator reports an observed-but-undeclared table loudly
+    // if this is ever wrong.
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the

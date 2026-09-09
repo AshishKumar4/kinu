@@ -36,9 +36,10 @@ import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { MissionGovernor } from '../src/mission-budget';
 import {
   createAgentsCodemodeProvider, type AgentsToolDeps,
@@ -296,11 +297,11 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
 
 /** A runtime whose workspace holds the reference implementation, so the `file` tool has
  *  something real to return. Shared by both harnesses below. */
-async function workspace(): Promise<{ rt: AgentRuntime }> {
-  const { rt } = createTestRuntime();
+async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
+  const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
-  return { rt };
+  return { rt, db };
 }
 
 /* ── The run ──────────────────────────────────────────────────────────────── */
@@ -310,17 +311,21 @@ async function run(input: {
   readonly branches: number;
   readonly proposeAtDepth1: boolean;
 }) {
-  const { rt } = await workspace();
+  const { rt, db } = await workspace();
   const logger = createRecordingLogger();
   const { model, script } = workingNode({ proposeAtDepth1: input.proposeAtDepth1 });
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, },
+    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
   const wallClockMs = Date.now() - startedAt;
+  // Scoped: the run's search ledger is the CALLER's (`initRunLedgers` binds
+  // `rt.actor`), and each node is now its own actor over this same database, so
+  // an unscoped `SELECT *` would fold a node's own tree rows into this count.
   const nodes = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
   return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql, rt.actor), wallClockMs };
 }
 
@@ -630,17 +635,17 @@ describe('the mission ledger a search charges', () => {
     readonly branches: number;
     readonly tokens?: number;
   }) {
-    const { rt } = await workspace();
-    const db = new Database(':memory:');
-    const governor = new MissionGovernor({
-      storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
-    });
+    const { rt, db } = await workspace();
+    // The governor over the workspace's OWN storage and actor, not a second
+    // database beside it: a mission cap is that actor's ledger in that actor's
+    // workspace, and the run being capped writes to this one.
+    const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
     governor.declare(LABEL, input.tokens === undefined ? {} : { tokens: input.tokens });
     governor.activate([LABEL]);
     const { model, script } = workingNode({ proposeAtDepth1: true });
     const deps: AgentsToolDeps = {
       mode: 'build',
-      fork: { rt, model },
+      fork: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
       budget: governor,
     };
     const provider = createAgentsCodemodeProvider(() => deps);
@@ -653,8 +658,12 @@ describe('the mission ledger a search charges', () => {
       depth: input.depth,
       branches: input.branches,
     });
+    // Scoped like `run()`'s: the run's search ledger is the CALLER's, and each
+    // node is its own actor over this same database now, so an unscoped read
+    // would fold a node's own tree rows into the caller's count.
     const nodes = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+      SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+      ORDER BY depth ASC, created_at ASC`;
     return { governor, script, nodes, out: v.parse(SwarmOutputSchema, out) };
   }
 

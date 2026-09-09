@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { memberBody, toolExecute } from '@kinu.run/test-utils';
 import { WORKSPACE_RUN_ID, type CompletedTurn } from '@kinu.run/core';
 import {
-  orchestratorHarness, reactivateOrchestratorHarness,
+  hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
@@ -64,8 +64,7 @@ const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'),
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
-const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
-const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
+const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
 const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
 const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
 
@@ -168,21 +167,29 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
   });
 
-  test('facet-spawned heads inherit the registered parent workspace identity', () => {
-    // The root's own split seeds the child with the REGISTERED workspace, never
-    // this actor's own DO name — the file plane is keyed by it, so a self-named
-    // head derives a second, empty filesystem.
-    const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
-    expect(rootRuntime).toContain('sharedParent: this.workspaceName()');
-    expect(rootRuntime).not.toContain('sharedParent: this.name');
-    // A recursive split re-uses the ROOT it was given, never its own facet name.
-    expect(exploration).toContain('sharedParent: this.facetIdentity.parentWorkspace()');
-    // The spawn seam is what turns that into the child facet's persisted parent.
-    expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
-    // One factory for both, so there is exactly one place the seed can be wrong —
-    // and it resolves the identity per spawn rather than baking in a stale token.
-    expect(headRuntime).toContain('identity: () => Promise<ExplorationFacetIdentity>');
-    expect(headRuntime).toContain('spawnHeadFacet(deps.host, input, await deps.identity())');
+  test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
+    // The old failure this replaces: the root's split seeded the child with
+    // the REGISTERED workspace, never the splitter's own DO name — the file
+    // plane is keyed by it, so a self-named head derived a second, empty
+    // filesystem. Registration now names no workspace at all (the directory
+    // owns the name), so the proof is behavioral: bytes the root wrote are
+    // the bytes the head reads, on the one file plane.
+    const workspace = orchestratorHarness();
+    await hostedMainActor(workspace);
+    const rootFiles = workspace.agent.observeRuntime().storage.vfs;
+    await rootFiles.writeFile('/home/user/shared-proof.md', 'registered workspace bytes');
+    const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
+    expect(head.actor.record.kind).toBe('head');
+    const headFiles = head.actor.runtime.storage.vfs;
+    expect(await headFiles.readFile('/home/user/shared-proof.md', { encoding: 'utf8' }))
+      .toBe('registered workspace bytes');
+    // And the seam carries no name of its own to get wrong: no sharedParent,
+    // no facet identity, no spawn RPC — the only names in play are the
+    // directory's.
+    expect(exploration).not.toContain('sharedParent');
+    expect(exploration).not.toContain('facetIdentity');
+    expect(exploration).not.toContain('setSharedParent');
+    expect(exploration).not.toContain('spawnHeadFacet');
     // The actor's own model services, not a second provider registry.
     expect(headRuntime).not.toContain('createAgentProviderRegistry');
   });
@@ -203,14 +210,29 @@ describe('turn-pipeline correctness wiring', () => {
     // The annotation is load-bearing, not style: `gate:wired` attributes a
     // field supply by the WRITTEN type on the literal, and it does not descend
     // into a nested one. Built inline under `fork:` the substrate's own optional
-    // wires — `nodeHost`, `compactShared` — were supplied here and reported as
-    // supplied by nobody, which is how a live wire looks identical to a missing
-    // one. So the shape this asserts is the shape that stays measurable.
+    // wires were supplied here and reported as supplied by nobody, which is how
+    // a live wire looks identical to a missing one. So the shape this asserts is
+    // the shape that stays measurable.
+    //
+    // The wires themselves are the HOSTED ones. `nodeHost` — the in-isolate
+    // `NodeLoopHost` a facet backend handed a whole wave — has no supplier on
+    // this backend any more; a node is a logical actor of the one workspace, so
+    // the substrate asks for its seat PER NODE (`hostNode`) and for that seat's
+    // own private home (`provisionNodeHome`). Both of those, and the two
+    // liveness channels beside them, are optional in the interface and supplied
+    // here, which is exactly the set that goes unattributed if this literal ever
+    // slides back inside `fork:`.
     const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
     expect(depsBody).toContain('const fork: AgentsForkDeps = {');
     expect(depsBody).toContain('resolveModel:');
-    expect(depsBody).toContain('nodeHost:');
+    expect(depsBody).toContain('hostNode:');
+    expect(depsBody).toContain('provisionNodeHome:');
+    expect(depsBody).toContain('reportNodeDelta:');
+    expect(depsBody).toContain('announceHeadActivity:');
     expect(depsBody).toContain('compactShared:');
+    // And no in-isolate loop host smuggled back in beside the hosted seat: two
+    // suppliers for one node's execution is the collision the cutover removes.
+    expect(depsBody).not.toContain('nodeHost:');
     expect(depsBody).not.toContain('mcts:');
     expect(depsBody).not.toContain('heads:');
     expect(actor).not.toContain('defaultOptions');
@@ -296,7 +318,25 @@ describe('turn-pipeline correctness wiring', () => {
     // two askers in this file — the MCTS rollout and the pruned-branch
     // reflection — both read `route.reasoningEffort` now.
     expect(exploration).not.toMatch(/resolveModelWithEffort\([^)]*'(low|medium|high)'\)/);
-    expect(exploration.match(/resolveModelWithEffort\(\s*\n?\s*route\.model, route\.reasoningEffort,?\s*\n?\s*\)/g)?.length).toBe(2);
+    // Hosting SPLIT the pair's producer from its consumer, and the split is
+    // where an effort goes missing without anything failing to compile. The
+    // askers resolve `(model, effort)` together and no longer bind a client at
+    // all — the root owns the provider registry and the operation sink — so what
+    // has to be measured now is that the effort TRAVELS with the spec it was
+    // resolved beside, on both askers.
+    expect(exploration.match(/spec: route\.model, effort: route\.reasoningEffort/g)?.length).toBe(2);
+    // …and that the one transport on the other side of the split spends it
+    // rather than recomputing one. A `REASONING_EFFORT_FOR_STAGE` lookup here
+    // reads as routing while overriding exactly the axis the route decided,
+    // which is the substitution that stood in this file for an hour.
+    const branchTransport = memberBody(actor, 'private branchRunnerDeps()');
+    expect(branchTransport).toContain('resolveModelWithEffort(spec, effort)');
+    // `effort` there has to have ARRIVED. The compiler forces it to come from
+    // the request or not exist, so what is left to refuse is a local shadow: a
+    // stage-table lookup or a named level, either of which computes the route's
+    // own answer and then substitutes for it.
+    expect(branchTransport).not.toMatch(/REASONING_EFFORT_FOR_STAGE\.\w+/);
+    expect(branchTransport).not.toMatch(/'(low|medium|high)'/);
     expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
     expect(headRuntime).not.toContain('reasoningEffortOptions');
     // The merge's ROUTE is no longer decided in this backend at all — core's
@@ -418,18 +458,26 @@ describe('turn-pipeline correctness wiring', () => {
     // may be written into `messages` for the default chat, and the
     // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
+    // The SDK's own transcript table, keyed the way `ensurePaneTable` writes it:
+    // one database now holds every actor's rows, so `actor_id` leads the key and
+    // every read the canonical store performs is scoped by it. A table without
+    // the column does not read empty here — `conversationPageRows` fails to
+    // compile its SELECT.
+    const actorId = harness.agent.observeRuntime().actor.actorId;
     harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+      actor_id TEXT NOT NULL, id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (actor_id, id))`);
     const append = harness.db.prepare(
-      `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-       VALUES (?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
+      `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+       VALUES (?, ?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
     );
-    append.run('u-live', null, 'user', JSON.stringify({
+    append.run(actorId, 'u-live', null, 'user', JSON.stringify({
       id: 'u-live', role: 'user', parts: [{ type: 'text', text: 'do the thing' }],
     }));
-    append.run('a-live', 'u-live', 'assistant', JSON.stringify({
+    append.run(actorId, 'a-live', 'u-live', 'assistant', JSON.stringify({
       id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
     }));
 
@@ -498,15 +546,20 @@ describe('turn-pipeline correctness wiring', () => {
   describe('mid-turn captures are credited to the turn only when it answered', () => {
     /** One take set captured mid-turn: written unclaimed, stamped inside the
      *  claiming turn's window (the scoped claim drops anything older). The
-     *  workspace schema the harness already ran owns the table. */
+     *  workspace schema the harness already ran owns the table — and it now
+     *  keys every set on `(actor_id, id)`, because one database holds every
+     *  actor's captures. The claim and the purge are both `actor_id`-scoped, so
+     *  a set written under any other owner is not merely uncredited here, it is
+     *  invisible to the settle under test. */
     function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
       const harness = orchestratorHarness();
       harness.db.prepare(
         `INSERT INTO alternate_takes
-           (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
+           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
             candidates, created_at, picked_at)
-         VALUES ('take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
+         VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
       ).run(
+        harness.agent.observeRuntime().actor.actorId,
         JSON.stringify([
           { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
           { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
@@ -535,6 +588,11 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a completed PLAN turn purges them', async () => {
       const harness = settleOneTurn('plan');
+      // The seeded set is there to be purged. Stated because the assertion below
+      // is an ABSENCE: a fixture whose insert stopped landing — the shape the
+      // `actor_id` key change produced — would purge nothing and still read 0.
+      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
+        .toMatchObject({ n: 1 });
       await harness.agent.onChatResponse({
         message: settled, requestId: 'req-plan', continuation: false, status: 'completed',
       });
@@ -558,16 +616,23 @@ describe('turn-pipeline correctness wiring', () => {
     const LEASE_TAKEN_AT = Date.now();
 
     /** One admitted event, bound to `turnId` with its recovery lease OPEN —
-     *  what a drain leaves behind on its way to the turn. */
+     *  what a drain leaves behind on its way to the turn. Written under THIS
+     *  actor: the settle closes leases through an `actor_id`-scoped update, so a
+     *  row seeded under any other owner is not a lease this turn declines to
+     *  close, it is a lease the turn cannot see — and two of the three cases
+     *  below assert an UNCHANGED row, which a lease nobody can see also
+     *  produces. What rules that out is the spliced case: it is the one that
+     *  demands a CHANGE, so a seed bound to the wrong owner fails there rather
+     *  than passing quietly in all three. */
     function boundDelivery(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): void {
       harness.db.prepare(
         `INSERT INTO agent_log
-           (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
             schema_version, dedupe_key, consumed_at)
-         VALUES ('ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+         VALUES (?, 'ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
                  'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
-      ).run(turnId, JSON.stringify({
+      ).run(harness.agent.observeRuntime().actor.actorId, turnId, JSON.stringify({
         webhook_id: 'hook-1',
         http_method: 'POST',
         http_headers: { 'content-type': 'application/json' },

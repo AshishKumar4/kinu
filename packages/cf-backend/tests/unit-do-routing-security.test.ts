@@ -48,13 +48,19 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agentX/x')).toBe(true);
   });
 
-  test('only the orchestrator root and direct subordinate paths are admitted', () => {
+  test('only the orchestrator root and hosted-actor paths are admitted', () => {
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace')).toBe(false);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe(false);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe(false);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe(false);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/get-messages')).toBe(false);
 
-    // A literal `sub` segment at any deeper level would make the agents SDK
-    // recursively route another facet. Exploration heads remain worker-only.
+    // Every `/sub/` facet hop now names nothing and stays unroutable: the root
+    // serves a hosted actor itself under `/actor/<name>`, so a physical storage
+    // key never appears in a client-visible address again. A literal `sub`
+    // segment anywhere stays foreign, and so does any other tail the closed
+    // grammar does not name.
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/websocket')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested')).toBe(true);
@@ -69,7 +75,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
    *
    * `useAgentChat` fetches initial messages over HTTP, not the socket, by
    * appending this segment to the agent URL. The grammar allowed the agent name
-   * followed by end-of-string or `/sub/<subordinate>/…` and nothing else, so the
+   * followed by end-of-string or `/actor/<name>/…` and nothing else, so the
    * SDK's own `/get-messages` matched nothing, `isForeignAgentNamespacePath`
    * called it foreign, and the worker answered 404. The socket still connected,
    * so the live turn streamed while every prior message was missing — which
@@ -91,15 +97,17 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/get-messages')).toBeNull();
   });
 
-  test('ownership and CLI ticket extraction include direct additional-agent facets', () => {
+  test('ownership and CLI ticket extraction include hosted-actor paths', () => {
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
-    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe('my-workspace');
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe('my-workspace');
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher/get-messages')).toBe('my-workspace');
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
 
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
-    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe('my-workspace');
+    expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe('my-workspace');
   });
 
   test('server.ts rejects foreign namespaces with a 404 before ownership + routing', () => {

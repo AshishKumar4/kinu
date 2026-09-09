@@ -100,6 +100,7 @@
 
 import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { tolerate } from '../obs/index';
 import { formatScoreInterval } from '../utils/stats';
@@ -229,8 +230,10 @@ export type EnsembleRunResult =
   | { run: null; gap: EnsembleGap };
 
 /** Hand-labeled turns still in the ledger, as the blind items a rater sees. */
-function goldLabeledItems(universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor): LabelingItem[] {
-  const gold = goldLabels(sql);
+function goldLabeledItems(
+  universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor, actor: ActorHandle,
+): LabelingItem[] {
+  const gold = goldLabels(sql, actor);
   return universe.filter((row) => gold.has(row.id)).map(labelingItem);
 }
 
@@ -270,6 +273,7 @@ export interface EnsemblePanel {
  */
 export async function runEnsemble(
   sql: SqlExecutor,
+  actor: ActorHandle,
   panel: EnsemblePanel,
   opts: { now?: number } = {},
 ): Promise<EnsembleRunResult> {
@@ -277,9 +281,9 @@ export async function runEnsemble(
   // to score the panel against, then models to be the panel. A deployment
   // missing all three should be told about the labels first — that is the step
   // the whole flow is about, and the one that is free to check.
-  const universe = calibrationUniverse(sql);
+  const universe = calibrationUniverse(sql, actor);
   if (universe.length === 0) return { run: null, gap: { kind: 'no_population', judges: [] } };
-  const items = goldLabeledItems(universe, sql);
+  const items = goldLabeledItems(universe, sql, actor);
   if (items.length === 0) return { run: null, gap: { kind: 'no_gold_labels', judges: [] } };
   const specs = await panel.specs();
   if (specs.length < 2) {
@@ -287,7 +291,7 @@ export async function runEnsemble(
   }
   const judges = specs.map((spec) => panel.judge(spec));
 
-  const done = new Set(ensembleLabels(sql).map((row) => `${row.outcomeId}\n${row.model}`));
+  const done = new Set(ensembleLabels(sql, actor).map((row) => `${row.outcomeId}\n${row.model}`));
   const judged: EnsembleRun['judged'] = [];
   let alreadyJudged = 0;
   for (const judge of judges) {
@@ -301,7 +305,7 @@ export async function runEnsemble(
         failed++;
         continue;
       }
-      recordEnsembleLabels(sql, {
+      recordEnsembleLabels(sql, actor, {
         model: judge.spec,
         labels: [{ outcomeId: item.outcomeId, label }],
         now: opts.now,
@@ -451,11 +455,11 @@ function kappaStrata(
  * the classifier a different number from the calibration report's, which uses
  * every gold label — the report says which turns it speaks for.
  */
-export function ensembleReport(sql: SqlExecutor): EnsembleReport {
-  const universe = calibrationUniverse(sql);
+export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleReport {
+  const universe = calibrationUniverse(sql, actor);
   const byId = new Map(universe.map((row) => [row.id, row]));
-  const gold = goldLabels(sql);
-  const rows = ensembleLabels(sql);
+  const gold = goldLabels(sql, actor);
+  const rows = ensembleLabels(sql, actor);
 
   const models = [...new Set(rows.map((row) => row.model))].sort();
   /** Verdicts on turns the ledger still holds — a judge's rows about turns that

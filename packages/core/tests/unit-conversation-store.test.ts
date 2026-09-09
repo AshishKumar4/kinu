@@ -31,11 +31,13 @@ import type { ActorHandle } from '../src/state/actor-handle';
 /**
  * A workspace fixture and the actor its transcript belongs to.
  *
- * Handed back together because `messages` keys on (actor_id, id): a seeded
+ * Handed back together because BOTH stores key on (actor_id, id): a seeded
  * transcript is only readable through the handle that owns it, so a fixture
  * returning the database alone would be a workspace no reader can answer for.
- * The pane store carries no actor column — it is the SDK's own — so this handle
- * scopes only the plain half of every dual-store read below.
+ * The pane store is vendor-SHAPED, not vendor-owned — the table this tree
+ * creates is `ForkTargetWriter.ensurePaneTable`'s, carrying `actor_id` and
+ * keyed `(actor_id, id)` — so this one handle scopes both halves of every
+ * dual-store read below.
  */
 interface SeededWorkspace extends TestWorkspace {
   readonly actor: ActorHandle;
@@ -57,9 +59,12 @@ function local(workspaceId: string, name: string): SeededWorkspace {
 }
 
 /** Append to the pane store the way the SDK's session provider does: the
- *  serialized UI message, parented on the caller's choice or the latest leaf. */
+ *  serialized UI message, parented on the caller's choice or the latest leaf.
+ *  Both halves of the pane key are written, and the latest-leaf lookup carries
+ *  the same actor predicate every production pane read does — unscoped, it
+ *  would parent this actor's message on a stranger's row. */
 function paneAppend(
-  { sql }: SeededWorkspace,
+  { sql, actor }: SeededWorkspace,
   msg: { id: string; role: string; text: string; parentId?: string | null; at: string },
 ): void {
   const content = JSON.stringify({
@@ -67,10 +72,11 @@ function paneAppend(
   });
   const parent = msg.parentId !== undefined
     ? msg.parentId
-    : sql<{ id: string }>`SELECT id FROM assistant_messages ORDER BY rowid DESC LIMIT 1`[0]?.id ?? null;
+    : sql<{ id: string }>`SELECT id FROM assistant_messages
+        WHERE actor_id = ${actor.actorId} ORDER BY rowid DESC LIMIT 1`[0]?.id ?? null;
   void sql`
-    INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-    VALUES (${msg.id}, ${''}, ${parent}, ${msg.role}, ${content}, ${msg.at})
+    INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    VALUES (${actor.actorId}, ${msg.id}, ${''}, ${parent}, ${msg.role}, ${content}, ${msg.at})
   `;
 }
 

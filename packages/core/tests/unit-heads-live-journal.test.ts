@@ -26,6 +26,7 @@ import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';
 import {
   HeadJournal, initHeadsTables, LiveHeadJournal, type HeadInput, type HeadReport,
 } from '../src/index';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 function spawn(id: string, rootId: string): HeadInput {
   return {
@@ -33,6 +34,7 @@ function spawn(id: string, rootId: string): HeadInput {
     task: `do ${id}`, mode: 'build', rationale: 'because',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 

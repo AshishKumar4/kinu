@@ -1,20 +1,23 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { workspaceOwner } from '../workspace-box-rpc';
+import { workspaceOwner } from '../workspace-owner-rpc';
 import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
-/** One hop of an actor's root-relative facet path, as the SDK records it. */
+/** One hop of an actor's root-relative path, as the workspace directory records
+ *  it: a registered actor NAME under the workspace root. It used to be an SDK
+ *  facet hop — a class name plus a Durable Object key — and the class half was
+ *  dropped because a class name was never an identity: every actor is hosted by
+ *  the one root object, so what distinguishes two callers is which actor they
+ *  are, which is exactly the name the directory holds. */
 export interface SlateCallerHop {
-  readonly className: string;
   readonly name: string;
 }
 
 /**
- * The actor a slate acts FOR: its facet path under the workspace root (empty
- * for the root itself) and the credential its own file plane runs as. Both are
- * stamped by actor code on the Durable Object stub transport — the same trust
- * hop `workspaceBoxOp` uses for `NimbusExecOptions.cred` — never by a browser,
- * a CLI client, or the process that holds a binding.
+ * The actor a slate acts FOR: its actor path under the workspace root (empty
+ * for the main actor itself) and the credential its own file plane runs as. Both
+ * are stamped by actor code on the Durable Object stub transport — never by a
+ * browser, a CLI client, or the process that holds a binding.
  */
 export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];

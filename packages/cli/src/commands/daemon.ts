@@ -1,5 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Database } from 'bun:sqlite';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
@@ -293,8 +293,6 @@ function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
     // binds, and which virtual workspace groups it with its peers.
     roster: (): HostedAgentRef[] => listLocalRefsAllProjects(),
     dbPath: agentDbPath,
-    childDbPath: (parentDbPath: string, child: string) =>
-      join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
     open: openDaemonAgent,
     // Both callers of this factory are the daemon: `daemon run` resident, and
     // `daemon tick` one foreground pass. Saying so is what makes the lease

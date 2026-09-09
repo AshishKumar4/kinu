@@ -10,7 +10,8 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import { NO_COUNT_ENDPOINT, type LLMProviderConfig } from '@kinu.run/core';
-import { createCLIRuntime, type LocalModelResolver } from '@kinu.run/cli-backend';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime, type LocalModelResolver , makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 import { LocalAgentClient } from '../src/local-agent-client';
 import type { CliSessionOptions } from '../src/session';
@@ -102,12 +103,10 @@ function setup(model: LanguageModel) {
   // not that one (actor-identity.ts `requireLocalDatabasePath`), which no
   // in-memory handle can satisfy. `create: true` is what puts the file there.
   const db = new Database(dbPath, { create: true });
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -138,12 +137,10 @@ function openPersistentClient(
 ): LocalAgentClient {
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
@@ -425,14 +422,14 @@ describe('/takes — Alternate Takes over a real local client', () => {
     // run a turn so the session claims it.
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES ('r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-        VALUES ('r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES (${rt.actor.actorId}, 'r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+        VALUES (${rt.actor.actorId}, 'r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
     // Production captures happen mid-turn. This fixture seeds before send(), so
     // place it inside the upcoming turn's claim window instead of depending on
     // capture and turn start landing in the same millisecond.
-    captureAlternateTakes(rt.storage.sql, {
+    captureAlternateTakes(rt.storage.sql, rt.actor, {
       rootId: 'r', task: 'choose a plan', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000,
     });
     await client.send('solve it');

@@ -20,10 +20,7 @@
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
 import {
-  EXPLORATION_RPC_SURFACE,
   ORCHESTRATOR_RPC_SURFACE,
-  SUBORDINATE_AGENT_BOOT_SURFACE,
-  SUBORDINATE_RPC_SURFACE,
   USER_DO_RPC_SURFACE,
   sealRpcSurface,
 } from '../src/rpc-surface';
@@ -223,12 +220,20 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 });
 
 // ── The agent family ────────────────────────────────────────────────────────
-// `OrchestratorAgent` and `SubordinateAgent` cannot be constructed under bun —
-// their base chain reaches `cloudflare:*` through
-// `@cloudflare/think` and `@cloudflare/sandbox`. Their surfaces are plain data
-// though, and the class sources are readable, so the same two questions get
-// answered: does every class seal itself, and does its surface hold only what
-// the class actually declares?
+// ONE actor root, where there were two. `SubordinateAgent` hosted four modes
+// behind three exported allowlists, and containment had to be a runtime
+// re-seal per family because a stub could reach any method on the class. A
+// hosted actor is not addressable over a stub at all — no object to hold a stub
+// TO — so `SUBORDINATE_RPC_SURFACE`, `EXPLORATION_RPC_SURFACE` and
+// `SUBORDINATE_AGENT_BOOT_SURFACE` are gone with the class they narrowed, and
+// containment rides the actor's `actor_id`-scoped rows instead of a seal over a
+// wire.
+//
+// `OrchestratorAgent` cannot be constructed under bun — its base chain reaches
+// `cloudflare:*` through `@cloudflare/think` and `@cloudflare/sandbox`. Its
+// surface is plain data though, and the class sources are readable, so the same
+// two questions get answered: does every class seal itself, and does its
+// surface hold only what the class actually declares?
 
 const SRC = join(import.meta.dir, '..', 'src');
 const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
@@ -240,7 +245,6 @@ const AGENTS_FACET_RPC_SURFACE = surfaceLiteral('AGENTS_FACET_RPC_SURFACE');
 const SEALED_CLASSES = [
   { file: 'user/user-do.ts', klass: 'UserDO', constant: 'USER_DO_RPC_SURFACE', surface: USER_DO_RPC_SURFACE },
   { file: 'orchestrator.ts', klass: 'OrchestratorAgent', constant: 'ORCHESTRATOR_RPC_SURFACE', surface: ORCHESTRATOR_RPC_SURFACE },
-  { file: 'subordinate-agent.ts', klass: 'SubordinateAgent', constant: 'SUBORDINATE_AGENT_BOOT_SURFACE', surface: SUBORDINATE_AGENT_BOOT_SURFACE },
 ] as const;
 
 /** The inherited members that make an unsealed Durable Object a liability: the
@@ -331,16 +335,19 @@ describe('the agent surfaces cannot drift from their classes', () => {
     expect(missing.sort()).toEqual([]);
   });
 
-  test('the parent roster read reaches the subordinate snapshot across the sealed facet', () => {
-    // `subordinateView` calls this on a Facet stub, not on a local object. The
-    // seal denies every name absent from SUBORDINATE_RPC_SURFACE; the call then
-    // falls into its `Unavailable` recovery and every roster row loses its real
-    // display name and role. The type proves the method exists on the class. The
-    // two assertions below prove the parent calls it AND the sealed wire carries
-    // it — neither alone prevents the outage.
-    expect(source('actor-agent.ts')).toContain('.getSubordinateSnapshot()');
-    expect(SUBORDINATE_RPC_SURFACE).toContain('getSubordinateSnapshot');
-  });
+  /**
+   * THE SUBORDINATE SNAPSHOT HOP IS NOT HERE ANY MORE, and its absence is a
+   * property rather than a gap.
+   *
+   * A test used to pin `.getSubordinateSnapshot()` being called on a facet stub
+   * AND being carried by `SUBORDINATE_RPC_SURFACE`, because the display name and
+   * the role lived in the child's own database and a name the seal did not carry
+   * cost every roster row its real identity. `subordinateView` now reads them
+   * through `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows
+   * in the one database, no stub, no allowlist entry, nothing to drift. The
+   * behaviour that replaced it is a hosting question and is asserted where the
+   * roster is driven, not against a surface it no longer crosses.
+   */
 
   test('worker routes call only methods on the orchestrator surface', () => {
     const called = ['terminal-route.ts', 'files-routes.ts'].flatMap((file) =>
@@ -360,29 +367,31 @@ describe('the agent surfaces cannot drift from their classes', () => {
       .toEqual([]);
   });
 
-  test.each([
-    ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
-    ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
-    ['SubordinateAgent (exploration modes)', 'subordinate-agent.ts', EXPLORATION_RPC_SURFACE] as const,
-    ['SubordinateAgent (boot)', 'subordinate-agent.ts', SUBORDINATE_AGENT_BOOT_SURFACE] as const,
-  ])('%s names only members it or ActorAgent declares', (_name, file, surface) => {
-    const declared = new Set([...declaredClassMembers(source(file)), ...actorMembers].map((m) => m.name));
-    const stale = surface
+  /**
+   * ONE ROW, where a `test.each` carried four.
+   *
+   * Three of them named `SUBORDINATE_RPC_SURFACE`, `EXPLORATION_RPC_SURFACE`
+   * and `SUBORDINATE_AGENT_BOOT_SURFACE` over `subordinate-agent.ts`; all four
+   * names are gone with the facet class. What is left is a single question
+   * about a single surface, so it is asked as a plain test — a one-row
+   * `test.each` would be a table pretending to be a matrix.
+   */
+  test('the orchestrator surface names only members it or ActorAgent declares', () => {
+    const declared = new Set(
+      [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers].map((m) => m.name),
+    );
+    const stale = ORCHESTRATOR_RPC_SURFACE
       .filter((name) => !PLATFORM_RPC_SURFACE.includes(name) && !AGENTS_FACET_RPC_SURFACE.includes(name))
       .filter((name) => !declared.has(name));
     expect(stale.sort()).toEqual([]);
   });
 
-  test.each([
-    ['OrchestratorAgent', 'orchestrator.ts', ORCHESTRATOR_RPC_SURFACE] as const,
-    ['SubordinateAgent', 'subordinate-agent.ts', SUBORDINATE_RPC_SURFACE] as const,
-    ['SubordinateAgent (exploration modes)', 'subordinate-agent.ts', EXPLORATION_RPC_SURFACE] as const,
-    ['SubordinateAgent (boot)', 'subordinate-agent.ts', SUBORDINATE_AGENT_BOOT_SURFACE] as const,
-  ])('%s exposes no internal of its own or of ActorAgent', (_name, file, surface) => {
-    const internal = [...declaredClassMembers(source(file)), ...actorMembers]
+  test('the orchestrator surface exposes no internal of its own or of ActorAgent', () => {
+    const internal = [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers]
       .filter(isInternalMember)
       .map((m) => m.name);
-    expect(internal.filter((name) => surface.includes(name)).sort()).toEqual([]);
+    expect(internal.length).toBeGreaterThan(0);
+    expect(internal.filter((name) => ORCHESTRATOR_RPC_SURFACE.includes(name)).sort()).toEqual([]);
   });
 
   /**
@@ -392,108 +401,66 @@ describe('the agent surfaces cannot drift from their classes', () => {
    * core implementation, and nothing was red while they drifted: the
    * orchestrator's setModel and getStoredModelSpec skipped the `ensureSchema()`
    * its twin ran, so the two roots disagreed about whether their own tables had
-   * to exist before a config write. A copy reappearing on a root is exactly how
-   * that returns, so it is red here rather than left to review.
+   * to exist before a config write. A copy reappearing on the root is exactly
+   * how that returns, so it is red here rather than left to review.
    *
    * `getChatHistoryPage` is the fifth and arrived the other way round: it was
-   * declared on the workspace root ONLY, so a subordinate — a facet with its
-   * own `initWorkspaceSchema` tables and therefore its own conversation — had no
-   * way to be asked for a page of its own history. One root having a member of
-   * this plane and the other not is the same defect as both having their own
-   * copy, and this list is what refuses either shape.
+   * declared on the workspace root ONLY, so a subordinate had no way to be
+   * asked for a page of its own history. Both defects were shapes of one
+   * mistake — a plane with two implementations — and there is one root now, so
+   * what this refuses is the root re-declaring a member of a plane the
+   * substrate owns for every actor hosted over it.
    *
-   * Behaviour is pinned separately, through both classes, in
-   * unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
+   * Behaviour is pinned separately, through a hosted actor as well as the root,
+   * in unit-actor-control-plane.test.ts and unit-actor-transcript-page.test.ts.
    */
-  test('the shared control plane is declared on ActorAgent and on neither root', () => {
+  test('the shared control plane is declared on ActorAgent and not on the root', () => {
     const shared = [
       'getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork', 'getChatHistoryPage',
     ];
     const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));
     expect(onActor.sort()).toEqual([...shared].sort());
-    for (const file of ['orchestrator.ts', 'subordinate-agent.ts']) {
-      const redeclared = declaredClassMembers(source(file))
-        .map((m) => m.name)
-        .filter((name) => shared.includes(name));
-      expect(redeclared).toEqual([]);
-    }
+    const redeclared = declaredClassMembers(source('orchestrator.ts'))
+      .map((m) => m.name)
+      .filter((name) => shared.includes(name));
+    expect(redeclared).toEqual([]);
   });
 });
 
 /**
- * The seal is fail-closed, which is right — and it means a facet calling a
- * parent method nobody added to the surface fails at RUNTIME, with workerd's
- * "does not implement the method", inside a background head where nothing but a
- * console line sees it. That is how the four `headJournal*` routing calls and
- * `recordHeadStep` came to be declared, called, typechecked and unreachable at
- * once: `head_steps` stayed empty and a depth-2 head stayed unreadable while
- * every test passed.
+ * THE FACET-TO-ROOT SCAN IS GONE, AND WHAT IT GUARDED IS NOW MEASURED INSTEAD
+ * OF DERIVED.
  *
- * So the calls are derived from the source rather than listed: a new
- * `parent.foo(...)` in the facet is either on the surface or this is red.
+ * A describe block stood here that read `subordinate-agent.ts` and
+ * `obs/facet-operations.ts`, collected every `parent.x(` in them, and required
+ * each name to be on ORCHESTRATOR_RPC_SURFACE. It existed because the seal is
+ * fail-closed: a facet calling a parent method nobody listed failed at RUNTIME,
+ * with workerd's "does not implement the method", inside a background head
+ * where nothing but a console line saw it. That is how the four `headJournal*`
+ * routing calls and `recordHeadStep` came to be declared, called, typechecked
+ * and unreachable at once — `head_steps` stayed empty and a depth-2 head stayed
+ * unreadable while every test passed.
+ *
+ * Both of its input files are deleted, and so is every call it scanned for. A
+ * hosted head runs in the root's own isolate over the root's own database:
+ * `recordHeadStep` and the journal writes are `seams.recordStep` and the
+ * workspace's own `HeadJournal`, `nodeArbitrate` is the closure it always was,
+ * and `provisionFacetHome` is `facetHomeProvisioner` called in process. There is
+ * no stub to scan for, which is why this is a removal and not a re-pointing:
+ * re-pointing it at the callers that DO still hold a root stub (the owner's
+ * UserDO, the worker routes, the CLI transport) means a name-keyed scan over
+ * four different local spellings and two chained calls bound to no local at
+ * all — and the one failure mode a derived list has is shrinking silently,
+ * which that instrument would do on its first day.
+ *
+ * The guarantee itself is in better shape than the scan left it. `tests/workerd/
+ * plan-announce-probe.ts` now hops a real Durable Object stub against a real
+ * sealed root and reports what the RUNTIME did with each name: a listed one
+ * resolving, a listed one refused by the callee's own rule, and the inherited
+ * `broadcast` and `setState` rejected by workerd itself. The two tests above
+ * still check the CLI table and the worker routes against the surface, so the
+ * two callers with a stable call spelling keep their derived guard.
  */
-describe('a facet reaches its root only through the sealed surface', () => {
-  /**
-   * Every file that can hold a cross-DO call on the root stub.
-   *
-  * `subordinate-agent.ts` acquires the stub, and one acquisition HANDS IT AWAY: the
-  * `facetModelOperations` field passes a thunk to `forwardFacetModelOperations`,
-  * which is where that stub's only call actually happens. So a scan confined to
-  * the acquiring file cannot see it — precisely the hole this describe block
-  * exists to close — and the receiving file is in the corpus for the same
-  * reason `stepSink`'s parameter is pinned below.
-  */
-  const REACHING_FILES = ['subordinate-agent.ts', 'obs/facet-operations.ts'] as const;
-
-  /** `const parent = this.getSharedParentStub()` is the only way a head obtains
-   *  its root's stub, so every `parent.x(` in these files is a cross-DO call. */
-  const parentCalls = REACHING_FILES
-    .flatMap((file) => [...source(file).matchAll(/\bparent\.(\w+)\(/g)].map(([, name]) => name!))
-    .filter((name, i, all) => all.indexOf(name) === i)
-    .sort();
-
-  /**
-   * The scan keys on the local's NAME, so the naming convention is part of the
-   * instrument and is pinned here rather than assumed.
-   *
-   * It had already been broken once: `runAsNode` bound the same stub to `port`,
-   * so `parent.x(` never saw it and `nodeArbitrate` — a call that fails closed at
-   * runtime inside a background node — was outside the scan for its whole life.
-   * A second spelling shrinks the scan silently, which is the one failure mode a
-   * derived list has that a hand-written one does not.
-   */
-  test('every acquisition of the root stub binds it to the name the scan reads', () => {
-    const source_ = source('subordinate-agent.ts');
-    const bindings = [...source_.matchAll(/this\.getSharedParentStub\(\)/g)];
-    const named = [...source_.matchAll(/const (\w+) = this\.getSharedParentStub\(\)/g)]
-      .map(([, name]) => name!);
-    // The ONE acquisition that is not a local: it hands the thunk to another
-    // module, which is why that module is in REACHING_FILES. Counted here so a
-    // second hand-off cannot be added without extending the corpus too.
-    const handedOff = [...source_.matchAll(/forwardFacetModelOperation\(\(\) => this\.getSharedParentStub\(\), event\)/g)];
-    expect(handedOff).toHaveLength(1);
-    expect(named).toHaveLength(bindings.length - handedOff.length);
-    expect(named.filter((name, i, all) => all.indexOf(name) === i)).toEqual(['parent']);
-    // And the two seams that take the stub as an argument instead of acquiring
-    // it, for the same reason: a renamed parameter hides its calls too.
-    expect(source_).toContain('private stepSink(parent: DurableObjectStub<OrchestratorAgent>');
-    expect(source('obs/facet-operations.ts')).toContain('const parent = parentOf();');
-  });
-
-  test('the scan found the calls it exists to check (denominator)', () => {
-    // Without this the filter below is green on an empty list, which is exactly
-    // what a renamed accessor or a refactored stub would produce.
-    expect(parentCalls.length).toBeGreaterThan(0);
-    expect(parentCalls).toContain('recordHeadStep');
-    expect(parentCalls).toContain('headJournalRecordSplit');
-    expect(parentCalls).toContain('nodeArbitrate');
-    expect(parentCalls).toContain('provisionFacetHome');
-  });
-
-  test('every one of them is reachable on an OrchestratorAgent stub', () => {
-    expect(parentCalls.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
-  });
-});
 
 // ── The mechanism ───────────────────────────────────────────────────────────
 // `UserDO`'s base classes are stubbed under bun, so the inherited half of the

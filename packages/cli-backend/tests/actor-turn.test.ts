@@ -1,8 +1,13 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
-import { startActorTurn, prepareActorProgram, inWorkMode, runHeadInference, HeadCapture, MissionGovernor, localMissionScope } from '@kinu.run/core';
+import {
+  startActorTurn, prepareActorProgram, inWorkMode, runHeadInference, HeadCapture,
+  MissionGovernor, localMissionScope, initActorClaimTables,
+} from '@kinu.run/core';
 import { createSandboxedExecutor } from '../src/executor';
+import { defaultLoopOrigin } from '@kinu.run/core';
+import { headLoopSeams } from './actor-fixture';
 import type { ChatEvent } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import { jsonSchema, tool } from 'ai';
@@ -25,6 +30,13 @@ async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extend
 
 async function fixture() {
   const { rt } = createTestRuntime();
+  // The claim/working-history plane, from the one initializer that owns it:
+  // a seated head takes CLAIMED turns, and `ActorSession` reads and writes
+  // `actor_turn_claims` plus the raw working revisions a mid-turn edit
+  // rewrites. `createTestRuntime` bootstraps identity and the actor directory
+  // only, so a fixture that seats an actor has to add this ledger — by calling
+  // the production DDL rather than retyping a second copy of it.
+  initActorClaimTables(rt.storage.execRaw);
   rt.executor = createSandboxedExecutor();
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
@@ -104,8 +116,9 @@ test('the real head caller executes its selected program and retains its produce
     id: 'head-one', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   }, {
-    runtime: rt, model: chat.model, tools: {}, capture: new HeadCapture(),
+    ...headLoopSeams(rt), model: chat.model, tools: {}, capture: new HeadCapture(),
     workspaceLayout: 'private-scratch', isAborted: () => false,
     reportMessages: messages => { produced.push(...messages); },
   });
@@ -118,7 +131,7 @@ test('separate model calls inside a selected head program share its real mission
   const { rt, files, chat, chatModel } = await fixture();
   rt.identity.scaffold.version = async () => 1;
   await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "first" }] }); await host.llmStream({ system: "sys", messages: [{ role: "user", content: "second" }] }); }');
-  const governor = new MissionGovernor({ storage: rt.storage });
+  const governor = new MissionGovernor({ actor: rt.actor, storage: rt.storage });
   governor.declare('head-budget', { tokens: 1 }, {});
   const mission = localMissionScope(governor, ['head-budget']);
   if (mission === null) throw new Error('the declared mission must have a scope');
@@ -126,8 +139,9 @@ test('separate model calls inside a selected head program share its real mission
     id: 'head-budgeted', rootId: 'origin', parentId: null, depth: 0, task: 'go', mode: 'build',
     rationale: 'exercise the selected program budget', inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   }, {
-    runtime: rt, model: chat.model, tools: {}, capture: new HeadCapture(), mission,
+    ...headLoopSeams(rt), model: chat.model, tools: {}, capture: new HeadCapture(), mission,
     workspaceLayout: 'private-scratch', isAborted: () => false,
   });
   expect(report.status).toBe('budget_exceeded');

@@ -21,12 +21,16 @@ import { resumableAgentsInput } from '../tools/agents-tool';
 import { harvestSwarm } from '../strategy/swarm-resume';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
 /** The durable rows a swarm harvest reads. The backend already holds both. */
 export interface SwarmHarvestDeps {
   readonly sql: SqlExecutor;
+  /** Whose harvest. The tree and the node records are actor-private, so the raw
+   *  reads inside `harvestSwarm` carry the same owner the ledger is bound to. */
+  readonly actor: ActorHandle;
   readonly ledger: MctsSearchStore;
 }
 

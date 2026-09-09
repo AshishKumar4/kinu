@@ -1,12 +1,17 @@
 // createCLIHeadRuntime — the local HeadRuntime backing the `agents` tool's fork
 // action. The cf backend runs heads as SubordinateAgent facets in head mode; locally each
-// head runs IN-PROCESS over a FORK of the parent runtime (buildCLIHeadRuntime):
-// the parent's real host executor (`run laptop` / codemode `laptop.*`), the
-// parent's canonical workspace through `parent.*`, and a PRIVATE durable
-// scratch (its own workspace filesystem, Memory, CraftStore and shell) so
-// siblings can't corrupt each other. Heads are LLM-bound, so the
-// HeadController's Promise.all gives real concurrency without subprocesses; the
-// merge LLM runs in this process.
+// head runs IN-PROCESS as a LOGICAL ACTOR of the workspace it forks
+// (buildCLIHeadRuntime): the parent's real host executor (`run laptop` /
+// codemode `laptop.*`), the parent's canonical workspace through `parent.*`,
+// and its own home in the one file plane so siblings can't corrupt each other.
+// Heads are LLM-bound, so the HeadController's Promise.all gives real
+// concurrency without subprocesses; the merge LLM runs in this process.
+//
+// ONE DATABASE. A head no longer opens a per-head scratch file under `~/.kinu/heads/`: it is acquired
+// from the root's ActorHost, so its claims, journal steps, scaffold pointer and
+// program state are its own actor-keyed rows in the workspace's one store —
+// which is what lets a head take a CLAIMED turn (the promoted-loop contract)
+// instead of an unclaimed loop over private bytes nobody else could read.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
 // uses: `run` + `execute_tools` + `web` (the parent's vocabulary, so a fork's
@@ -20,19 +25,35 @@ import {
   type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal, headAgentName, explorationActorKey, facetHomeReleaser,
-  createStateCodemodeProvider,
+  type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal,
+  createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
-import { Database } from 'bun:sqlite';
-import { mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { buildCLIHeadRuntime, makeSqlExec, cleanupFacetCwdScratch, type CLIRuntime } from './runtime';
-import { registerLocalActor, seedLocalActor, retireLocalActor } from './actor-identity';
+import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
+import type { CLIRuntime } from './runtime';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
-import { kinuHome } from './home';
+
+/**
+ * One head's seat: the runtime objects its CLAIMED loop runs on.
+ *
+ * The four members `runHeadInference` needs beyond its tools — the session a
+ * turn is admitted on, the run its claims attribute to, the profile authority
+ * that pins its program version, and the live context block for its own actor
+ * — plus the release that ends the seat. The local twin of core's
+ * `HostedNodeSeat`, because a head and a swarm node are the same kind of thing
+ * on this backend: a hosted actor running one promoted loop.
+ */
+export interface HostedHeadSeat {
+  readonly actor: HostedActor;
+  readonly runId: string;
+  readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
+  => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
+  readonly dynamic: () => DynamicContext;
+  /** Drop this head's runtime objects and retire its directory row. */
+  release: () => Promise<void>;
+}
 
 export interface CLIHeadRuntimeDeps {
   /** The session's model for a head that names none or cannot resolve theirs —
@@ -96,6 +117,24 @@ export interface CLIHeadRuntimeDeps {
    *  it never opened. Omit ⇒ the merge runs unwatched, like any seam with no
    *  sink. */
   operations?: ModelOperationSink;
+  /**
+   * Seat ONE head as a logical actor of this workspace, watched by `writes`.
+   *
+   * A FACTORY, not a value, for the reason core's `HostedNodeSeat` is one: a
+   * split runs several heads concurrently off one deps object, and a single
+   * hosted actor shared between them would give the whole wave one claim
+   * ledger, one loop pointer and one row set — the cross-actor collision this
+   * cutover exists to make impossible. Each call registers its own actor,
+   * acquires its runtime objects from the root's host under the origin this
+   * `HeadInput` names, and hands back the release that retires it.
+   *
+   * `writes` is the run's own `HeadCapture.files`, and it is a PARAMETER rather
+   * than something the seater could know: the head's file attribution is per
+   * RUN, the capture is created by the run, and the runtime it must wrap is
+   * built inside `acquire`. A seat built without it reports an empty
+   * `fileChanges` for a head that rewrote the tree.
+   */
+  hostHead: (input: HeadInput, writes: WriteObserver) => Promise<HostedHeadSeat>;
 }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
@@ -118,49 +157,6 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
 
-/**
- * A local head's private scratch store.
- *
- * A cf head's `/local` is its FACET's own SQLite — real storage, sized by the
- * DO's quota rather than by whatever is left of a process. The local head's was
- * `new Database(':memory:')`, which put the whole scratch — filesystem pages, the
- * FTS5 memory index, the CraftStore — in the CLI process heap, shared with the
- * parent session and with every sibling head running concurrently in that same
- * process. A file gives both backends the same answer: SQLite pages to disk, so
- * a fork that writes a large artifact to /local costs disk rather than the
- * session's heap.
- *
- * Isolated by construction (one file per head id, and a head id is unique
- * within a run) and removed when the head's work is finished, so scratch never
- * accumulates. The id is sanitized because it names a path: it is generated by
- * the controller today, but a path built from an identifier must not be the
- * place that assumes so.
- */
-interface HeadScratch {
-  db: Database;
-  dispose(): void;
-}
-
-function openHeadScratch(storageKey: string): HeadScratch {
-  if (!/^[A-Za-z0-9_-]+$/.test(storageKey)) throw new KinuError('bad_input', 'The head storage key is not a file component.');
-  const dir = join(kinuHome(), 'heads');
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${storageKey}.db`);
-  const db = new Database(path, { create: true });
-  let disposed = false;
-  return {
-    db,
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      db.close();
-      // The sidecars exist only under WAL/hot journals; `force` covers absence.
-      for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(path + suffix, { force: true });
-    },
-  };
-}
-
-/** Run one head in-process over a fork of the parent runtime. */
 /** The model THIS head runs — its own spec when it named one and the session can
  *  resolve it, else the session's. A bad spec degrades to the session model
  *  rather than failing the head: one fork's unresolvable model must not take
@@ -183,32 +179,48 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   }
 }
 
+/**
+ * Run one head in-process, as a hosted logical actor of the parent workspace.
+ *
+ * The head takes a SEAT: the root's host builds its runtime, stores,
+ * orchestration and the one `ActorSession` its claimed turns are admitted on,
+ * under the loop origin this `HeadInput` names. There is no scratch database to
+ * open and none to unlink — the head's rows are its own actor-keyed rows in the
+ * workspace's one store, so a parent can read what its own fork did — and
+ * releasing the seat drops the runtime objects and retires the directory row
+ * while the rows themselves stay.
+ */
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: AbortSignal): Promise<HeadReport> {
-  const binding = registerLocalActor(deps.parentRuntime.actor, { name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task', dbPathForKey: (key) => join(kinuHome(), 'heads', `${key}.db`) });
-  const scratch = openHeadScratch(binding.storageKey);
-  const db = scratch.db;
-  const agentName = headAgentName(binding.storageKey);
+  const capture = new HeadCapture();
+  // The capture's own file observer, handed to the seat so the runtime the HOST
+  // builds is the one being watched. `HeadReport.fileChanges` is
+  // `capture.files.snapshot()` and nothing else fills it, so a seat built
+  // without this reports that the head changed nothing however much it wrote.
+  const seat = await deps.hostHead(input, capture.files);
   try {
-    seedLocalActor(db, makeSqlExec(db), binding);
-    const capture = new HeadCapture();
-    const rt = await buildCLIHeadRuntime(db, {
-      parentRuntime: deps.parentRuntime, actorBinding: binding,
-      writeObserver: capture.files,
-    });
-    // execute_tools over the head's OWN router providers (private `workspace.*`
-    // + the parent's real `laptop.*`) plus the web/llm codemode namespaces and
-    // `state.*` over the head's own scratch, the table initActorTables created:
-    // the shared description promises `state.set`/`state.get` to every
-    // program, and the hosted head binds the same provider over its facet's
-    // SQL. A function of the finished head surface, the shape buildHeadToolSet
+    const rt = seat.actor.runtime;
+    // execute_tools over the head's OWN router providers (its own home in the
+    // one file plane + the parent's real `laptop.*`) plus the web/llm codemode
+    // namespaces, `state.*` over the head's own program state and `db.*` over
+    // the head's own app data — the shared description promises both to every
+    // program, and the hosted head binds the same providers over its own
+    // actor-keyed rows. `state.*` is bound off `seat.actor.handle`, never the
+    // parent's: a fork's markers are its own rows, and a head that wrote into
+    // its parent's program state would be one actor moving another's. A
+    // function of the finished head surface, the shape buildHeadToolSet
     // resolves after its own filtering, so `tools.<name>` declares and binds
     // exactly the tools this head holds.
     const sandbox = createNodeExecuteToolFactory({
-      extraProviders: [...deps.codemodeExtras(), createStateCodemodeProvider(rt.actor.programState)],
+      extraProviders: [
+        ...deps.codemodeExtras(),
+        createStateCodemodeProvider(seat.actor.handle.programState),
+        createDbCodemodeProvider(seat.actor.stores.appData),
+      ],
     });
     const executeTool = (finished: ToolSet) => sandbox({
       native: finished,
-      // A head's CraftStore is a throwaway in-memory fork: no crafted tools.
+      // A head reads the workspace's crafted tools through its own router; it
+      // crafts none of its own for the length of one fork.
       craftedTools: () => ({}),
       providers: rt.executionRouter?.getProviders() ?? [],
     });
@@ -223,7 +235,15 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     const journal = deps.journal();
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
-      runtime: rt,
+      // THE CLAIMED LOOP. `actor` carries the session every iteration is
+      // admitted on, `runId` the run its claims attribute to, `profile` the
+      // same authority a chat turn resolves through, and `dynamic` this head's
+      // own live context — so a fork's turn is durable, pinned and cancellable
+      // exactly like the parent's.
+      actor: seat.actor,
+      runId: seat.runId,
+      profile: seat.profile,
+      dynamic: seat.dynamic,
       model: headModel(input, deps), tools, capture,
       workspaceLayout: 'shared-workspace',
       signal,
@@ -236,19 +256,11 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
     if (mission) inferenceOptions.mission = mission;
     return await runHeadInference(input, inferenceOptions);
   } finally {
-    try {
-      await retireLocalActor(deps.parentRuntime.actor, binding.name, binding.reference, async () => {
-        scratch.dispose();
-        if (deps.parentRuntime.cwd) cleanupFacetCwdScratch(deps.parentRuntime.cwd, agentName);
-        else if (deps.parentRuntime.nodeHome) await facetHomeReleaser(deps.parentRuntime.nodeHome())(agentName);
-      });
-    } finally {
-      scratch.dispose();
-    }
+    await seat.release();
   }
 }
 
-/** Child reports and steps remain in the root journal after their private storage is released. */
+/** Child reports and steps remain in the root journal after a head's seat ends. */
 async function runLocalSplit(
   request: HeadSplitRequest,
   input: HeadInput,

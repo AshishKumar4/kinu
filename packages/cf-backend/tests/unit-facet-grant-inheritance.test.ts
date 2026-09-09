@@ -20,6 +20,7 @@ import {
 } from '@kinu.run/core';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
+import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 const root = new URL('../', import.meta.url).pathname;
 
@@ -54,11 +55,74 @@ describe('reachability of the root policy read', () => {
     }
   });
 
-  test('the root/facet split is decided by the container-ownership test', () => {
-    // Same predicate the sandbox handle uses, so a facet cannot be a root for
-    // grants while being a facet for its container.
-    expect(readFileSync(`${root}src/runtime.ts`, 'utf8'))
-      .toContain('const isRootActor = agent.name === actor.workspaceName');
+  /**
+   * WHICH ACTOR reaches that read, decided by the actor's registered KIND.
+   *
+   * This replaces a case that asserted the source text
+   * `const isRootActor = agent.name === actor.workspaceName` and justified it as
+   * "the same predicate the sandbox handle uses". Both halves are gone. Every
+   * actor of a workspace now rides ONE container (`sandboxIdForWorkspace` is
+   * keyed on `workspaceName`, the same string for all of them), so there is no
+   * container-ownership split left for a grants split to agree with; and the
+   * name comparison is exactly what the cutover had to delete, because hosted in
+   * the root's isolate every actor answers to that same name and a subordinate
+   * would have been handed the root's own recording authority.
+   *
+   * So the surviving guarantee is stated instead of spelled: a hosted actor that
+   * is not main reaches the ROOT for its answers and can only narrow them. Both
+   * actors below are acquired from one `ActorHost` through one `runtimeFor`, so
+   * the registered kind is the only difference between them — which is the whole
+   * claim.
+   */
+  test('a hosted actor reaches the root for its policy; the main actor never does', async () => {
+    const workspace = orchestratorHarness();
+    let rootReads = 0;
+    const readGrants = workspace.agent.getShellApprovalGrants.bind(workspace.agent);
+    Object.defineProperty(workspace.agent, 'getShellApprovalGrants', {
+      configurable: true,
+      value: async () => { rootReads += 1; return readGrants(); },
+    });
+
+    // The owner's standing decision, recorded where grants are only ever
+    // written: the workspace's own main actor.
+    workspace.agent.observeRuntime().actor.config
+      .grantShellApproval([{ rule: GATED_RULE, executor: 'workspace' }]);
+
+    const main = await hostedMainActor(workspace);
+    const mainShell = main.actor.runtime.shell;
+    if (!mainShell) throw new Error('the main actor carries a shell');
+    expect((await mainShell.exec(GATED)).refusal).toBeUndefined();
+    // It answered out of its OWN config — no root hop, because it IS the root.
+    expect(rootReads).toBe(0);
+
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'grantee-1', displayName: 'Grantee', nameOrigin: 'user',
+      mission: 'inherit the workspace policy', roleId: 'implementer',
+    });
+    // It recorded nothing of its own, so anything it holds, it holds because the
+    // root holds it.
+    expect(child.actor.handle.config.getShellApprovalGrants()).toEqual([]);
+    const childShell = child.actor.runtime.shell;
+    if (!childShell) throw new Error('a hosted subordinate carries a shell');
+    // Counted from AFTER the hire, so the hop is attributed to the child's own
+    // gate rather than to anything the hiring did on the way.
+    const beforeExec = rootReads;
+    expect((await childShell.exec(GATED)).refusal).toBeUndefined();
+    expect(rootReads).toBeGreaterThan(beforeExec);
+  });
+
+  /** The control that makes the pass above mean "inherited" rather than
+   *  "ungated": with nothing granted on the root, the same command through the
+   *  same hosted shell is refused. */
+  test('a hosted actor whose root granted nothing is still gated', async () => {
+    const workspace = orchestratorHarness();
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',
+      mission: 'inherit an empty policy', roleId: 'implementer',
+    });
+    const shell = child.actor.runtime.shell;
+    if (!shell) throw new Error('a hosted subordinate carries a shell');
+    expect((await shell.exec(GATED)).refusal).toBeDefined();
   });
 });
 

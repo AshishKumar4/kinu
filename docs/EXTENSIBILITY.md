@@ -108,21 +108,25 @@ nothing in `actorActiveTools()`. No flag or allowlist decides this.
 `ActorToolDeps` (line 571) has `team`, `peers`, `report`, `releases` and
 `submitPlan`. `teamProfile()` (line 1074) returns `{ team }` while an actor has
 tree below it and `{}` at the depth cap, so delegation budget, not class,
-stops recursion. `SubordinateAgent.actorToolDeps()`
-(`cf-backend/src/subordinate-agent.ts:353`) adds `report` on a parent-assigned
-turn or `submitPlan` on an owner turn.
+stops recursion. A hosted subordinate's delegated-turn surface is built by the
+ROOT and reaches its runner through `SubordinateHostSeams.taskTools`
+(`cf-backend/src/subordinate-hosting.ts`), adding `report` on a parent-assigned
+turn or `submitPlan` on an owner turn — a per-ACTOR narrowing, since there is no
+longer a second class to hang it on. A head's and a node's surface is built by
+`cf-backend/src/exploration-hosting.ts` over that actor's own runtime. An MCTS
+branch has no tool surface at all and acquires no execution plane, which is a
+fact about its construction rather than a filter applied to it.
 
 `OwnedModelServices` (`cf-backend/src/owned-model-services.ts:39`) holds
 per-actor model/provider state by composition: `providerRegistry()`,
 `resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
 constructs it with `ownerRequired: true`
-(`cf-backend/src/actor-agent.ts:1409`). `SubordinateAgent` builds a second
-instance for its exploration modes with `ownerRequired: false`
-(`facetModelServices` in `cf-backend/src/subordinate-agent.ts`). The seed
-decides containment. The constructor seals the boot RPC surface. Each seed
-narrows the instance to its family surface. A head cannot resolve a
-subordinate seed across a stub. A subordinate cannot resolve a head seed
-across a stub.
+(`cf-backend/src/actor-agent.ts:1409`). A hosted exploration actor gets its own
+instance with `ownerRequired: false` (`cf-backend/src/exploration-hosting.ts`).
+The actor's KIND decides containment, and it is the directory row that says
+which kind it is — not a seed a worker reports about itself. Each hosted actor
+is narrowed to its family surface: a head cannot resolve a subordinate's
+services and a subordinate cannot resolve a head's.
 
 ## Adding a new ModelProvider
 

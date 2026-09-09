@@ -3,7 +3,8 @@
  *
  * Schema:
  *   gepa_runs
- *     run_id            TEXT PK
+ *     actor_id          TEXT (PK part 1 — the actor whose artifact is optimized)
+ *     run_id            TEXT (PK part 2)
  *     target            TEXT ('scaffold' | 'prompt_section')
  *     target_ref        TEXT (the section id; null for the scaffold)
  *     started_at        INTEGER
@@ -16,8 +17,9 @@
  *     budget_json       TEXT (snapshot of GepaBudget)
  *
  *   gepa_candidates
- *     id                TEXT PK
- *     run_id            TEXT (FK)
+ *     actor_id          TEXT (PK part 1)
+ *     id                TEXT (PK part 2)
+ *     run_id            TEXT (FK, within the same actor)
  *     parent_id         TEXT (null for seed)
  *     source            TEXT (the artifact string)
  *     scores_json       TEXT (Map<instanceId, number> as JSON object)
@@ -32,6 +34,7 @@
 
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../../types/primitives';
+import type { ActorHandle } from '../../state/actor-handle';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
 import {
@@ -48,7 +51,8 @@ const FeedbackMapSchema = v.record(v.string(), v.string());
 
 export function initGepaTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS gepa_runs (
-    run_id        TEXT PRIMARY KEY,
+    actor_id      TEXT NOT NULL,
+    run_id        TEXT NOT NULL,
     target        TEXT NOT NULL,
     target_ref    TEXT,
     started_at    INTEGER NOT NULL,
@@ -58,13 +62,17 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     winner_id     TEXT,
     metric_calls  INTEGER NOT NULL DEFAULT 0,
     iterations    INTEGER NOT NULL DEFAULT 0,
-    budget_json   TEXT NOT NULL
+    budget_json   TEXT NOT NULL,
+    PRIMARY KEY (actor_id, run_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_runs_status_started
-           ON gepa_runs(status, started_at)`);
+           ON gepa_runs(actor_id, status, started_at)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_runs_target
+           ON gepa_runs(actor_id, target, target_ref, started_at DESC)`);
 
   execRaw(`CREATE TABLE IF NOT EXISTS gepa_candidates (
-    id             TEXT PRIMARY KEY,
+    actor_id       TEXT NOT NULL,
+    id             TEXT NOT NULL,
     run_id         TEXT NOT NULL,
     parent_id      TEXT,
     source         TEXT NOT NULL,
@@ -73,12 +81,13 @@ export function initGepaTables(execRaw: RawSqlExec): void {
     aggregate      REAL NOT NULL,
     created_at     INTEGER NOT NULL,
     iteration      INTEGER NOT NULL,
-    accepted       INTEGER NOT NULL DEFAULT 1
+    accepted       INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_iter
-           ON gepa_candidates(run_id, iteration)`);
+           ON gepa_candidates(actor_id, run_id, iteration)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_gepa_candidates_run_aggregate
-           ON gepa_candidates(run_id, aggregate DESC)`);
+           ON gepa_candidates(actor_id, run_id, aggregate DESC)`);
 
 }
 
@@ -87,19 +96,21 @@ export function initGepaTables(execRaw: RawSqlExec): void {
  *  matches what runGepa actually used. */
 export function startGepaRun(
   sql: SqlExecutor,
+  actor: ActorHandle,
   opts: {
     target: 'scaffold' | 'prompt_section';
     targetRef?: string | null;
     budget?: Partial<GepaBudget>;
   },
 ): string {
+  actor.assertCurrent();
   const runId = `gepa-${nanoid()}`;
   const startedAt = nowMs();
   const budgetJson = JSON.stringify({ ...DEFAULT_GEPA_BUDGET, ...opts.budget });
   void sql`INSERT INTO gepa_runs
-        (run_id, target, target_ref, started_at, ended_at, status, stop_reason,
+        (actor_id, run_id, target, target_ref, started_at, ended_at, status, stop_reason,
          winner_id, metric_calls, iterations, budget_json)
-        VALUES (${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
+        VALUES (${actor.actorId}, ${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
                 ${null}, ${'running'}, ${null}, ${null}, ${0}, ${0}, ${budgetJson})`;
   return runId;
 }
@@ -107,6 +118,7 @@ export function startGepaRun(
 /** Persist a candidate (seed or mutated) row. */
 export function persistGepaCandidate(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: {
     runId: string;
     candidate: GepaCandidate;
@@ -114,12 +126,13 @@ export function persistGepaCandidate(
     accepted: boolean;
   },
 ): void {
+  actor.assertCurrent();
   const scoresJson = JSON.stringify(Object.fromEntries(args.candidate.scores));
   const feedbackJson = JSON.stringify(Object.fromEntries(args.candidate.feedback));
   void sql`INSERT INTO gepa_candidates
-        (id, run_id, parent_id, source, scores_json, feedback_json,
+        (actor_id, id, run_id, parent_id, source, scores_json, feedback_json,
          aggregate, created_at, iteration, accepted)
-        VALUES (${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
+        VALUES (${actor.actorId}, ${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
                 ${args.candidate.source}, ${scoresJson}, ${feedbackJson},
                 ${args.candidate.aggregateScore}, ${args.candidate.createdAt},
                 ${args.iteration}, ${args.accepted ? 1 : 0})`;
@@ -129,16 +142,19 @@ export function persistGepaCandidate(
 /** Update counters mid-run so a hibernating DO can resume. */
 export function updateGepaRunCounters(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: { runId: string; metricCalls: number; iterations: number },
 ): void {
+  actor.assertCurrent();
   void sql`UPDATE gepa_runs SET metric_calls = ${args.metricCalls},
                             iterations   = ${args.iterations}
-        WHERE run_id = ${args.runId}`;
+        WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
 }
 
 /** Mark a run finished. */
 export function finishGepaRun(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: {
     runId: string;
     status: 'completed' | 'aborted';
@@ -148,6 +164,7 @@ export function finishGepaRun(
     iterations: number;
   },
 ): void {
+  actor.assertCurrent();
   void sql`UPDATE gepa_runs
         SET ended_at     = ${nowMs()},
             status       = ${args.status},
@@ -155,7 +172,7 @@ export function finishGepaRun(
             winner_id    = ${args.winnerId},
             metric_calls = ${args.metricCalls},
             iterations   = ${args.iterations}
-        WHERE run_id = ${args.runId}`;
+        WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
 }
 
 /**
@@ -173,10 +190,13 @@ export function finishGepaRun(
  * activity a rotation needs to advance. The run ledger is already durable and
  * already written by every pass, so there is nothing to keep in step.
  */
-export function lastGepaRunPerTarget(sql: SqlExecutor, target: string): Map<string, number> {
+export function lastGepaRunPerTarget(
+  sql: SqlExecutor, actor: ActorHandle, target: string,
+): Map<string, number> {
+  actor.assertCurrent();
   const rows = sql<{ target_ref: string; started_at: number }>`
     SELECT target_ref, MAX(started_at) AS started_at FROM gepa_runs
-    WHERE target = ${target} AND target_ref IS NOT NULL
+    WHERE actor_id = ${actor.actorId} AND target = ${target} AND target_ref IS NOT NULL
     GROUP BY target_ref`;
   return new Map(rows.map((row) => [row.target_ref, row.started_at]));
 }
@@ -195,7 +215,8 @@ export interface GepaRunSummary {
   iterations: number;
 }
 
-export function listGepaRuns(sql: SqlExecutor, limit = 20): GepaRunSummary[] {
+export function listGepaRuns(sql: SqlExecutor, actor: ActorHandle, limit = 20): GepaRunSummary[] {
+  actor.assertCurrent();
   type Row = {
     run_id: string; target: string; target_ref: string | null;
     started_at: number; ended_at: number | null; status: string;
@@ -205,6 +226,7 @@ export function listGepaRuns(sql: SqlExecutor, limit = 20): GepaRunSummary[] {
   const rows = sql<Row>`SELECT run_id, target, target_ref, started_at, ended_at,
                                status, stop_reason, winner_id, metric_calls, iterations
                           FROM gepa_runs
+                          WHERE actor_id = ${actor.actorId}
                           ORDER BY started_at DESC
                           LIMIT ${limit}`;
   return rows.map(r => ({
@@ -224,8 +246,10 @@ export function listGepaRuns(sql: SqlExecutor, limit = 20): GepaRunSummary[] {
 /** Load every persisted candidate for a run (oldest first). */
 export function loadGepaCandidates(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runId: string,
 ): GepaCandidate[] {
+  actor.assertCurrent();
   type Row = {
     id: string; parent_id: string | null; source: string;
     scores_json: string; feedback_json: string;
@@ -234,7 +258,7 @@ export function loadGepaCandidates(
   const rows = sql<Row>`SELECT id, parent_id, source, scores_json, feedback_json,
                                aggregate, created_at
                           FROM gepa_candidates
-                          WHERE run_id = ${runId}
+                          WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
                           ORDER BY iteration ASC, created_at ASC`;
   return rows.map(r => {
     const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));
@@ -255,14 +279,17 @@ export function loadGepaCandidates(
  * iteration completion. Pareto membership remains derived from stored scores. */
 export function makePersistingHooks(args: {
   sql: SqlExecutor;
+  actor: ActorHandle;
   runId: string;
 }): Required<GepaProgressHooks> {
   return {
     onCandidate: ({ candidate, iteration }) => {
-      persistGepaCandidate(args.sql, { runId: args.runId, candidate, iteration, accepted: true });
+      persistGepaCandidate(args.sql, args.actor, {
+        runId: args.runId, candidate, iteration, accepted: true,
+      });
     },
     onIteration: state => {
-      updateGepaRunCounters(args.sql, { runId: args.runId,
+      updateGepaRunCounters(args.sql, args.actor, { runId: args.runId,
         metricCalls: state.metricCallsUsed, iterations: state.iteration + 1 });
     },
   };
@@ -283,10 +310,13 @@ export interface GepaParetoEntry {
  * described by `gepa_candidates` and nothing else. Rejected candidates are
  * excluded — they never entered the pool the engine maintained its front over.
  */
-export function loadGepaParetoFront(sql: SqlExecutor, runId: string): GepaParetoEntry[] {
+export function loadGepaParetoFront(
+  sql: SqlExecutor, actor: ActorHandle, runId: string,
+): GepaParetoEntry[] {
+  actor.assertCurrent();
   const rows = sql<{ id: string; scores_json: string }>`
     SELECT id, scores_json FROM gepa_candidates
-    WHERE run_id = ${runId} AND accepted = 1`;
+    WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND accepted = 1`;
   if (rows.length === 0) return [];
   const pool = rows.map((r): GepaCandidate => {
     const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));

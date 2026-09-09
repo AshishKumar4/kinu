@@ -65,6 +65,7 @@ kinu <command> [options]
 | --- | --- |
 | [`kinu evolve <name>`](#kinu-evolve-name) | Trigger an MCTS evolution cycle |
 | [`kinu jobs <name> [action] [id]`](#kinu-jobs-name-action-id) | List or cancel background jobs |
+| [`kinu actors <name> [actorId]`](#kinu-actors-name-actorid) | List every logical actor this workspace holds, or show one by id |
 | [`kinu state <name>`](#kinu-state-name) | Show the durable workspace state snapshot |
 | [`kinu spend <name>`](#kinu-spend-name) | Show what the whole workspace spent, by producer and by mission |
 | [`kinu memory <name> [query...]`](#kinu-memory-name-query) | Read or search workspace memory |
@@ -378,6 +379,14 @@ List or cancel background jobs.
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: KINU_BASE_URL) |
 | `--auth <header>` | Auth header value (env: KINU_AUTH) |
+
+### kinu actors <name> [actorId]
+
+List every logical actor this workspace holds, or show one by id.
+
+| Option | What it does |
+| --- | --- |
+| `--json` | Print raw JSON |
 
 ### kinu state <name>
 

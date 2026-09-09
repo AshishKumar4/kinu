@@ -92,7 +92,7 @@ function setup(opts: {
   const store = new BackgroundJobStore(sql, actor);
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
-  const eventLog = new EventLog(hubSql);
+  const eventLog = new EventLog(hubSql, actor);
   const { fiber, stashes, runs, settled } = fakeFiber();
   const { host, enqueued, setStatus, setRejection } = fakeHost();
   const logs: Array<{ e: string; d?: string }> = [];

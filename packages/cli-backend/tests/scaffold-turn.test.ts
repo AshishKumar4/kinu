@@ -18,12 +18,13 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import {
   initScaffoldTables, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
   INITIAL_SCAFFOLD_SOURCE,
 } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { scratchPath } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
@@ -62,12 +63,10 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // file its handle is not open on. `scratchPath` is mkdtemp-backed, so each
   // setup gets its own directory. Same convention as local-session.test.ts.
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   // What `kinu create` provisions (identity/create.ts): the scaffold
   // tables, actor_config, and the v0 scaffold file + archive row — so the

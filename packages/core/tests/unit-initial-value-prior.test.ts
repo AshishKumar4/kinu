@@ -21,11 +21,14 @@ import { converge } from '../src/mcts/convergence';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initActorTables } from '../src/identity/schema';
 import type { SqlExecutor } from '../src/types/primitives';
+import type { ActorHandle } from '../src/state/actor-handle';
 
 /** Record a node the way the engine does — value/visits are never written, so
  *  the DDL default is what lands in the row. */
-function record(session: SessionWriter, sql: SqlExecutor, nodeId: string): Promise<string> {
-  return recordNode(session, sql, {
+function record(
+  session: SessionWriter, sql: SqlExecutor, actor: ActorHandle, nodeId: string,
+): Promise<string> {
+  return recordNode(session, sql, actor, {
     nodeId,
     parentNodeId: null,
     parentMsgId: null,
@@ -42,10 +45,11 @@ describe('BUG-1: the initial value prior', () => {
   test('a node that has never been backpropagated has value 0 and visits 0', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
-    await record(createMockSession(), rt.storage.sql, 'fresh');
+    await record(createMockSession(), rt.storage.sql, rt.actor, 'fresh');
 
     const node = rt.storage.sql<{ value: number; visits: number }>`
-      SELECT value, visits FROM search_nodes WHERE id = 'fresh'`[0]!;
+      SELECT value, visits FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'fresh'`[0]!;
     // Lean initial_in_range: visits = 0 admits scaledSum = 0 only.
     expect(node.visits).toBe(0);
     expect(node.value).toBe(0);
@@ -55,8 +59,8 @@ describe('BUG-1: the initial value prior', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
-    await record(session, rt.storage.sql, 'a');
-    await record(session, rt.storage.sql, 'b');
+    await record(session, rt.storage.sql, rt.actor, 'a');
+    await record(session, rt.storage.sql, rt.actor, 'b');
 
     // No backpropagate() call anywhere: no branch has earned a score.
     const result = await converge(rt, session, 'r');
@@ -71,12 +75,12 @@ describe('BUG-1: the initial value prior', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
-    await record(session, rt.storage.sql, 'scored');
-    await record(session, rt.storage.sql, 'never-evaluated');
+    await record(session, rt.storage.sql, rt.actor, 'scored');
+    await record(session, rt.storage.sql, rt.actor, 'never-evaluated');
 
     // 0.35: a real but mediocre grounded score — above minAcceptableScore (0.3)
     // and below a 0.5 prior, so the prior would steal the win.
-    backpropagate(rt.storage.sql, 'scored', 0.35);
+    backpropagate(rt.storage.sql, rt.actor, 'scored', 0.35);
 
     const result = await converge(rt, session, 'r');
 

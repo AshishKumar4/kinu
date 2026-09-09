@@ -223,7 +223,7 @@ function locate(
   deps: RefinementDeps,
   input: { requestId: string; routeIndex: number },
 ): Located {
-  const request = createRefinementStore(deps.control.sql).get(input.requestId);
+  const request = createRefinementStore(deps.control.sql, deps.control.rt.actor).get(input.requestId);
   if (!request) return { ok: false, error: `no refinement ${input.requestId}` };
   if (!DECIDABLE_STAGES.has(request.stage)) {
     return {
@@ -370,7 +370,7 @@ function patch(
   next: RefinementRoute,
   detail: string,
 ): RefinementDecisionResult {
-  const store = createRefinementStore(deps.control.sql);
+  const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   const routes = request.routes.map((existing, index) => index === routeIndex ? next : existing);
   if (!store.record(request.id, request.stage, { routes })) {
     return { ok: false, error: `refinement ${request.id} moved while you were deciding` };

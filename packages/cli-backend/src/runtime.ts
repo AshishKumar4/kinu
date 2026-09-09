@@ -12,8 +12,9 @@
  * episode gets.
  */
 
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, ActorReference, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
@@ -25,7 +26,7 @@ import { spawn } from 'node:child_process';
 import { promises as fs, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
 import {
-  type LLMProviderConfig, buildRuntime, agentHome, headAgentName, facetHomeProvisioner,
+  type LLMProviderConfig, actorScaffoldPath, buildRuntime, agentHome, headAgentName, facetHomeProvisioner,
   observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
@@ -33,8 +34,10 @@ import {
   DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
   withMountTable, standardMounts,
   withApprovalGatedShell,
-  initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
+  createAgentStores, contextMount,
   resolveModelRoute,
+  type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
 } from '@kinu.run/core';
 import {
@@ -56,7 +59,7 @@ import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, createHostMountVFS } from './host-mount';
-import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber';
+import { createLinuxFiber, detectOrphanedFibers } from './fiber';
 import { createBranchSpawner } from './branch-process';
 import {
   createLocalModelResolver, createLocalProviderLLM,
@@ -69,9 +72,8 @@ import {
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
-import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import { adoptLocalActorHandle, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
-import { bindLocalActor, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -201,6 +203,28 @@ export interface CLIRuntime extends AgentRuntime {
    * the in-SQLite plane through {@link nodeRuntime}.
    */
   facetShell?: (facet: string) => Shell;
+  /**
+   * The SQL-derived stores THIS actor has — the one list both backends
+   * inherit, built here because a runtime is the first thing that exists for
+   * an actor and its own context plane already reads two of them.
+   *
+   * Shared rather than rebuilt per consumer: the `/context` mount, the
+   * session, and the ActorHost's `BoundActor` all mean the same claim ledger
+   * and the same run-event recorder, and two instances over one actor is two
+   * memos of one truth.
+   */
+  stores: AgentStores;
+  /**
+   * Publish the resolver for the actors this one MANAGES, so `/context/agents/`
+   * can list them.
+   *
+   * Late-bound for the same reason the shell-approval channel is: the resolver
+   * belongs to the root's ActorHost, and a root's runtime is built before that
+   * host exists (`openWorkspaceCLI` opens the database first). A runtime that
+   * is never handed one manages nothing and lists nothing, which is the honest
+   * answer for `kinu evolve` and for a fixture.
+   */
+  setChildContext?(resolver: ChildContextResolver | null): void;
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
@@ -376,14 +400,6 @@ export function createCLIRuntime(
   requireLocalDatabasePath(db, config.dbPath);
 
   initFiberTable(execRaw);
-  const orphans = detectOrphanedFibers(sql);
-  if (orphans.length > 0) {
-    diagnostics.failure(
-      'fiber.orphans_detected',
-      new KinuError('cancelled', 'fibers from a previous run were interrupted by its exit'),
-      { orphans: orphans.length },
-    );
-  }
 
   let actor: ActorHandle;
   let agentId: string;
@@ -391,7 +407,7 @@ export function createCLIRuntime(
   if (config.facet !== undefined) {
     if (!config.actorBinding) throw new KinuError('missing', 'A local facet requires its root-issued actor binding.');
     initActorStateSchema(makeWorkspaceSchemaSql(db));
-    actor = bindLocalActor(db, sql, makeSqlExec(db), config.actorBinding);
+    actor = config.actor ?? bindLocalActor(sql, config.actorBinding);
     agentId = actor.actorId;
     agentName = config.actorBinding.name;
   } else {
@@ -408,6 +424,19 @@ export function createCLIRuntime(
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
     actor = openLocalRootActor(db, sql);
+  }
+
+  // AFTER the branch above, never before it: the sweep reads THIS actor's lanes
+  // and there is no actor to read for until one of the two arms has bound one.
+  // Every actor in a workspace mints the same fiber names, so an unscoped sweep
+  // here would report — and a recovery would resume — a sibling's lane.
+  const orphans = detectOrphanedFibers(sql, actor);
+  if (orphans.length > 0) {
+    diagnostics.failure(
+      'fiber.orphans_detected',
+      new KinuError('cancelled', 'fibers from a previous run were interrupted by its exit'),
+      { orphans: orphans.length },
+    );
   }
 
   // The three model seams below are built here, before a session exists, so each
@@ -507,14 +536,14 @@ export function createCLIRuntime(
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
     cron: async () => {},
-    fiber: createLinuxFiber(sql),
+    fiber: createLinuxFiber(sql, actor),
   };
 
   // `:memory:` is SQLite's in-memory sentinel, not a path — see the spawner's
-  // own doc comment. Null tells it there is no directory rather than letting it
-  // compute one from a value that is not a filename.
-  const basePath = config.dbPath === ':memory:' ? null : config.dbPath.replace(/\.db$/, '');
-  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(basePath, {
+  // own doc comment. Null tells it there is no file rather than letting it
+  // point a second OS process at a handle nothing outside this one can open.
+  const rootDbPath = config.dbPath === ':memory:' ? null : config.dbPath;
+  const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
     parent: actor, llm: config.llm,
     providerCredentials: config.providerCredentials,
     codexConfigPath: config.codexConfigPath,
@@ -567,10 +596,22 @@ export function createCLIRuntime(
     ? facetShell(config.facet)
     : withApprovalGatedShell(workspace.shell, approvalPolicy);
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
-  const agentVfs = withMountTable(
-    fileVfs,
-    standardMounts((name) => executionRouter.getProvider(name)),
-  );
+  const stores = createAgentStores(() => sql, () => actor, (write) => db.transaction(write)());
+  let childContext: ChildContextResolver | null = null;
+  const agentVfs = withMountTable(fileVfs, [
+    ...standardMounts((name) => executionRouter.getProvider(name)),
+    // `/context` — this actor's own working history, read live off the two
+    // stores above. Every actor in this database gets its own, keyed on its own
+    // id, so a subordinate reading `/context` reads its own turns and never the
+    // root's.
+    contextMount({
+      stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
+      children: {
+        list: () => childContext?.list() ?? [],
+        resolve: (storageKey) => childContext?.resolve(storageKey) ?? null,
+      },
+    }),
+  ]);
   const limits = hostResourceLimits();
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs: agentVfs,
@@ -616,6 +657,8 @@ export function createCLIRuntime(
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
+    stores,
+    setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
     cwd,
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
@@ -716,29 +759,98 @@ export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
 }
 
 /**
+ * The runtime for one LOGICAL ACTOR of this workspace, over the ONE database
+ * the workspace already has.
+ *
+ * The seam `ActorHostDeps.runtimeFor` is satisfied by, for the two kinds a
+ * session creates on its own authority: an exploration head and a swarm node.
+ * A HIRE is not here, because a subordinate's runtime needs the provider and
+ * auth wiring the surface that opened the workspace holds — the agent host
+ * supplies that and delegates the two kinds below to this function, so both
+ * hosts build one head the same way.
+ *
+ * A node's BASE runtime shares the origin's plane and says so. A search that
+ * provisions private homes re-provisions it per node
+ * (`AgentsForkDeps.runtimeForNodeWorkspace`), which changes the credential its
+ * shell and files act as and nothing about which actor it is.
+ */
+export async function buildLocalActorRuntime(
+  parent: CLIRuntime,
+  bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
+  writeObserver?: WriteObserver,
+): Promise<AgentRuntime> {
+  // THE HOST'S HANDLE TRAVELS THROUGH, and the whole point of taking `bound`
+  // rather than a bare reference is that it cannot be re-derived here: the
+  // directory mints a fresh frozen handle on every bind, and `ActorHost`
+  // requires the runtime to carry the one IT issued so that releasing the
+  // binding revokes every statement the runtime can still make. Re-binding
+  // produced a runtime the host refused outright — no head or node could be
+  // acquired on this backend at all.
+  const binding = bindLocalActorReference(parent.actor, bound.reference);
+  // The host's handle needs this root's scope before anything reads local
+  // identity through it — same scope, same reference, validated again here.
+  adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
+  if (binding.kind === 'head') {
+    const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
+      parentRuntime: parent, actorBinding: binding, actor: bound.handle,
+    };
+    if (writeObserver) opts.writeObserver = writeObserver;
+    return await buildCLIHeadRuntime(opts);
+  }
+  if (binding.kind === 'node') {
+    if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
+    return await parent.nodeRuntime(
+      { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
+      bound.handle, parent, writeObserver,
+    );
+  }
+  throw new KinuError('denied', `A ${binding.kind} actor's runtime is not built by this workspace's own session.`);
+}
+
+
+/**
  * The runtime a single local head (a fork of the parent workspace) runs over.
  *
- * The local mirror of the cloud head: its own private state, the parent's real
- * execution surface, and the parent's workspace reachable as the `parent`
- * EXECUTOR — `parent.exec` runs a command in the parent's real shell,
- * `parent.readFile` reads its files.
+ * ONE DATABASE. A head is a logical actor of the workspace it forks, so its
+ * rows are its own rows in the parent's database rather than a file of its
+ * own: its scaffold pointer, its claims, its journal steps and its program
+ * state are all actor-keyed, and the parent can therefore read what its own
+ * fork did. It used to open a per-head scratch file under `~/.kinu/heads/` and provision a whole
+ * second workspace inside it — a second filesystem, a second memory index, a
+ * second craft store — which is precisely the per-actor store open-38 removes.
+ *
+ * What stays private is what makes this a FORK rather than a second view: its
+ * own HOME in the one filesystem (`headAgentName`, uid-confined where the
+ * plane has a principal registry), its own execution router, and its own
+ * actor-keyed rows. Memory and the craft store are the workspace's, which is
+ * what a fork of that workspace should read.
  *
  * Where the head's canonical FILES are depends on what the parent is bound to.
  * A parent bound to a physical directory shares it: a fork explores the same
  * project, so the head addresses those bytes directly and `parent.*` reaches
- * the same tree by another name. An in-SQLite parent has a per-database plane,
- * so the head gets its own tree (private scratch a sibling cannot see) and the
- * `parent` executor is the only way to its parent's files — a different
- * workspace, for the same reason the sandbox and the machine are.
+ * the same tree by another name. An in-SQLite parent hands the head its own
+ * home in the one global view, credentialed as itself, exactly as a swarm node
+ * gets one.
  *
  * The head also inherits the parent's `laptop` provider unchanged, so `run
  * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
  * real execution, and what the doctrine promises a fork.
  */
 export async function buildCLIHeadRuntime(
-  db: Database,
   opts: {
     parentRuntime: CLIRuntime; actorBinding: LocalActorBinding;
+    /**
+     * The handle the HOST bound, when a host bound one.
+     *
+     * `ActorHost` requires a hosted runtime to carry the very handle it issued
+     * (`state/actor-host.ts`), because a release revokes THAT handle and a
+     * runtime holding a second binding of the same actor would keep
+     * authorising statements after the fence flipped. `bindLocalActor` mints a
+     * fresh frozen handle per call, so re-binding here produced a runtime the
+     * host correctly refused. Absent only for the hostless caller — a bench or
+     * a probe building a head runtime with no host to bind it.
+     */
+    actor?: ActorHandle;
     /** Watches every write this head makes to the PARENT workspace, so the
      *  split can report which files this head changed. Its own view is what
      *  makes the answer exact under concurrency. */
@@ -746,41 +858,13 @@ export async function buildCLIHeadRuntime(
   },
 ): Promise<AgentRuntime> {
   const { parentRuntime: parent } = opts;
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
+  const sql = parent.storage.sql;
   if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
-  const actor = bindLocalActor(db, sql, makeSqlExec(db), opts.actorBinding);
+  const actor = opts.actor ?? bindLocalActor(sql, opts.actorBinding);
   const physicalName = headAgentName(actor.storageKey);
-  // The scratch is a full-loop actor's storage, and this function is the only
-  // thing that provisions it: no `initWorkspaceSchema` runs over a head's
-  // database, and none should — a head has no workspace identity and no fork
-  // lineage of its own. `initActorTables` is exactly that distinction, and the
-  // three stores below are not the whole of what a head reads. The inline
-  // executor registered on this same `sql` quotes the crafted-tool EMA from
-  // `crafted_tools quality columns` in `listTools`, seeds it in `createTool` and
-  // files a misevolution veto in `evolution_events`;
-  // with only the VFS, memory and craft schemas below, a head raised
-  // `no such table: crafted_tools` on its first `workspace.listTools()` and a
-  // tool it crafted was written and then reported as a failure.
-  initActorStateSchema(makeWorkspaceSchemaSql(db));
-  // A head's scaffold is private to it ("its own scaffold" below), so its
-  // tables live in the same scratch database — without them, the first
-  // `identity.scaffold` touch on a fresh head raised `no such table:
-  // scaffold_versions`.
-  initScaffoldTables(execRaw);
+  const stores = createAgentStores(() => sql, () => actor, parent.storage.transactionSync);
 
-  const workspaceSql = nimbusSql(db);
-  const workspace = createWorkspaceFilesystem({
-    sql: workspaceSql,
-    transactions: localTransactions(db),
-    generation: nextWorkspaceGeneration(workspaceSql),
-    runtimes: WORKSPACE_RUNTIMES,
-    runtimeFacets: localFacetHost(),
-  } satisfies WorkspaceOptions);
-  // What stays private is what makes this a fork rather than a second view of
-  // the parent: its own scaffold, memory, craft store and transcript, in its
-  // own scratch database.
-  const agentStateVfs = workspace.vfs;
+  const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
   const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
   // The observer watches whichever plane the head's writes actually land on, so
   // the split can name the files this head changed. With a shared directory
@@ -789,25 +873,21 @@ export async function buildCLIHeadRuntime(
     ? agentStateVfs
     : opts.writeObserver ? observeWrites(cwdPlane, opts.writeObserver) : cwdPlane;
 
-  const memoryStore = new MemoryStore(agentStateVfs, sql);
-  memoryStore.ensureSchema();
-  const memory = adaptMemory(memoryStore, agentStateVfs);
-  const craftStoreImpl = new AgentUtilsCraftStore(sql);
-  craftStoreImpl.ensureSchema();
-  const craftStore = adaptCraftStore(craftStoreImpl);
-
   // One directory, one approval policy, one undo history: a head over a shared
   // plane runs the parent's own gated and checkpointed shell, with its own
   // scratch as HOME and TMPDIR, rather than an in-SQLite shell that cannot see
   // the files it is reading.
+  const parentShell = parent.shell;
+  if (!parentShell) throw new KinuError('missing', 'The forked workspace has no shell for its head to run in.');
   const shell = parent.cwd && parent.facetShell
     ? parent.facetShell(physicalName)
-    : withApprovalGatedShell(workspace.shell);
+    : parentShell;
   const executionRouter = new DefaultExecutionRouter();
-  executionRouter.register(createInlineExecutor({
-    vfs, memory, craftStore, shell, sql,
+  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
+    vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
-  }));
+  };
+  executionRouter.register(createInlineExecutor(inlineOptions));
 
   // The parent workspace, over the parent runtime in this same process — the
   // same interface the cloud head satisfies with Durable Object RPC.
@@ -857,15 +937,28 @@ export async function buildCLIHeadRuntime(
   const laptop = parent.executionRouter?.getProvider('laptop');
   if (laptop) executionRouter.register(laptop);
   // The head's plane carries the same mount table as its parent's — the
-  // inherited `laptop` provider is what /pc resolves to here.
-  const agentVfs = withMountTable(vfs, standardMounts((name) => executionRouter.getProvider(name)));
+  // inherited `laptop` provider is what /pc resolves to here, and `/context`
+  // is THIS head's own working history rather than the fork parent's.
+  const agentVfs = withMountTable(vfs, [
+    ...standardMounts((name) => executionRouter.getProvider(name)),
+    contextMount({
+      stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
+    }),
+  ]);
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
-    transactionSync: write => db.transaction(write)(),
-    actor, sql, execRaw, vfs: agentVfs, agentStateVfs,
+    transactionSync: parent.storage.transactionSync,
+    // THIS head's own scaffold, not the workspace's. The agent-state plane is
+    // shared by construction (`createWorkspaceFilesystem` takes no actor), so
+    // the PATH is the only thing separating two actors' programs: with the
+    // builder's default every head wrote its parent's `scaffold/agent.js` and
+    // the parent would go on to execute its head's source. Core owns the rule
+    // so the two backends cannot drift.
+    scaffoldPath: actorScaffoldPath(opts.actorBinding),
+    actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
-    memory, craftStore,
+    memory: parent.memory, craftStore: parent.craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     executionRouter, shell,
   };

@@ -39,6 +39,7 @@ import {
 import { initCraftedToolsTables } from '../packages/agent-utils/src/stores/index';
 import { createWorkspace } from '../packages/core/src/identity/index';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime';
+import { LocalAgentSession } from '../packages/cli-backend/src/local-session';
 import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime';
 
 import { benchChatModel, createBenchInferenceProxy } from './bench-inference-proxy';
@@ -118,7 +119,7 @@ async function main(): Promise<void> {
   }
 
   const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });
-  const governor = new MissionGovernor({ storage: rt.storage });
+  const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
   const byIndex = new Map(panel.map((config, index) => [forkSpec(index), config]));
 
   // A panel member does no live research — every arm must see the same world,
@@ -133,7 +134,21 @@ async function main(): Promise<void> {
   // Bound to the runtime's own actor: the journal is actor-private, and the
   // head runtime below writes each head's steps through the same owner.
   const journal = new HeadJournal(makeSql(db), rt.actor);
+  // Every panel member is a HEAD, and a head is its own actor of this workspace
+  // — its own claim ledger, loop pointer and row set. Local head hosting is
+  // session-bound (`LocalAgentSession.hostHead`), so the bench holds ONE
+  // seating session for the whole panel: one host, a seat per member. Sharing
+  // one actor across the panel would give every arm one ledger and make the
+  // comparison meaningless.
+  const seating = new LocalAgentSession({
+    rt, db, model: benchChatModel(analyst), onEvent: () => {}, noAutoEvolve: true, oneShot: true,
+  });
   const headRuntime = createCLIHeadRuntime({
+    // The observer is FORWARDED, never invented: `runLocalHead` owns the head's
+    // capture and hands it down, which is what makes `HeadReport.fileChanges`
+    // report the files THIS head changed rather than the empty list a seam that
+    // dropped it produced.
+    hostHead: (input, writes) => seating.hostHead(input, writes),
     model: () => benchChatModel(analyst),
     parentRuntime: rt,
     resolveModel: (spec: string) => {

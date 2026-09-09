@@ -43,6 +43,7 @@ const codemodeHandoff: SubordinateHandoff = {
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from '../../core/tests/helpers-actor-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -137,8 +138,12 @@ function expandingModel() {
 }
 
 function searchOnlyDeps(): AgentsToolDeps {
-  const { rt } = createTestRuntime();
-  return { mode: 'build', fork: { rt, model: expandingModel() } };
+  const { rt, testSql } = createTestRuntime();
+  // A search's nodes are hosted actors over this fixture's ONE database — not a
+  // bare runtime value — because the seat factory is where a wave would
+  // otherwise give every node one claim ledger and one loop pointer.
+  const seats = hostedSeatsOver({ rt, db: testSql.db });
+  return { mode: 'build', fork: { rt, hostNode: seats.hostNode, model: expandingModel() } };
 }
 
 function fullDeps(): AgentsToolDeps {

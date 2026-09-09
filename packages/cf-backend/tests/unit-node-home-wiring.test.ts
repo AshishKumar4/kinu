@@ -1,7 +1,7 @@
 /**
  * The node home provisioner, against a real workspace.
  *
- * `agentHomeNodeProvisioner` is the seam a host fills so a swarm node stops
+ * `facetHomeProvisioner` is the seam a host fills so a swarm node stops
  * sharing the origin's file plane. It is asserted here rather than over a fake
  * because everything it claims is a substrate rule, not a line of its own code:
  * the uid floor, the uid-0-only `chown`, the 0o755 home mode and the EACCES a
@@ -27,7 +27,7 @@ import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/run
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
-  agentHomeNodeProvisioner,
+  facetHomeProvisioner, nodeAgentName,
   AGENT_HOME_MODE,
   AGENT_TMP_MODE,
   AGENT_UID_FLOOR,
@@ -133,8 +133,15 @@ async function openFixture(): Promise<Fixture> {
   return {
     workspace,
     host,
-    provision: agentHomeNodeProvisioner(wiring),
-    reprovision: agentHomeNodeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) }),
+    // Keyed on the node ACTOR's storage key, not the raw node id. Every
+    // actor-scoped address in the cutover is keyed that way — `shellId`, the
+    // state subtree, the home — because a rename must not move an actor's
+    // directory and two actors that briefly shared a name across a retirement
+    // must not share one. `agentHomeNodeProvisioner` wrapped this same applier
+    // but keyed on `node.nodeId`, which is the collision it was deleted for.
+    provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(nodeAgentName(identity.nodeId)),
+    reprovision: (identity: NodeIdentity) =>
+      facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(nodeAgentName(identity.nodeId)),
   };
 }
 
@@ -773,8 +780,8 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const sql = hostedSql(database);
     const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
     const first = createWorkspace({ sql, transactions, generation: 1 });
-    const provision = agentHomeNodeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
-    const identity = await provision(node('reset'));
+    const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
+    const identity = await provision(nodeAgentName(node('reset').nodeId));
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
     const child = await first.asAgent(identity);
     expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
@@ -799,11 +806,11 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
       generation: 1,
     });
-    const provision = agentHomeNodeProvisioner(
+    const provision = facetHomeProvisioner(
       workspace.privileged().then((privileged) => ({ ...privileged, sql })),
     );
-    const a = await provision(node('aX9'));
-    const b = await provision(node('bK2'));
+    const a = await provision(nodeAgentName(node('aX9').nodeId));
+    const b = await provision(nodeAgentName(node('bK2').nodeId));
     if (a.isolation !== 'private-home' || b.isolation !== 'private-home') {
       throw new Error('the in-isolate seam must provision credentials');
     }

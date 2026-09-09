@@ -178,15 +178,21 @@ export const ROSTER: readonly string[] = ['Main'];
  * commits. `AshishKumar4` is the repository owner's GitHub handle, which appears
  * in `by AshishKumar4` clone URLs.
  *
- * This is also where an identifier the tree no longer holds belongs, if one ever
- * bites: 3 of 1,898 historical commits used the possessive of a class that has
- * since been deleted (`SqliteFS`, `HeadAgent`, `TriggersTab`). Each was correct
- * when written and each is invisible at `commit-msg` time, where the class is
- * still in the tree being committed. None is seeded here, because none is
- * inside the governed range.
+ * This is also where an identifier the tree no longer holds belongs, and one has
+ * now bitten. 3 of 1,898 historical commits used the possessive of a class that
+ * has since been deleted (`SqliteFS`, `HeadAgent`, `TriggersTab`); each was
+ * correct when written, each is invisible at `commit-msg` time where the class
+ * is still in the tree being committed, and none is inside the governed range.
+ * `FacetIdentity` is the fourth and the first one governed: `76936034ba` line 21
+ * cites its durable-write pattern, `packages/core/src/state/facet-identity.ts`
+ * declared it at that commit and still declares it at `4b732f164`, and the
+ * actor-host cutover deleted the per-actor facet identity row it named. The
+ * citation is a class this repository shipped, checkable at either SHA, and
+ * deleting a type is not grounds for rewriting the history that used it.
  */
 export const NAMES_WITHOUT_CODE: readonly string[] = [
   'TypeScript', 'JavaScript', 'GitHub', 'AlphaEvolve', 'FunSearch', 'AshishKumar4',
+  'FacetIdentity',
 ];
 
 export interface Narration {

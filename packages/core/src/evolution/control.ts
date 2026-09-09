@@ -425,8 +425,8 @@ export async function proposeScaffold(
     baseVersion !== undefined ? { baseVersion } : undefined,
   );
   if (result.ok) {
-    void control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-      VALUES (${nanoid()}, 'scaffold_proposed',
+    void control.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+      VALUES (${control.rt.actor.actorId}, ${nanoid()}, 'scaffold_proposed',
               ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
               ${null}, ${Date.now()})`;
   }
@@ -663,8 +663,8 @@ export async function runScaffoldGepaOptimization(
   const reflectionLm = reflectionLmFor(control, model);
 
   // 4. Run GEPA, persisting every candidate + Pareto snapshot.
-  const runId = startGepaRun(control.sql, { target: 'scaffold', budget });
-  const persist = makePersistingHooks({ sql: control.sql, runId });
+  const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold', budget });
+  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   let iterations = 0;
   let result;
   try {
@@ -680,13 +680,13 @@ export async function runScaffoldGepaOptimization(
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
-    finishGepaRun(control.sql, {
+    finishGepaRun(control.sql, control.rt.actor, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: message, runId };
   }
 
-  finishGepaRun(control.sql, {
+  finishGepaRun(control.sql, control.rt.actor, {
     runId,
     status: 'completed',
     stopReason: result.gepa.stopReason,
@@ -804,10 +804,10 @@ async function runPromptSectionGepaOptimization(
   };
   const reflectionLm = reflectionLmFor(control, await control.model());
 
-  const runId = startGepaRun(control.sql, {
+  const runId = startGepaRun(control.sql, control.rt.actor, {
     target: 'prompt_section', targetRef: opts.sectionId, budget,
   });
-  const persist = makePersistingHooks({ sql: control.sql, runId });
+  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   const metric = sectionMetric(control, opts.sectionId);
   let metricCalls = 0;
   let iterations = 0;
@@ -815,6 +815,7 @@ async function runPromptSectionGepaOptimization(
   try {
     result = await runSectionGepa({
       sql: control.sql,
+      actor: control.rt.actor,
       sectionId: opts.sectionId,
       evalSet: split.val,
       trainSet: split.train,
@@ -825,13 +826,13 @@ async function runPromptSectionGepaOptimization(
       onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
     });
   } catch (err) {
-    finishGepaRun(control.sql, {
+    finishGepaRun(control.sql, control.rt.actor, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
     return { ok: false, error: renderThrownChain({ cause: err }), runId };
   }
   const gepa = result.gepa;
-  finishGepaRun(control.sql, {
+  finishGepaRun(control.sql, control.rt.actor, {
     runId,
     status: 'completed',
     stopReason: gepa?.stopReason ?? 'no_improvement_possible',
@@ -885,12 +886,12 @@ async function runPromptSectionTrials(
   sectionId: string,
   opts?: { trials?: number },
 ): Promise<PromptSectionTrialResult> {
-  const pending = getPendingPromptSection(control.sql, sectionId);
+  const pending = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
   if (!pending) return { sectionId, pending: false, trialsRun: 0 };
   const section = findPromptSectionTarget(sectionId);
   if (!section) return { sectionId, pending: false, trialsRun: 0 };
 
-  const incumbent = incumbentSectionSource(control.sql, section);
+  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, sectionId);
   // Drawn fresh each pass, so consecutive passes see the turns that happened in
   // between: the newest failures plus the accepted-turn guards, and never the
@@ -904,7 +905,7 @@ async function runPromptSectionTrials(
       metric(incumbent, instance),
       metric(pending.source, instance),
     ]);
-    recordPromptSectionTrial(control.sql, {
+    recordPromptSectionTrial(control.sql, control.rt.actor, {
       sectionId,
       pendingVersion: pending.version,
       instanceId: instance.id,
@@ -917,7 +918,7 @@ async function runPromptSectionTrials(
     trialsRun += 1;
   }
 
-  const settled = getPendingPromptSection(control.sql, sectionId);
+  const settled = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
   if (!settled) return { sectionId, pending: true, trialsRun };
   const verdict = decidePromptSectionPromotion(settled);
   const result: PromptSectionTrialResult = {
@@ -925,7 +926,7 @@ async function runPromptSectionTrials(
     decision: verdict.decision, winRate: verdict.winRate,
   };
   if (verdict.decision === 'continue') return result;
-  const applied = applyPromptSectionDecision(control.sql, settled, verdict.decision);
+  const applied = applyPromptSectionDecision(control.sql, control.rt.actor, settled, verdict.decision);
   result.action = applied.action;
   if (applied.vetoReason) result.vetoReason = applied.vetoReason;
   return result;
@@ -989,7 +990,7 @@ export async function proposeMeasuredPromptSection(
     };
   }
 
-  const incumbent = incumbentSectionSource(control.sql, section);
+  const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
   const metric = sectionMetric(control, section.id);
   // The held-out half, exactly as the trials use it: a candidate measured on the
   // turns whoever wrote it was shown has learned those turns.
@@ -1001,7 +1002,7 @@ export async function proposeMeasuredPromptSection(
   const incumbentScore = scoreInterval(scored.map(([current]) => current.score));
   const candidateScore = scoreInterval(scored.map(([, candidate]) => candidate.score));
 
-  const proposal = proposePromptSection(control.sql, {
+  const proposal = proposePromptSection(control.sql, control.rt.actor, {
     section,
     source: input.source,
     rationale: input.rationale,
@@ -1029,8 +1030,8 @@ export async function proposeMeasuredPromptSection(
  * break on the registry's own order, so two never-passed sections resolve the
  * way `PROMPT_SECTIONS` declares them.
  */
-function nextPromptSectionTarget(sql: SqlExecutor): PromptSection<string> | null {
-  const lastPass = lastGepaRunPerTarget(sql, 'prompt_section');
+function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSection<string> | null {
+  const lastPass = lastGepaRunPerTarget(sql, actor, 'prompt_section');
   let next: PromptSection<string> | null = null;
   let nextAt = Number.POSITIVE_INFINITY;
   for (const section of PROMPT_SECTION_TARGETS) {
@@ -1071,11 +1072,11 @@ export type PromptSectionLaneStep =
 export async function advancePromptSectionLane(
   control: ScaffoldControl,
 ): Promise<PromptSectionLaneStep> {
-  const pending = firstPendingPromptSection(control.sql);
+  const pending = firstPendingPromptSection(control.sql, control.rt.actor);
   if (pending !== null) {
     return { step: 'trials', sectionId: pending, trials: await runPromptSectionTrials(control, pending) };
   }
-  const section = nextPromptSectionTarget(control.sql);
+  const section = nextPromptSectionTarget(control.sql, control.rt.actor);
   if (!section) return { step: 'idle' };
   return {
     step: 'pass',

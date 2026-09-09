@@ -3,17 +3,18 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestSql, testActorHandle, type TestSql } from '@kinu.run/test-utils';
 import { ConversationSearchStore, initAllTables } from '../src/index';
+import { SDK_SESSION_DDL } from './helpers';
 
 interface Fixture { sql: TestSql['sql']; store: ConversationSearchStore }
 
 /**
  * The one actor every fixture in this file binds.
  *
- * `messages` keys on (actor_id, id) and the store reads only its own actor's
- * rows, so the seeded transcript and the store under test have to name the same
- * actor — stated once here rather than repeated at each seed, because a seed
- * that drifted from the handle would read as an empty index rather than as a
- * mismatch.
+ * BOTH stores key on (actor_id, id) — the pane is vendor-shaped, not
+ * vendor-owned — and the store reads only its own actor's rows, so the seeded
+ * transcript and the store under test have to name the same actor: stated once
+ * here rather than repeated at each seed, because a seed that drifted from the
+ * handle would read as an empty index rather than as a mismatch.
  */
 const ACTOR_ID = 'actor-search';
 
@@ -219,17 +220,13 @@ describe('ConversationSearchStore.browse', () => {
   test('reads non-default previews from messages when pane owns default chat', () => {
     const { sql, execRaw } = createTestSql();
     initAllTables(execRaw, sql);
-    execRaw(`CREATE TABLE assistant_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL DEFAULT '',
-      parent_id TEXT,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at DATETIME NOT NULL
-    )`);
+    // The pane store exactly as production creates it, `actor_id` included:
+    // the browse read predicates the owner, so a pane column-set of this
+    // fixture's own invention would answer a question no workspace is asked.
+    execRaw(SDK_SESSION_DDL);
     void sql`INSERT INTO assistant_messages
-      (id, session_id, parent_id, role, content, created_at)
-      VALUES ('pane-user', '', NULL, 'user',
+      (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${ACTOR_ID}, 'pane-user', '', NULL, 'user',
         '{"id":"pane-user","role":"user","parts":[{"type":"text","text":"pane kickoff"}]}',
         '1970-01-01 00:00:01.000')`;
     insert(sql, 'peer-session', 'user', 'peer kickoff', 2_000);

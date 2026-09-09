@@ -30,6 +30,7 @@
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
@@ -176,7 +177,7 @@ async function run(input: {
    *  and reported an aborted status — the distinction this file exists for. */
   readonly throwsAt?: 0 | 1;
 }) {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   const logger = createRecordingLogger();
   const budgets: (number | undefined)[] = [];
   /** The step cap each node was GRANTED, read off the spec a host receives — the same
@@ -184,6 +185,11 @@ async function run(input: {
   const steps: number[] = [];
   const deps: SwarmRunDeps = {
     rt,
+    // A REAL actor per node, even though the loop itself runs through the
+    // fixture's `host` below: the seat is what the expansion claims the node's
+    // turn under, so a run cannot reach its host without one. One per node id,
+    // all over this runtime's single database.
+    hostNode: hostedSeatsOver({ rt, db }).hostNode,
     // NEVER CALLED. Every node runs through the host below, and a swarm that reached
     // the model would be a swarm running a node twice.
     model: new MockLanguageModelV3({
@@ -215,6 +221,10 @@ async function run(input: {
         reported: { status: outcome.status, content: outcome.content },
         granted: null,
         produced: [],
+        // What the executor this loop ran on could execute. A hosted node runs
+        // on the host's runtime, which here is the caller's — so this is that
+        // runtime's own list rather than a second declaration of it.
+        languages: rt.executor.languages,
       };
     },
   };
@@ -228,7 +238,8 @@ async function run(input: {
   }
   const result = await runSwarm(declared, resolved());
   const rows = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
   return { result, rows, budgets, steps };
 }
 

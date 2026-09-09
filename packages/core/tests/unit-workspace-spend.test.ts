@@ -25,6 +25,7 @@ import { MissionGovernor } from '../src/mission-budget';
 import { usageTotal, USAGE_FIELDS, UsageSchema, type Usage } from '../src/usage';
 import { createTestActors } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 /** Big enough for the run-list read below, and deliberately NOT a bound on any
  *  spend figure — nothing here passes a window to `workspaceSpend` any more. */
@@ -159,6 +160,7 @@ describe('workspaceSpend', () => {
         id, rootId: 'root-1', parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
         mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
         mergeStrategy: 'synthesize',
+        loop: defaultLoopOrigin('head'),
       });
     }
     journal.recordReport({
@@ -346,7 +348,7 @@ describe('workspaceSpend — the breakdown', () => {
   test('missions come from the ledger the caps are enforced against, dearest first', () => {
     const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });
-    const governor = new MissionGovernor({ storage: { sql: ws.sql, execRaw: ws.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ws.sql, execRaw: ws.execRaw }, actor });
     governor.declare('checkout-fixes', { usd: 25 }, {});
     governor.declare('sweep', { tokens: 5_000 }, { parent: 'checkout-fixes' });
     governor.debit(4_000, { labels: ['sweep'], calls: 2 });

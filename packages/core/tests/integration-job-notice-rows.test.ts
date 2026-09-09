@@ -47,6 +47,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
 import { openWorkspaceMainActor } from '../src/state/workspace-actors';
+import type { ActorHandle } from '../src/state/actor-handle';
 import { createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
@@ -66,15 +67,20 @@ const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 function chatStore(db: Database) {
   const sql = makeSql(db);
   makeExecRaw(db)(SDK_SESSION_DDL);
+  // The pane rows are keyed on their OWNER, and the transcript read below is
+  // actor-scoped, so the copied derivation writes the same workspace main the
+  // registry and the read use. A row written without it is a row no read finds.
+  const actor = openWorkspaceMainActor(sql);
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
       const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`;
-      const present = sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`;
+      const present = sql<{ id: string }>`SELECT id FROM assistant_messages
+        WHERE actor_id = ${actor.actorId} AND id = ${id}`;
       if (present.length === 0) {
         void sql`
-          INSERT INTO assistant_messages (id, session_id, role, content)
-          VALUES (${id}, ${''}, ${'user'}, ${JSON.stringify({
+          INSERT INTO assistant_messages (actor_id, id, session_id, role, content)
+          VALUES (${actor.actorId}, ${id}, ${''}, ${'user'}, ${JSON.stringify({
             id, role: 'user', parts: [{ type: 'text', text }], metadata,
           })})
         `;
@@ -98,7 +104,9 @@ function activation(db: Database) {
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
     signals: new SignalDelivery(host),
-    eventLog: new EventLog(makeSqlExec(db)),
+    // The same actor the job store is bound to: the job and the notice it
+    // publishes are one actor's, over the one workspace database.
+    eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
     scheduleDrain: () => {},
   });
   return { runner, sql };
@@ -126,9 +134,10 @@ function evictedWorkspace() {
   return { db: ws.db, store, now, actor };
 }
 
-function noticeRows(sql: SqlExecutor) {
+function noticeRows(sql: SqlExecutor, actor: ActorHandle) {
   return sql<{ id: string; content: string }>`
-    SELECT id, content FROM assistant_messages ORDER BY rowid ASC`;
+    SELECT id, content FROM assistant_messages
+    WHERE actor_id = ${actor.actorId} ORDER BY rowid ASC`;
 }
 
 describe('a settled background job announces itself once, and not as the owner', () => {
@@ -145,7 +154,7 @@ describe('a settled background job announces itself once, and not as the owner',
       await runner.wake(JOB);
     }
 
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = noticeRows(makeSql(ws.db), ws.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.id).toBe(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`);
     expect(rows[0]!.content).toContain(`Background agents job ${JOB} completed`);
@@ -170,7 +179,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const second = activation(ws.db);
     await second.runner.recover({ jobId: JOB, phase: 'running' });
 
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = noticeRows(makeSql(ws.db), ws.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.content).toContain('gave up after 5 resume attempts');
   });
@@ -186,7 +195,8 @@ describe('a settled background job announces itself once, and not as the owner',
     expect(history[0]!.role).toBe('system');
     // The stored row is untouched: the model still reads its turn input as the
     // user message it has to be. Only the claim about authorship changed.
-    const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM assistant_messages`;
+    const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM assistant_messages
+      WHERE actor_id = ${ws.actor.actorId}`;
     expect(stored[0]!.role).toBe('user');
   });
 
@@ -197,8 +207,8 @@ describe('a settled background job announces itself once, and not as the owner',
     await runner.wake(JOB);
     // Something the owner really did type, before the notice.
     void sql`
-      INSERT INTO assistant_messages (id, session_id, role, content)
-      VALUES (${'typed-1'}, ${''}, ${'user'}, ${JSON.stringify({
+      INSERT INTO assistant_messages (actor_id, id, session_id, role, content)
+      VALUES (${ws.actor.actorId}, ${'typed-1'}, ${''}, ${'user'}, ${JSON.stringify({
         id: 'typed-1', role: 'user', parts: [{ type: 'text', text: 'find me a domain' }],
       })})
     `;
@@ -221,7 +231,7 @@ describe('a settled background job announces itself once, and not as the owner',
     // Six rows, byte-identical content, distinct ids — the shape measured on
     // stone-ash-71f2. Nothing about the seam prevents this; the producer naming
     // its fact is what does.
-    const rows = noticeRows(makeSql(ws.db));
+    const rows = noticeRows(makeSql(ws.db), ws.actor);
     expect(rows).toHaveLength(6);
     expect(new Set(rows.map((row) => row.id)).size).toBe(6);
     expect(new Set(rows.map((row) => uiMessageText(row.content))).size).toBe(1);
@@ -264,7 +274,7 @@ describe('a settled background job announces itself once, and not as the owner',
       store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
       fiber,
       signals: new SignalDelivery(preempting),
-      eventLog: new EventLog(makeSqlExec(ws.db)),
+      eventLog: new EventLog(makeSqlExec(ws.db), openWorkspaceMainActor(sql)),
       scheduleDrain: () => {},
     });
     await runner.wake(JOB);

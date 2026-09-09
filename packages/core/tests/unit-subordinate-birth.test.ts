@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { createTestActor, makeSqlExec } from './helpers';
 import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
 import { actorReferenceOf } from '../src/state/actor-handle';
@@ -15,11 +15,16 @@ function setup() {
   createTestActor(database.sql, database.execRaw, 'workspace', 'main');
   const directory = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
   const main = directory.main();
-  const roster = new SubordinateRosterStore(makeSqlExec(database.db));
+  // The roster is the PARENT's: a subordinate name is chosen by the actor that
+  // hired it, so two actors of one workspace really do hire the same 'reader'.
+  const roster = new SubordinateRosterStore(makeSqlExec(database.db), main);
   roster.ensureSchema();
   const child = createTestSql();
   initEventsHubTables(makeSqlExec(child.db));
-  const events = new EventLog(makeSqlExec(child.db));
+  // The subordinate's OWN inbox, over the subordinate's own database — the
+  // admitted task is the child's to drain, never the parent's.
+  const childActor = createTestActors(child.sql, child.execRaw).main;
+  const events = new EventLog(makeSqlExec(child.db), childActor);
   let interruptSeed = false;
   let interruptAssignment = false;
   let interruptDeletion = false;
@@ -54,7 +59,7 @@ function setup() {
     birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable' }, assignment: { body: 'Read the source.', mode: 'plan' } },
     createdBy: 'orchestrator', status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
   });
-  return { database, child, directory, main, roster, runtime, admit,
+  return { database, child, childActor, directory, main, roster, runtime, admit,
     interruptSeed: () => { interruptSeed = true; }, interruptAssignment: () => { interruptAssignment = true; }, interruptDeletion: () => { interruptDeletion = true; } };
 }
 
@@ -66,7 +71,7 @@ describe('admitted subordinate lifecycle', () => {
     await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
     const issued = fixture.directory.resolveChild(fixture.main, 'reader');
     if (!issued) throw new Error('Registration did not land.');
-    const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db));
+    const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main);
     await recoverSubordinateLifecycles(cold, fixture.runtime);
     expect(cold.requireExisting('reader').actorReference).toEqual(actorReferenceOf(issued));
     expect(cold.requireExisting('reader').birth).toBeNull();
@@ -78,8 +83,10 @@ describe('admitted subordinate lifecycle', () => {
     fixture.admit('birth-one');
     fixture.interruptAssignment();
     await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
-    await recoverSubordinateLifecycles(new SubordinateRosterStore(makeSqlExec(fixture.database.db)), fixture.runtime);
-    const rows = fixture.child.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_log WHERE kind = 'event' AND variant = 'subordinate_task'`;
+    await recoverSubordinateLifecycles(new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main), fixture.runtime);
+    const rows = fixture.child.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_log
+      WHERE actor_id = ${fixture.childActor.actorId}
+        AND kind = 'event' AND variant = 'subordinate_task'`;
     expect(rows[0]?.count).toBe(1);
     expect(fixture.roster.requireExisting('reader').birth).toBeNull();
   });

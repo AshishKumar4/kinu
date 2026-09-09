@@ -73,6 +73,7 @@ import {
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
+import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -95,11 +96,12 @@ import {
 } from '../utils/json';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
-// The deps implementation rides the workspace DO's facet substrate: spawn =
-// subAgent(SubordinateAgent, name) + seeded identity + roster row; assign /
-// message publish `subordinate_task` events into the subordinate's EventLog
-// (drained as its programmatic turn); reports come back as
-// `subordinate_report` events on the parent.
+// The deps implementation rides the workspace's ONE actor host: spawn =
+// `ActorHost.acquire` over a `workspace_actors` row + roster row, which binds
+// the child's session and stores over the SAME workspace database rather than
+// giving it one of its own; assign / message publish `subordinate_task` events
+// into the subordinate's own actor-scoped EventLog (drained as its programmatic
+// turn); reports come back as `subordinate_report` events on the parent.
 
 export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
 
@@ -347,7 +349,14 @@ const ASSIGN_NOTES = {
  * dispatches a strategy.
  */
 export interface AgentsForkDeps {
+  /** The CALLER's runtime — the actor that invoked the fork. Not any node's. */
   rt: AgentRuntime;
+  /**
+   * Acquire the hosted logical actor ONE swarm node runs as, by that node's
+   * identity. One call per node: each node is its own actor of this workspace,
+   * over the one workspace database.
+   */
+  hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
   /**
    * The ONE seam that turns a resolved tier's model SPEC into the model a
@@ -1518,6 +1527,10 @@ async function runSwarmAction(
    */
   const runDeps: SwarmRunDeps = {
     rt,
+    // Per-node actor acquisition, forwarded not derived: the backend owns what a
+    // hosted node's runtime and role are, and every node of this search gets its
+    // own actor over the one workspace database.
+    hostNode: fork.hostNode,
     model: fork.model,
     mode,
     // Frozen at dispatch so `context:'fork'` survives a background re-drive and a

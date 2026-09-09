@@ -36,7 +36,6 @@ import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 
 const CLIENT = 'packages/cf-backend/src/hooks/use-kinu.ts';
 const SERVER = 'packages/cf-backend/src/orchestrator.ts';
-const FACET_SERVER = 'packages/cf-backend/src/subordinate-agent.ts';
 const GALLERY = 'packages/cf-backend/src/gallery.tsx';
 
 /** Property names of a named interface, as its own source declares them. */
@@ -162,16 +161,40 @@ describe('the workspace snapshot contract', () => {
     expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
   });
 
-  test('every field the facet client declares is returned by the facet server', () => {
-    // The same contract one facet down, and it broke the same way: the gallery
-    // stub answered `roleId` and no `pendingSteers` while the client read `role`
-    // and `pendingSteers`, masked until a throw upstream of the reads was cut.
-    // The stub side is a `satisfies SubordinateSnapshot` in gallery.tsx.
-    const declared = interfaceFields(CLIENT, 'SubordinateSnapshot');
-    const returned = returnedKeys(FACET_SERVER, 'getSubordinateSnapshot');
-
-    expect(declared.filter((field) => !returned.includes(field))).toEqual([]);
-  });
+  /**
+   * THE FACET HALF OF THIS CONTRACT IS GONE, and its removal is a fact about
+   * the surface rather than a gap in the suite.
+   *
+   * What the case proved: `SubordinateSnapshot` — the one round trip a facet
+   * tab made when it opened — declared `name`, `displayName`, `role`,
+   * `mission`, `model`, `activePlan` and `pendingSteers`, and every one of them
+   * had to appear in the return literal of `getSubordinateSnapshot` on
+   * `subordinate-agent.ts`. It caught a real drift: the stub answered `roleId`
+   * where the client read `role`.
+   *
+   * Why it cannot be asked any more: that contract existed BECAUSE of the facet
+   * split. The display name and the role lived in the child's own database, so
+   * the only way the parent's tab could read them was an RPC across a storage
+   * boundary, and the RPC's return literal was the thing to hold the interface
+   * to. `subordinate-agent.ts` is deleted with the facet class, and there is no
+   * hosted method that returns a `SubordinateSnapshot` to compare against.
+   *
+   * What replaced it: `ActorAgent.subordinateView` reads `displayName` and
+   * `role` off `actorHost().bindStores(...).stores.config` — `actor_id`-scoped
+   * rows in the ONE workspace database, no stub and no hop. Nothing there is a
+   * declared-field-set contract, so re-aiming this assertion at the nearest
+   * surviving symbol would pin a guarantee nobody holds, which is worse than
+   * asking nothing. It is deleted rather than re-pointed.
+   *
+   * WHAT THAT LEAVES UNCOVERED, stated because the hole is real and is not
+   * this file's to close: `hooks/use-kinu.ts` still calls
+   * `rpc("getSubordinateSnapshot", [])` in two live places — the 25-second
+   * subordinate liveness ping and `loadSubordinateData` — against a method this
+   * backend no longer implements. Nothing typechecks that edge in either
+   * direction. The replacement coverage belongs with whoever migrates that
+   * caller onto the hosted read, because only that change decides what the
+   * hosted path answers with.
+   */
 
   test('the gallery stub supplies each field a current snapshot reads', () => {
     const stubbed = stubbedKeys(GALLERY, 'AGENT_RPC_DATA', 'getWorkspaceSnapshot');

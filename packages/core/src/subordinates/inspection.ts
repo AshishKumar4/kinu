@@ -82,11 +82,11 @@ export function readSubordinateInspection(
   switch (request.view) {
     case 'plans':
       if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
-      return { view: 'plans', path, page: new PlanReviewStore(sql).listPage('default', request.page) };
+      return { view: 'plans', path, page: new PlanReviewStore(sql, actor).listPage('default', request.page) };
     case 'plan':
     case 'planTasks': {
       if (!tableExists(sql, 'plan_reviews')) return missingSubordinateHistory(path);
-      const plan = new PlanReviewStore(sql).get(request.id, request.revision);
+      const plan = new PlanReviewStore(sql, actor).get(request.id, request.revision);
       if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
       if (request.view === 'plan') return { view: 'plan', path, plan };
       if (!tableExists(sql, 'plan_task_links')) return missingSubordinateHistory(path);
@@ -94,7 +94,7 @@ export function readSubordinateInspection(
     }
     case 'children': {
       if (!tableExists(sql, 'actor_subordinates')) return missingSubordinateHistory(path);
-      const roster = new SubordinateRosterStore(raw);
+      const roster = new SubordinateRosterStore(raw, actor);
       return { view: 'children', path, page: roster.listPage(request.page) };
     }
     case 'history':

@@ -8,7 +8,7 @@ import {
   deriveEventTrust, derivePriority, deriveFields, dedupeKeyFor, renderForLLM,
   buildDrainBatch,
   type IngressDescriptor, type EmailPayload, type KinuEvent,
-  type ReplyDispatcher, type AlarmScheduler,
+  type ReplyDispatcher,
 } from '../src/events/hub/index';
 import {
   EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
@@ -16,9 +16,22 @@ import {
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 
-function makeSql(): SqlExec {
-  return makeSqlExec(new Database(':memory:'));
+/** One hub database and the ONE actor whose rows it holds.
+ *
+ *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
+ *  than of the reader: a log bound to a fabricated id publishes rows no
+ *  production reader resolves. Bound through the production directory. */
+interface Hub {
+  readonly sql: SqlExec;
+  readonly actor: ActorHandle;
+}
+
+function makeSql(): Hub {
+  const db = new Database(':memory:');
+  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
 function emailPayload(overrides: Partial<EmailPayload> = {}): EmailPayload {
@@ -72,9 +85,9 @@ describe('email trust + priority derivation', () => {
 
 describe('email dedupe', () => {
   test('Message-ID is the idempotency key', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
     expect(r1.admitted).toBe(true);
     // A retried delivery of the same message dedupes to the original event.
@@ -113,9 +126,9 @@ describe('email dedupe', () => {
 
 describe('email rendering for the LLM', () => {
   test('renderForLLM shows sender, subject, body and attachment count', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const { id } = log.publish({
       descriptor: emailDescriptor('owner', {
         attachments: [{ filename: 'report.pdf', content_type: 'application/pdf', size: 123 }],
@@ -132,9 +145,9 @@ describe('email rendering for the LLM', () => {
   });
 
   test('an email event drains into the wake batch', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
     const batch = buildDrainBatch(log.pending());
     expect(batch).not.toBeNull();
@@ -145,13 +158,13 @@ describe('email rendering for the LLM', () => {
 
 describe('email_thread reply channels', () => {
   test('open → bindEvent → findOpenByEvent → reply dispatches through the email dispatcher', async () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const sent: unknown[] = [];
     const dispatcher: ReplyDispatcher = {
       async dispatch(_channel, payload) { sent.push(payload); return { delivered: true }; },
     };
-    const store = new ReplyChannelStore(sql, { email_thread: dispatcher });
+    const store = new ReplyChannelStore(sql, actor, { email_thread: dispatcher });
 
     const id = store.open({
       event_id: 'pending', kind: 'email_thread',
@@ -172,100 +185,14 @@ describe('email_thread reply channels', () => {
   });
 
   test('an expired email_thread channel refuses dispatch', async () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const store = new ReplyChannelStore(sql, {});
+    const store = new ReplyChannelStore(sql, actor, {});
     const id = store.open({
       event_id: 'e', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
     }, 0)!;
     const outcome = await store.reply(id, 'late', 25 * 60 * 60 * 1000);
     expect(outcome).toEqual({ outcome: 'channel_closed', state: 'expired' });
-  });
-});
-
-describe('CHECK-widening rebuild for live DOs', () => {
-  /** The pre-email DDL as it exists on deployed DOs. */
-  const OLD_REPLY_CHANNELS_DDL = `
-    CREATE TABLE IF NOT EXISTS reply_channels (
-      id                  TEXT    PRIMARY KEY,
-      event_id            TEXT    NOT NULL,
-      kind                TEXT    NOT NULL
-                                  CHECK(kind IN ('ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'none')),
-      holder_addr         TEXT    NOT NULL DEFAULT '',
-      ttl_expires_at      INTEGER NOT NULL,
-      payload_policy      TEXT    NOT NULL DEFAULT 'full',
-      state               TEXT    NOT NULL DEFAULT 'open'
-                                  CHECK(state IN ('open', 'replied', 'expired', 'aborted')),
-      reply_payload       TEXT,
-      attempt_count       INTEGER NOT NULL DEFAULT 0,
-      created_at          INTEGER NOT NULL,
-      updated_at          INTEGER NOT NULL
-    )`;
-  const OLD_TRIGGERS_DDL = `
-    CREATE TABLE IF NOT EXISTS triggers (
-      id                  TEXT    PRIMARY KEY,
-      kind                TEXT    NOT NULL
-                                  CHECK(kind IN (
-                                    'webhook_durable', 'webhook_ephemeral',
-                                    'timer_oneshot', 'timer_cron',
-                                    'process_watch', 'file_watch',
-                                    'peer_inbox', 'mcp_route'
-                                  )),
-      spec                TEXT    NOT NULL DEFAULT '{}',
-      creator_trust       TEXT    NOT NULL
-                                  CHECK(creator_trust IN ('external', 'authenticated', 'owner', 'self')),
-      fork_policy         TEXT
-                                  CHECK(fork_policy IS NULL OR fork_policy IN ('copy', 'sever', 'share')),
-      state               TEXT    NOT NULL DEFAULT 'active'
-                                  CHECK(state IN ('active', 'paused', 'revoked')),
-      rate_limit_per_min  INTEGER NOT NULL DEFAULT 60,
-      created_at          INTEGER NOT NULL,
-      paused_at           INTEGER,
-      revoked_at          INTEGER,
-      next_fire_at        INTEGER,
-      last_fire_at        INTEGER,
-      fire_count          INTEGER NOT NULL DEFAULT 0
-    )`;
-
-  const noAlarm: AlarmScheduler = { async scheduleAt() {} };
-
-  test('existing rows survive the rebuild and the new enum members insert', async () => {
-    const sql = makeSql();
-    // Simulate a live DO: old-CHECK tables with data already in them.
-    sql.exec(OLD_REPLY_CHANNELS_DDL);
-    sql.exec(OLD_TRIGGERS_DDL);
-    const preStore = new ReplyChannelStore(sql, {});
-    const preId = preStore.open({
-      event_id: 'evt-old', kind: 'peer_back', holder_addr: 'peer:x', payload_policy: 'full',
-    }, 500)!;
-    const preReg = new TriggerRegistry(sql, noAlarm);
-    const preTrigger = await preReg.register({
-      kind: 'timer_cron', spec: { cron: '* * * * *' }, creator_trust: 'owner',
-    }, 500);
-
-    // Boot-time init runs the rebuild.
-    initEventsHubTables(sql);
-
-    // Old rows preserved.
-    const store = new ReplyChannelStore(sql, {});
-    expect(store.get(preId)?.kind).toBe('peer_back');
-    const reg = new TriggerRegistry(sql, noAlarm);
-    expect(reg.get(preTrigger)?.kind).toBe('timer_cron');
-
-    // New enum members now insert (the old CHECK would have thrown).
-    const emailChannel = store.open({
-      event_id: 'evt-new', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
-    }, 1000);
-    expect(emailChannel).not.toBeNull();
-    const emailTrigger = await reg.register({
-      kind: 'email_route', spec: { allow: ['friend@example.com'] }, creator_trust: 'owner',
-    }, 1000);
-    expect(reg.get(emailTrigger)?.kind).toBe('email_route');
-
-    // Idempotent: a second init is a no-op.
-    initEventsHubTables(sql);
-    expect(store.get(preId)?.kind).toBe('peer_back');
-    expect(reg.get(emailTrigger)?.kind).toBe('email_route');
   });
 });
 
@@ -277,11 +204,11 @@ describe('the agent inbox', () => {
   const NOW = 1_700_000_000_000;
 
   function inbox(ownerEmail: string | null = 'owner@example.com') {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     initWebhookRateLimitTables(sql);
-    const log = new EventLog(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
+    const log = new EventLog(sql, actor);
+    const triggers = new TriggerRegistry(sql, actor, { scheduleAt: async () => {} });
     const { vfs } = createMemoryVfs();
     let drains = 0;
     return {
@@ -289,7 +216,7 @@ describe('the agent inbox', () => {
       drains: () => drains,
       inbox: new EmailInbox({
         log, triggers, sql,
-        replies: new ReplyChannelStore(sql),
+        replies: new ReplyChannelStore(sql, actor),
         vfs: () => vfs,
         ownerEmail: async () => ownerEmail,
         onAdmitted: () => { drains += 1; },

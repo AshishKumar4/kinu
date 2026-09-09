@@ -8,6 +8,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { EvaluationGrounding } from '../types/evaluation';
 import { nanoid } from '../utils/nanoid';
 
@@ -101,13 +102,15 @@ export interface RecordNodeOpts {
  */
 export function insertSearchNode(
   sql: SqlExecutor,
+  actor: ActorHandle,
   node: RecordNodeOpts & { readonly msgId: string | null },
 ): void {
+  actor.assertCurrent();
   void sql`
  INSERT INTO search_nodes
-      (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id, evaluation_json)
+      (actor_id, id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id, evaluation_json)
     VALUES
-      (${node.nodeId}, ${node.parentNodeId ?? null}, ${node.rootId},
+      (${actor.actorId}, ${node.nodeId}, ${node.parentNodeId ?? null}, ${node.rootId},
        ${node.task}, ${node.action}, ${node.observation},
        ${node.codeUsed ?? null}, ${node.codeLanguage ?? null}, ${node.depth}, ${node.msgId},
        ${node.evaluation ? JSON.stringify(node.evaluation) : null})
@@ -121,6 +124,7 @@ export function insertSearchNode(
 export async function recordNode(
   session: SessionWriter,
   sql: SqlExecutor,
+  actor: ActorHandle,
   opts: RecordNodeOpts,
 ): Promise<string> {
   const msgId = nanoid();
@@ -142,7 +146,7 @@ export async function recordNode(
     opts.parentMsgId,
   );
 
-  insertSearchNode(sql, { ...opts, msgId });
+  insertSearchNode(sql, actor, { ...opts, msgId });
 
   return msgId;
 }

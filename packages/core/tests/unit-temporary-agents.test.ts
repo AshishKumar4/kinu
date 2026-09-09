@@ -48,6 +48,7 @@ import {
 import { dispatchAgentsAction } from '../src/tools/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec, createTestActor } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -124,9 +125,14 @@ interface Scene {
   files: VFS;
 }
 
+/** The HIRING actor's roster. A subordinate name is the parent's choice, so
+ *  `actor_subordinates` leads with that parent: without the handle, one actor
+ *  could dismiss or re-point another's child by name alone. */
 function makeRosterStore(): SubordinateRosterStore {
   const db = new Database(':memory:');
-  return new SubordinateRosterStore(makeSqlExec(db));
+  const sql = makeSql(db);
+  const parent = createTestActors(sql, makeExecRaw(db)).main;
+  return new SubordinateRosterStore(makeSqlExec(db), parent);
 }
 
 function makeScene(options: {
@@ -149,9 +155,11 @@ function makeScene(options: {
   const eventDb = new Database(':memory:');
   const eventSql = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
-  const log = new EventLog(eventSql);
   createTestActor(makeSql(eventDb), makeExecRaw(eventDb), 'temporary-workspace', 'main');
   const directory = new WorkspaceActorDirectory(makeSql(eventDb), { workspaceId: 'temporary-workspace', ownerUserId: '' });
+  // The inbox belongs to the actor whose events these are — the workspace main
+  // that hires the temporaries below, over the same database it was issued on.
+  const log = new EventLog(eventSql, directory.main());
   const runtime: SubordinateRuntime = {
     async spawn(input) {
       calls.push(`spawn:${input.name}`);

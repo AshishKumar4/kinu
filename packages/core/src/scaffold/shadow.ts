@@ -336,7 +336,7 @@ export function queueShadowTrial(
   actor.assertCurrent();
   // Ahead of the depth check: a trial that has already run is not competing for
   // a queue slot, and `queue_full` would be a false refusal.
-  if (args.id !== undefined && effectAlreadyDone(sql, TRIAL_SCOPE, args.id)) return 'queued';
+  if (args.id !== undefined && effectAlreadyDone(sql, actor, TRIAL_SCOPE, args.id)) return 'queued';
   if (countQueuedShadowTrials(sql, actor, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
   // DO NOTHING, not a replace: the row the first queueing wrote is the one the
   // runner may already have taken, and overwriting it would re-open work that
@@ -402,7 +402,7 @@ export function countQueuedShadowTrials(
  *  scored twice. */
 export function dropQueuedShadowTrial(sql: SqlExecutor, actor: ActorHandle, id: string): void {
   actor.assertCurrent();
-  recordEffectDone(sql, TRIAL_SCOPE, id);
+  recordEffectDone(sql, actor, TRIAL_SCOPE, id);
   void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId} AND id = ${id}`;
 }
 
@@ -735,7 +735,7 @@ export async function applyPromotionDecision(
     }
     const misevolution = checkMisevolution(pendingCode);
     if (!misevolution.ok) {
-      recordMisevolutionVeto(sql, {
+      recordMisevolutionVeto(sql, rt.actor, {
         surface: 'scaffold', violation: misevolution,
         detail: `promotion of v${pending.version} vetoed; rolled back instead`,
       });

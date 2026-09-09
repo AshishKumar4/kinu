@@ -14,6 +14,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
 } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
@@ -180,18 +181,24 @@ export function createInlineExecutor(): Executor {
   };
 }
 
-export function createInlineSchedule(sql: SqlExecutor): Schedule {
+export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Schedule {
+  // A fiber is a LANE OF ONE ACTOR's work, and its name is minted per lane, so
+  // every actor sharing this database presents the same names.
+  const actorId = actor.actorId;
   return {
     after: async (_ms, fn) => { await fn(); },
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
+      actor.assertCurrent();
       const id = nanoid();
-      void sql`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (${id}, ${name}, ${null}, ${Date.now()})`;
+      void sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
+        VALUES (${actorId}, ${id}, ${name}, ${null}, ${Date.now()})`;
       const stash: FiberCtx['stash'] = (data) => {
-        void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)} WHERE id = ${id}`;
+        void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)}
+          WHERE actor_id = ${actorId} AND id = ${id}`;
       };
       try { return await fn({ stash, snapshot: null }); }
-      finally { void sql`DELETE FROM fibers WHERE id = ${id}`; }
+      finally { void sql`DELETE FROM fibers WHERE actor_id = ${actorId} AND id = ${id}`; }
     },
   };
 }

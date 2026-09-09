@@ -23,11 +23,11 @@ import { buildBuiltinTools, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, sub
 import { createWorkspace } from '@kinu.run/core/identity';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
-  createCLIRuntime, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
+  createCLIRuntime, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
-import { registerLocalActor, seedLocalActor } from '../src/actor-identity';
+import { registerLocalActor } from '../src/actor-identity';
 import { openWorkspaceCLI } from '../src/open';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -45,15 +45,20 @@ function roots(label: string) {
   return { state, project };
 }
 
-/** One agent's runtime over its own database, bound to `cwd` when given. */
-function agentRuntime(state: string, name: string, cwd?: string): CLIRuntime {
+/** A root runtime plus the ONE handle its whole actor tree shares. Every actor
+ *  beneath it — a hire, a head, a node — binds this database, so a test that
+ *  makes one needs the handle rather than a path to put a new file at. */
+type LocalAgent = CLIRuntime & { readonly db: Database; readonly dbPath: string };
+
+function agentRuntime(state: string, name: string, cwd?: string): LocalAgent {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const config: Parameters<typeof createCLIRuntime>[1] = {
     dbPath, llm: DUMMY_LLM, agentName: name,
   };
   if (cwd !== undefined) config.cwd = cwd;
-  return createCLIRuntime(new Database(dbPath), config);
+  const db = new Database(dbPath);
+  return Object.assign(createCLIRuntime(db, config), { db, dbPath });
 }
 
 /** A workspace with a real identity and SOUL.md, opened the way the CLI opens
@@ -127,14 +132,17 @@ describe('peers over one directory', () => {
     expect(readdirSync(project)).toEqual([]);
   });
 
-  test('a subordinate writes into the shared directory and keeps its own stores', async () => {
+  test('a subordinate writes into the shared directory and keeps its own actor-scoped stores', async () => {
     const { state, project } = roots('cwd-plane-subordinate');
     const parent = agentRuntime(state, 'parent', project);
-    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', kind: 'subordinate', lifetime: 'durable', dbPathForKey: (key) => join(state, `${key}.db`) });
-    const childDb = new Database(binding.dbPath);
-    seedLocalActor(childDb, makeSqlExec(childDb), binding);
+    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', kind: 'subordinate', lifetime: 'durable' });
     const physicalName = subordinateAgentName(binding.storageKey);
-    const child = await shareLocalWorkspacePlane(createCLIRuntime(childDb, { dbPath: binding.dbPath, llm: null, cwd: project, facet: physicalName, actorBinding: binding }), parent, physicalName);
+    // THE PARENT'S DATABASE. A subordinate has no file of its own, so both the
+    // handle and the declared path are the root's.
+    const child = await shareLocalWorkspacePlane(
+      createCLIRuntime(parent.db, { dbPath: parent.dbPath, llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
+      parent, physicalName,
+    );
 
     await child.storage.vfs.writeFile('from-child.txt', 'child was here');
     expect(readFileSync(join(project, 'from-child.txt'), 'utf8')).toBe('child was here');
@@ -144,9 +152,10 @@ describe('peers over one directory', () => {
     // one restore point for that directory, and nothing else.
     expect(child.cwd).toBe(resolve(project));
     expect(child.checkpoints).toBe(parent.checkpoints);
-    expect(child.memory).not.toBe(parent.memory);
-    expect(child.craftStore).not.toBe(parent.craftStore);
-    expect(child.storage.sql).not.toBe(parent.storage.sql);
+    // ONE DATABASE, one physical store — and the separation that used to be a
+    // second file is now the actor the rows are keyed to.
+    expect(child.actor.actorId).not.toBe(parent.actor.actorId);
+    expect(existsSync(join(state, 'child'))).toBe(false);
   });
 });
 
@@ -160,8 +169,7 @@ describe('a fork over the bound directory', () => {
       needsBaseline: () => true,
       record: (event) => { written.push(event); },
     };
-    const headDb = new Database(':memory:');
-    const head = await createHeadRuntime(headDb, parent, 'h1', observer);
+    const head = await createHeadRuntime(parent, 'h1', observer);
 
     // A fork explores the same project, so what the user left in the directory
     // is what the head reads, and what it writes lands there.
@@ -188,11 +196,16 @@ describe('a fork over the bound directory', () => {
     const parentShell = parent.shell;
     if (!parentShell) throw new Error('a bound workspace runs the host shell');
     expect((await parentShell.exec('echo "$HOME"')).stdout.trim()).toBe(process.env.HOME ?? '');
+    // Its own SCAFFOLD POINTER, in the parent's database. What used to be a
+    // separate file is now the actor the row is keyed to, which is why the
+    // parent still reads none while the head reads its own.
     await head.identity.scaffold.write('// head\n');
     expect(await head.identity.scaffold.read()).toBe('// head\n');
     expect(await parent.identity.scaffold.exists()).toBe(false);
     expect(existsSync(join(project, 'scaffold'))).toBe(false);
-    headDb.close();
+    // No second database anywhere: the state directory holds the root's file
+    // and nothing the head added.
+    expect(readdirSync(join(state, 'parent')).filter((entry) => entry.endsWith('.db'))).toEqual(['agent.db']);
   });
 });
 

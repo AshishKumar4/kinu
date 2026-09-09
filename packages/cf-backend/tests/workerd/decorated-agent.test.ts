@@ -46,7 +46,6 @@ import { describe, expect, test } from 'vitest';
 import { Agent } from 'agents';
 import { ActorAgent } from '../../src/actor-agent';
 import { OrchestratorAgent } from '../../src/orchestrator';
-import { SubordinateAgent } from '../../src/subordinate-agent';
 import { UserDO } from '../../src/user/user-do';
 
 /** What one real class prototype answers about its own browser RPC surface. */
@@ -109,14 +108,20 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
  *
  * `witness` is one method whose presence is checked by name, so an empty-map
  * regression cannot be hidden by a floor of zero. The numbers were read off a
- * real run of this layer, never guessed: the measured sets were 120, 16 and
- * 18, and the merged subordinate set adds the 9 exploration entries for 27 —
- * the floor holds two below it, and this layer's next real run re-pins it.
+ * real run of this layer, never guessed.
+ *
+ * TWO classes, where there were three. `SubordinateAgent` is gone with the
+ * facets: a hired subordinate, a head, a node and a rollout branch are logical
+ * actors hosted over the root's one database, and their chat surface IS the
+ * orchestrator's own `@callable` surface bound to an actor by the request path.
+ * So there is no second decorated root whose transform could break
+ * independently — which also means the inherited-surface check below is the
+ * only remaining witness that `getCallableMethods` still walks a prototype
+ * CHAIN rather than one class's own registry.
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
   { name: 'ActorAgent', cls: ActorAgent, floor: 14, witness: 'steerTurn' },
-  { name: 'SubordinateAgent', cls: SubordinateAgent, floor: 25, witness: 'explore' },
 ] as const;
 
 describe('KINU-065 — the real decorated classes load and keep their callable metadata', () => {
@@ -137,21 +142,17 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
   // below genuinely needs it: there, a method's absence and a method's
   // non-exposure are different defects and only one of them is acceptable.
 
-  test('both actor roots inherit the shared surface rather than redeclaring it', () => {
+  test('the one actor root inherits the shared surface rather than redeclaring it', () => {
     // ActorAgent declares the chat, approval and steering RPCs once, and the
-    // orchestrator and the subordinate both reach them through the prototype
-    // chain. `getCallableMethods` walks that chain, so this is the half of the
-    // transform a single-class check cannot see: a per-class registry would
-    // still pass the floor above and lose every inherited name here.
+    // orchestrator reaches them through the prototype chain. `getCallableMethods`
+    // walks that chain, so this is the half of the transform a single-class
+    // check cannot see: a per-class registry would still pass the floor above
+    // and lose every inherited name here.
     const actor = callableSurface(ActorAgent).callable;
     expect(actor.length).toBeGreaterThan(0);
-    for (const root of [
-      { name: 'OrchestratorAgent', surface: callableSurface(OrchestratorAgent) },
-      { name: 'SubordinateAgent', surface: callableSurface(SubordinateAgent) },
-    ]) {
-      for (const inherited of actor) {
-        expect(root.surface.callable, `${root.name} lost inherited ${inherited}`).toContain(inherited);
-      }
+    const root = callableSurface(OrchestratorAgent);
+    for (const inherited of actor) {
+      expect(root.callable, `OrchestratorAgent lost inherited ${inherited}`).toContain(inherited);
     }
   });
 });

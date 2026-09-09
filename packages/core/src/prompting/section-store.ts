@@ -37,6 +37,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '../obs/error';
 import { DEFAULT_CONFIG } from '../config';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import type { ScoreInterval } from '../utils/stats';
@@ -92,6 +93,7 @@ export interface PendingPromptSection {
 
 export function initPromptSectionTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS prompt_section_versions (
+    actor_id        TEXT NOT NULL,
     section_id      TEXT NOT NULL,
     version         INTEGER NOT NULL,
     source          TEXT NOT NULL,
@@ -99,12 +101,13 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
     status          TEXT NOT NULL CHECK (status IN ('current','pending','rolled_back','historical')),
     incumbent_bytes INTEGER NOT NULL,
     written_at      INTEGER NOT NULL,
-    PRIMARY KEY (section_id, version)
+    PRIMARY KEY (actor_id, section_id, version)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_prompt_section_status
-           ON prompt_section_versions(status, section_id)`);
+           ON prompt_section_versions(actor_id, status, section_id)`);
   execRaw(`CREATE TABLE IF NOT EXISTS prompt_section_evaluations (
-    id              TEXT PRIMARY KEY,
+    actor_id        TEXT NOT NULL,
+    id              TEXT NOT NULL,
     section_id      TEXT NOT NULL,
     pending_version INTEGER NOT NULL,
     instance_id     TEXT NOT NULL,
@@ -112,10 +115,11 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
     pending_score   REAL NOT NULL,
     winner          TEXT NOT NULL CHECK (winner IN ('current','pending','tie')),
     feedback        TEXT NOT NULL,
-    evaluated_at    INTEGER NOT NULL
+    evaluated_at    INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_prompt_section_eval_pending
-           ON prompt_section_evaluations(section_id, pending_version)`);
+           ON prompt_section_evaluations(actor_id, section_id, pending_version)`);
 }
 
 /**
@@ -125,9 +129,13 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
  * once per activation, not per turn: a promotion is an agent event, and the
  * cacheable prefix is allowed to move on one.
  */
-export function activePromptSectionOverrides(sql: SqlExecutor): PromptSectionOverrides {
+export function activePromptSectionOverrides(
+  sql: SqlExecutor, actor: ActorHandle,
+): PromptSectionOverrides {
+  actor.assertCurrent();
   const rows = sql<{ section_id: string; source: string }>`
-    SELECT section_id, source FROM prompt_section_versions WHERE status = 'current'`;
+    SELECT section_id, source FROM prompt_section_versions
+    WHERE actor_id = ${actor.actorId} AND status = 'current'`;
   const overrides: Record<string, string> = {};
   for (const row of rows) overrides[row.section_id] = row.source;
   return overrides;
@@ -135,19 +143,25 @@ export function activePromptSectionOverrides(sql: SqlExecutor): PromptSectionOve
 
 /** What a candidate is measured against: the promoted source if the section has
  *  one, else the template compiled into the bundle. */
-export function incumbentSectionSource(sql: SqlExecutor, section: PromptSection<string>): string {
+export function incumbentSectionSource(
+  sql: SqlExecutor, actor: ActorHandle, section: PromptSection<string>,
+): string {
+  actor.assertCurrent();
   const rows = sql<{ source: string }>`
     SELECT source FROM prompt_section_versions
-    WHERE section_id = ${section.id} AND status = 'current' LIMIT 1`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${section.id}
+      AND status = 'current' LIMIT 1`;
   return rows[0]?.source ?? section.source;
 }
 
 /** The first section with a candidate under trial, or null. The cadence asks
  *  this before starting a new pass: a proposal nobody trials never lands, so
  *  finishing one is always worth more than proposing another. */
-export function firstPendingPromptSection(sql: SqlExecutor): string | null {
+export function firstPendingPromptSection(sql: SqlExecutor, actor: ActorHandle): string | null {
+  actor.assertCurrent();
   const rows = sql<{ section_id: string }>`
-    SELECT section_id FROM prompt_section_versions WHERE status = 'pending'
+    SELECT section_id FROM prompt_section_versions
+    WHERE actor_id = ${actor.actorId} AND status = 'pending'
     ORDER BY written_at ASC LIMIT 1`;
   return rows[0]?.section_id ?? null;
 }
@@ -235,8 +249,10 @@ export interface ProposePromptSectionArgs {
 
 export function proposePromptSection(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: ProposePromptSectionArgs,
 ): ProposeSectionResult {
+  actor.assertCurrent();
   const { section, source, rationale } = args;
   if (!PROMPT_SECTIONS.some((known) => known.id === section.id)) {
     return { ok: false, code: 'not_registered', error: `"${section.id}" is not a registered prompt section` };
@@ -245,7 +261,7 @@ export function proposePromptSection(
     return { ok: false, code: 'rationale_too_short', error: `Rationale must be ≥${String(MIN_RATIONALE_LENGTH)} chars` };
   }
 
-  const incumbent = incumbentSectionSource(sql, section);
+  const incumbent = incumbentSectionSource(sql, actor, section);
   if (source === incumbent) {
     return { ok: false, code: 'unchanged', error: 'candidate is the incumbent, byte for byte' };
   }
@@ -275,7 +291,7 @@ export function proposePromptSection(
   // Gate 3: misevolution, the full checklist.
   const misevolution = checkMisevolution(source);
   if (!misevolution.ok) {
-    recordMisevolutionVeto(sql, {
+    recordMisevolutionVeto(sql, actor, {
       surface: 'scaffold', violation: misevolution, detail: `prompt section ${section.id}: ${rationale}`,
     });
     return {
@@ -302,7 +318,8 @@ export function proposePromptSection(
   // Gate 5: one pending per section.
   const pending = sql<{ version: number }>`
     SELECT version FROM prompt_section_versions
-    WHERE section_id = ${section.id} AND status = 'pending' ORDER BY version DESC LIMIT 1`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${section.id} AND status = 'pending'
+    ORDER BY version DESC LIMIT 1`;
   if (pending.length > 0) {
     return {
       ok: false, code: 'already_pending',
@@ -311,28 +328,34 @@ export function proposePromptSection(
   }
 
   const maxRows = sql<{ v: number }>`
-    SELECT COALESCE(MAX(version), 0) AS v FROM prompt_section_versions WHERE section_id = ${section.id}`;
+    SELECT COALESCE(MAX(version), 0) AS v FROM prompt_section_versions
+    WHERE actor_id = ${actor.actorId} AND section_id = ${section.id}`;
   const version = (maxRows[0]?.v ?? 0) + 1;
   void sql`
     INSERT INTO prompt_section_versions
-      (section_id, version, source, rationale, status, incumbent_bytes, written_at)
-    VALUES (${section.id}, ${version}, ${source}, ${rationale}, 'pending', ${incumbentBytes}, ${nowMs()})`;
+      (actor_id, section_id, version, source, rationale, status, incumbent_bytes, written_at)
+    VALUES (${actor.actorId}, ${section.id}, ${version}, ${source}, ${rationale}, 'pending',
+            ${incumbentBytes}, ${nowMs()})`;
   return { ok: true, version };
 }
 
 /** The section's pending candidate with its trial record, or null. */
 export function getPendingPromptSection(
   sql: SqlExecutor,
+  actor: ActorHandle,
   sectionId: string,
 ): PendingPromptSection | null {
+  actor.assertCurrent();
   const rows = sql<{ version: number; source: string; rationale: string; written_at: number }>`
     SELECT version, source, rationale, written_at FROM prompt_section_versions
-    WHERE section_id = ${sectionId} AND status = 'pending' ORDER BY version DESC LIMIT 1`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND status = 'pending'
+    ORDER BY version DESC LIMIT 1`;
   const row = rows[0];
   if (!row) return null;
   const counts = sql<{ winner: string; n: number }>`
     SELECT winner, COUNT(*) AS n FROM prompt_section_evaluations
-    WHERE section_id = ${sectionId} AND pending_version = ${row.version} GROUP BY winner`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
+      AND pending_version = ${row.version} GROUP BY winner`;
   let trialsSoFar = 0, pendingWins = 0, currentWins = 0, ties = 0;
   for (const count of counts) {
     trialsSoFar += count.n;
@@ -357,6 +380,7 @@ export function getPendingPromptSection(
  */
 export function recordPromptSectionTrial(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: {
     sectionId: string;
     pendingVersion: number;
@@ -368,11 +392,13 @@ export function recordPromptSectionTrial(
     now?: number;
   },
 ): void {
+  actor.assertCurrent();
   void sql`
     INSERT INTO prompt_section_evaluations
-      (id, section_id, pending_version, instance_id, current_score, pending_score, winner, feedback, evaluated_at)
-    VALUES (${`psec-${nanoid()}`}, ${args.sectionId}, ${args.pendingVersion}, ${args.instanceId},
-            ${args.currentScore}, ${args.pendingScore},
+      (actor_id, id, section_id, pending_version, instance_id, current_score, pending_score,
+       winner, feedback, evaluated_at)
+    VALUES (${actor.actorId}, ${`psec-${nanoid()}`}, ${args.sectionId}, ${args.pendingVersion},
+            ${args.instanceId}, ${args.currentScore}, ${args.pendingScore},
             ${v.parse(TrialWinnerSchema, args.winner)}, ${args.feedback}, ${args.now ?? nowMs()})`;
 }
 
@@ -403,38 +429,46 @@ export interface AppliedSectionDecision {
  */
 export function applyPromptSectionDecision(
   sql: SqlExecutor,
+  actor: ActorHandle,
   pending: PendingPromptSection,
   decision: 'promote' | 'rollback',
 ): AppliedSectionDecision {
+  actor.assertCurrent();
   if (decision === 'promote') {
     const misevolution = checkMisevolution(pending.source);
     if (!misevolution.ok) {
-      recordMisevolutionVeto(sql, {
+      recordMisevolutionVeto(sql, actor, {
         surface: 'scaffold', violation: misevolution,
         detail: `promotion of ${pending.sectionId} v${String(pending.version)} vetoed; rolled back instead`,
       });
-      const rolled = applyPromptSectionDecision(sql, pending, 'rollback');
+      const rolled = applyPromptSectionDecision(sql, actor, pending, 'rollback');
       return { ...rolled, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
     void sql`UPDATE prompt_section_versions SET status = 'historical'
-      WHERE section_id = ${pending.sectionId} AND status = 'current'`;
+      WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId} AND status = 'current'`;
     void sql`UPDATE prompt_section_versions SET status = 'current'
-      WHERE section_id = ${pending.sectionId} AND version = ${pending.version}`;
+      WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
+        AND version = ${pending.version}`;
     return { action: 'promote' };
   }
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
-    WHERE section_id = ${pending.sectionId} AND version = ${pending.version}`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
+      AND version = ${pending.version}`;
   return { action: 'rollback' };
 }
 
 /** The section archive, newest first — what the Evolution Changelog reads. */
-export function listPromptSectionVersions(sql: SqlExecutor, limit = 50): PromptSectionVersion[] {
+export function listPromptSectionVersions(
+  sql: SqlExecutor, actor: ActorHandle, limit = 50,
+): PromptSectionVersion[] {
+  actor.assertCurrent();
   const rows = sql<{
     section_id: string; version: number; source: string; rationale: string;
     status: string; incumbent_bytes: number; written_at: number;
   }>`
     SELECT section_id, version, source, rationale, status, incumbent_bytes, written_at
-    FROM prompt_section_versions ORDER BY written_at DESC LIMIT ${limit}`;
+    FROM prompt_section_versions WHERE actor_id = ${actor.actorId}
+    ORDER BY written_at DESC LIMIT ${limit}`;
   return rows.map((row) => ({
     sectionId: row.section_id,
     version: row.version,
@@ -450,10 +484,13 @@ export function listPromptSectionVersions(sql: SqlExecutor, limit = 50): PromptS
  *  evidence line. Keyed `sectionId:version`. */
 export function promptSectionTrialRecord(
   sql: SqlExecutor,
+  actor: ActorHandle,
 ): ReadonlyMap<string, { wins: number; losses: number; ties: number }> {
+  actor.assertCurrent();
   const rows = sql<{ section_id: string; pending_version: number; winner: string; n: number }>`
     SELECT section_id, pending_version, winner, COUNT(*) AS n
-    FROM prompt_section_evaluations GROUP BY section_id, pending_version, winner`;
+    FROM prompt_section_evaluations WHERE actor_id = ${actor.actorId}
+    GROUP BY section_id, pending_version, winner`;
   const record = new Map<string, { wins: number; losses: number; ties: number }>();
   for (const row of rows) {
     const key = `${row.section_id}:${String(row.pending_version)}`;
