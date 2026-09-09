@@ -17,6 +17,7 @@ import {
   deriveRoleLabel,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
+  turnLocalContextMessage,
   splitPromptSections,
   AGENTS_TOOL_ACTIONS,
   BUILTIN_SKILLS,
@@ -915,13 +916,16 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain('## Verification');
-    // The generic "check your work before calling it done" framing is gone:
-    // the CompletionGate is that instruction as a mechanism, and a generic
-    // re-check line is what Anthropic's Opus 5 guidance says to delete.
+    // Every instruction to re-read or re-check as such is gone: the
+    // CompletionGate is that instruction as a mechanism, and an unconditional
+    // re-verification pass is the family Anthropic's Opus 5 guidance says to
+    // delete (a third off cost per ticket, no accuracy change).
     expect(prompt).not.toMatch(/The artifact is the evidence — read it/);
     expect(prompt).not.toMatch(/Before you call work done/);
-    // The transposition test: check the artifact's literal shape, not the plan.
-    expect(prompt).toMatch(/Re-read the artifact itself/);
+    expect(prompt).not.toMatch(/Re-read/);
+    // The transposition test: check the artifact's literal shape, not the
+    // plan — a specific thing to look at rather than a second pass.
+    expect(prompt).toMatch(/Check every deliverable the request names/);
     expect(prompt).toMatch(/column order, direction, units, filenames/);
     // The self-graded-signature test.
     expect(prompt).toMatch(/Build to the interface the task states/);
@@ -943,7 +947,7 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(noExec).toContain('## Verification');
-    expect(noExec).toContain('Re-read the artifact itself');
+    expect(noExec).toContain('Check every deliverable the request names');
     expect(noExec).not.toContain('Run the real check');
 
     const withRun = buildSystemPromptSync(rt, {
@@ -1036,9 +1040,6 @@ describe('buildSystemPromptSync', () => {
 
   test('adds mode overlays only when requested', () => {
     const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('Background-resume mode');
-    expect(buildSystemPromptSync(rt, { provenance: 'background_resume' }))
-      .toContain('Background-resume mode');
     const plan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
     expect(plan).toContain('submit_plan');
     expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
@@ -1056,8 +1057,11 @@ describe('buildSystemPromptSync', () => {
     // wake, and `background_jobs.work_mode` is NOT NULL — so under the old
     // single-`mode` precedence the work mode always won and this guidance,
     // written to stop the agent re-doing or polling settled work, never
-    // reached a model on the real wake path. Provenance is now read from the
-    // event alone, so the wake carries the overlay AND its permission.
+    // reached a model on the real wake path. The two axes are read from
+    // different keys now, so the wake carries the overlay AND its permission
+    // — but through different TIERS: the permission is a bar and rides the
+    // cacheable prefix, the overlay is per-turn and rides the turn's own
+    // message, so a wake landing mid-session no longer rewrites the prefix.
     const wake = { kinuEvent: 'background_job', kinuMode: 'build' };
     expect(turnProvenanceForMetadata(wake)).toBe('background_resume');
     expect(workModeForTurnMetadata(wake)).toBe('build');
@@ -1065,19 +1069,19 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
-      provenance: turnProvenanceForMetadata(wake),
       workMode: workModeForTurnMetadata(wake),
     });
-    expect(prompt).toContain('fetch the referenced job result first');
+    expect(prompt).not.toContain('the referenced job result first');
+    expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) })!.content))
+      .toContain('the referenced job result first');
 
-    // A Plan job's wake keeps BOTH: the resume overlay and the read-only bar.
+    // A Plan job's wake keeps BOTH: the read-only bar in the prefix, the
+    // resume overlay in the turn.
     const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
-    const planPrompt = buildSystemPromptSync(rt, {
-      provenance: turnProvenanceForMetadata(planWake),
-      workMode: workModeForTurnMetadata(planWake),
-    });
-    expect(planPrompt).toContain('fetch the referenced job result first');
+    const planPrompt = buildSystemPromptSync(rt, { workMode: workModeForTurnMetadata(planWake) });
     expect(planPrompt).toContain('Do not change project files, system resources, releases, or deployments');
+    expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) })!.content))
+      .toContain('the referenced job result first');
   });
 
   test('the two axes are read from different metadata keys and neither can suppress the other', () => {

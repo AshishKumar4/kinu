@@ -4308,20 +4308,31 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
 // builder in isolation, and not on a source grep. `systemCapturingModel` reads
 // the role:'system' entry off the LanguageModelV2 call.
 describe('LocalAgentSession — provenance and durable roles reach the model', () => {
-  test('a background-job wake carries the resume guidance even though it also carries a work mode', async () => {
+  test('a background-job wake carries the resume guidance in its own turn, not in the prefix', async () => {
     // jobs/runner.ts stamps BOTH kinuEvent and kinuMode on the wake, and
     // `background_jobs.work_mode` is never null. Under the old single-`mode`
     // precedence the work mode won and this guidance — written to stop the
     // agent re-doing or polling work that already settled — never reached a
     // model on the real wake path.
-    let system = '';
-    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }));
+    //
+    // It reaches it now, and from the turn-local tier: a wake landing between
+    // two chat turns of one session must not move the cacheable prefix. The
+    // overlay used to sit ~400 bytes into a 9.2 KB prefix, so the wake and the
+    // chat turn after it each rewrote 95.7% of it.
+    let observed: PromptMessage[] = [];
+    const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
     await session.enqueueTurn({
       text: 'job bgjob-1 finished',
       metadata: { kinuEvent: 'background_job', kinuMode: 'build' },
     });
-    expect(system).toContain('Background-resume mode');
-    expect(system).toContain('fetch the referenced job result first');
+    const system = observed
+      .filter((message) => message.role === 'system')
+      .map((message) => message.content)
+      .join('\n');
+    const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText).join('\n');
+    expect(system).not.toContain('the referenced job result first');
+    expect(system).not.toContain('Background-resume');
+    expect(turnMessages).toContain('the referenced job result first');
     await session.end();
   });
 

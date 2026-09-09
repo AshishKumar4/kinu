@@ -2767,7 +2767,6 @@ export class LocalAgentSession implements BackendHost {
       externalTools,
       backend: 'cli-local',
       workMode: this.actorSession.workMode,
-      provenance: turnProvenanceForMetadata(item.metadata),
       roleSection: profile.role,
       planSubmissionAvailable: false,
       model: { id: this.effectiveModelSpec() },
@@ -2807,7 +2806,15 @@ export class LocalAgentSession implements BackendHost {
       ledger: this.actorSession.dynamic,
       snapshot: () => this.dynamicContextSnapshot(memoryTail),
     };
-    const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
+    // Provenance rides here, not in the system prompt: it flips whenever a
+    // background job lands mid-session, and at system placement that flip
+    // rewrote the whole cacheable prefix twice — once into the wake and once
+    // back out (prompting/volatile-context.ts).
+    const turnLocal: Parameters<typeof turnLocalContextMessage>[0] = {
+      provenance: turnProvenanceForMetadata(item.metadata),
+    };
+    if (activeSkills) turnLocal.activeSkills = activeSkills;
+    const turnLocalMsg = turnLocalContextMessage(turnLocal);
     // Instruction bytes no owner approved ride that same turn-local tail rather
     // than the system prompt: sealed, labelled reference material the model may
     // read but cannot be commanded by. Placed BEFORE the turn-local message so
