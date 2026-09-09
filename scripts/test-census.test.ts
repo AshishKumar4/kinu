@@ -590,9 +590,10 @@ describe('this repository', () => {
   /**
    * The never-run set, EMPTY.
    *
-   * `scripts/test-census.test.ts` — this census's own suite — sits in the push
-   * tier's gate-tests row, in `deploy.sh`'s "Gate self-tests" line and in
-   * `deploy.test.ts`'s order pin, so no suite in the corpus goes unclaimed.
+   * `scripts/test-census.test.ts` — this census's own suite — is claimed by the
+   * push tier's gate-tests row and `deploy.sh`'s "Gate self-tests" command,
+   * whose execution `deploy.test.ts` checks by set equality, so no suite in the
+   * corpus goes unclaimed.
    *
    * The assertion is red in the direction that matters: a suite that STOPS
    * being executed appears here and fails by name. The reverse direction — an

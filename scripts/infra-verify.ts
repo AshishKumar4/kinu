@@ -48,12 +48,12 @@
  * `wrangler secret list` returns names; Cloudflare will not return a value and
  * nothing here asks for one. An ordinary config var is checked the same way
  * against that environment's own `vars`. Per environment is the load-bearing
- * half: unioning every environment's bindings and vars before comparing lets
- * production's `EMAIL_DOMAIN` answer for staging, which has none, and skips
- * every `config-var` entry outright. A missing required value fails loudly,
- * because nothing else asks whether the names in `Env` are satisfied by
- * anything — which is how `NIMBUS_RUNTIME_CACHE` goes months declared a
- * `string` while being an R2 bucket.
+ * half: unioning environments lets production's `EMAIL_DOMAIN` answer for
+ * staging, which has none; skipping `config-var` entries is a separate hole that
+ * leaves ordinary variables unchecked. Every required value is checked against
+ * its own environment, because a declared name or type alone does not prove that
+ * a resource supplies it — which is how `NIMBUS_RUNTIME_CACHE` goes months
+ * declared a `string` while being an R2 bucket.
  *
  * THREE PHASES, AND ONLY ONE OF THEM IS EVER RELAXED — see {@link PHASES}. The
  * split exists because "does this resource exist" has two different answers

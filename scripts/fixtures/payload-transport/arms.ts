@@ -127,12 +127,10 @@ export const MIB = 1024 * 1024;
  * A `PART_SIZE_BYTES`, a `base64ReadPlan` and a chunk/part algebra here would
  * describe an arm reading bounded base64 chunks and welding them into exact
  * 16 MiB R2 multipart parts inside the Durable Object — and none of that
- * describes devbox: `snapshot-chain.ts` hands the container's byte stream
- * straight to an uploader that does its own routing. The arm calls that
- * uploader, so the geometry is the measured one and not a second copy of a
- * decision this file owns. The uploader lives in `isolate-relay.ts`: the chain
- * publishes through a store mount, so the arm that prices the isolate route is
- * the one that holds its shape.
+ * belongs here: the owning-DO arm calls the fixture's `isolate-relay.ts`
+ * uploader, which owns routing and multipart geometry, including the 16 MiB
+ * parts. The product snapshot chain publishes through a store mount; this arm
+ * measures the isolate route as a separate baseline.
  */
 
 /**
