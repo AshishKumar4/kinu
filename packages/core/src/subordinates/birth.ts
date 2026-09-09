@@ -25,7 +25,6 @@ export const SubordinateBirthSchema = v.strictObject({
     body: v.pipe(v.string(), v.nonEmpty()),
     mode: v.custom<WorkMode>(isWorkMode),
     deliverable: v.optional(v.string()),
-    deadlineHint: v.optional(v.string()),
     inheritedContext: v.optional(v.string()),
   })),
 });
