@@ -1264,12 +1264,13 @@ describe('attach — the mount must be observed to have landed', () => {
 //
 //   ContainerStartOverrun: Devbox.attach exceeded its 300000ms budget
 //
-// on the wake after a stop, while the COLD attach of the same box passed. The
-// difference between the two is a COPY: a cold box has no delta, and a woken
-// one would have the whole cumulative changed set copied into a fresh upper —
-// read through squashfuse over the mounted store, the only full read of an
-// archive anywhere on this path. The header's claim that "an attach moves NO
-// bytes" holds of everything except a step like that, which moves all of them.
+// on the wake after a stop, while the COLD attach of the same box passed.
+// Copying the cumulative changed set into a fresh upper would distinguish a wake
+// from a cold attach and require a full archive read through squashfuse over the
+// store mount — the only full read of an archive anywhere on this path. That work
+// violates the no-payload-copy attach contract the header states as "an attach
+// moves NO bytes"; the measured wake overrun of 300000 ms is the evidence for
+// composing the delta as a layer.
 //
 // So the delta is a LAYER, and there are exactly two shapes. A stop does not
 // necessarily take the container with it: when the same instance comes back its
