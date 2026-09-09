@@ -10,7 +10,10 @@ export default defineConfig({
         compatibilityFlags: ['nodejs_compat'],
         bindings: {
           BENCH_TOKEN: 'test-token',
-          BENCH_SELECTED_ARMS: 'bounded-layers,merkle-pack',
+          // AN ARM THIS RUN DOES NOT DEPLOY, deliberately: the guard in
+          // `tests/workerd/bench-selected-arm.test.ts` is only live when the
+          // selected set does not name the strategy a request asks for.
+          BENCH_SELECTED_ARMS: 'none-of-them',
         },
       },
     }),

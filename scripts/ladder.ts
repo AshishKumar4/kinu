@@ -1070,13 +1070,13 @@ export const LADDER: readonly Gate[] = [
     // than absorbed by that glob because its name is a contract: a real container
     // measurement that remains only in stdout is not evidence.
     //
-    // The eight rig self-tests after it are explicit for the same reason, and they
+    // The seven rig self-tests after it are explicit for the same reason, and they
     // are on THIS row because each one guards a `scripts/bench-*.ts` rig or the
-    // fixtures it runs on — bench-capture-probe, bench-devbox-strategies,
-    // bench-payload-transports, and the r2-bench deploy substrate. Not one of
-    // their names starts with `bench`, so all eight shipped tracked, passing by
-    // hand, and claimed by NO tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    // fixtures it runs on — bench-devbox-strategies, bench-payload-transports,
+    // and the r2-bench deploy substrate. Not one of their names starts with
+    // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
+    // tier: 89 tests that ran in no pipeline.
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
@@ -1092,11 +1092,9 @@ export const LADDER: readonly Gate[] = [
       + 'commit tier proven able to FAIL, which the committed assertion over a '
       + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
       + 'patch file no tasks.jsonl line names, each driven from a fixture. And now '
-      + 'the four experiment rigs\' own admission and teardown logic: a capture '
-      + 'mechanism decided from a report that never passed the probe contract, an '
-      + 'ephemeral live probe whose generated config carries its own bearer token '
-      + 'or whose teardown cannot replay, a storage cell ranked without its '
-      + 'red-check evidence or scored without the Latin-square order and the '
+      + 'the three experiment rigs\' own admission and teardown logic: a storage '
+      + 'cell ranked without its red-check evidence or scored without the '
+      + 'Latin-square order and the '
       + 'CV/budget censoring the protocol requires, a pilot counted as ranking, a '
       + 'payload arm judged on an image or an operation it never started, and a '
       + 'Wrangler failure read as proof that an ephemeral worker is gone. No '

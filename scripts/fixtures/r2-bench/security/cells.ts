@@ -21,8 +21,8 @@ import {
   type SecurityEvidence,
 } from '../../storage-matrix/admission';
 
-/** The arms the security cells cover. Anything else reports unable. */
-export const SECURITY_STRATEGIES = ['snapshot-chain', 'bounded-layers', 'merkle-pack'] as const;
+/** The arm the security cells cover. */
+export const SECURITY_STRATEGIES = ['snapshot-chain'] as const;
 export type SecurityStrategy = (typeof SECURITY_STRATEGIES)[number];
 
 export type SecurityCellId = 'F7' | 'F10' | 'F11' | 'F12';
@@ -79,31 +79,6 @@ export type SecurityCellsReply = v.InferOutput<typeof SecurityCellsReplySchema>;
 export interface SecurityFixture {
   readonly origin: string;
   readonly token: string;
-}
-
-/**
- * Arms the security cells never run, and the reason for each. Read by
- * {@link summarizeSecurity}: an exclusion without prose, or an arm silently
- * added to it, fails the decision suite the same way the fault-cut table
- * does. r2fs syncs per-close uploads with no epoch, envelope, or grant to
- * attack; overlay-cas folds a journal with no candidate control identity.
- * Cutting either would fail an honest arm for lacking a property its
- * strategy refuses to offer — so they report unable and the gate refuses.
- */
-const SECURITY_EXCLUDED = {
-  r2fs: 'r2fs publishes no writer epoch, envelope, or capability grant. Its checkpoint is a sync over per-close s3fs uploads, so a stale-writer fence, a hostile-metadata digest binding, and a grant escape/replay surface do not exist to attack. Probing them would fail an honest arm for lacking properties its strategy refuses to offer.',
-  'overlay-cas': 'overlay-cas publishes no candidate epoch, envelope, or grant. Its checkpoint stages blobs and appends journal batches under a folded cursor, so the candidate stale-writer fence and the envelope/grant bindings do not exist to attack. Probing them would fail an honest arm for lacking properties its strategy refuses to offer.',
-} satisfies Partial<Record<string, string>>;
-
-export function securityExclusion(strategy: string): string | undefined {
-  switch (strategy) {
-    case 'r2fs':
-      return SECURITY_EXCLUDED.r2fs;
-    case 'overlay-cas':
-      return SECURITY_EXCLUDED['overlay-cas'];
-    default:
-      return undefined;
-  }
 }
 
 /** A nonce that doubles as the fixture's isolated namespace id. */
@@ -166,13 +141,13 @@ export async function runSecurityFaultCells(
  * Fold one observation per arm into the run-level security block. Strict in
  * the only direction that keeps G4 honest:
  *
- * - `securityCellsComplete` holds only when every non-excluded arm produced
- *   an observation whose every cell REFUSED its attack. An `unable` cell is
- *   not a refusal: it leaves the block incomplete so the gate refuses rather
- *   than admitting on untested zeros.
+ * - `securityCellsComplete` holds only when every arm produced an observation
+ *   whose every cell REFUSED its attack. An `unable` cell is not a refusal:
+ *   it leaves the block incomplete so the gate refuses rather than admitting
+ *   on untested zeros.
  * - Escape/accept flags are sticky: one accepted stale writer, hostile
  *   metadata, prefix escape, capability escape/replay, or credential leak
- *   anywhere in the cuttable set fails the run.
+ *   anywhere in the set fails the run.
  * - `credentialLeaks` carries descriptions only. The worker's F12 rows plus
  *   the driver-side scan over the run's own serialized output both land
  *   here; neither ever carries a secret value.
@@ -181,13 +156,12 @@ export async function runSecurityFaultCells(
  *   not read as a security finding.
  */
 export function summarizeSecurity(input: {
-  readonly rows: ReadonlyArray<{ readonly strategy: string; readonly observation: SecurityCellsObservation | null }>;
+  readonly rows: ReadonlyArray<{ readonly observation: SecurityCellsObservation | null }>;
   readonly token: string;
   readonly driverText: string;
 }): SecurityEvidence {
-  const cuttable = input.rows.filter((row) => securityExclusion(row.strategy) === undefined);
-  const observations = cuttable.map((row) => row.observation);
-  const completed = cuttable.length > 0
+  const observations = input.rows.map((row) => row.observation);
+  const completed = observations.length > 0
     && observations.every((observation) => observation !== null && observation.completed);
   let prefixEscapes = 0;
   let capabilityEscapesOrReplays = 0;

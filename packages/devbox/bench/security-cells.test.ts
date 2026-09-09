@@ -15,20 +15,12 @@
 
 import { describe, expect, test } from 'bun:test';
 
-import { isCanonicalJournalPath } from '../src/cas/types';
-import { sha256Hex } from '../src/cas/hash';
 import {
   baseObjectKey,
   isChainId,
   ChainRecordAdvanced,
   layerIntegrityFailure,
 } from '../src/snapshot-chain';
-import {
-  envelopeBytes,
-  envelopeIdOf,
-  parseEnvelopeBytes,
-} from '../src/candidates/publication';
-import type { RootEnvelopeV1 } from '../src/durability/contracts';
 import type { StoredValue } from '../src/storage';
 
 import {
@@ -36,11 +28,9 @@ import {
   securityPrefixFor,
 } from './security-cells';
 
-const encoder = new TextEncoder();
-
 /**
  * In-memory R2. `Object.create` recovers the `R2Bucket` shape the cells take
- * without asserting it: the literal below implements exactly the five members
+ * without asserting it: the literal below implements exactly the four members
  * the cells reach, and every other member resolves nowhere because no line of
  * the cells can call it.
  */
@@ -61,17 +51,6 @@ function fakeBucket() {
           const copy = bytes.slice();
           return copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength);
         },
-      };
-    },
-    head: async (key: string) => {
-      const found = objects.get(key);
-      if (found === undefined) return null;
-      return {
-        key,
-        size: found.bytes.byteLength,
-        version: found.version,
-        etag: `"${sha256Hex(found.bytes).slice(0, 32)}"`,
-        checksums: { sha256: undefined },
       };
     },
     delete: async (keys: string | string[]): Promise<void> => {
@@ -121,20 +100,17 @@ function fakeStorage() {
 }
 
 async function runCells(
-  strategy: string,
   secret: string,
   envValues: ReadonlyArray<{ readonly name: string; readonly value: string }> = [],
 ) {
   const bucket = fakeBucket();
   const storage = fakeStorage();
-  const nonce = `sec-test-${strategy.replace(/[^a-z]/g, '').slice(0, 8)}-nonce`;
   const observation = await runBenchSecurityCells({
-    strategy,
+    strategy: 'snapshot-chain',
     boxPrefix: 'boxes/test-box-id/',
-    nonce,
+    nonce: 'sec-test-chain-nonce',
     bucket: bucket.handle,
     storage: storage.handle,
-    boxId: 'test-box-id',
     fixtureSecret: secret,
     envValues,
   });
@@ -182,47 +158,6 @@ describe('F7 stale writer discrimination', () => {
 });
 
 describe('F10 hostile metadata discrimination', () => {
-  test('hostile paths are rejected by the exact candidate predicate', () => {
-    for (const hostile of ['../escape', '/absolute', 'a//b', 'a/./b', '', 'trailing/', 'a/../b']) {
-      expect(isCanonicalJournalPath(hostile)).toBe(false);
-    }
-  });
-
-  test('canonical paths still pass: the predicate above is not vacuous', () => {
-    expect(isCanonicalJournalPath('ladder/c1024.bin')).toBe(true);
-    expect(isCanonicalJournalPath('.devbox-verify-marker.txt')).toBe(true);
-  });
-
-  test('a tampered envelope does not parse at its original digest', () => {
-    const sha = sha256Hex(encoder.encode('f10-unit'));
-    const envelope: RootEnvelopeV1 = {
-      version: 1,
-      format: 'bounded-layers/v1',
-      boxId: 'unit-box',
-      epoch: '3',
-      generation: '1',
-      parentRootId: null,
-      cut: {
-        captureId: 'unit-cut', epoch: '3', baseRevision: '0', cut: '1',
-        stableStageHandle: 'unit-stage', manifestSha256: sha,
-      },
-      rootObject: { key: 'obj/root', byteLength: '1', sha256: sha },
-      closure: [],
-    };
-    const id = envelopeIdOf(envelope);
-    const canonical = envelopeBytes(envelope);
-    expect(parseEnvelopeBytes(canonical, id)).toEqual(envelope);
-    // A field changed under the same pointer: the bytes still parse, and the
-    // digest the pointer names is no longer theirs.
-    const relabeled = encoder.encode(new TextDecoder().decode(canonical).replace('"generation":"1"', '"generation":"2"'));
-    expect(relabeled).not.toEqual(canonical);
-    expect(() => parseEnvelopeBytes(relabeled, id)).toThrow(`candidate envelope does not match pointer ${id}`);
-    // The same envelope in a second encoding: it parses to the pointer's
-    // digest and is refused anyway, so one envelope has exactly one body.
-    const reencoded = encoder.encode(`${JSON.stringify(envelope, null, 1)}\n`);
-    expect(() => parseEnvelopeBytes(reencoded, id)).toThrow(`candidate envelope body at ${id} is not canonical`);
-  });
-
   test('hostile chain ids never become storage keys', () => {
     for (const hostile of ['../escape', '', 'not-a-uuid', 'a/b']) {
       expect(isChainId(hostile)).toBe(false);
@@ -232,54 +167,36 @@ describe('F10 hostile metadata discrimination', () => {
   });
 
   test('same-length digest replacement is refused; identical layer is sound', () => {
-    const declared = { bytes: 1024, digest: sha256Hex(encoder.encode('a')), objectVersion: 'va' };
-    const tampered = { bytes: 1024, digest: sha256Hex(encoder.encode('b')), objectVersion: 'vb' };
+    const declared = { bytes: 1024, digest: 'a'.repeat(64), objectVersion: 'va' };
+    const tampered = { bytes: 1024, digest: `${'a'.repeat(63)}b`, objectVersion: 'vb' };
     expect(layerIntegrityFailure({ declared, stored: tampered, label: 'delta' })).not.toBeNull();
     expect(layerIntegrityFailure({ declared, stored: { ...declared }, label: 'delta' })).toBeNull();
   });
 });
 
 describe('live cells over fakes', () => {
-  for (const strategy of ['snapshot-chain', 'bounded-layers', 'merkle-pack'] as const) {
-    test(`${strategy} completes with every attack refused`, async () => {
-      const { observation, bucket, storage } = await runCells(strategy, 'live-fixture-secret-abcdef');
-      expect(observation.strategy).toBe(strategy);
-      expect(observation.completed).toBe(true);
-      expect(observation.cells.map((cell) => cell.id)).toEqual(['F7', 'F10', 'F11', 'F12']);
-      for (const cell of observation.cells) expect(cell.status).toBe('refused');
-      expect(observation.staleWriterAccepted).toBe(false);
-      expect(observation.hostileMetadataAccepted).toBe(false);
-      expect(observation.prefixEscapes).toBe(0);
-      expect(observation.capabilityEscapesOrReplays).toBe(0);
-      expect(observation.credentialLeaks).toEqual([]);
-      expect(observation.cleanupErrors).toEqual([]);
-      // The isolated namespace is purged and no live keys were touched.
-      expect([...bucket.objects.keys()].filter((key) => key.includes('security-cells'))).toEqual([]);
-      expect([...storage.rows.keys()]).toEqual([]);
-      // Nothing echoes the secret.
-      expect(JSON.stringify(observation)).not.toContain('live-fixture-secret-abcdef');
-    });
-  }
-
-  for (const strategy of ['r2fs', 'overlay-cas'] as const) {
-    test(`${strategy} reports unable rather than passing on zeros`, async () => {
-      const { observation } = await runCells(strategy, 'live-fixture-secret-abcdef');
-      expect(observation.completed).toBe(false);
-      const byId = new Map(observation.cells.map((cell) => [cell.id, cell.status]));
-      expect(byId.get('F7')).toBe('unable');
-      expect(byId.get('F10')).toBe('unable');
-      expect(byId.get('F11')).toBe('unable');
-      expect(byId.get('F12')).toBe('refused');
-      // Unable is not success dressed up: no accepted flags, no fake zeros claimed complete.
-      expect(observation.staleWriterAccepted).toBe(false);
-      expect(observation.hostileMetadataAccepted).toBe(false);
-    });
-  }
+  test('snapshot-chain completes with every attack refused', async () => {
+    const { observation, bucket, storage } = await runCells('live-fixture-secret-abcdef');
+    expect(observation.strategy).toBe('snapshot-chain');
+    expect(observation.completed).toBe(true);
+    expect(observation.cells.map((cell) => cell.id)).toEqual(['F7', 'F10', 'F11', 'F12']);
+    for (const cell of observation.cells) expect(cell.status).toBe('refused');
+    expect(observation.staleWriterAccepted).toBe(false);
+    expect(observation.hostileMetadataAccepted).toBe(false);
+    expect(observation.prefixEscapes).toBe(0);
+    expect(observation.capabilityEscapesOrReplays).toBe(0);
+    expect(observation.credentialLeaks).toEqual([]);
+    expect(observation.cleanupErrors).toEqual([]);
+    // The isolated namespace is purged and no live keys were touched.
+    expect([...bucket.objects.keys()].filter((key) => key.includes('security-cells'))).toEqual([]);
+    expect([...storage.rows.keys()]).toEqual([]);
+    // Nothing echoes the secret.
+    expect(JSON.stringify(observation)).not.toContain('live-fixture-secret-abcdef');
+  });
 
   test('F12 names the surface without echoing the live secret', async () => {
     const secret = 'live-fixture-secret-abcdef';
     const { observation } = await runCells(
-      'bounded-layers',
       secret,
       [{ name: 'ALLOW_EXTRACTION', value: `prefix-${secret}-suffix` }],
     );
