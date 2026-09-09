@@ -93,8 +93,8 @@ describe('SignalDelivery — one delivery time: the next step', () => {
   });
 
   test('a settled background job reaches the live turn instead of waiting for a new one', async () => {
-    // The regression this collapse fixes: the job used to queue behind the
-    // turn that backgrounded it, so its result arrived a whole turn late.
+    // The regression this collapse fixes: a job queued behind the turn that
+    // backgrounded it delivers its result a whole turn late.
     const busy = setup({ turnInFlight: true });
     expect(await busy.signals.deliver({
       kind: 'background_job', text: 'job done',

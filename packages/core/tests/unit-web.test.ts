@@ -372,9 +372,9 @@ describe('web provider — fetch', () => {
   });
 
   test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {
-    // The 15s default that used to sit here armed one on every request, and its
-    // refusal read as an origin that failed. A page the agent asked for is work
-    // the agent still wants at second sixteen.
+    // A 15s default here would arm one on every request, and its refusal reads as
+    // an origin that failed. A page the agent asked for is work the agent still
+    // wants at second sixteen.
     const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
     const provider = createDefaultWebSearchProvider({ fetch });
     const res = await provider.fetch('https://example.com/page');

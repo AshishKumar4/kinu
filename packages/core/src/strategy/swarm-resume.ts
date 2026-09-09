@@ -430,14 +430,13 @@ interface NodeRow {
  *  4. READ THE TREE, with each node's record and its reconstructed turns.
  *  5. CLAIM THE UNFINISHED WORK ({@link PendingSwarmNode}) rather than retiring it.
  *
- * STEP 5 REPLACED A TERMINAL WRITE, and that is this function's own defect closed.
- * It used to call `HeadJournal.abandonRunning` here, scoped to the root, stamping
- * every unreported row `aborted` with prose that said the nodes after it were the
- * continuation — while the accounting, blind to those rows, went on to create that
- * continuation out of fresh ids. Both halves were wrong and they compounded: a
- * five-node search reported five failures and five new nodes per eviction.
+ * STEP 5 CLAIMS RATHER THAN TERMINATES. A `HeadJournal.abandonRunning` here, scoped to
+ * the root, would stamp every unreported row `aborted` with prose saying the nodes
+ * after it are the continuation — while the accounting, blind to those rows, goes on to
+ * create that continuation out of fresh ids. Both halves are wrong and they
+ * compound: a five-node search reports five failures and five new nodes per eviction.
  *
- * `abandonRunning` KEEPS ITS ONE MEANING, which is why nothing here writes a status
+ * `abandonRunning` HAS ONE MEANING, which is why nothing here writes a status
  * at all: it says "nothing will ever continue this run", and the only caller that can
  * honestly say so is the start-of-life reconciliation, for a root whose durable job
  * the resume gate could not re-drive (`heads/reconcile.ts`). A re-entry is the exact
@@ -743,12 +742,11 @@ export interface SwarmHarvest {
  *
  * A background `agents.swarm` job is bounded: it may be re-driven only so many times
  * and may live only so long (`jobs/runner.ts`). When a bound is reached the job has to
- * settle, and the question is what it settles WITH. It used to be nothing — an
- * eviction message — and that was measured costing the owner real work: root
- * `2rye1eyny1efm9583sqye` held TWO completed candidates with real content while its
- * job showed nothing at all, and the owner asked why the turn would not give itself
- * up. PARTIAL CANDIDATES ARE RESULTS. A search that measured two of five answers
- * measured two answers.
+ * settle, and the question is what it settles WITH. Settling with nothing — an eviction
+ * message — costs the owner real work, measured: root `2rye1eyny1efm9583sqye` held TWO
+ * completed candidates with real content while its job showed nothing at all, and the
+ * owner asked why the turn would not give itself up. PARTIAL CANDIDATES ARE RESULTS. A
+ * search that measured two of five answers measured two answers.
  *
  * READ-ONLY, and deliberately so: this is what the search HAS, not a transition. The
  * caller that reaches a bound is the one that settles the ledger row, because it is

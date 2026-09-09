@@ -60,8 +60,8 @@ function initTables(rt: ReturnType<typeof createTestRuntime>['rt']) {
 describe('MCTS integration', () => {
   // A branch runs behind a backend seam (facet RPC on cf, forked worker
   // locally), so a resolved value is still untrusted input. One that resolves
-  // malformed used to crash the search AFTER its nodes were recorded; it must
-  // score 0 like any other failed branch and be reported.
+  // malformed must score 0 like any other failed branch and be reported, not
+  // crash the search after its nodes are already recorded.
   test('a branch that resolves a malformed exploration is reported, not fatal', async () => {
     const { rt } = createTestRuntime();
     const failures: string[] = [];
@@ -368,9 +368,10 @@ describe('MCTS integration', () => {
   });
 
   test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {
-    // Regression: converge used to leave the winner status='open', so the
-    // SECOND runMCTS's global-argmax UCT selected the FIRST task's high-value
-    // winner instead of the new task's root and expanded under it.
+    // converge must close its winner: selection is a global-argmax UCT over one
+    // DB, so a winner left status='open' is what the SECOND runMCTS picks — the
+    // FIRST task's high-value node instead of the new task's root, expanded
+    // under it.
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({ explore: async () => ({ text: 'explored' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
 

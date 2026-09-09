@@ -82,11 +82,12 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
  * table through FTS5.
  *
  * The rows are written in the production shape, through the production chunker
- * and the DDL's real owner, because this used to declare a THIRD schema:
- * `(id, path, content)`. Whichever of the two ran first won, every insert
- * against the other shape failed on `no column named content`, and the catch
- * that wrapped it reported an indexed file. A fork copies `memory_chunks`, so
- * the same divergence also handed a fork an empty memory index.
+ * and the DDL's real owner, so there is exactly ONE declaration of
+ * `memory_chunks`. A second one — say `(id, path, content)` — lets whichever
+ * ran first win, fails every insert against the other shape on `no column
+ * named content`, and a catch around that insert reports an indexed file. A
+ * fork copies `memory_chunks`, so the same divergence also hands a fork an
+ * empty memory index.
  */
 export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
   const { sql } = wrapDatabase(db);

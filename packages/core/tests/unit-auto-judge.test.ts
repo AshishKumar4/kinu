@@ -253,11 +253,10 @@ describe('runAutoShadowEval', () => {
   });
 
   test('the trial carries no elapsed deadline — the config exposes no timeout knob', () => {
-    // A trial used to run the candidate under a wall clock; a candidate that
-    // attempted substantial work was cut and scored 0 for running out of room
-    // rather than for being worse. The candidate now runs to completion
-    // exactly as the live turn did, so there is no field left to tune and no
-    // default to drift.
+    // The candidate runs to completion, exactly as the live turn does. Under a
+    // wall clock a candidate that attempts substantial work is cut and scored 0
+    // for running out of room rather than for being worse — so there is no
+    // timeout field left to tune and no default to drift.
     expect('scaffoldTimeoutMs' in DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
     expect('scaffoldTimeoutMs' in structuredClone(DEFAULT_AUTO_JUDGE_CONFIG)).toBe(false);
   });

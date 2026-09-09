@@ -155,8 +155,8 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  *  pattern extracted from them encodes nothing reusable, which is why the
  *  extractor skips them too. One definition, both readers.
  *
- *  `fact` was folded into `memory`; stored turns from before that carry the old
- *  name and must still score the same, so it is recognised too. */
+ *  Turn records carry `fact` as well as `memory` for the same read, and a
+ *  recall under either name must score the same, so both are recognised. */
 export function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
   return call.name === 'fact' && call.args.action === 'recall';
@@ -171,11 +171,10 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
  * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
  *
  * The evidence is the tool-execution record the turn already carries, read
- * SYMMETRICALLY: it used to be consulted only when it said "something broke",
- * so a headless ledger could record that a turn went wrong and could never
- * record that one went right, and every downstream estimate (craft EMA and
- * retirement, GEPA's split, the archive's real-outcome priors) inherited that
- * pessimism.
+ * SYMMETRICALLY: consulted only when it says "something broke", a headless
+ * ledger could record that a turn went wrong and never that one went right, and
+ * every downstream estimate (craft EMA and retirement, GEPA's split, the
+ * archive's real-outcome priors) would inherit that pessimism.
  *
  *   • no non-lookup tool call → null. The turn never acted on the world, so
  *     the world returned no verdict, and an ungraded turn is recorded as

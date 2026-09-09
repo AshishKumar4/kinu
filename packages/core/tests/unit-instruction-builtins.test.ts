@@ -1,11 +1,10 @@
 // KINU-N028 — built-in skill names are reserved.
 //
 // `/workspace/skills/` is writable by the agent's own `file` tool, its codemode
-// and its shell. Discovery used to seed the corpus with the built-ins and then
-// let a file of the same name overwrite the entry, which the old comment in
-// `skills/builtins.ts` described as "the agent can override us". That is a
-// replacement of shipped doctrine — including the `allowed_tools` a built-in
-// declares — chosen by picking a filename, so it is refused outright.
+// and its shell. Seeding the corpus with the built-ins and then letting a file
+// of the same name overwrite the entry — "the agent can override us" — is a
+// replacement of shipped doctrine, including the `allowed_tools` a built-in
+// declares, chosen by picking a filename. It is refused outright.
 //
 // This is an invariant, not an approval question: there is no digest an owner
 // could approve that would make shadowing a built-in the right answer, because

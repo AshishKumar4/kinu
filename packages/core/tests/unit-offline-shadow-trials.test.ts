@@ -2,11 +2,11 @@ import type { ChatEvent } from '../src/chat';
 /**
  * The promotion gate's trials are OFFLINE.
  *
- * A shadow trial is a whole candidate turn plus two judge calls. It used to run
- * on the lane the finished turn was still holding — a `kinu exec` process
- * waited it out before it could exit, and a Durable Object ran a second full
- * inference beside the next request. What a turn owes the gate is now one row;
- * the rollout happens on the cadence lane.
+ * A shadow trial is a whole candidate turn plus two judge calls. What a turn
+ * owes the gate is ONE ROW; the rollout happens on the cadence lane. Run on the
+ * lane the finished turn is still holding, a trial makes a `kinu exec` process
+ * wait it out before it can exit and has a Durable Object run a second full
+ * inference beside the next request.
  *
  * These tests pin both halves and the seam between them: the turn executes
  * nothing, the drain executes what the turn queued, and a queued trial is never

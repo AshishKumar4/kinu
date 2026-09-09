@@ -257,10 +257,10 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
  *
  * A version that named NO cell scores 0, not a shared-bucket bonus. That is
  * the honest reading — it claimed no niche, so it has no coverage to be thin
- * in — and it is also what makes the term backward-compatible: an archive with
- * no pathologies at all adds zero to every weight and reproduces the
- * pre-pathology policy exactly, term for term, the same way a lineage-free
- * archive reproduces the pre-clade one.
+ * in — and it is also what keeps the term INERT where it has nothing to say:
+ * an archive with no pathologies at all adds zero to every weight, so the
+ * policy is exactly the pathology-free one, term for term, the same way a
+ * lineage-free archive collapses the clade term.
  */
 function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<string, number> {
   const counts = new Map<string, number>();

@@ -56,7 +56,8 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
 /**
  * Drive one completion through the SDK. The mock bodies are complete, so this
  * is awaited rather than absorbed: a provider that sends the right request and
- * then cannot read the answer back used to pass every assertion below.
+ * then cannot read the answer back fails here instead of passing every
+ * assertion below.
  */
 async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
   const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });

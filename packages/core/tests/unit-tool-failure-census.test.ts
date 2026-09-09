@@ -603,9 +603,9 @@ describe('each executor tool files its own failure in the right part', () => {
   }, 10_000);
 
   test('sandbox: a transport fault is NOT a platform gap', async () => {
-    // The contrast that makes the case above mean something. Both used to be one
-    // prose string; pooling them would put every container fault in the bucket
-    // that says "Kinu never provisioned this".
+    // The contrast that makes the case above mean something. Pooling the two under one
+    // prose string puts every container fault in the bucket that says "Kinu never
+    // provisioned this".
     const census = censusOf(await escalate(createSandboxExecutor({
       exec: async () => { throw new Error('the container hung up mid-write'); },
       readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
@@ -637,14 +637,14 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(censusOf(call({ name: 'execute_tools', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
   });
 
-  test('laptop: no device attached is a platform gap, and it used to be invisible', async () => {
+  test('laptop: no device attached is a platform gap, not a successful call', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
       rpc: async () => { throw new Error('no device connected'); },
       status: () => ({ connected: false, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
     }));
-    // The regression this locks: the old prose was read as a SUCCESSFUL call, so
-    // the census counted nothing at all here.
+    // The regression this locks: prose read as a SUCCESSFUL call leaves the census
+    // counting nothing at all here.
     expect(payload.outcome).toMatchObject({ success: false, reason: 'unavailable' });
     const census = censusOf(payload);
     expect(census.byKey).toEqual([['run·unavailable', 1]]);

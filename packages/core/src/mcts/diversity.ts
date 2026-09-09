@@ -26,12 +26,12 @@ const DIVERSITY_APPROACHES: readonly string[] = [
 /**
  * A second axis, orthogonal to the approach: where the work STARTS.
  *
- * WHY IT EXISTS. The angle used to be `APPROACHES[i % 6]`, so branch 7 was handed
- * branch 1's angle BYTE FOR BYTE — and since the angle is the only thing that differs
- * between siblings in the count-based mode, two siblings of a seven-wide wave were
- * asked an identical question and then compared against each other. `ideate` runs 5
- * and the named presets run 3-5, so the wrap was invisible until a caller asked for a
- * wider wave; `branches` has no upper bound.
+ * WHY IT EXISTS. Six approaches indexed by `i % 6` hand branch 7 the angle branch 1
+ * got, BYTE FOR BYTE — and since the angle is the only thing that differs between
+ * siblings in the count-based mode, two siblings of a seven-wide wave get asked an
+ * identical question and are then compared against each other. `ideate` runs 5 and the
+ * named presets run 3-5, so the wrap stays invisible until a caller asks for a wider
+ * wave; `branches` has no upper bound.
  *
  * A SECOND AXIS RATHER THAN A LONGER LIST, because a list long enough to cover any
  * width would be six real distinctions padded with restatements of them. Where an

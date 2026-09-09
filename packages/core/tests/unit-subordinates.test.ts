@@ -922,8 +922,8 @@ describe('subordinate event admission', () => {
     });
   });
 
-  // The sender used to be handed a fixed sentence and told nothing about what
-  // happened to the work. Everything below was already known at admission.
+  // The sender is told what actually happened to the work, never a fixed
+  // sentence. Everything below is already known at admission.
   test('the sender is told the event id its report will cite', () => {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);

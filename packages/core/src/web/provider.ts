@@ -80,10 +80,10 @@ export interface DefaultWebSearchProviderDeps {
    * Per-request network budget in ms, CALLER-REQUESTED ONLY.
    *
    * Absent means the request ends on its response, on a network failure, or on
-   * the platform below it — never on a clock chosen here. The 15_000 ms default
-   * that used to stand in its place cited no requirement, and it failed a slow
-   * origin with `request timed out`, which a reader cannot tell apart from an
-   * origin that really refused.
+   * the platform below it — never on a clock chosen here. A 15_000 ms default
+   * would cite no requirement, and it would fail a slow origin with `request
+   * timed out`, which a reader cannot tell apart from an origin that really
+   * refused.
    */
   timeoutMs?: number;
 }

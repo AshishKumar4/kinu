@@ -217,10 +217,10 @@ describe('decideBenchOutcome — rejection by default', () => {
   });
 
   test('an improvement over 3 differing pairs rejects on the floor, not on the p-value', () => {
-    // 12 tasks, 3 of which differed. The rejection this used to assert — "not
-    // significant" — implies a design that could have said otherwise; 3 differing
-    // pairs bottom out at p=0.25, so nothing here could ever have been accepted.
-    // Naming the floor is the stronger and more useful refusal.
+    // 12 tasks, 3 of which differed. "not significant" would imply a design
+    // that could have said otherwise; 3 differing pairs bottom out at p=0.25, so
+    // nothing here could ever be accepted. Naming the floor is the stronger and
+    // more useful refusal.
     const decision = decideBenchOutcome(scorecard([
       { a: false, b: true }, { a: false, b: true }, { a: true, b: false },
       ...Array.from({ length: 9 }, () => ({ a: true, b: true })),

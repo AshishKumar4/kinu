@@ -115,13 +115,13 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   /**
-   * F2. The base tier used to default to `$HOME`, learned by running
-   * `printf %s "$HOME"` on the machine — an exec, which needs the FULL tier,
-   * so a base-tier workspace could not list a directory without first being
-   * pushed through a full-filesystem card. And `$HOME` holds
-   * `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and `~/.aws`, so
-   * "inside its connected folder" was the whole home and reading one file in
-   * it escalated the tier.
+   * F2. The base tier reaches nothing the device did not name. Defaulting it to
+   * `$HOME` costs twice: learning `$HOME` means running `printf %s "$HOME"` on
+   * the machine — an exec, which needs the FULL tier, so a base-tier workspace
+   * could not list a directory without first being pushed through a
+   * full-filesystem card. And `$HOME` holds `~/.kinu/config.json` (the owner's
+   * CLI bearer), `~/.ssh` and `~/.aws`, so "inside its connected folder" would
+   * mean the whole home, and reading one file in it would escalate the tier.
    */
   test('a device that named no directory has no base-tier reach, and asks for none', async () => {
     const t = transport(() => 'contents');
@@ -217,11 +217,11 @@ describe('createDeviceTunnelExecutor', () => {
     ]);
   });
 
-  test('writeFile accepts the old daemon ok response and the structured response', async () => {
-    const legacy = transport(() => 'ok');
+  test('writeFile answers from the bytes it sent, whatever the daemon replies', async () => {
+    const bareOk = transport(() => 'ok');
     const structured = transport(() => ({ success: true }));
 
-    const a = await createDeviceTunnelExecutor(legacy).tools.writeFile.execute('/tmp/a', 'x');
+    const a = await createDeviceTunnelExecutor(bareOk).tools.writeFile.execute('/tmp/a', 'x');
     const b = await createDeviceTunnelExecutor(structured).tools.writeFile.execute('/tmp/b', 'yy');
 
     expect(a).toBe('Written 1 bytes to /tmp/a');
@@ -229,8 +229,8 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('tools reach the hub even when the cached snapshot is stale-false', async () => {
-    // Regression: agents whose runtime predated the device connection gated
-    // every call on the cached flag, so false could never flip back to true.
+    // A runtime that gates every call on the cached flag can never flip a false
+    // back to true, so the tools ask the hub rather than the snapshot.
     const t = transport(() => ({ stdout: 'hi', stderr: '', exitCode: 0 }));
     t.status = () => ({ connected: false, registered: true, toolchain: null });
     const provider = createDeviceTunnelExecutor(t);
@@ -356,9 +356,9 @@ describe('createDeviceTunnelExecutor', () => {
     });
     const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
 
-    // It used to be `false` — "the path is absent on your machine" — from a catch
-    // that dropped its error. An unreachable read and an absent path are different
-    // facts and the boolean channel cannot hold both.
+    // `false` would read as "the path is absent on your machine", which is what
+    // a catch that drops its error answers. An unreachable read and an absent
+    // path are different facts and the boolean channel cannot hold both.
     expect(answer).not.toBe(false);
     expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
   });

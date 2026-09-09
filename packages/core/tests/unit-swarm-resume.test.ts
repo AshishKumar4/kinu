@@ -164,12 +164,11 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
 
 /**
  * S12: A SWARM'S PROGRESS LIVES IN THE TREE, NOT THE ROW. The ledger row's
- * integer columns are the MCTS loop's checkpoint; a swarm used to write its
- * level barriers into them, so a run cut inside a level read the level before
- * it. Now every swarm progress reader derives iteration (children the tree
- * records) and remaining budget (the persisted initial budget minus those
- * children) at read time, and the row's own writes shrink to an epoch-fenced
- * liveness touch.
+ * integer columns are the MCTS loop's checkpoint, and a swarm writes no level
+ * barriers into them — a run cut inside a level would read the level before it.
+ * Every swarm progress reader derives iteration (children the tree records) and
+ * remaining budget (the persisted initial budget minus those children) at read
+ * time, and the row's own writes are an epoch-fenced liveness touch.
  */
 describe('swarm progress reads the durable tree, not the row', () => {
   function treeAndLedger() {
@@ -842,9 +841,9 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
-    // The level-1 barrier landed and SAID SO. The ledger row was previously written at
-    // `begin` and at the settle barrier only, so an evicted run left `iter=0` on disk
-    // and a re-entry had no progress to read.
+    // The level-1 barrier landed and SAID SO. A ledger row written at `begin` and at
+    // the settle barrier only leaves an evicted run with `iter=0` on disk and a
+    // re-entry with no progress to read.
     expect(log.emitted.map((line) => line.event)).toContain('swarm.checkpoint_reached');
     expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 2, epoch: 0 });
     expect(treeOf(sql).filter((node) => node.depth === 1)).toHaveLength(2);
@@ -928,9 +927,9 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       .toEqual([...frozenNodeIds].sort());
 
     // NO FAKE TERMINAL ROW ANYWHERE. Every row reached a real outcome, and none
-    // carries the takeover prose that used to be written on a node that was about to
-    // be re-run: "Interrupted before it reported. This search was re-entered from its
-    // durable rows, and the nodes after it are the continuation."
+    // carries takeover prose on a node that is about to be re-run: "Interrupted
+    // before it reported. This search was re-entered from its durable rows, and the
+    // nodes after it are the continuation."
     expect(journalled.map((row) => row.status)).toEqual(['completed', 'completed', 'completed', 'completed']);
     for (const row of journalled) expect(row.error_message).toBeNull();
     expect(sql<{ n: number }>`
@@ -1181,8 +1180,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
  * THE OTHER HALF OF THE SAME WAKE, which the suite above leaves out: a real cold
  * activation does not run only `recoverOrphans()`. It also reconciles the fork
  * journal, because a `running` head row cannot be executing in an isolate that
- * has just started, and that reconciliation used to be the FIRST thing an
- * activation did.
+ * has just started — and the ORDER of those two is the whole subject here.
  *
  * MEASURED ON THE OWNER'S WORKSPACE, the run before the one the suite above
  * pins: five heads spawned, none reported, and the next activation retired all
@@ -1190,10 +1188,9 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
  * activation found nothing left that could run it`. The re-entry never ran. The
  * agent was told its work was gone and re-forked by hand.
  *
- * The order was not a race. The sweep was unconditional and synchronous at start
- * of life while the re-drive was conditional — so the sweep won every eviction,
- * and its own message asserted that nothing could run the heads at the moment
- * something still could.
+ * The order is not a race. A sweep that is unconditional and synchronous at start
+ * of life beats a conditional re-drive on every eviction, and its own message then
+ * asserts that nothing could run the heads at the moment something still could.
  *
  * Both halves of one activation, in the order an activation runs them.
  */
@@ -1319,18 +1316,18 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
   }, 300_000);
 
   test('a run a LATER activation refuses is still retired, not left interrupted forever', async () => {
-    // THE HOLE THIS CLOSES. Retirement used to be gated on THIS activation having
-    // marked something (`if (interrupted.length === 0) return []`), which is a
-    // different question from "did the gate refuse it". A run marked `interrupted` by
-    // an earlier activation is not marked again, so on the activation whose gate
-    // finally refuses it the early return fired and its rows stayed `interrupted` for
-    // the life of the workspace: no report, no terminal state, and no card. The
-    // ledger row beside them was already closed on the gate's answer alone, so one
-    // sweep's two halves disagreed about which activation was allowed to settle.
+    // THE HOLE THIS CLOSES. Gating retirement on THIS activation having marked
+    // something (`if (interrupted.length === 0) return []`) asks a different question
+    // from "did the gate refuse it". A run marked `interrupted` by an earlier
+    // activation is not marked again, so on the activation whose gate finally refuses
+    // it that early return fires and its rows stay `interrupted` for the life of the
+    // workspace: no report, no terminal state, and no card. The ledger row beside them
+    // is closed on the gate's answer alone, so one sweep's two halves would disagree
+    // about which activation is allowed to settle.
     //
-    // Reachable because a swarm's re-entry no longer writes terminal rows of its own:
-    // it re-runs what it owns, so the only writer left for a genuinely dead run is
-    // this sweep.
+    // Reachable because a swarm's re-entry writes no terminal rows of its own: it
+    // re-runs what it owns, so the only writer left for a genuinely dead run is this
+    // sweep.
     const { rt, activation } = await workspace();
     const hostNode = activation();
     const sql = rt.storage.sql;
@@ -1497,7 +1494,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
   test('a row with no journalled heads closes too, on its own evidence', async () => {
     // A `unit:'thought'` swarm journals no head rows, so the journal sweep has
-    // nothing to find and used to return before anything looked at the ledger.
+    // nothing to find — returning on that alone would never look at the ledger.
     const { rt } = await workspace();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);

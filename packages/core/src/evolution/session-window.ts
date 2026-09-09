@@ -254,8 +254,9 @@ export interface CompletedTurnStore {
   /** The review's own side effects have landed (the `turn_outcomes` row, the
    *  craft EMA move, the lesson). Split from its lease so recovery can tell
    *  "the review ran" from "a host held the row": a claim is only a lease, so
-   *  an eviction after the side effects but before {@link settleReview} used to
-   *  re-run the whole review on the next activation. Idempotent. */
+   *  without this an eviction after the side effects but before
+   *  {@link settleReview} re-runs the whole review on the next activation.
+   *  Idempotent. */
   recordReviewRan(rowId: string): void;
   /** Defer one turn's review. With `storedRowId`, the turn is ALREADY a row
    *  here (just claimed) and the row itself becomes the owed review instead of
@@ -345,11 +346,11 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
         return null;
       }
       // `queued`, not `none`, and written in the SAME insert as the turn. The
-      // review of a turn with no follow-up coming used to be DISPATCHED inline by
-      // the caller after this insert returned, so an eviction between the two
-      // left the row at `none` with its review lost, while a replay of the
-      // recording dispatched it a second time. The obligation is now part of the
-      // row, and the durable queued-review lane claims it exactly once.
+      // obligation is PART OF THE ROW, and the durable queued-review lane
+      // claims it exactly once. Dispatched inline by the caller after this
+      // insert returned instead, an eviction between the two would leave the
+      // row at `none` with its review lost, and a replay of the recording would
+      // dispatch it a second time.
       const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
       const id = opts.id ?? `turn-${nanoid()}`;
       const now = opts.now ?? nowMs();
@@ -515,9 +516,10 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       if (stale.length === 0) return 0;
       // THE defect this split exists for. A claim is a lease, not the work: an
       // eviction after `reviewTurn` appended its `turn_outcomes` row and moved
-      // the craft EMAs, but before `settleReview`, used to arrive here and
-      // re-run the whole review on the next activation — and both of those
-      // writes are append-only or cumulative, so the duplicate is observable.
+      // the craft EMAs, but before `settleReview`, arrives here — and without
+      // the tombstone it would re-run the whole review on the next activation,
+      // where both of those writes are append-only or cumulative, so the
+      // duplicate is observable.
       // A row whose work is tombstoned is settled; only the rest is owed again.
       let requeued = 0;
       for (const row of stale) {

@@ -235,8 +235,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const sql = rt.storage.sql;
     const actor = rt.actor;
     // `execution` is the runtime's own verdict on a headless turn: no user saw
-    // it, let alone followed up. The digest used to report the whole batch as
-    // "from real user follow-ups", which invented a person for these two.
+    // it, let alone followed up. Reporting the whole batch as "from real user
+    // follow-ups" invents a person for these two.
     recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'ship it', assistantResponse: 'shipped',

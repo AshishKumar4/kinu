@@ -73,10 +73,10 @@ export async function clampToolResult(
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;
   const omitted = text.length - headLen - tailLen;
-  // Why this result came back shorter than the last one. The system prompt
-  // used to explain the turn-cumulative cap in its Delegation section, ~3,000
-  // tokens before anything could trip it; the fact is only actionable at the
-  // trip, and it costs nothing on the turns that never get here.
+  // Why this result came back shorter than the last one. Explaining the
+  // turn-cumulative cap in the system prompt's Delegation section spends ~3,000
+  // tokens before anything can trip it; the fact is only actionable at the trip,
+  // and it costs nothing on the turns that never get here.
   const tightened = maxChars < configured;
   const reason = tightened
     ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a search or a subordinate rather than pulling more of it in here.'

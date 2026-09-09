@@ -367,9 +367,9 @@ export function floorMargin(floor: Floor, direction: ObjectiveDirection): number
  * candidate bypassed the measured channel, or the floor is wrong — and a result
  * consistent with two hypotheses confirms neither. So both are named, the
  * measurement is RETAINED, and the run reports this as its own outcome rather
- * than folding it into a zero. The previous behaviour (score 0, "the measurement
- * channel was bypassed", hard-tasks/cost-model.ts:452-459) picks one hypothesis
- * silently, which is what let a wrong floor stand.
+ * than folding it into a zero. Scoring it 0 with "the measurement channel was
+ * bypassed" (hard-tasks/cost-model.ts:78-86) picks one hypothesis silently,
+ * which is what lets a wrong floor stand.
  */
 export interface FloorBreach {
   readonly floor: Floor;

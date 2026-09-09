@@ -160,12 +160,11 @@ const StatusFieldSchema = v.looseObject({
 /**
  * What a provider failure carries once it has crossed this boundary.
  *
- * Kept as fields rather than folded into one string because every consumer
- * downstream used to recover them by re-matching the prose: the CLI's guidance
- * layer regex-matched a rendered sentence, and the turn-failure classifier
- * matched a different one. A status is part of the HTTP protocol and a
- * provider's `code`/`type` is its own published identifier; neither drifts the
- * way wording does.
+ * Kept as fields rather than folded into one string because one string leaves every
+ * consumer downstream to recover them by re-matching the prose: a guidance layer
+ * regex-matching a rendered sentence in the CLI, a turn-failure classifier matching a
+ * different one. A status is part of the HTTP protocol and a provider's `code`/`type`
+ * is its own published identifier; neither drifts the way wording does.
  */
 export interface ProviderFailureFacts {
   /** The provider's own reason, safe to show a user. Never a raw response
@@ -190,8 +189,8 @@ export interface ProviderFailureFacts {
  * That distinction is the whole point: an unparseable body is an HTML error
  * page, a signed URL, or a gateway echo of the request that failed — the
  * request Kinu sent, headers included — and none of those is text for a user's
- * terminal. The same rule kills the whole-object `JSON.stringify` this used to
- * fall back to, which forwarded every field an SDK happened to attach.
+ * terminal. The same rule rules out a whole-object `JSON.stringify` fallback, which
+ * would forward every field an SDK happened to attach.
  */
 export function providerFailureFacts(failure: { readonly cause: unknown }): ProviderFailureFacts {
   return readProviderFailure({ cause: failure.cause, depth: 0 })
@@ -234,11 +233,11 @@ function readProviderFailure(
   if (text.success) return { message: text.output };
   if (v.is(v.string(), error)) return null;
 
-  // Shallow on purpose. This used to go through a `JsonObject` guard, and
-  // `JsonObjectSchema` is RECURSIVE: a provider error object that references
-  // itself — the shape a gateway produces the moment it attaches the request it
-  // failed on — overflowed valibot's stack instead of failing to match, and the
-  // guard's `catch { return false }` reported that overflow as "not an object".
+  // Shallow on purpose, and not through a `JsonObject` guard: `JsonObjectSchema` is
+  // RECURSIVE, so a provider error object that references itself — the shape a gateway
+  // produces the moment it attaches the request it failed on — overflows valibot's
+  // stack instead of failing to match, and the guard's `catch { return false }` reports
+  // that overflow as "not an object".
   // Nothing here needs deep JSON validity: each field below re-validates.
   const record = v.safeParse(v.record(v.string(), v.unknown()), error);
   if (!record.success) return null;

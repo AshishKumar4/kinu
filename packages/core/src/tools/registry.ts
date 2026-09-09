@@ -256,12 +256,12 @@ export function codemodeCapabilitiesFor(
 /**
  * One role's tool surface, over BOTH places a capability can be reached.
  *
- * THE POINT IS THE SINGLE SET. Role narrowing used to be applied to the native
- * ToolSet only, while `execute_tools` built its codemode providers from
- * unfiltered deps — so a role allowed `execute_tools` and denied `agents` still
- * delegated, hired and wrote memory through `agents.*`, and the narrowing was
- * decorative for any role that kept the sandbox. Both surfaces now read the
- * same merged list, so they cannot disagree.
+ * THE POINT IS THE SINGLE SET. Both surfaces read the same merged list, so they
+ * cannot disagree. Narrow the native ToolSet alone and `execute_tools` builds
+ * its codemode providers from unfiltered deps — a role allowed `execute_tools`
+ * and denied `agents` still delegates, hires and writes memory through
+ * `agents.*`, and the narrowing is decorative for any role that keeps the
+ * sandbox.
  */
 export interface ToolSurfaceNarrowing {
   /** Whether a native tool id survives. */
@@ -336,13 +336,15 @@ export interface BuiltinToolSpec {
 }
 
 // ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder with TWO rungs, and they differ on lifetime
+// The `agents` tool is ONE ladder with THREE rungs, and they differ on lifetime
 // and on who decides: swarm = an ephemeral search whose candidates are MEASURED
-// against a number the caller declares and which settles into this turn; hire =
-// a persistent subordinate that outlives the turn and starts from a blank
-// context; ask/send = talking to what already exists. The tool docstring
-// renders these rungs verbatim and the prompt's Delegation section indexes
-// them, so editing them here is the only place delegation doctrine changes.
+// against a number the caller declares and which settles into this turn; a
+// role-targeted ask = one full agent for one question, released the moment it
+// answers; hire = a persistent subordinate that outlives the turn and starts
+// from a blank context; ask/send by `agent` = talking to what already exists.
+// The tool docstring renders these rungs verbatim and the prompt's Delegation
+// section indexes them, so editing them here is the only place delegation
+// doctrine changes.
 //
 // TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. Every configured
 // search of any depth is `action:'swarm'`, whose candidates are scored against
@@ -355,20 +357,19 @@ export interface BuiltinToolSpec {
 //
 // NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
 // `hire`, not `staff` and not `spawn`.
-//   `spawn` is disqualified outright — BOTH rungs spawn something, so the word
+//   `spawn` is disqualified outright — EVERY rung spawns something, so the word
 //     is exactly the information the ladder is keyed on, removed.
-//   `staff` carried the lifetime signal but takes the wrong OBJECT: you staff
+//   `staff` carries the lifetime signal but takes the wrong OBJECT: you staff
 //     an organisation and you hire a person, and this action's object is one
-//     person (`role` + `mission` → one subordinate). It was defensible only
-//     while the caller was the workspace orchestrator, where "staff the
-//     workspace" was a readable elision; a subordinate hiring its own helper
-//     has no organisation to staff, and subordinates hire now.
+//     person (`role` + `mission` → one subordinate). Subordinates hire their own
+//     helpers, and a subordinate has no organisation to staff.
 //   `hire` keeps the lifetime signal (nobody hires for one turn), takes the
 //     object the call actually has, matches the workplace vocabulary the rest
 //     of this surface already uses (role, mission, roster, dismiss), and pairs
 //     with `dismiss` — hire/dismiss is a matched pair on the enum, staff/dismiss
-//     was not.
-// The cutover is total: no alias, no accepted-legacy action.
+//     is not.
+// AGENTS_TOOL_ACTIONS below is the whole vocabulary: `hire` is the only spelling
+// of the persistent rung, and no second action reaches it.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see
@@ -385,7 +386,8 @@ export const DELEGATION_FRAME =
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
- * which rung a task wants, and the half neither rung used to state.
+ * which rung a task wants, and the half each rung's doctrine composes from here
+ * rather than wording for itself.
  *
  * Keyed by ACTION rather than written as one paragraph covering both, because
  * the two rungs need OPPOSITE instructions and a rule the model has to apply
@@ -490,16 +492,17 @@ export const DELEGATION_CONVERSE =
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
-// The preset doctrine USED TO BE HERE, as `SWARM_PRESET_DOCTRINE`. It now lives in
-// strategy/swarm.ts, beside the preset table it describes, and is rendered from those
-// rows rather than written alongside them.
+// The preset doctrine is NOT here. It lives in strategy/swarm.ts as
+// `SWARM_PRESET_DOCTRINE`, beside the preset table it describes, and is rendered
+// from those rows rather than written alongside them.
 //
-// The distance was the defect. This module is import-free by design, so the prose here
-// could not read the table there: it asserted that `optimise` "requires `objective`"
-// and that research/audit/redteam "require `objective` and `key`" while the table and
-// the validator were what actually decided, and the two were free to disagree. They
-// did — a live incident spent five of a model's ten steps on a call the doctrine
-// described as legal. Only the clause a renderer cannot derive is still hand-written,
+// Distance from the table is the defect that placement avoids. This module is
+// import-free by design, so prose written here cannot read the table there: it
+// would assert that `optimise` "requires `objective`" and that
+// research/audit/redteam "require `objective` and `key`" while the table and the
+// validator are what actually decide, and the two would be free to disagree. A
+// live incident spent five of a model's ten steps on a call hand-written doctrine
+// described as legal. Only the clause a renderer cannot derive is hand-written,
 // and it sits on the row itself (`SwarmPresetPoint.doctrine`).
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────
@@ -538,10 +541,10 @@ export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
 /**
  * The one wording for "the model sent a discriminant that is not in the
- * vocabulary" — shared by every native dispatcher, because they used to
- * disagree about it and the disagreement was the defect: `tasks` answered
- * `unknown tasks action 'list">'`, naming what the model typed and none of the
- * words that would have worked, so the retry repeated the mistake.
+ * vocabulary" — shared by every native dispatcher, because a per-dispatcher
+ * wording is free to drop the half that matters: `unknown tasks action 'list">'`
+ * names what the model typed and none of the words that would have worked, so
+ * the retry repeats the mistake.
  *
  * Both halves earn their place. The vocabulary is what makes the next call
  * succeed. The echo is what tells the model WHICH of its arguments was wrong

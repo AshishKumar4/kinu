@@ -1,11 +1,10 @@
 // The node transcript's step trace, bounded.
 //
-// `readNodeTranscript` used to answer with EVERY step of the branch in one
-// payload — a 400-step search opened its whole trace over the wire on one
-// click. The steps are now a cursored page (newest page first, each page
-// oldest-first, cursor anchored on `head_steps.id`), with `stepCount` carrying
-// the honest total so the Steps metric does not start lying about the page it
-// was handed.
+// `readNodeTranscript` answers with a cursored page (newest page first, each
+// page oldest-first, cursor anchored on `head_steps.id`), with `stepCount`
+// carrying the honest total so the Steps metric does not start lying about the
+// page it was handed. EVERY step of the branch in one payload opens a 400-step
+// search's whole trace over the wire on one click.
 //
 // These tests walk a transcript longer than one page and hold the contract the
 // chat history paging already established: every row reachable exactly once,
@@ -118,7 +117,7 @@ describe('node transcript paging', () => {
  * `mcts/engine.ts` records a search's root with `action: ''` — a root is the
  * workspace as found and proposed nothing — so a breadcrumb built from the raw
  * column had nothing to print, and the panel printed the literal `root`. The
- * crumb now carries the run's name, derived exactly as the run list derives it.
+ * crumb carries the run's name, derived exactly as the run list derives it.
  */
 describe('the search path names the run it belongs to', () => {
   /** A two-level search: an unlabelled root, one branch under it. */

@@ -56,10 +56,11 @@ export async function maybeStoreCraftedTool(
     jsonObjectOnlyInstruction(),
   );
 
-  // Only the model's own output is allowed to be unusable here. The store write
-  // below used to sit inside the same catch as this parse, so a tool that failed
-  // to persist was reported as "the LLM returned invalid JSON" and the craft
-  // loop looked like it had simply declined to generalize.
+  // Only the model's own output is allowed to be unusable here. `tolerate`
+  // covers the parse and NOTHING else: a store write inside the same catch
+  // would report a tool that failed to persist as "the LLM returned invalid
+  // JSON", and the craft loop would look like it had simply declined to
+  // generalize.
   const extracted = tolerate(() => extractJsonObject(generalized), 'malformed-input');
   if (extracted === undefined) return;
   const parsed = v.parse(GeneralizedToolSchema, extracted);

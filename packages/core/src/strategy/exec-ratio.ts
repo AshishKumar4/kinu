@@ -71,12 +71,12 @@ export const REFERENCE_FILE = 'reference.mjs';
  * is unique per verification. Underscored so they sort away from the agent's own
  * files.
  *
- * UNIQUE NAMES RATHER THAN A CACHE-BUSTING QUERY STRING, which is what this
- * originally used. Measured: `import('./solution.mjs?v=1787001636902')` fails in
- * the workspace with `Cannot find module` — the embedded runtime resolves the
- * specifier as a literal path, so the query is part of the filename. A fresh name
- * needs no support from the module resolver at all, and it is correct whether or
- * not the registry is shared between two `exec` calls in one isolate.
+ * UNIQUE NAMES RATHER THAN A CACHE-BUSTING QUERY STRING. Measured:
+ * `import('./solution.mjs?v=1787001636902')` fails in the workspace with
+ * `Cannot find module` — the embedded runtime resolves the specifier as a
+ * literal path, so the query is part of the filename. A fresh name needs no
+ * support from the module resolver at all, and it is correct whether or not the
+ * registry is shared between two `exec` calls in one isolate.
  */
 const MEASURE_PREFIX = '_measure_';
 const CANDIDATE_PREFIX = '_candidate_';
@@ -335,12 +335,11 @@ const RESULT_LINE = /^RESULT (.*)$/m;
  * The declaration a reference module must carry for {@link referenceAsExpression}
  * to convert it.
  *
- * Exported so the registry's `spec` schema can REFUSE a reference without it,
- * beside the other field complaints. It used to be enforced only here, at
- * measurement time, which put it after `spec` validation had already passed: a
- * model iterating on its spec fixed the shape complaints, got a clean parse, and
- * only then learned about this one — one more round trip, in a production turn
- * that had ten steps to spend.
+ * Exported so the registry's `spec` schema can REFUSE a reference without it, beside
+ * the other field complaints. Enforced only here, at measurement time, it would sit
+ * after `spec` validation has already passed: a model iterating on its spec fixes the
+ * shape complaints, gets a clean parse, and only then learns about this one — one more
+ * round trip, in a production turn that has ten steps to spend.
  */
 export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
 

@@ -133,9 +133,9 @@ export interface ShadowConfig {
  * world the recorded tie rate goes 50% → 73%. A budget of 12 then runs out
  * while only two or three decisive trials are in, and the ceiling's forced
  * decision — which promotes on a bare >0.5 majority and does NOT consult
- * minDecisiveTrials — starts deciding most rollouts. That is the leak this
- * comment used to file as "residual and not config-fixable"; it is fixable, by
- * denominating the budget correctly. Sweeping it at (maxReg 1, minDec 5):
+ * minDecisiveTrials — starts deciding most rollouts. That leak is not residual
+ * and it is config-fixable: denominate the budget correctly. Sweeping it at
+ * (maxReg 1, minDec 5):
  *
  *   maxTrials | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
  *          12 |        65.6%           |   7.9%   ← misses the bar
@@ -556,14 +556,14 @@ export async function readScaffoldVersion(rt: AgentRuntime, version: number): Pr
   // own bodies the agent is about to run: a read that fails for any other reason
   // must not come back as "there is no such version".
   //
-  // This guard used to read `rt.identity.scaffold.version()`, which is
-  // MAX(version) and therefore counts the PENDING row. So asking for a pending
-  // version whose backup file was missing compared equal, fell through, and
-  // handed back the CURRENT code as if it were the pending candidate: shadow eval
-  // then judged current against current, could declare "pending" the winner on
-  // judge noise, and with autoApply promote a version whose source does not
-  // exist. That is the same defect modify.ts's gate 4 is written to avoid, and
-  // the only test over the path accepted both outcomes so it never fired.
+  // The comparison is against `getCurrentScaffoldVersion` — the status='current'
+  // row — and NOT `rt.identity.scaffold.version()`, which is MAX(version) and
+  // therefore counts the PENDING row. Under MAX(version) a pending version whose
+  // backup file is missing compares equal, falls through, and comes back as the
+  // CURRENT code dressed as the pending candidate: shadow eval then judges
+  // current against current, can declare "pending" the winner on judge noise,
+  // and with autoApply promote a version whose source does not exist. That is
+  // the same defect modify.ts's gate 4 is written to avoid.
   if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
   return await rt.identity.scaffold.read();
 }

@@ -5,8 +5,7 @@
  * "Inherited context", "The report contract", "Arbitration", "Isolation" and "The
  * journal read model".
  *
- * A node used to be one `generateText` call whose whole output was text. It is an
- * AGENT now, normatively so, and *A node is an agent* lists the six things that
+ * A node is an AGENT, normatively so, and *A node is an agent* lists the six things that
  * makes it one: a tool loop with a stop condition, a tool surface, no delegation
  * authority, its own model, its own transcript, and its own workspace. This module
  * is five of those six. The sixth is built: {@link nodeWorkspace} hands a node a
@@ -33,9 +32,9 @@
  * tree. In that second state a diff of the workspace attributes nothing, which is
  * why the grading signal is the report in both. The engine writes the REPORTED
  * candidate to the verifier's path and measures that, one node at a time. This is
- * the constraint the delegation doctrine used to state as the reason a graded node
- * could not hold tools at all; it is a constraint on the GRADING SIGNAL, not on the
- * tool surface, and separating the two is what made this commit possible.
+ * the constraint the delegation doctrine states, and it is a constraint on the GRADING
+ * SIGNAL, not on the tool surface: a graded node holds tools, and what grades it is
+ * still the report.
  *
  * THE REPORT IS CONSUMED THROUGH ONE FUNCTION. *The grading report's retry bound,
  * its terminal set and its verifier immutability are not settled here*, so
@@ -245,8 +244,8 @@ export interface NodeAgentDeps {
    * A FACTORY, and it has to be: a search builds these deps once and shallow
    * copies them per child, so a single `HostedActor` here would give every node
    * of a wave one claim ledger, one loop pointer and one set of rows — the exact
-   * cross-actor collision the one-database cutover has to make impossible. One
-   * call per node, one actor per node, all of them over the same database.
+   * cross-actor collision this factory makes impossible. One call per node, one
+   * actor per node, all of them over the same database.
    */
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
@@ -333,11 +332,10 @@ export interface NodeLoopDeps {
    * The HOSTED logical actor this node IS — its handle, its actor-scoped stores
    * over the ONE workspace database, its runtime and its session.
    *
-   * It used to be a bare `rt`, and a node's turn wrote no durable claim: the
-   * kind whose whole job is to explore under the workspace's own program was
-   * one of the two that ran under no identity, on a private database, with a
-   * fresh v0 loop. Its runtime is `actor.runtime`; its turns are claimed turns
-   * on `actor.session`.
+   * A `HostedActor` and not a bare `rt`, because a node's turn writes a durable claim:
+   * the kind whose whole job is to explore under the workspace's own program runs under
+   * an identity, on the workspace's own database, with a claimed loop. Its runtime is
+   * `actor.runtime`; its turns are claimed turns on `actor.session`.
    */
   actor: HostedActor;
   /** The activation's run id; every turn this node admits is claimed under it. */
@@ -717,10 +715,10 @@ async function runNodeLoop(
   // runner reads presence to decide whether to fall back to the interactive default.
   if (deps.backgroundPolicy !== undefined) runnerDeps.policy = deps.backgroundPolicy;
   const jobRunner = new BackgroundJobRunner(runnerDeps);
-  // ONE SPELLING for "a branch could be granted here": a null arbiter. The spec
-  // used to carry the same fact a second time as `canPropose`, because a host's
-  // arbiter was an RPC stub and therefore never null however the search had ruled
-  // — and with the host gone the two spellings could only ever disagree by bug.
+  // ONE SPELLING for "a branch could be granted here": a null arbiter. A second
+  // spelling of the same fact on the spec — a `canPropose` flag beside it — could only
+  // ever disagree with the arbiter by bug, and the arbiter is what the grant path
+  // reads.
   const tools = buildNodeToolSet({
     deps,
     capture,
@@ -796,7 +794,7 @@ async function runNodeLoop(
  * into an `errored` report, and a node that errored is a candidate the search could
  * not measure rather than a run that stops.
  *
- * THE TRANSPORT's failures are not, and this function used to claim otherwise. The
+ * THE TRANSPORT's failures are NOT reports, and must not be turned into one. The
  * node's actor and the home-credentialed runtime are both acquired here; a failure
  * to build either arrives as a thrown error with no report behind it, and there is
  * no report for the ledger to record. So this DOES throw for that case — wrapped,

@@ -21,14 +21,13 @@
  *     child of the same message, which is the whole point of a tree.
  *     {@link sessionTreeAncestry} cuts on the edges.
  *
- *  2. A SECOND copy of the same conversation used to exist: a post-turn
- *     reconciler projected the pane's newest-leaf ancestry into plain
- *     `messages` rows because every reader except the fork cut read that
- *     table. An interrupted turn, or a sibling branch off an older node, sat
- *     unprojected until the next reconciler pass, invisible to status counts,
- *     paging, search and outcome attribution. There is no reconciler any more:
- *     every reader goes through THIS module, and each workspace carries its
- *     default chat in exactly ONE store.
+ *  2. One copy of a conversation, or none. Every reader goes through THIS
+ *     module, and each workspace carries its default chat in exactly ONE
+ *     store. A second copy — a post-turn reconciler projecting the pane's
+ *     newest-leaf ancestry into plain `messages` rows — leaves an interrupted
+ *     turn, or a sibling branch off an older node, unprojected until the next
+ *     pass, invisible to status counts, paging, search and outcome
+ *     attribution.
  */
 
 import * as v from 'valibot';

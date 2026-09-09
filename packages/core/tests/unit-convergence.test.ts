@@ -71,8 +71,8 @@ describe('Convergence', () => {
 
   // With no value signal every node carries the same number, so `ORDER BY value
   // DESC` degenerates to row order: the "winner" is whichever row came back
-  // first, and it used to be handed over as a converged answer because the
-  // shared value cleared minAcceptableScore.
+  // first, and a shared value clearing minAcceptableScore is no reason to hand
+  // it over as a converged answer.
   test('two DISTINCT approaches scoring identically is not a convergence', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
@@ -87,7 +87,7 @@ describe('Convergence', () => {
         VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
 
     const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
-    // 0.6 clears minAcceptableScore — the old code shipped it as a winner.
+    // 0.6 clears minAcceptableScore, so the score alone would ship it as a winner.
     expect(result.winnerValue).toBeCloseTo(0.6, 10);
     expect(result.converged).toBe(false);
     expect(result.reason).toBe('undifferentiated');

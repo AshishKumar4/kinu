@@ -57,7 +57,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     const lessonText = lessons[0]!.text;
 
     // THE RESET: the whole memory file plane is wiped, as a workspace reset
-    // does. Under the old design this erased every lesson copy with it.
+    // does. A lesson kept as a MEMORY.md copy goes with it.
     await rt.storage.vfs.writeFile('memory/MEMORY.md', '');
 
     // 1. The prompt view still carries the lesson.

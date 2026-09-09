@@ -208,7 +208,7 @@ describe('the size refusal is load-bearing', () => {
     expect(report.outcomes[0]?.kind).toBe('refused');
   });
 
-  test('RED: the mutant no longer names the bound, so a caller cannot act on it', async () => {
+  test('RED: the mutant names no bound, so a caller cannot act on it', async () => {
     const mutant = await mutate('no-size-check-message', [[
       'const exceeded = memberApplyBound(plan);',
       'const exceeded = null;',

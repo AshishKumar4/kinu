@@ -93,8 +93,8 @@ export async function generateJson<TOutput>(opts: {
 }): Promise<TOutput> {
   const spend = opts.spend;
   // Opened before the request: this substrate carries the judge lanes, and a
-  // judge killed mid-call used to leave the ledger with no trace of the grading
-  // it was in the middle of.
+  // judge killed mid-call would otherwise leave the ledger with no trace of the
+  // grading it was in the middle of.
   const operation = beginModelOperation(spend, 'generate_json');
   let result;
   try {

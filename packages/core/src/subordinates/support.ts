@@ -183,11 +183,11 @@ export class SubordinateIdentityStore {
 
   /** Bind the identity row to ONE actor.
    *
-   *  `id INTEGER PRIMARY KEY CHECK (id = 1)` used to mean one identity per
-   *  DATABASE, which was true only while a subordinate owned a database of its
-   *  own. One workspace database now holds every hired subordinate, so the
-   *  singleton is per ACTOR: the owner leads the key and the `id = 1` CHECK
-   *  keeps each actor's row unique the way it always did. */
+   *  One workspace database holds every hired subordinate, so the singleton is
+   *  per ACTOR, not per database: `PRIMARY KEY (actor_id, id)` leads with the
+   *  actor and the `id = 1` CHECK keeps each actor's row unique. A bare
+   *  `id INTEGER PRIMARY KEY CHECK (id = 1)` would mean one identity per
+   *  DATABASE — one row for the whole workspace. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }

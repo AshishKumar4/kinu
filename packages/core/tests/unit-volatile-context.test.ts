@@ -1321,11 +1321,11 @@ function referenceFnv1a64(text: string): string {
 }
 
 describe('active-skill budget priority (activation precedence, stable render order)', () => {
-  // The decision moved: the renderer no longer truncates a body, because half a
-  // workflow instruction is not a workflow. `admitActiveSkills` decides which
-  // bodies this turn's allocation can pay for, spends in ACTIVATION priority
-  // order, and a body that misses the cut is never read at all — the block
-  // points at it instead. The renderer stays a pure projection in name order.
+  // The renderer truncates no body, because half a workflow instruction is not a
+  // workflow. `admitActiveSkills` decides which bodies this turn's allocation can
+  // pay for, spends in ACTIVATION priority order, and a body that misses the cut
+  // is never read at all — the block points at it instead. The renderer stays a
+  // pure projection in name order.
   test('an alphabetically-early giant skill cannot crowd out an earlier-activated one', async () => {
     const giantBody = 'G'.repeat(20_000);
     const invokedBody = 'THE-INVOKED-BODY '.repeat(10);

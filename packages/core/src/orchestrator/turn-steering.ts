@@ -34,7 +34,7 @@
  * mechanisms would each fire on the same thrash loop.
  *
  * Every steer is a HINT. The message says so, nothing gates on it, and the
- * model is free to push on — but it can no longer end the turn having never
+ * model is free to push on — but it cannot end the turn having never
  * been told. Whether it converted is the point of the durable `turn_steering`
  * run event ({@link TurnSteering.snapshot}), which the settle spine writes
  * exactly as it writes `context_budget`. What "converted" means is per trigger:

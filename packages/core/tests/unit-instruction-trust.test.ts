@@ -199,8 +199,8 @@ describe('grandfatherExisting — one migration snapshot, never first sight', ()
     const { store: s } = store();
     s.grandfatherExisting([{ path: PATH, digest: instructionDigest('existing') }]);
 
-    // This is the attack the old first-seen fallback allowed: an agent writes
-    // a new AGENTS.md or skill path and gets system placement merely by making
+    // This is the attack a first-seen fallback allows: an agent writes a new
+    // AGENTS.md or skill path and gets system placement merely by making
     // discovery notice it. The marker closes that path.
     expect(s.trustOf('/repo/new/AGENTS.md', 'agent-written policy')).toBe('unverified');
     expect(s.get('/repo/new/AGENTS.md')).toBeNull();

@@ -26,8 +26,8 @@ import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
-/** The session's first ask — a fresh multi-part request, the shape that used
- *  to draw a delegation hint and now must draw nothing. */
+/** The session's first ask — a fresh multi-part request, the shape that must
+ *  draw nothing at all. */
 const fresh = 'add caching to the api and update the docs';
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
@@ -41,8 +41,8 @@ const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
 const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
 
 /** The loop steers never name the delegation ladder: no `agents`, no swarm,
- *  no delegation. A steer that did would reintroduce the nudge this cutover
- *  removed, through prose rather than a trigger. */
+ *  no delegation. A steer that did would nudge toward delegation through prose
+ *  rather than a trigger, which is exactly what no trigger fires for. */
 function expectNoDelegationNudge(text: string): void {
   expect(text).not.toContain('agents');
   expect(text).not.toContain('swarm');
@@ -478,8 +478,8 @@ describe('no turn-start or length steering', () => {
   });
 
   test('a long turn that keeps moving is never steered for length', async () => {
-    // Twenty-five steps of new ground used to draw the long-turn hint. Now a
-    // turn that keeps reaching new calls draws nothing at any step count.
+    // Twenty-five steps of new ground is not a length to steer for: a turn that
+    // keeps reaching new calls draws nothing at any step count.
     const orch = newTurn();
     for (let s = 0; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 15; s++) {
       await orch.turnExtension.onToolResult!({

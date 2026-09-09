@@ -231,9 +231,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('descriptions document the one tools.<name> namespace and the state store', () => {
-    // ONE namespace for every tool the program can call, native and crafted;
-    // `codemode.*` is gone (it used to be a refusing alias the model kept
-    // reaching for). `state.*` is what outlives a program.
+    // ONE namespace for every tool the program can call, native and crafted. No
+    // `codemode.*`: a refusing alias in the description is a name the model keeps
+    // reaching for. `state.*` is what outlives a program.
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).not.toContain('codemode.*');
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`tools.<name>(input)`');
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`state.*`');
@@ -503,10 +503,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {
-    // It used to answer `'Error: no workspace shell available in this runtime.'`
-    // — accurate prose carrying no class, so a reader could not tell this apart
-    // from a timeout or an OOM. `unsupported`: this runtime has no shell, and
-    // retrying cannot change that.
+    // `'Error: no workspace shell available in this runtime.'` is accurate prose
+    // carrying no class, so a reader cannot tell it apart from a timeout or an OOM.
+    // `unsupported`: this runtime has no shell, and retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
@@ -556,15 +555,15 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {
-    // Regression: the gate message used to tell the model to call
-    // setShellApprovalMode('allow_all') — a backend RPC the model cannot
+    // Regression: a gate message telling the model to call
+    // setShellApprovalMode('allow_all') names a backend RPC the model cannot
     // reach. The actionable path is the owner deciding, and the words say so
     // without spending a paragraph on it.
     //
-    // The gate itself now lives at the execution seam (`shell`/the
-    // ExecutionRouter — see execution/approval.ts), not inside `run`'s own
-    // executor, so this needs a real (gated) shell to see the message —
-    // createTestRuntime() has none by default.
+    // The gate itself lives at the execution seam (`shell`/the ExecutionRouter —
+    // see execution/approval.ts), not inside `run`'s own executor, so this needs a
+    // real (gated) shell to see the message — createTestRuntime() has none by
+    // default.
     const { rt } = createTestRuntime();
     const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
     const t = tools({ ...rt, shell });
@@ -660,11 +659,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 /**
  * Role narrowing over BOTH surfaces from ONE merged set.
  *
- * Narrowing used to be applied to the native ToolSet only, while `execute_tools`
- * built its codemode providers from unfiltered deps. So a role that allowed
- * `execute_tools` and denied `agents` still delegated, hired, and wrote memory
- * through `agents.*` and `memory.*` — the narrowing was decorative for any role
- * that kept the sandbox, which is every role that can do real work.
+ * Narrowing is applied to the merged set. Applied to the native ToolSet alone,
+ * while `execute_tools` builds its codemode providers from unfiltered deps, a role
+ * that allows `execute_tools` and denies `agents` still delegates, hires and writes
+ * memory through `agents.*` and `memory.*` — decorative narrowing for any role that
+ * keeps the sandbox, which is every role that can do real work.
  */
 describe('a role narrows the sandbox as well as the tool list', () => {
   /** The shape a restricted role resolves to: it keeps the sandbox and the
@@ -770,8 +769,8 @@ describe('a role narrows the sandbox as well as the tool list', () => {
 
   test('a namespace the role lost is not reachable from inside the sandbox', async () => {
     // The end of the escape route: a role that keeps `execute_tools` and loses
-    // `agents` used to delegate and hire through `agents.*` anyway, because the
-    // providers were built from unfiltered deps. `typeof` rather than a call,
+    // `agents` would delegate and hire through `agents.*` anyway if the providers
+    // were built from unfiltered deps. `typeof` rather than a call,
     // because an unbound name throws a ReferenceError while a bound-but-empty
     // namespace would still be there to reach for.
     const providers = [

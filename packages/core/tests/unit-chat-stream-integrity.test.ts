@@ -16,10 +16,10 @@ import {
 
 /** The openings the two silent-turn messages actually ship with.
  *
- *  Written out rather than imported: the constants are module-scoped now, and
- *  importing them made the classifier's own test compare a value with itself —
- *  rewording either sentence would have kept it green while every stored row
- *  changed shape. Spelled here, a reword fails this file, which is the point. */
+ *  Written out rather than imported: importing the module-scoped constants makes
+ *  the classifier's own test compare a value with itself, so rewording either
+ *  sentence stays green while every stored row changes shape. Spelled here, a
+ *  reword fails this file, which is the point. */
 const STALLED_OPENING = 'Turn stalled:';
 const RATE_LIMITED_OPENING = 'Turn ended by provider rate limiting:';
 
@@ -238,7 +238,7 @@ describe('definitive provider failures propagate', () => {
   });
 });
 
-describe('recorded pre-cutover failure prose remains classifiable', () => {
+describe('failure prose persisted by a node stays classifiable', () => {
   test('the classifier reads a reason from the chain a node persisted', () => {
     expect(isRateLimitedTurnError(
       `run agent n1 to a report: ${RATE_LIMITED_OPENING} the provider asked this turn to wait 60s`,

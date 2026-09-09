@@ -289,12 +289,12 @@ export async function gatherApprovableInstructions(input: {
  * The one migration-time snapshot: current AGENTS.md bytes plus complete,
  * valid workspace skill files.
  *
- * It runs before the first post-upgrade turn, not during ordinary discovery.
+ * It runs before the first turn, not during ordinary discovery.
  * The marker in InstructionApprovalStore then closes the baseline forever: a
  * new path appearing after this call has no row and begins unverified.
  *
  * `admissionTokens` is the real turn allocation, not an invented migration
- * maximum. Oversized files stayed inert before upgrade and remain unverified;
+ * maximum: a file too big to reach a turn is inert and stays unverified, and
  * migration never materializes an unbounded corpus merely to grandfather it.
  */
 export async function snapshotExistingInstructions(input: {

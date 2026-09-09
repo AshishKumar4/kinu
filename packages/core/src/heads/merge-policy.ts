@@ -105,8 +105,7 @@ function resolveHeadMergeRoute(profile: ResolvedTurnProfile): ModelRouteResoluti
  * and the GEPA metric ride — so the JSON-only instruction, the
  * report-before-parse ordering and the operation frame around a call that never
  * returns are one implementation rather than a shape each backend re-derives.
- * The local merge used to re-derive them and got the frame right and the
- * instruction missing.
+ * A backend re-deriving them gets the frame right and the instruction missing.
  */
 export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
   return async (prompt) => {

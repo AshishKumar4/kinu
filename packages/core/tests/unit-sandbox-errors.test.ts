@@ -6,14 +6,14 @@
  * that shape into an actionable correction and leaves every other error
  * (real bugs, thrown provider errors, timeouts) untouched.
  *
- * Where the capability actually IS is read from TOOL_REACH. It used to be a
- * hardcoded `name === 'run'` branch pointing at `workspace.exec`, with every
- * other native tool told "it is not reachable from inside execute_tools" — a
- * sentence that was FALSE for the six that own a codemode namespace and for
- * `file`, whose bytes are `workspace.readFile`/`writeFile`/`editFile`. The
- * per-tool test below is what makes that impossible to reintroduce: it reads
- * the declaration and demands the message name that tool's own namespace, so a
- * message that hardcodes one tool's answer fails for the other seven.
+ * Where the capability actually IS is read from TOOL_REACH, never a hardcoded
+ * `name === 'run'` branch pointing at `workspace.exec` with every other native
+ * tool told "it is not reachable from inside execute_tools" — a sentence that
+ * is FALSE for the six that own a codemode namespace and for `file`, whose
+ * bytes are `workspace.readFile`/`writeFile`/`editFile`. The per-tool test
+ * below is what makes that impossible: it reads the declaration and demands
+ * the message name that tool's own namespace, so a message that hardcodes one
+ * tool's answer fails for the other seven.
  */
 import { describe, test, expect } from 'bun:test';
 import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors';
@@ -46,7 +46,8 @@ describe('explainNativeToolReferenceError', () => {
   });
 
   test('no native tool is told it is unreachable from inside execute_tools', () => {
-    // The old message said exactly that for seven of eight.
+    // A message that hardcodes one tool's answer says exactly that for seven of
+    // eight, and it is false for all seven.
     for (const name of BUILTIN_TOOLS) {
       expect(explainNativeToolReferenceError(`${name} is not defined`))
         .not.toContain('not reachable from inside execute_tools');

@@ -31,9 +31,9 @@ export interface ActorTurnInput {
  * PHASE TWO of a two-phase lifecycle, and the split is the point: phase one
  * (`prepareActorProgram`) pins the selected version's immutable bytes and their
  * digest, the claim owner persists that identity, and only then does anything
- * run. Returning a prepared program and its event stream together — which this
- * module used to do — gave the claim owner no seam to write at, and an
- * in-memory program record is not durable provenance.
+ * run. Returning a prepared program and its event stream together would leave
+ * the claim owner no seam to write at, and an in-memory program record is not
+ * durable provenance.
  *
  * Nothing here executes yet either: `runChat` and the transform below are async
  * generators, so the turn's first effect happens on the caller's first `next()`.

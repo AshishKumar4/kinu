@@ -9,15 +9,14 @@
 //
 // WHAT ENFORCES IT HERE. Every initializer the entry point owns is run ALONE on
 // its own empty database, and its tables must already be present after the
-// entry point ran: an initializer that left the shared list fails by name. That
-// is the same invariant the previous version of this file asserted, taken over
-// the DDL instead of over the entry point's source text — and the reason it is
-// taken this way is that the source-text form went red for a spelling, not a
-// defect. `initSearchTables`, `initScaffoldTables` and `initCraftedToolsTables`
-// moved one level down into `initActorTables`, so a regex over the entry point's
-// own body stopped seeing three names it still reaches, while every table they
-// own was created exactly as before. A gate that reads call names measures the
-// call names; this one measures the schema.
+// entry point ran: an initializer that left the shared list fails by name. The
+// invariant is taken over the DDL, not over the entry point's source text,
+// because a source-text form goes red for a spelling rather than for a defect:
+// `initSearchTables`, `initScaffoldTables` and `initCraftedToolsTables` sit one
+// level down inside `initActorTables`, so a regex over the entry point's own
+// body does not see three names it still reaches, while every table they own is
+// created. A gate that reads call names measures the call names; this one
+// measures the schema.
 //
 // The two tiers are the second half. `initWorkspaceSchema` boots a workspace
 // ROOT; `initActorStateSchema` opens one ACTOR's state inside a database that
@@ -176,10 +175,10 @@ describe('workspace schema is the only path', () => {
   const actorTier = initialized(initActorStateSchema);
 
   test('the entry point creates every table the initializers it owns create', () => {
-    // The floor the roots used to each declare one by one. Read as tables, so
-    // an initializer reached through another initializer still counts — and an
-    // initializer that quietly left the shared set is named here with the
-    // tables it took with it.
+    // The floor: one entry point owns it, not a table list re-declared at each
+    // root. Read as tables, so an initializer reached through another
+    // initializer still counts — and an initializer that quietly left the
+    // shared set is named here with the tables it took with it.
     const missing = Object.entries(OWNED)
       .map(([name, init]) => ({
         name,
@@ -210,13 +209,13 @@ describe('workspace schema is the only path', () => {
   });
 
   test('the schema creates memory_chunks and its FTS index', () => {
-    // These used to be created only where a MemoryStore was constructed, so a
-    // workspace opened by any other path (a fork target, an archive restore)
-    // had readers and no table — and those readers papered over it with
-    // `catch { return [] }`, making "no such table" indistinguishable from
-    // "indexed nothing". The same hole an unindexed memory plane had. Named
-    // separately from the floor above because the FTS index is a VIRTUAL table
-    // the normalization folds its shadows away from.
+    // Created by the schema itself, not by whichever path constructs a
+    // MemoryStore: a workspace opened any other way (a fork target, an archive
+    // restore) would have readers and no table, and a reader that swallows
+    // "no such table" makes it indistinguishable from "indexed nothing" — the
+    // same hole an unindexed memory plane leaves. Named separately from the
+    // floor above because the FTS index is a VIRTUAL table the normalization
+    // folds its shadows away from.
     const db = new Database(':memory:');
     initWorkspaceSchema(schemaSql(db));
     const rows = db.query<{ name: string }, []>(

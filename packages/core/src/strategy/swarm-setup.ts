@@ -106,22 +106,23 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
   }
-  // NO `unit` ARM REFUSES ANY MORE, and the absence is the ticket. `trajectory` was
-  // refused here because a tool-using node shares one workspace with its siblings and
-  // so cannot be graded on what it changed — the measured `agent-trajectory-search`
-  // region scored 18% because the design blocked the composition and nothing on the
-  // surface said so. The blocker was real and it was mis-sited: it bounds the GRADING
-  // SIGNAL, not the tool surface. A node now holds tools and is graded on what it
-  // REPORTS (`node-agent.ts`), the value that named the shape is gone because the
-  // shape is what `answer` now IS, and `thought` is the degenerate point *The six
-  // axes* names, kept as the cheap tier. Both execute below.
-  // NO `score` ARM REFUSES `judge` ANY MORE, and this is the second time the absence is
-  // the ticket. It was refused because "judge needs the marginalised ensemble the
-  // shipped tree owns" — and the tree DOES own one: `mcts/evaluation.ts` marginalises a
-  // judge over samples, clamps the ensemble against the per-evaluation call budget and
-  // reports the size it actually ran. Nothing about it is tree-shaped; it takes a task,
-  // a candidate's text, an executor and two LLMs. So the ensemble is REACHED below
-  // rather than reimplemented, which is what the refusal was pointing at all along.
+  // NO `unit` ARM REFUSES HERE, and the absence is the ticket. The blocker a
+  // `trajectory` refusal would encode is real: a tool-using node shares one
+  // workspace with its siblings and so cannot be graded on what it changed — the
+  // measured `agent-trajectory-search` region scored 18% because the design blocked
+  // the composition and nothing on the surface said so. It is also MIS-SITED: it
+  // bounds the GRADING SIGNAL, not the tool surface. A node holds tools and is
+  // graded on what it REPORTS (`node-agent.ts`), so `answer` IS that shape and no
+  // separate value names it, and `thought` is the degenerate point *The six axes*
+  // names, kept as the cheap tier. Both execute below.
+  // NO `score` ARM REFUSES `judge`, and this is the second time the absence is the
+  // ticket. The objection a refusal would encode — "judge needs the marginalised
+  // ensemble the shipped tree owns" — is answered by the tree itself:
+  // `mcts/evaluation.ts` marginalises a judge over samples, clamps the ensemble
+  // against the per-evaluation call budget and reports the size it actually ran.
+  // Nothing about it is tree-shaped; it takes a task, a candidate's text, an
+  // executor and two LLMs. So the ensemble is REACHED below rather than
+  // reimplemented, which is what that objection is really about.
   //
   // What survives is the one refusal that is about the measurement rather than about
   // the wiring: a judged TREE below the marginalisation floor runs a scorer the
@@ -141,10 +142,10 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
       + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
-  // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. The refusal it
-  // used to share with `pareto` said both "need a store this run has no writer for", and
-  // that sentence was one refusal covering two different causes: the store landed, and
-  // `exploration_records` IS the archive's grid — a row keyed by a descriptor, one elite
+  // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. It does NOT
+  // share `pareto`'s refusal: "needs a store this run has no writer for" is one sentence
+  // covering two different causes, and the archive is not one of them —
+  // `exploration_records` IS the archive's grid, a row keyed by a descriptor, one elite
   // per cell, monotone, sealed. What refuses below is the archive's own region, checked
   // through the predicate `swarmValidity` shares so an in-process caller cannot run a
   // shape the tool surface refuses.
@@ -160,9 +161,9 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
   // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
   // impossible. A composition that resolved and then quietly aggregated nothing would
-  // be the accepted-and-ignored axis *Accepted and ignored* refuses, which is the
-  // defect the refusal it replaces was written against — the refusal was true about
-  // the engine and is not any more.
+  // be the accepted-and-ignored axis *Accepted and ignored* refuses, and that is the
+  // defect each arm below is written against. A blanket refusal of `aggregate` would
+  // be false about this engine: it fans in.
   if (config.expand === 'aggregate' && config.advance.kind === 'pareto') {
     return badInput('expand:"aggregate" needs a scalar verifier verdict to re-grade a merge node, '
       + 'while advance:"pareto" preserves a vector without collapsing it. Use expand:"sample".');
@@ -339,20 +340,17 @@ if (!('kind' in measured.verify)) {
     + 'candidate is written to, so this run cannot place one for it to measure. Register a '
     + 'verifier kind and pass verify as {kind, spec}.');
 }
-// ORDER MATTERS HERE, and it used to be wrong.
+// ORDER MATTERS HERE: the kind, the shell, then whether THIS instrument can run in THIS
+// shell, and only then the spec. Every refusal above the spec is one no spec could have
+// avoided, so a caller is never sent to correct a field while the instrument behind it
+// is unrunnable.
 //
-// Old order: validate `spec`, then build the measurement context, then
-// measure the baseline. So a caller learned about its spec's fields first and
-// about an instrument that cannot run in this workspace at all LAST — one
-// refusal per attempt, each one a real turn step. Measured in production: a
-// model spent five of its ten steps on that sequence (an unregistered kind, two
-// spec-shape complaints, then two faulted baselines) and the turn was cut
-// before it ever ran a search.
-//
-// New order: the kind, the shell, then whether THIS instrument can run in THIS
-// shell, and only then the spec. Every refusal above the spec is one no spec
-// could have avoided, so a caller is never sent to correct a field while the
-// instrument behind it is unrunnable.
+// Validating `spec` first, then building the measurement context, then measuring the
+// baseline, teaches a caller about its spec's fields first and about an instrument that
+// cannot run in this workspace at all LAST — one refusal per attempt, each one a real
+// turn step. Measured in production: a model spent five of its ten steps on that
+// sequence (an unregistered kind, two spec-shape complaints, then two faulted
+// baselines) and the turn was cut before it ever ran a search.
 const kind = registeredVerifierKind(measured.verify.kind);
 if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
 const ctx = measurementContext(rt);
@@ -587,19 +585,19 @@ export function readCarryIn(input: {
 }
 
 /**
- * NOTHING IS WRITTEN ON A NODE THIS RUN TAKES OVER, and the absence is the fix.
+ * NOTHING IS WRITTEN ON A NODE THIS RUN TAKES OVER, and the absence is deliberate.
  *
- * There used to be a `RESUMED_SWARM_NODE_REASON` here — "Interrupted before it
- * reported. This search was re-entered from its durable rows, and the nodes after it
- * are the continuation." — passed into `HeadJournal.abandonRunning` by
- * {@link resolveReentry} and rendered verbatim on the exploration surface. Every
- * clause of it was false about the row it was written on: the node was not finished
- * with, the nodes "after it" were fresh ids the same re-entry then paid for a second
- * time, and a five-node search accumulated five such failures per eviction.
+ * There is no `RESUMED_SWARM_NODE_REASON` for {@link resolveReentry} to pass into
+ * `HeadJournal.abandonRunning` — no "Interrupted before it reported. This search was
+ * re-entered from its durable rows, and the nodes after it are the continuation."
+ * rendered verbatim on the exploration surface. Every clause of that would be false
+ * about the row it sits on: the node is not finished with, the nodes "after it" would be
+ * fresh ids the same re-entry then paid for a second time, and a five-node search would
+ * accumulate five such failures per eviction.
  *
  * A node that was spawned and never reported is UNFINISHED WORK, so the re-entry
  * re-runs it under its own id (`swarm-resume.ts`, `PendingSwarmNode`) and the
- * row is re-opened rather than retired. The only caller that may still retire one is
+ * row is re-opened rather than retired. The only caller that may retire one is
  * the start-of-life reconciliation, for a root nothing can re-drive — which is the
  * one place where "no report will arrive" is a true statement.
  */
@@ -775,15 +773,15 @@ export function resolveNodeModels(input: {
  * AND IF IT IS NEITHER, IT IS NOTHING. A call that did not re-enter and finds a search
  * of its own task STILL RUNNING is refused rather than given a second tree.
  *
- * This used to be the deliberate arm - "a fresh `agents.swarm` whose task matches a
- * search still expanding gets its own root" - and the case it was defending is real:
- * two concurrent deliberate calls must not grow one search between them. What it did
- * not survive is how a re-spawn actually arrives. A failed job's wake tells the model
- * "decide whether to retry or report the failure", the model retries by calling the
- * tool again, and that call carries no re-drive marker because it is not a re-drive -
- * so it took this arm and minted a second root over a tree the first attempt had left
- * running. Measured on the owner's live workspace: two roots with byte-identical task
- * text, six waves and thirty head spawns against one budget-5 job.
+ * A DELIBERATE ARM HERE — "a fresh `agents.swarm` whose task matches a search still
+ * expanding gets its own root" - would be defending something real: two concurrent
+ * deliberate calls must not grow one search between them. What it does not survive is
+ * how a re-spawn actually arrives. A failed job's wake tells the model "decide whether
+ * to retry or report the failure", the model retries by calling the tool again, and that
+ * call carries no re-drive marker because it is not a re-drive - so it takes that arm
+ * and mints a second root over a tree the first attempt had left running. Measured on
+ * the owner's live workspace: two roots with byte-identical task text, six waves and
+ * thirty head spawns against one budget-5 job.
  *
  * A REFUSAL RATHER THAN AN ADOPTION, because adoption is exactly what the marker
  * exists to authorise: a caller with no marker has not proved it owns the earlier

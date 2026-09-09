@@ -115,10 +115,9 @@ describe('DeviceTunnel', () => {
     await expect(t.rpc('exec', ['slow'])).rejects.toThrow(/timeout/i);
   });
 
-  // The transport used to put ONE 30s deadline on every call, so a laptop
-  // build or test suite failed as "device RPC timeout" — a message
-  // indistinguishable from a dead device. Liveness was welded onto the work
-  // budget; these pin them apart.
+  // Liveness and the work budget are separate deadlines, and these pin them
+  // apart. ONE 30s deadline on every call fails a laptop build or test suite as
+  // "device RPC timeout" — a message indistinguishable from a dead device.
   describe('work budget vs liveness', () => {
     test('a call with no deadline outlives the control timeout', async () => {
       const sock = fakeSocket();
@@ -199,10 +198,11 @@ describe('DeviceTunnel', () => {
    * Request identity, which is two things at once: what a response is paired
    * with, and what a cancellation names.
    *
-   * Ids used to be a bare instance counter. A hub evicted mid-command woke with
-   * that counter back at zero while the command kept running on the machine, so
-   * the machine's late answer paired with whatever call now held `rpc-1` — one
-   * workspace's result read as another's, on the same user's device.
+   * A bare instance counter cannot carry it. A hub evicted mid-command wakes
+   * with that counter back at zero while the command keeps running on the
+   * machine, so the machine's late answer pairs with whatever call now holds
+   * `rpc-1` — one workspace's result read as another's, on the same user's
+   * device. Hence the epoch.
    */
   describe('request identity', () => {
     test('a rebuilt tunnel cannot reissue an id a previous one used', async () => {

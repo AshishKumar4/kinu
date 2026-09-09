@@ -139,8 +139,8 @@ function detachThenReport(seen: string[][]): ReturnType<typeof scriptedTurnModel
   });
 }
 
-/** Answers in prose and never calls `report` — the outcome that used to be impossible
- *  to distinguish from a broken node. */
+/** Answers in prose and never calls `report` — the outcome a broken node is
+ *  otherwise indistinguishable from. */
 const PROSE_ONLY_MODEL = scriptedTurnModel({
   modelId: 'fake-prose',
   doGenerate: () => ({
@@ -368,9 +368,9 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
       expect(reason).not.toContain('not yet');
       expect(name).not.toBe('');
     }
-    // And the one whose reason was WRONG on the base of this change is named for what it
-    // actually is: `DELEGATION_MAX_DEPTH` governs the hire ladder, not a node's search
-    // depth, so recursion was never the argument.
+    // And the reason that must not drift back: `DELEGATION_MAX_DEPTH` governs the hire
+    // ladder, not a node's search depth, so recursion is not the argument for
+    // withholding `agents`.
     expect(NODE_WITHHELD_TOOLS.agents).toContain('search engine');
     expect(NODE_WITHHELD_TOOLS.agents).not.toContain('recursion');
   });

@@ -69,10 +69,10 @@ export { VERIFIER_KINDS, type VerifierKind };
 const ExecRatioSpecSchema = v.strictObject({
   params: v.record(v.string(), v.pipe(v.number(), v.finite())),
   // The declaration the harness converts. Checked HERE, with the other field
-  // complaints, because it used to be enforced only at measurement time — so a
-  // caller iterating on its spec passed validation, started a run, and learned
-  // about this requirement from a faulted baseline one round trip later. A rule
-  // the schema can state is a rule the schema should state.
+  // complaints, because enforcing it only at measurement time lets a caller
+  // iterating on its spec pass validation, start a run, and learn about this
+  // requirement from a faulted baseline one round trip later. A rule the schema
+  // can state is a rule the schema should state.
   reference: v.pipe(
     v.string(), v.minLength(1),
     v.includes(REFERENCE_SOLVE_DECLARATION,
@@ -226,10 +226,10 @@ export function unregisteredKindRefusalFor(kind: string): SwarmRefusal {
  * Ask a registered instrument whether it can run in this workspace. `null` when it
  * can, otherwise why not.
  *
- * ONE call, before a run is accepted. What it replaces: a model discovering the
- * answer from faulted baselines, one throw per turn-step, having first been sent
- * round the `spec` schema — measured at five of ten steps on a production turn,
- * which is what cut that turn short.
+ * ONE call, before a run is accepted. Without it a model discovers the answer
+ * from faulted baselines, one throw per turn-step, having first been sent round
+ * the `spec` schema — measured at five of ten steps on a production turn, which
+ * is what cut that turn short.
  */
 export async function preflightVerifier(
   kind: VerifierKind, ctx: MeasurementContext,

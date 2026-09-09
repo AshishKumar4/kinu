@@ -1,17 +1,18 @@
 /**
- * The head merge's model/effort/spend policy, proven where it now lives.
+ * The head merge's model/effort/spend policy, proven in the one place that
+ * decides it.
  *
- * This used to be decided twice — once per backend — and the two decided
- * differently: Cloudflare resolved the `judge` route off the turn profile and ran
- * at the deep tier's own effort, while the CLI passed the SESSION'S CHAT MODEL at
- * a hardcoded `'low'` and filed the result as `judge` spend anyway. One split,
- * one account, two models, both reported as deep-tier grading.
+ * Deciding it per backend gets it decided differently: Cloudflare resolving the
+ * `judge` route off the turn profile and running at the deep tier's own effort,
+ * while the CLI passes the SESSION'S CHAT MODEL at a hardcoded `'low'` and files
+ * the result as `judge` spend anyway. One split, one account, two models, both
+ * reported as deep-tier grading.
  *
  * So the assertions here are the policy, and each backend's suite proves only
  * that it calls this and supplies nothing else. The fixture is shared
  * (`@kinu.run/test-utils`, `mergePolicyProfile`) so all three suites route
  * against ONE catalog whose `default` and `deep` tiers disagree on both axes —
- * under a catalog where they agreed, a routed merge and a merge that used
+ * under a catalog where they agree, a routed merge and a merge that took
  * whatever it was handed are indistinguishable.
  */
 

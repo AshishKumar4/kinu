@@ -167,10 +167,10 @@ export type ActivationReason =
   | { kind: 'keyword'; matched_keyword: string }
   | { kind: 'always_active'; via: 'config' };
 
-// There is no SkillsAction type anymore: skill CRUD (read/create/edit/
-// delete) is ordinary workspace.readFile/writeFile/readdir/exec('rm …')
-// inside execute_tools — no dispatcher takes a discriminated action union
-// for it. `list`/`invoke` are gone outright: discovery is the ambient index
+// There is no SkillsAction type: skill CRUD (read/create/edit/delete) is
+// ordinary workspace.readFile/writeFile/readdir/exec('rm …') inside
+// execute_tools — no dispatcher takes a discriminated action union for it.
+// There is no `list` and no `invoke` either: discovery is the ambient index
 // (renderSkillsIndexSection), and activation is resolved once at turn start
 // (resolveTurnSkills), never by a mid-turn call.
 

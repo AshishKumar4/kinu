@@ -114,13 +114,12 @@ const TEAM_RECURSES = {
 /**
  * The workspace filesystem's own tables.
  *
- * WIRED wherever a workspace lives, which after the one-DO cutover is the
- * orchestrator's own Durable Object: `createWorkspace` opens Nimbus over
- * `ctx.storage.sql`, so these sit beside the conversation and the memory index
- * that reads them. Absent on a SUBORDINATE for the reason every shared-workspace
- * surface is absent there — a facet has its own SQLite and shares its parent's
- * tree over one RPC, so a filesystem in its own database would be a second,
- * empty workspace.
+ * WIRED wherever a workspace lives, which is the orchestrator's own Durable
+ * Object: `createWorkspace` opens Nimbus over `ctx.storage.sql`, so these sit
+ * beside the conversation and the memory index that reads them. Absent on a
+ * SUBORDINATE for the reason every shared-workspace surface is absent there —
+ * a facet has its own SQLite and shares its parent's tree over one RPC, so a
+ * filesystem in its own database would be a second, empty workspace.
  */
 const NIMBUS_BASE = {
   'cf-orchestrator': WIRED,
@@ -403,17 +402,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
-    // removal is the entry. It was the Agents SDK's facet registry, created by
-    // the first `subAgent()` call and therefore present the moment a workspace
-    // opened. No Kinu actor spawns a facet any more: a hired subordinate, a
-    // temporary, a head, a swarm node and an MCTS branch are all logical actors
-    // bound over the ONE workspace object's SQLite (`state/actor-host.ts`), so
-    // nothing calls `subAgent()` and the table is never created on any root.
-    // Declaring it `absent` with a reason would say the product could have it
-    // and chose not to; declaring it `wired` said it existed. Neither is true,
-    // so it is not a plane member — the registry enumerates what a workspace
-    // HAS, and the comparator reports an observed-but-undeclared table loudly
-    // if this is ever wrong.
+    // absence is the entry. It is the Agents SDK's facet registry, created by
+    // the first `subAgent()` call. No Kinu actor spawns a facet: a hired
+    // subordinate, a temporary, a head, a swarm node and an MCTS branch are all
+    // logical actors bound over the ONE workspace object's SQLite
+    // (`state/actor-host.ts`), so nothing calls `subAgent()` and the table is
+    // never created on any root. Declaring it `absent` with a reason would say
+    // the product could have it and chose not to; declaring it `wired` would
+    // say it exists. Neither is true, so it is not a plane member — the
+    // registry enumerates what a workspace HAS, and the comparator reports an
+    // observed-but-undeclared table loudly if this is ever wrong.
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the

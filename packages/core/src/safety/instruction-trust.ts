@@ -147,8 +147,8 @@ export function trustOfInstructionApprovals(
  * of a workspace, and they share a scope while emphatically not sharing trust:
  * a hired subordinate reads its own instruction files, and the owner approving
  * a skill for the root is not the owner approving it for a temporary the root
- * spawned. So the migration marker is per actor too — a fresh actor has no
- * legacy baseline to grandfather, whatever the root already carried over.
+ * spawned. So the migration marker is per actor too — a fresh actor has
+ * nothing to grandfather, whatever the root already carried over.
  */
 export class InstructionApprovalStore {
   private readonly actorId: string;
@@ -194,8 +194,8 @@ export class InstructionApprovalStore {
    * Carry the workspace's pre-trust instruction files over exactly once.
    *
    * This is deliberately NOT a discovery-time fallback. A first-seen fallback
-   * lets an agent create a new path after upgrade and have its own bytes enter
-   * system placement as "grandfathered". Call this once before the first turn,
+   * lets an agent create a new path and have its own bytes enter system
+   * placement as "grandfathered". Call this once before the first turn,
    * snapshotting the paths that exist at migration time, then persist the marker.
    * Every path discovered after that marker starts unverified until the owner
    * approves its exact digest.
@@ -230,7 +230,7 @@ export class InstructionApprovalStore {
 
   /** A fork copies writable files but not the owner's approval authority. Mark
    * the target migrated with no rows before it is published, so copied paths
-   * start unverified instead of being mistaken for a legacy baseline. */
+   * start unverified instead of being mistaken for a grandfathered baseline. */
   markMigratedEmpty(): void {
     this.actor.assertCurrent();
     this.transaction(() => {

@@ -2,11 +2,11 @@
  * A REAL hosted actor per head and per node, over the caller's ONE workspace
  * database.
  *
- * A head's and a node's turn is now a CLAIMED actor turn on the common
+ * A head's and a node's turn is a CLAIMED actor turn on the common
  * `ActorSession` (open-41): the session pins the program, admits the durable
  * claim naming that program's version and source digest, records the exact
- * array each step consumed, and owns the abort. So a fixture can no longer hand
- * a bare `AgentRuntime` to `runHeadInference` or to a node's own run — it has to
+ * array each step consumed, and owns the abort. So a fixture cannot hand a bare
+ * `AgentRuntime` to `runHeadInference` or to a node's own run — it has to
  * supply the actor those turns belong to.
  *
  * This is that fixture, and it is deliberately the PRODUCTION path: the
@@ -14,8 +14,7 @@
  * its handle, stores, runtime and session, the production `seedActorLoop` seeds
  * its loop pointer, and every one of them lands in the SAME database the
  * caller's runtime already holds. Nothing here is mocked, because a mocked
- * session would let a head's turn pass every assertion while writing no claim —
- * which is precisely the state open-41 removed.
+ * session would let a head's turn pass every assertion while writing no claim.
  *
  * ONE helper rather than a copy per suite: fifteen suites need a hosted actor,
  * they all need the same one, and fifteen copies of an orchestration seam is

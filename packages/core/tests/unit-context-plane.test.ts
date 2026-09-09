@@ -148,7 +148,7 @@ test('a fresh actor serves an empty working history at revision 0, and an edit o
   const vfs = planeFor(actor);
 
   // Before ANY turn: the path exists, reads, and names a revision. This is the
-  // arm that used to be unreachable — a claims getter with no claim.
+  // arm a claims getter with no claim lands in.
   const before = await readText(vfs, '/context/working.jsonl');
   expect(servedHeader(before)).toMatchObject({ actor: 'actor-fresh', revision: 0 });
   expect(servedMessages(before)).toEqual([]);
@@ -465,11 +465,12 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
  *
  * The step pipeline holds two arrays: the live RAW one the SDK rebuilds each
  * step, and the FINAL rendered one a provider receives. A landed edit's
- * protected tail is a slice of the raw array, and the count it slices at used
- * to be read off a RENDERED revision — so one woven `<dynamic_context>` block
- * moved the boundary by one message and the tail lost its head. With an
- * assistant tool call as the first tail message, that is a tool result with no
- * call in front of it: the shape a provider rejects outright.
+ * protected tail is a slice of the raw array, and the count it slices at is
+ * read off that same raw array. Read it off a RENDERED revision instead and
+ * one woven `<dynamic_context>` block moves the boundary by one message and
+ * the tail loses its head. With an assistant tool call as the first tail
+ * message, that is a tool result with no call in front of it: the shape a
+ * provider rejects outright.
  */
 test('a landed edit preserves the raw tail exactly, with a woven block and a pruned tool output in play', async () => {
   const ws = workspace();

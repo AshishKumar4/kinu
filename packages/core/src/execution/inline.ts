@@ -202,7 +202,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // `refusalOf`, not `refusalText`: this tool's declared result is already an
         // OBJECT carrying `reason` then `error`, so the classification travels as
         // the field the dispatcher's own refusals use rather than as JSON in a
-        // string. What it replaces was an `{ error }` with no reason at all.
+        // string. A bare `{ error }` would carry no reason at all.
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
         // Built per call: the SAME dispatcher and ledger the native `file`
@@ -286,7 +286,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'List crafted tools as an array of { name, description, qualityScore }.',
       execute: async () => {
         // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
-        // Previous implementation returned a joined markdown string and broke .filter/.map.
+        // A joined markdown string has no .filter/.map and would break that call.
         const crafted = craftStore.list();
         // Pull quality scores. The columns live on the crafted_tools row the
         // store just wrote (identity/workspace-schema.ts ensures the shape),
@@ -332,7 +332,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
         // Admission BEFORE any write: the source is normalized to one expression
-        // and proven to parse, so a `const name = …` body can no longer be stored
+        // and proven to parse, so a `const name = …` body cannot be stored
         // verbatim and turn every later program in the workspace into a
         // SyntaxError. What parses but does not evaluate to a function is caught
         // per tool at load, and blamed on that tool alone.

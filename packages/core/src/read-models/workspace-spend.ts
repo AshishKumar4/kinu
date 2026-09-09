@@ -5,10 +5,10 @@
  * answers it well: what the orchestrator's own turns cost, over a window of
  * `step_finish` rows. The owner's question is bigger — "does this show ALL of
  * the usage, including any async models running and costing like judge models" —
- * and the honest answer used to be no, without the panel saying so. A workspace
- * runs judges, a fast tier, an evolution engine, exploration heads, MCTS
- * rollouts, compaction folds, a scaffold's own loop and an embedder, and none of
- * them was in the number.
+ * and a per-agent number cannot answer it: a workspace runs judges, a fast tier,
+ * an evolution engine, exploration heads, MCTS rollouts, compaction folds, a
+ * scaffold's own loop and an embedder, and none of them is in the step
+ * telemetry's number.
  *
  * NOT A SECOND STORE. Three things that already exist are read here and nothing
  * new is written:
@@ -31,19 +31,19 @@
  *
  * COMPLETE, NOT WINDOWED. The producer totals are summed IN SQL over every
  * `step_finish` and `model_call` row the log holds (`spendByProducer`), so no
- * bound stands between the owner and what the workspace spent. They used to be
- * folded over the same recent-rows window the step telemetry samples, which made
- * every total a floor as soon as the log outgrew the window — and the panel that
- * rendered it said "newest 2000 rows" in text a reader could pass over. A
- * percentile needs a sample; a sum does not. The step telemetry beside this keeps
- * its window and its `windowLimit`, because a cache-hit rate over the whole of
+ * bound stands between the owner and what the workspace spent. Folded over the
+ * same recent-rows window the step telemetry samples, every total would be a
+ * floor as soon as the log outgrew the window — and "newest 2000 rows" is text a
+ * reader passes over. A percentile needs a sample; a sum does not. The step
+ * telemetry beside this keeps its window and its `windowLimit`, because a
+ * cache-hit rate over the whole of
  * history answers nobody's question. Heads are read whole from their journal for
  * the same reason: a workspace has orders of magnitude fewer heads than steps.
  *
  * TWO AXES OVER ONE SUM. `producers` groups the spend by what KIND of work made
  * the call; `missions` groups it by which declared piece of work it was made
  * FOR, read out of the same ledger the budget caps are enforced against. Both
- * are now cumulative over the workspace's whole life, so they answer at the same
+ * are cumulative over the workspace's whole life, so they answer at the same
  * scope — but they still must not be added together, because one call appears in
  * exactly one producer row and in every mission label above it.
  */
@@ -93,8 +93,8 @@ export interface WorkspaceSpend {
    *  ran, not that it is unwired. */
   readonly producers: readonly ProducerSpend[];
   /** Every producer summed, over the whole log. Same absence rules as a producer
-   *  row. There is no truncation state beside it any more: this IS the total, and
-   *  a field saying so could never vary. */
+   *  row. There is no truncation state beside it: this IS the total, and a field
+   *  saying so could never vary. */
   readonly total: SpendTally;
   readonly coverage: SpendCoverage;
   /**

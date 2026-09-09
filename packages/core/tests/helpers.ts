@@ -252,11 +252,11 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
  * The Memory a test runtime gets: the SAME inline primitive the local CLI path
  * builds, over the same `memory_chunks` shape.
  *
- * It used to be a hand-rolled copy with a third schema, `(id, path, content)`.
- * Once `initWorkspaceSchema` created the real seven-column table the copy's
- * insert failed on every call, and the catch around it reported a file as
- * indexed — so every memory assertion in this suite was passing against a
- * memory that had never stored anything.
+ * One shared DDL, because a hand-rolled copy carrying its own columns — say
+ * `(id, path, content)` against the real seven-column table — fails on every
+ * insert, and the catch around it still reports the file as indexed. Every
+ * memory assertion in this suite would then be passing against a memory that
+ * had never stored anything.
  */
 export function createMemoryMemory(db: Database, vfs: VFS): Memory {
   return createInlineMemory(makeAgentDatabase(db), vfs);
@@ -386,15 +386,14 @@ export function createMemoryCraftStore(db: Database): CraftStore {
 /**
  * A fiber lane per ACTOR, over the production `fibers` table.
  *
- * The DDL used to be a fourth copy here — `(id PRIMARY KEY, name, snapshot,
- * created_at)` — and it has now drifted from the real one, which carries
- * `actor_id` in its primary key because a fiber name is minted per lane
- * ('reactor', 'advisor-lane') and every actor of a workspace therefore presents
- * the SAME names. With the copy in place `initWorkspaceSchema` found the table
- * already there, skipped its own `CREATE TABLE IF NOT EXISTS`, and then failed
- * building `idx_fibers_actor_name` on a column the copy had no idea about. So
- * the production initializer owns it here too, exactly as `createMemoryMemory`
- * already learned to do.
+ * The production initializer owns the DDL here too, because a copy in this file
+ * drifts from it: the real table carries `actor_id` in its primary key, since a
+ * fiber name is minted per lane ('reactor', 'advisor-lane') and every actor of a
+ * workspace therefore presents the SAME names. A local
+ * `(id PRIMARY KEY, name, snapshot, created_at)` leaves `initWorkspaceSchema`
+ * finding the table already there, skipping its own
+ * `CREATE TABLE IF NOT EXISTS`, and then failing to build
+ * `idx_fibers_actor_name` on a column the copy knows nothing about.
  */
 export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule {
   initActorTables(makeExecRaw(db), makeSql(db));

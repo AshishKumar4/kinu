@@ -14,8 +14,8 @@
 // resume attempts)`.
 //
 // That second string is HISTORY as of 2026-09-04: the resume cap that wrote it
-// is deleted, so nothing produces it any more. Rows carrying it are still out
-// there in real workspaces, which is why this file goes on reading one.
+// is deleted, so nothing produces it. Rows carrying it are still out there in
+// real workspaces, which is why this file goes on reading one.
 //
 // Two independent defects produced that:
 //
@@ -146,9 +146,8 @@ describe('a settled background job announces itself once, and not as the owner',
     ws.store.settle(JOB, 0, JSON.stringify({ strategy: 'mcts', score: 0 }), ws.now + 1_000);
 
     // Six activations, each a fresh isolate sweeping the registry. The count is
-    // arbitrary — it used to be chosen as "one more than MAX_RESUME_ATTEMPTS" to
-    // stay clear of the resume cap, and with that cap deleted (2026-09-04) the
-    // only thing it has to be is more than one.
+    // arbitrary: no resume cap bounds it, so the only thing it has to be is
+    // more than one.
     for (let start = 0; start < 6; start++) {
       const { runner } = activation(ws.db);
       await runner.wake(JOB);
@@ -166,10 +165,10 @@ describe('a settled background job announces itself once, and not as the owner',
     // recoverJob's blind re-wake exists to cover, and the one it multiplied.
     ws.store.fail(
       JOB, 0,
-      // A row written by the code that used to give up. Kept verbatim because a
-      // durable registry outlives the code that filled it, and the announcement
-      // path must stay able to read what it finds — not only what today's runner
-      // would write.
+      // A give-up message from a run that exhausted its resume attempts. Kept
+      // verbatim because a durable registry outlives the code that filled it,
+      // and the announcement path must stay able to read what it finds — not
+      // only what today's runner would write.
       'interrupted by Durable Object eviction before completion (gave up after 5 resume attempts)',
       ws.now + 1_000,
     );
