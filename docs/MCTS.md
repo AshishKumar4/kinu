@@ -288,8 +288,8 @@ than shipping an unearned answer.
 
 ## Formal properties (Lean 4)
 
-Eleven of the corpus's 485 named declarations live in `lean/Kinu/MCTS/`
-(measured 2026-08-30). The model uses exact scaled-integer arithmetic; SQLite
+Eleven of the corpus's 366 named declarations live in `lean/Kinu/MCTS/`
+(measured 2026-09-09). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
 | Property | File | Theorem | Claim status |
