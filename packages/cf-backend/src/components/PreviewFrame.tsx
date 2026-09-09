@@ -1,56 +1,33 @@
 /**
  * The one preview-iframe pipeline. Every surface that renders an exposed-port
- * app — the chat inline preview card, the Output surface, and the Environment
- * preview pane — uses this frame, so the chrome (copy / reload /
- * open-in-new-tab) and the sandbox policy never drift apart.
+ * app — compact chat cards and full-height preview tabs — uses this frame,
+ * so URL/copy/open-in-new-tab chrome and the sandbox policy never drift apart.
  *
  * Fills its parent: render inside a sized container (flex-1 min-h-0 column,
  * or a fixed-height wrapper for the inline chat card).
  */
-import { useState } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { PREVIEW_SANDBOX, isPreviewUrl } from "@/lib/preview-origin";
-import { ArrowsClockwiseIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
-/**
- * The preview's header row: the live dot, the label, the URL, and copy /
- * reload / open-in-new-tab. `PreviewFrame` puts it over its iframe; the public
- * landing page puts it over a sample body, because that page's CSP is
- * `frame-src 'none'` and it cannot frame anything.
- */
-export function PreviewChrome({ url, label, onReload }: {
-  url: string;
-  label?: string;
-  onReload: () => void;
-}) {
+/** URL-only header shared with the signed-out sample, which cannot host an iframe. */
+export function PreviewChrome({ url }: { url: string }) {
   return (
     <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-      <span className="size-1.5 rounded-full p-dot-success shrink-0" />
-      {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
-      <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
+      <code className="text-[10px] p-text-3 font-mono truncate flex-1">{url}</code>
       <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
-      <button
-        onClick={onReload}
-        className="p-text-3 hover:p-text p-1 shrink-0"
-        title="Reload"
-      ><ArrowsClockwiseIcon size={11} /></button>
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="p-text-3 hover:p-text p-1 shrink-0"
-        title="Open in new tab"
-      ><ArrowSquareOutIcon size={11} /></a>
+      <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
     </div>
   );
 }
 
 export function PreviewFrame({ url, label }: {
   url: string;
-  /** Header label, e.g. ":8080 · hello-world". The URL is always shown. */
+  /** The frame's accessible name — a tab title or a port label. The header
+   *  shows the URL only: the tab that opened this frame already names it, and
+   *  a second title beside the URL is the duplication the tabs replaced. */
   label?: string;
 }) {
-  const [reloadKey, setReloadKey] = useState(0);
   // The only gate on what this app frames. Preview URLs reach here out of raw
   // tool output, so an agent that writes a URL of its own choosing must not get
   // it rendered inside the workspace chrome.
@@ -65,12 +42,11 @@ export function PreviewFrame({ url, label }: {
   }
   return (
     <div className="h-full flex flex-col">
-      <PreviewChrome url={url} label={label} onReload={() => setReloadKey(k => k + 1)} />
+      <PreviewChrome url={url} />
       <iframe
-        key={reloadKey}
         src={url}
         title={label ?? url}
-        className="p-bg flex-1 w-full"
+        className="p-bg flex-1 min-h-0 w-full border-0"
         sandbox={PREVIEW_SANDBOX}
       />
     </div>

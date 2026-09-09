@@ -12,9 +12,9 @@ import { createCLIRuntime } from '../src/runtime';
 import { scratchPath, toolExecute } from '@kinu.run/test-utils';
 
 function localRuntime() {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('clamp-marker', 'agent.db'), { create: true });
   return createCLIRuntime(db, {
-    dbPath: scratchPath('clamp-marker', 'agent.db'),
+    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
 }

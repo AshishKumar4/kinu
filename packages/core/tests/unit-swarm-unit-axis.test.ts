@@ -31,6 +31,7 @@ import {
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 
 /**
@@ -308,9 +309,13 @@ describe('the composition that was permanently refused is no longer refused', ()
     // call. This model answers once and stops, which is the smallest run that proves
     // the region opened; what an agent node DOES with its tools is the behavioural
     // suite's subject, not this one's.
-    const { rt } = createTestRuntime();
+    const { rt, testSql } = createTestRuntime();
     const result = await runSwarm({
       rt,
+      // `unit:'answer'` is an agent node, so the run acquires one seat per node
+      // — a real one, over this runtime's own database, because a node that got
+      // no actor is exactly the composition this case says is no longer refused.
+      hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
       model: scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-unit-axis',

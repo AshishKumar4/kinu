@@ -348,17 +348,15 @@ describe('the prompt', () => {
     expect(prompt).toContain('never assert a value the record does not show');
   });
 
-  test('each severity carries a worked note inside the length bound it will be cut to', () => {
-    // Severity calibration had one clause per tier and no instance, while note
-    // CONTENT had a cap, a dedupe window and a content-free filter. Three
-    // examples give the tier the same rigour, and each is a note that would
-    // survive parseAdvisorReply's slice unchanged.
-    const examples = [...prompt.matchAll(/^ {2}e\.g\. "(.+)"$/gm)].map((match) => match[1]!);
-    expect(examples).toHaveLength(ADVISOR_SEVERITIES.length);
-    for (const example of examples) expect(example.length).toBeLessThanOrEqual(ADVISOR_NOTE_MAX_CHARS);
-    expect(prompt).toContain('could have been one edit');
-    expect(prompt).toContain('its text starts `Error (exit 3)`');
-    expect(prompt).toContain('Stop and confirm a backup exists before continuing.');
+  test('the advisor receives producer outcomes even when returned data is identical', () => {
+    const result = { error: 'business data' };
+    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'run', args: {}, result, outcome: { success: true } }] }));
+    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [{ name: 'run', args: {}, result, outcome: { success: false, reason: 'denied' } }] }));
+    expect(succeeded).toContain('"success":true');
+    expect(failed).toContain('"success":false');
+    expect(failed).toContain('"reason":"denied"');
+    expect(succeeded).toContain('business data');
+    expect(failed).toContain('business data');
   });
 });
 

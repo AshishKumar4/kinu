@@ -65,17 +65,19 @@ const StringListSchema = v.array(v.string());
 export function initCurriculumTable(execRaw: (ddl: string) => void): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS proposed_tasks (
-      id                 TEXT PRIMARY KEY,
+      actor_id           TEXT NOT NULL,
+      id                 TEXT NOT NULL,
       task               TEXT NOT NULL,
       rationale          TEXT NOT NULL,
       predicted_success  REAL NOT NULL,
       targets_skills     TEXT NOT NULL,
       proposed_at        INTEGER NOT NULL,
-      status             TEXT NOT NULL DEFAULT 'pending'
+      status             TEXT NOT NULL DEFAULT 'pending',
+      PRIMARY KEY (actor_id, id)
     )
   `);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_proposed_tasks_status_proposed
-             ON proposed_tasks(status, proposed_at DESC)`);
+             ON proposed_tasks(actor_id, status, proposed_at DESC)`);
 }
 
 interface RecentOutcome {
@@ -112,9 +114,10 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext 
   // Abandoned turns carry no verdict (evolution/outcomes.ts scores them neutral),
   // so they stay out of the prompt: listing one as a failure teaches the judge
   // that a dropped topic was a task done badly.
+  rt.actor.assertCurrent();
   const recent = rt.storage.sql<{ user_message: string; outcome: TurnOutcome }>`
     SELECT user_message, outcome FROM turn_outcomes
-      WHERE outcome != 'abandoned'
+      WHERE actor_id = ${rt.actor.actorId} AND outcome != 'abandoned'
       ORDER BY created_at DESC LIMIT ${takeOutcomes}`
     .map((row) => ({ task: row.user_message, succeeded: row.outcome === 'accepted' }));
   return { skills, recent };
@@ -197,10 +200,12 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
   }));
 
   // Persist for the UI / autonomous loop to consume.
+  opts.rt.actor.assertCurrent();
   for (const p of proposals) {
     void opts.rt.storage.sql`
-      INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-      VALUES (${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
+      INSERT INTO proposed_tasks
+        (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+      VALUES (${opts.rt.actor.actorId}, ${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
               ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
   }
 
@@ -212,13 +217,16 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
     id: string; task: string; rationale: string; predicted_success: number;
     targets_skills: string; proposed_at: number; status: string;
   };
+  rt.actor.assertCurrent();
   const rows = status
     ? rt.storage.sql<Row>`
         SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-          FROM proposed_tasks WHERE status = ${status} ORDER BY proposed_at DESC, id DESC LIMIT 50`
+          FROM proposed_tasks WHERE actor_id = ${rt.actor.actorId} AND status = ${status}
+          ORDER BY proposed_at DESC, id DESC LIMIT 50`
     : rt.storage.sql<Row>`
         SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
-          FROM proposed_tasks ORDER BY proposed_at DESC, id DESC LIMIT 50`;
+          FROM proposed_tasks WHERE actor_id = ${rt.actor.actorId}
+          ORDER BY proposed_at DESC, id DESC LIMIT 50`;
   // These are our OWN rows: a status outside the picklist, or skills JSON that
   // will not parse, is corruption in the workspace database — not a row to
   // drop quietly, which is what made a truncated write look like a short list.
@@ -236,9 +244,12 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
 export function updateProposedTaskStatus(
   rt: AgentRuntime, id: string, status: ProposedTask['status'],
 ): void {
-  const existing = rt.storage.sql<{ id: string }>`SELECT id FROM proposed_tasks WHERE id = ${id} LIMIT 1`;
+  rt.actor.assertCurrent();
+  const existing = rt.storage.sql<{ id: string }>`SELECT id FROM proposed_tasks
+    WHERE actor_id = ${rt.actor.actorId} AND id = ${id} LIMIT 1`;
   if (existing.length === 0) {
     throw new Error(`updateProposedTaskStatus: unknown proposed task id "${id}"`);
   }
-  void rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
+  void rt.storage.sql`UPDATE proposed_tasks SET status = ${status}
+    WHERE actor_id = ${rt.actor.actorId} AND id = ${id}`;
 }

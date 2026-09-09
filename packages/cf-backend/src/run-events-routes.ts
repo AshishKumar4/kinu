@@ -44,7 +44,10 @@ function reportRouteFailure(input: { surface: string; cause: unknown }): Respons
 }
 
 const SSE_POLL_MS = 500;
-const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+/** How long one browser SSE subscription stays open before the client
+ *  reconnects. Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five
+ *  minutes for a person answering a prompt. */
+const SSE_TIMEOUT_MS = 5 * 60 * 1000;
 const SSE_HEARTBEAT_MS = 15_000;
 const ALLOWED_TYPES = [
   'run_start', 'turn_start', 'tool_call_end',

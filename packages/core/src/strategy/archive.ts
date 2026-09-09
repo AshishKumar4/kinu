@@ -74,6 +74,7 @@
 import { admitsPublication, type ExplorationRecord, type PublicationState } from './objective';
 import { cellOccupants, recordExploration, type ExplorationWrite, type RecordVerdict } from './records';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 /**
  * The cell a candidate belongs to, or the fact that its instrument witnessed none.
@@ -224,6 +225,7 @@ export type ArchiveVerdict =
  */
 export function admitToArchive(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: {
     readonly publication: PublicationState;
     readonly write: ArchiveWrite;
@@ -237,7 +239,7 @@ export function admitToArchive(
   }
 
   let nearest: { readonly occupant: ExplorationRecord; readonly distance: number } | null = null;
-  for (const occupant of cellOccupants(sql, {
+  for (const occupant of cellOccupants(sql, actor, {
     identity: write.identity, floor: write.floor, descriptor: write.descriptor,
   })) {
     if (occupant.artifact === write.artifact) continue;
@@ -253,5 +255,5 @@ export function admitToArchive(
       novelty,
     };
   }
-  return recordExploration(sql, { publication: input.publication, write });
+  return recordExploration(sql, actor, { publication: input.publication, write });
 }

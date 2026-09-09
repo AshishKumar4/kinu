@@ -32,7 +32,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
-  summarizeSoulBytes,
+  summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
@@ -65,12 +65,14 @@ export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SO
  *  `ForkTargetWriter.ensurePaneTable` runs, because a source workspace that has
  *  served a hosted turn has this table and its ancestry is read from it. */
 const PANE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  id TEXT NOT NULL,
   session_id TEXT NOT NULL DEFAULT '',
   parent_id TEXT,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (actor_id, id)
 )`;
 
 /** workerd's streaming digest, which is how an object hashes bytes it must not
@@ -349,9 +351,9 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     void this.sql`DELETE FROM workspace_identity`;
     void this.sql`INSERT INTO workspace_identity (id, name, created_at)
       VALUES (${'source-workspace'}, ${PROBE_SOURCE_NAME}, ${1_760_000_000_000})`;
-    void this.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'probe/model-1'})`;
-    void this.sql`INSERT OR REPLACE INTO agent_config (key, value)
-      VALUES (${'reasoning_effort'}, ${'high — long enough that this row needs a frame of its own'})`;
+    const actor = new WorkspaceActorDirectory(this.sql, { workspaceId: 'source-workspace', ownerUserId: '' }).createMain({ name: PROBE_SOURCE_NAME });
+    actor.config.setModel('probe/model-1');
+    actor.config.set('reasoning_effort', 'high — long enough that this row needs a frame of its own');
     void this.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'}, ${null},
               ${'export default () => 1;'}, ${'workspace'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
@@ -368,8 +370,8 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
       { id: PROBE_CUT_MESSAGE_ID, parent: 'm2', role: 'assistant', text: 'Done. This is the cut point.' },
     ];
     pane.forEach((row, index) => {
-      void this.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${row.id}, ${'default'}, ${row.parent}, ${row.role},
+      void this.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${row.id}, ${'default'}, ${row.parent}, ${row.role},
                 ${JSON.stringify({ id: row.id, role: row.role, parts: [{ type: 'text', text: row.text }] })},
                 ${`2026-01-01 00:00:0${index + 1}.000`})`;
     });
@@ -410,6 +412,10 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     try {
       for await (const frame of forkTransferFrames({
         sql: this.sql,
+        // The probe's own actor: the seed issued a main and the pane rows
+        // above are keyed to it, so forking under any other handle would read
+        // an empty transcript and pass while proving nothing.
+        actor: openWorkspaceMainActor(this.sql),
         vfs: this.plane,
         untilMessageId: PROBE_CUT_MESSAGE_ID,
         transferId,
@@ -517,6 +523,7 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
     if (this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`.length === 0) {
       void this.sql`INSERT INTO workspace_identity (id, name, created_at)
         VALUES (${this.ctx.id.toString()}, ${'unpublished-target'}, ${1_760_000_000_100})`;
+      new WorkspaceActorDirectory(this.sql, { workspaceId: this.ctx.id.toString(), ownerUserId: '' }).createMain({ name: 'unpublished-target' });
     }
 
     this.receiver ??= new ForkTransferReceiver(
@@ -565,14 +572,13 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       lineage: readForkLineage(this.sql),
       identity: this.sql<{ id: string; name: string; mission: string | null }>`
         SELECT id, name, mission FROM workspace_identity LIMIT 1`[0] ?? null,
-      displayName: this.sql<{ value: string }>`
-        SELECT value FROM agent_config WHERE key = ${'display_name'}`[0]?.value ?? null,
+      displayName: openWorkspaceMainActor(this.sql).config.getDisplayName(),
       paneRows: !pane ? 0 : tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role <> ${'system'}`),
       markers: !pane ? 0 : tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role = ${'system'}`),
       plainRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM messages`),
-      configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_config`),
+      configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
       files: await this.plane.digests(),

@@ -251,6 +251,11 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     hasDevices: devices.length > 0,
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
+    // A slate previews on the workspace's OWN preview origin, so the slate
+    // route exists exactly when the workspace is one of the executors that can
+    // publish one. Stating it against a workspace that cannot would send the
+    // model at an operation that must refuse.
+    workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
   });
 }

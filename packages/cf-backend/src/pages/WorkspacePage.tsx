@@ -388,6 +388,7 @@ function ForkModal({
 interface SubordinatePlanContext {
   name: string;
   plan: PlanReview | null;
+  focus: string | null;
   rpc: Rpc;
 }
 
@@ -413,9 +414,9 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
   useEffect(() => {
-    onPlanContext({ name: subName, plan: state.activePlan, rpc: state.rpc });
+    onPlanContext({ name: subName, plan: state.activePlan, focus: state.planFocus, rpc: state.rpc });
     return () => onPlanContext(null);
-  }, [onPlanContext, state.activePlan, state.rpc, subName]);
+  }, [onPlanContext, state.activePlan, state.planFocus, state.rpc, subName]);
 
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
@@ -672,7 +673,7 @@ export default function WorkspacePage() {
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
-  // Output still takes over the moment there is something running to look at.
+  // Plan decisions use the selected actor; previews remain workspace-scoped.
   const subordinateReview = subName !== undefined
     && subordinatePlanContext?.name === subName
     ? subordinatePlanContext
@@ -683,7 +684,6 @@ export default function WorkspacePage() {
   // orchestrator's — and survive tab switches and revisits without leaking
   // into any additional agent's composer.
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
-  const chatMode = ui.mode;
   const setChatMode = ui.setMode;
   const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
   const effectiveChatMode = planGate.mode;
@@ -796,35 +796,6 @@ export default function WorkspacePage() {
     };
   }, [agentId]);
 
-  // New ports can bring Output forward from Work, but must not replace a
-  // selected surface. In particular, booting a slate must leave its live
-  // source-refresh owner mounted.
-  const prevPortCountRef = useRef(0);
-  useEffect(() => {
-    const n = state.pinnedPorts.length;
-    const planOwnsOutput = chatMode === "plan"
-      || visiblePlan?.status === "pending"
-      || visiblePlan?.status === "changes_requested";
-    if (n > prevPortCountRef.current && !planOwnsOutput) {
-      setSurface((selected) => selected === "Work" ? "Output" : selected);
-    }
-    prevPortCountRef.current = n;
-  }, [chatMode, state.pinnedPorts.length, visiblePlan?.status]);
-
-  // A new durable revision owns focus once. Annotation saves update the same
-  // revision and must not keep dragging the owner back after they navigate.
-  const previousPlanRef = useRef<string | null>(null);
-  useEffect(() => {
-    const key = visiblePlan
-      ? `${subName ?? "main"}/${visiblePlan.id}/${visiblePlan.revision}`
-      : null;
-    if (key && key !== previousPlanRef.current) setSurface("Output");
-    previousPlanRef.current = key;
-  }, [
-    subName,
-    visiblePlan?.id,
-    visiblePlan?.revision,
-  ]);
 
   // `sendChat` owns admission — one synchronous latch inside `useKinu`, so a
   // reactive `state.isStreaming` pre-check here is exactly what let two presses
@@ -1319,6 +1290,12 @@ export default function WorkspacePage() {
         >
           <WorkSurface
             surface={surface}
+            previewFocus={state.previewFocus}
+            planFocus={subName === undefined ? state.planFocus : subordinateReview?.focus}
+            planOwner={subName ?? "main"}
+            workspacePlanArrival={state.workspacePlanArrival}
+            activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
+            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}

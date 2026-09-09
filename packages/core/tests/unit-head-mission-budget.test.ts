@@ -19,7 +19,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { HeadInput } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import {
@@ -28,6 +28,10 @@ import {
 import type { SqlExecutor, SqlValue, RawSqlExec } from '../src/types/primitives';
 import { usageTotal } from '../src/usage';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { hostedSeatsOver } from './helpers-actor-host';
+import type { HostedNodeSeat } from '../src/strategy/node-agent';
 
 /** A model that keeps calling a tool so the agentic loop keeps stepping,
  *  reporting a fixed spend per step. */
@@ -69,13 +73,29 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
     budget: { maxDepth: 0, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
   return missionLabels ? { ...input, missionLabels } : input;
+}
+
+/**
+ * The hosted actor this head's turn runs on, over ONE workspace database.
+ *
+ * A head's turn is a claimed turn on the actor's own `ActorSession`, so the
+ * fixture supplies the actor rather than a bare runtime — through the
+ * production directory, host and session `hostedSeatsOver` builds. The MISSION
+ * ledger under test is a separate database on purpose: the counting seam below
+ * has to observe the governor's statements and nothing else.
+ */
+async function hostedHead(): Promise<HostedNodeSeat> {
+  const { rt, testSql } = createTestRuntime();
+  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'head');
 }
 
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
   const deps: Parameters<typeof runHeadInference>[1] = {
+    ...await hostedHead(),
     model: steppingModel({ input: 1_000, output: 200, ...opts }),
     tools: buildHeadAccumulatorTools(capture),
     capture,
@@ -87,7 +107,15 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
   return { report, capture };
 }
 
-/** A ledger over real SQLite that counts every statement issued through it. */
+/**
+ * A ledger over real SQLite that counts every statement issued through it,
+ * plus the actor whose spend it holds.
+ *
+ * `mission_budget` is keyed by actor — a label is caller-authored prose, so two
+ * actors of one workspace declare the same one — and the handle is bound over
+ * THIS database through the counting seam, so nothing the governor does can
+ * reach the table without the counter seeing it.
+ */
 function countingLedger() {
   const db = new Database(':memory:');
   const rawSql = makeSql(db);
@@ -104,13 +132,14 @@ function countingLedger() {
     statements.push(ddl.replace(/\s+/g, ' ').trim());
     return rawExec(ddl, ...args);
   };
-  return { db, sql, execRaw, statements };
+  const actor = createTestActors(sql, execRaw).main;
+  return { db, sql, execRaw, statements, actor };
 }
 
 describe('an undeclared run is never governed', () => {
   test('a head with no labels issues no ledger statement at all', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     // The constructor's own DDL is the only thing that may have run.
     const afterConstruction = ledger.statements.length;
 
@@ -130,7 +159,7 @@ describe('an undeclared run is never governed', () => {
 
   test('a port handed an empty label set is inert even if something calls it', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     const afterConstruction = ledger.statements.length;
 
     expect(await governor.guard('model_call', [])).toBeNull();
@@ -143,7 +172,7 @@ describe('an undeclared run is never governed', () => {
   test('a head under a label with no LIMITS meters but never refuses', async () => {
     // A pure accounting scope: the operator wanted the number, not a cap.
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('audit', {}, {});
 
     const { report } = await runHead(localMissionScope(governor, ['audit']), { stopAfter: 6 });
@@ -158,7 +187,7 @@ describe('an undeclared run is never governed', () => {
 describe('a declared budget reaches the head mid-flight', () => {
   test('spend is debited per step, not once at the end', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 1_000_000 }, {});
 
     const seen: number[] = [];
@@ -176,7 +205,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
   test('an exhausted budget stops the head mid-flight and says which budget', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     // Room for two steps' worth of spend, on a model that would otherwise run
     // for fifty.
     governor.declare('mission', { tokens: 2_500 }, {});
@@ -194,7 +223,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
   test('a head spawned into an already-spent mission gets no free inference', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 100 }, {});
     governor.debit(500, { labels: ['mission'], calls: 1 });
 
@@ -212,7 +241,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
   test('a stopped head reports what it banked, never its mid-flight thought', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 2_500 }, {});
 
     const { report } = await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
@@ -228,6 +257,7 @@ describe('a declared budget reaches the head mid-flight', () => {
     const exhausted: string[] = [];
     const governor = new MissionGovernor({
       storage: { sql: ledger.sql, execRaw: ledger.execRaw },
+      actor: ledger.actor,
       onExhausted: (refusal) => { exhausted.push(refusal.label); },
     });
     governor.declare('mission', { tokens: 2_500 }, {});
@@ -238,7 +268,7 @@ describe('a declared budget reaches the head mid-flight', () => {
 
   test('a nested label debits its ancestors too, so the outer cap is real', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('outer', { tokens: 10_000 }, {});
     governor.declare('inner', { tokens: 1_000_000 }, { parent: 'outer' });
 

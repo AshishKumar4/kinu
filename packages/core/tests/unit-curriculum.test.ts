@@ -5,6 +5,7 @@ import {
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import { createTestRuntime, makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { recordTurnOutcome } from '../src/evolution/outcomes';
 
 function setup() {
   const { rt, db } = createTestRuntime();
@@ -101,10 +102,14 @@ describe('Voyager curriculum proposer', () => {
 
   test('leaves abandoned turns out of the prompt context', async () => {
     const { rt } = setup();
-    void rt.storage.sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
-        VALUES ('o-abandoned', 'abandoned', 0.5, 'classifier', 'abandoned-marker-task', 'resp', 3)`;
-    void rt.storage.sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
-        VALUES ('o-accepted', 'accepted', 0.9, 'classifier', 'accepted-marker-task', 'resp', 4)`;
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
+      outcome: 'abandoned', confidence: 0.5, source: 'classifier',
+      userMessage: 'abandoned-marker-task', assistantResponse: 'resp', now: 3,
+    });
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
+      outcome: 'accepted', confidence: 0.9, source: 'classifier',
+      userMessage: 'accepted-marker-task', assistantResponse: 'resp', now: 4,
+    });
     const judge = createScriptedLLM(['[]']);
     await proposeNextTasks({ rt, judge });
     const promptText = judge.prompts.join('\n');
@@ -136,8 +141,8 @@ describe('Voyager curriculum proposer', () => {
   test('status-filtered list is capped at 50, newest first', () => {
     const { rt } = setup();
     for (let i = 1; i <= 55; i++) {
-      void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-          VALUES (${`seed-${i}`}, ${`task ${i}`}, 'r', 0.5, '[]', ${i}, 'pending')`;
+      void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+          VALUES (${rt.actor.actorId}, ${`seed-${i}`}, ${`task ${i}`}, 'r', 0.5, '[]', ${i}, 'pending')`;
     }
     const listed = listProposedTasks(rt, 'pending');
     expect(listed.length).toBe(50);
@@ -147,11 +152,11 @@ describe('Voyager curriculum proposer', () => {
   test('equal timestamps order by id', () => {
     const { rt } = setup();
     for (const id of ['tie-a', 'tie-b']) {
-      void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-          VALUES (${id}, ${id}, 'r', 0.5, '[]', 10, 'pending')`;
+      void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+          VALUES (${rt.actor.actorId}, ${id}, ${id}, 'r', 0.5, '[]', 10, 'pending')`;
     }
-    void rt.storage.sql`INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
-        VALUES ('older', 'older', 'r', 0.5, '[]', 9, 'pending')`;
+    void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
+        VALUES (${rt.actor.actorId}, 'older', 'older', 'r', 0.5, '[]', 9, 'pending')`;
     expect(listProposedTasks(rt).map((p) => p.id)).toEqual(['tie-b', 'tie-a', 'older']);
   });
 

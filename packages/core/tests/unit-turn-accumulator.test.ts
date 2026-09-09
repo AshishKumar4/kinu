@@ -6,6 +6,7 @@ import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { MissionGovernor } from '../src/mission-budget';
 import type { Usage } from '../src/usage';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 
@@ -256,7 +257,13 @@ describe('TurnAccumulator', () => {
 
   test('a reported zero is a report; a step with no report meters nothing', () => {
     const db = new Database(':memory:');
-    const governor = new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    // The cap is per actor, so the governor is bound to the actor whose spend
+    // the accumulator is metering.
+    const governor = new MissionGovernor({
+      storage: { sql, execRaw }, actor: createTestActors(sql, execRaw).main,
+    });
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const events: Array<{ usage?: Usage }> = [];

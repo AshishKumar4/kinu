@@ -22,6 +22,7 @@ import type {
   VFS,
 } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
+import type { ActorHandle } from '../src/state/actor-handle';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
@@ -30,6 +31,20 @@ import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
+import { WORKSPACE_IDENTITY_DDL, tableExists, initActorTables } from '../src/identity/schema';
+import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { initAgentConfigTable } from '../src/config/store';
+import { initCodemodeStateTable } from '../src/tools/state-codemode';
+
+export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
+  if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);
+  execRaw(WORKSPACE_IDENTITY_DDL);
+  void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
+  initWorkspaceActorTable(execRaw);
+  initAgentConfigTable(execRaw);
+  initCodemodeStateTable(execRaw);
+  return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
+}
 
 /** One in-memory workspace database with the three SQL handles onto it. */
 export interface TestWorkspace {
@@ -59,22 +74,32 @@ export function createTestWorkspace(): TestWorkspace {
 }
 
 /**
- * The agents SDK's own session-store DDL, verbatim from
- * `AgentSessionProvider.ensureTable`. `created_at` is a whole-second DATETIME —
+ * The pane session store, shaped exactly as `ForkTargetWriter.ensurePaneTable`
+ * creates it (src/identity/fork.ts). `created_at` is a whole-second DATETIME —
  * the reason a fork cut cannot be a timestamp comparison.
  *
- * Deliberately NOT part of `createTestWorkspace`: the SDK creates this table on
- * its first append, so a real workspace that has never run a turn does not have
+ * VENDOR-SHAPED, NOT VENDOR-OWNED. The columns mirror what the agents SDK's
+ * `AgentSessionProvider` reads, but the table this tree creates carries
+ * `actor_id` and is keyed `(actor_id, id)`: one host holds several issued
+ * actors in one database and a pane message id is minted per actor, so an
+ * unscoped read is one actor reading another's transcript and an unscoped
+ * write collides on the primary key. A fixture missing the column tests a
+ * shape no workspace has, and every pane read fails on it.
+ *
+ * Deliberately NOT part of `createTestWorkspace`: the pane store appears on
+ * first append, so a real workspace that has never run a turn does not have
  * it, and the code under test has to keep answering that absence correctly.
  * A test that needs the table seeds it explicitly, from this one definition.
  */
 export const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  id TEXT NOT NULL,
   session_id TEXT NOT NULL DEFAULT '',
   parent_id TEXT,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (actor_id, id)
 )`;
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
@@ -358,22 +383,37 @@ export function createMemoryCraftStore(db: Database): CraftStore {
 
 // ── In-memory Schedule ───────────────────────────────────────────
 
-export function createMemorySchedule(db: Database): Schedule {
-  db.exec(`CREATE TABLE IF NOT EXISTS fibers (id TEXT PRIMARY KEY, name TEXT, snapshot TEXT, created_at INTEGER)`);
+/**
+ * A fiber lane per ACTOR, over the production `fibers` table.
+ *
+ * The DDL used to be a fourth copy here — `(id PRIMARY KEY, name, snapshot,
+ * created_at)` — and it has now drifted from the real one, which carries
+ * `actor_id` in its primary key because a fiber name is minted per lane
+ * ('reactor', 'advisor-lane') and every actor of a workspace therefore presents
+ * the SAME names. With the copy in place `initWorkspaceSchema` found the table
+ * already there, skipped its own `CREATE TABLE IF NOT EXISTS`, and then failed
+ * building `idx_fibers_actor_name` on a column the copy had no idea about. So
+ * the production initializer owns it here too, exactly as `createMemoryMemory`
+ * already learned to do.
+ */
+export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule {
+  initActorTables(makeExecRaw(db), makeSql(db));
 
   return {
     after: async (_ms, fn) => { await fn(); },
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       const id = crypto.randomUUID();
-      db.run('INSERT INTO fibers (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)', [id, name, Date.now()]);
+      db.run('INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, NULL, ?)',
+        [actor.actorId, id, name, Date.now()]);
       const stash = (data: JsonValue) => {
-        db.run('UPDATE fibers SET snapshot = ? WHERE id = ?', [JSON.stringify(data), id]);
+        db.run('UPDATE fibers SET snapshot = ? WHERE actor_id = ? AND id = ?',
+          [JSON.stringify(data), actor.actorId, id]);
       };
       try {
         return await fn({ stash, snapshot: null });
       } finally {
-        db.run('DELETE FROM fibers WHERE id = ?', [id]);
+        db.run('DELETE FROM fibers WHERE actor_id = ? AND id = ?', [actor.actorId, id]);
       }
     },
   };
@@ -398,30 +438,35 @@ export function createTestRuntime(opts?: {
   const vfs = afterSeed(workspace.vfs, () =>
     workspace.vfs.mkdir('scaffold', { recursive: true })
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
+  // The PRODUCTION schema FIRST, for the reason spelled out on
+  // createTestWorkspace: a hand-picked subset tests a shape no workspace ever
+  // has, and the code under test is then forced to tolerate absences only this
+  // harness produces. First rather than last, because these tables are
+  // actor-scoped and a helper that created its own copy of one would win the
+  // `IF NOT EXISTS` race and leave the production index building on a column
+  // its copy never had.
+  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+  const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
   const memory = createMemoryMemory(db, vfs);
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
   const executor = createMockExecutor();
-  const schedule = createMemorySchedule(db);
-
-  // The PRODUCTION schema, for the reason spelled out on createTestWorkspace:
-  // a hand-picked subset tests a shape no workspace ever has, and the code
-  // under test is then forced to tolerate absences only this harness produces.
-  initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
-
+  const schedule = createMemorySchedule(db, actor);
   const identity: Identity = {
     id: 'test-agent-id',
     name: 'test-agent',
-    scaffold: createScaffoldSurface({ vfs, sql, path: 'scaffold/agent.js' }),
+    scaffold: createScaffoldSurface({ vfs, sql, actor, path: 'scaffold/agent.js' }),
   };
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'explored approach A' }),
     generateReflection: async () => ({ text: 'reflection: approach was suboptimal' }),
+    release: async () => {},
   };
 
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    actor,
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory,
     executor,
     llm,
@@ -432,7 +477,6 @@ export function createTestRuntime(opts?: {
     shell: workspace.shell,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
 
   return { rt, db };

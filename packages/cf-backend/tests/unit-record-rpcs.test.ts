@@ -83,8 +83,15 @@ function seededWorkspace() {
   // The harness's OWN database, through the same tag the actor binds — a second
   // connection would seed a different store from the one the RPCs read.
   const sql = sqlOver(harness.db);
+  // The records belong to the workspace actor those RPCs read as — read off the
+  // live runtime, not issued a second time. The shared leaderboards are
+  // actor-scoped precisely so one actor's search cannot read or overwrite
+  // another's, and `listRecordObjectives` answers as `actorHandle()`: rows filed
+  // under any other actor come back as an EMPTY page rather than an error, so
+  // the assertions below would hold over a workspace that recorded nothing.
+  const actor = harness.agent.observeRuntime().actor;
   for (const [index, value] of [41, 23, 88].entries()) {
-    recordExploration(sql, {
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({ artifact: `calls-${String(index)}`, value, at: T0 + index }),
     });
@@ -95,7 +102,7 @@ function seededWorkspace() {
     ['len=medium', 0.66, 14], ['len=long', 0.6, 15], ['len=long', 0.58, 16],
   ];
   for (const [index, [descriptor, value, offset]] of partitioned.entries()) {
-    recordExploration(sql, {
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({
         identity: PASS, floor: FLOOR, descriptor, value, at: T0 + offset,

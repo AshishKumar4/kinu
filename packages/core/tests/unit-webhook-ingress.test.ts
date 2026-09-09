@@ -15,11 +15,26 @@ import {
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
-import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSqlExec } from './helpers';
+import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
+import { makeSqlExec, makeSql as taggedSql, makeExecRaw } from './helpers';
+import type { ActorHandle } from '../src/state/actor-handle';
 
 function makeSql(db: Database): SqlExec {
   return makeSqlExec(db);
+}
+
+/**
+ * A real actor over the same database the hub stores are bound to.
+ *
+ * The hub tables are actor-keyed: a trigger produces events into ITS actor's
+ * inbox, a reply channel answers an event that actor admitted, and `revokeAll`
+ * means "everything this actor registered". So one handle is threaded through
+ * the registry, the log and the reply store — two handles here would file a
+ * delivery in an inbox nothing drains, which reads as a lost webhook rather
+ * than as the scoping it is.
+ */
+function actorOver(db: Database): ActorHandle {
+  return createTestActors(taggedSql(db), makeExecRaw(db)).main;
 }
 
 const NOW = 1_700_000_000_000;
@@ -29,14 +44,15 @@ function hub() {
   const sql = makeSql(db);
   initEventsHubTables(sql);
   initWebhookIngressTables(sql);
-  const log = new EventLog(sql);
-  const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
+  const actor = actorOver(db);
+  const log = new EventLog(sql, actor);
+  const triggers = new TriggerRegistry(sql, actor, { scheduleAt: async () => {} });
   const secrets = createWebhookSecretStore(sql);
   const { vfs, files } = createMemoryVfs();
   let drains = 0;
   const deps = {
     triggers, log, secrets, sql, vfs,
-    replies: new ReplyChannelStore(sql),
+    replies: new ReplyChannelStore(sql, actor),
     onAdmitted: () => { drains += 1; },
   };
 
@@ -369,7 +385,7 @@ describe('webhook registration', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
+    const triggers = new TriggerRegistry(sql, actorOver(db), { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     const webhook = await registerDurableWebhook(triggers, secrets, { label: 'ci', auth_mode: 'bearer', secret: 'shhh' }, NOW);
@@ -444,7 +460,7 @@ describe('webhook registration', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
+    const triggers = new TriggerRegistry(sql, actorOver(db), { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     await expect(registerDurableWebhook(
@@ -528,7 +544,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initEventsHubTables(sql);
-    const triggers = new TriggerRegistry(sql, { scheduleAt: async () => {} });
+    const triggers = new TriggerRegistry(sql, actorOver(db), { scheduleAt: async () => {} });
     const secrets = createWebhookSecretStore(sql);
 
     const live = await registerDurableWebhook(triggers, secrets, { label: 'live', auth_mode: 'bearer' }, NOW);

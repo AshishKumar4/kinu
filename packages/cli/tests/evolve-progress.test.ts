@@ -47,13 +47,11 @@ afterAll(() => {
   });
 });
 
-/** The renderer colours for a terminal; these tests assert its WORDS. Stripping
- *  at the seam keeps them true in a pipe, a PTY and under FORCE_COLOR alike —
- *  the deploy runs in a terminal and every local run was a pipe, which is how
- *  a green suite hid a red deploy twice in one day. */
-function plain(text: string): string {
-  return Bun.stripANSI(text);
-}
+// The renderer colours for a terminal and these assertions read its WORDS, so
+// every capture below is stripped at the seam: the words stay true in a pipe,
+// in a PTY and under FORCE_COLOR alike. The deploy runs in a terminal and every
+// local run was a pipe, which is how a green suite hid a red deploy twice in
+// one day.
 
 /** A search engine that emits one of every progress shape, then converges. */
 async function stubEngine(
@@ -80,13 +78,27 @@ describe('evolve progress rendering', () => {
 
     const lines: string[] = [];
     const originalLog = console.log;
+    const originalWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+    // BOTH sinks, because the mode decides which one carries a status event: a
+    // pipe gets a plain `console.log` line, a terminal gets the live row
+    // written straight to stdout. `display.ts` reads `isTTY` once at module
+    // load, so a suite cannot choose the mode — it has to read both, or it
+    // reports the runner's terminal rather than the command's behaviour.
+    // `toString` is the member both chunk representations share, and the only
+    // producer here is `display.ts` writing template strings.
+    const capture: typeof process.stdout.write = (chunk) => {
+      lines.push(chunk.toString());
+      return true;
+    };
+    process.stdout.write = capture;
     try {
       await evolveCommand(AGENT_NAME, { budget: '2', ...OFFLINE_PROVIDER }, { runMcts: stubEngine });
     } finally {
       console.log = originalLog;
+      process.stdout.write = originalWrite;
     }
-    const out = plain(lines.join('\n'));
+    const out = Bun.stripANSI(lines.join('\n'));
 
     expect(out).toContain('[1/2]');
     expect(out).toContain('exploring 3 branches');

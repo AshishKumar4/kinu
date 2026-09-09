@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
+index a169a5e1c..fb743a8d4 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -331,7 +331,7 @@
-       try {
-         for await (const chunk of llmStream(parsed.output)) {
-           acc += chunk;
--          await pushEvent({ type: 'text_delta', text: chunk });
-+          await pushEvent({ type: 'text_delta', text: acc });
+@@ -349,7 +349,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
+           if (chunk.type === 'native-tool-output') await pushEvent({ type: 'model_output', streamId, output: chunk.output });
+           else {
+             if (chunk.type === 'text-delta') acc += chunk.delta;
+-            await pushEvent({ type: 'model_chunk', streamId, chunk });
++            await pushEvent({ type: 'model_chunk', streamId, chunk: chunk.type === 'text-delta' ? { ...chunk, delta: acc } : chunk });
+           }
          }
          return acc;
-       } catch (err) {

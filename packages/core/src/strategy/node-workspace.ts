@@ -10,9 +10,12 @@
  * `/tmp/node-<id>` at `0o700`, and BOTH the way a node runs commands and the
  * way its file tools read and write are credentialed as that uid — so the
  * boundary is uid/gid/mode on real inodes rather than convention, and it holds
- * whichever way a node reaches the tree. {@link agentHomeNodeProvisioner} is
- * the implementation and `vfs/agent-home.ts` is the layout it provisions
- * against.
+ * whichever way a node reaches the tree. `facetHomeProvisioner` is the
+ * implementation and `vfs/agent-home.ts` is the layout it provisions against.
+ * The backend supplies it keyed on the node ACTOR's storage key
+ * (`cli-backend/src/local-session.ts`'s `provisionNodeHome`), never on a raw
+ * node id: a node is its own actor now, and its home has to follow the
+ * identity the directory issued rather than the id the search minted.
  *
  * Why permissions inside one filesystem and not a filesystem each: the
  * regression at `cf-backend/tests/unit-head-fork.test.ts:4-8` was a subagent
@@ -166,9 +169,11 @@ export interface NodeHomeHost {
  */
 export function facetHomeProvisioner(
   host: NodeHomeHost | Promise<NodeHomeHost>,
+  authorize?: () => void,
 ): (agentName: string) => Promise<NodeWorkspace> {
   return async (agentName) => {
     const { root, confiner, sql } = await host;
+    authorize?.();
     const identity = agentIdentity(sql, agentName);
     const home = provisionAgentHome(root, agentName, identity);
     // The bare `/tmp` rewrite as well as the directory, because a command that
@@ -191,20 +196,6 @@ export function facetHomeReleaser(
     const { root, confiner, sql } = await host;
     releaseAgentHome(root, confiner, sql, agentName);
   };
-}
-
-/**
- * The real provisioner: a private home and a private `/tmp` per node, in this
- * isolate.
- *
- * A node's name over {@link facetHomeProvisioner}, which owns the whole of
- * what provisioning means; this stays the seam a search hands its host to.
- */
-export function agentHomeNodeProvisioner(
-  host: NodeHomeHost | Promise<NodeHomeHost>,
-): NodeWorkspaceProvisioner {
-  const provision = facetHomeProvisioner(host);
-  return async (node) => provision(nodeAgentName(node.nodeId));
 }
 
 /**

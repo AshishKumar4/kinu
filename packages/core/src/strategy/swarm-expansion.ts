@@ -636,11 +636,11 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     context: input.context,
     mode,
     settle: resolved.settle,
-    // THE HOSTED HALF OF THE ASSIGNMENT: a facet cannot take a live model over
-    // RPC, so the slot's own SPEC rides the input and lands on
-    // `HeadInput.model`, where `SubordinateAgent.runAsNode` resolves it through
-    // the owner's registry. Undefined on an unrouted run, so the facet keeps
-    // resolving its route default exactly as before.
+    // THE OUT-OF-ISOLATE HALF OF THE ASSIGNMENT: a transport that crosses an
+    // isolate boundary cannot take a live model, so the slot's own SPEC rides
+    // the input and lands on `HeadInput.model`, where the hosting side resolves
+    // it through the owner's registry. Undefined on an unrouted run, so that
+    // side keeps resolving its route default exactly as before.
     modelSpec: routed?.spec,
     // *Build-time exclusion*: the tool exists only where a branch could be granted.
     // Depth is what cannot change mid-run, so it gates the BUILD; the budget can

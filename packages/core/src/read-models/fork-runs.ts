@@ -42,6 +42,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { boundedInt } from '../utils/bounds';
 import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
+import type { ActorHandle } from '../state/actor-handle';
 
 /** One vocabulary across both halves, so a list row can be read without knowing
  *  which stores it wrote. `partial` is "it stopped without a settled answer" —
@@ -107,21 +108,24 @@ const MAX_FORK_PAGE = 200;
  */
 export function listForkRuns(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_FORK_PAGE,
 ): Page<ForkRunSummary> {
+  actor.assertCurrent();
   // Closed here: a negative limit reaches SQL as `LIMIT 0` and `seekPage` as a
   // negative page, and an unparseable one fails the query. Same ceiling as the
   // run list.
   const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
   const over = page + 1;
-  return seekPage(readRuns(sql, null, queryPositions(sql, over, null, after)), page, forkAnchor);
+  return seekPage(readRuns(sql, actor.actorId, null, queryPositions(sql, actor.actorId, over, null, after)), page, forkAnchor);
 }
 
 /** One exact run, including runs older than the current page. */
-export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | null {
-  return readRuns(sql, rootId, queryPositions(sql, 1, rootId, null))[0] ?? null;
+export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ForkRunSummary | null {
+  actor.assertCurrent();
+  return readRuns(sql, actor.actorId, rootId, queryPositions(sql, actor.actorId, 1, rootId, null))[0] ?? null;
 }
 
 /**
@@ -167,9 +171,18 @@ interface RunPosition {
  * contributes nothing: it is a header row written before the first node spawns,
  * so a run known only to it has neither a tree nor a transcript, and every run
  * that reaches a node writes its tree root either way.
+ *
+ * BOTH halves are actor-scoped, and the tree half is the one that is easy to
+ * miss: `head_journal` has carried an `actor_id` predicate since the journal
+ * became actor-private, while `search_nodes` gained its leading `actor_id` in
+ * the same cutover and this union kept reading the whole table. Under one
+ * database that put every OTHER actor's search roots into this actor's
+ * Exploration list, and started them at the earliest `created_at` of the
+ * stranger's tree.
  */
 function queryPositions(
   sql: SqlExecutor,
+  actorId: string,
   limit: number,
   rootId: string | null,
   after: ForkAnchor | null,
@@ -181,12 +194,14 @@ function queryPositions(
     FROM (
       SELECT root_id AS root_id, MIN(created_at) AS started_at
       FROM search_nodes
-      WHERE (${rootId} IS NULL OR root_id = ${rootId})
+      WHERE actor_id = ${actorId}
+        AND (${rootId} IS NULL OR root_id = ${rootId})
       GROUP BY root_id
       UNION ALL
       SELECT root_id AS root_id, MIN(spawned_at) AS started_at
       FROM head_journal
-      WHERE root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
+      WHERE actor_id = ${actorId}
+        AND root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
         AND (${rootId} IS NULL OR root_id = ${rootId})
       GROUP BY root_id
     )
@@ -209,13 +224,14 @@ function queryPositions(
  */
 function readRuns(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   positions: readonly RunPosition[],
 ): ForkRunSummary[] {
   if (positions.length === 0) return [];
   const wanted = new Set(positions.map((position) => position.rootId));
-  const trees = queryTreeHalves(sql, rootId, wanted);
-  const journals = queryTranscriptHalves(sql, rootId, wanted);
+  const trees = queryTreeHalves(sql, actorId, rootId, wanted);
+  const journals = queryTranscriptHalves(sql, actorId, rootId, wanted);
   return positions.flatMap((position) => {
     const tree = trees.get(position.rootId);
     const transcripts = journals.get(position.rootId);
@@ -296,9 +312,18 @@ interface TreeHalf {
  * forever, so a ledger-driven list would make week-old searches disappear — the
  * exact failure this read model exists to end. The ledger is joined for the
  * status it alone records.
+ *
+ * EVERY read of `search_nodes` here is actor-scoped, including the frontier's
+ * child-existence subquery. The ledger is keyed `(actor_id, root_id)` and the
+ * tree `(actor_id, id)`, so under one database an unscoped read of either does
+ * not merely add a stranger's roots to the list: `branches`, `terminal` and
+ * `frontier` are SUMs over the group, so two actors that ran the same root id
+ * report each other's branch counts added together, and one actor's open node
+ * reads as expanded because ANOTHER actor's node claims it as a parent.
  */
 function queryTreeHalves(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   wanted: ReadonlySet<string>,
 ): Map<string, TreeHalf> {
@@ -312,13 +337,15 @@ function queryTreeHalves(
            MAX(CASE WHEN n.parent_id IS NULL THEN n.action END)     AS name,
            MAX(r.status)                                            AS status,
            SUM(CASE WHEN n.status = 'open'
-                      AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = n.id)
+                      AND NOT EXISTS (SELECT 1 FROM search_nodes c
+                                      WHERE c.actor_id = n.actor_id AND c.parent_id = n.id)
                     THEN 1 ELSE 0 END)                              AS frontier,
            SUM(CASE WHEN n.status = 'terminal' THEN 1 ELSE 0 END)   AS terminal,
            MAX(CASE WHEN n.status = 'terminal' THEN n.value END)    AS best_terminal
     FROM search_nodes n
-    LEFT JOIN mcts_search_runs r ON r.root_id = n.root_id
-    WHERE (${rootId} IS NULL OR n.root_id = ${rootId})
+    LEFT JOIN mcts_search_runs r ON r.actor_id = ${actorId} AND r.root_id = n.root_id
+    WHERE n.actor_id = ${actorId}
+      AND (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id`;
   const halves = new Map<string, TreeHalf>();
   for (const row of rows) {
@@ -428,6 +455,7 @@ interface TranscriptHalf {
  */
 function queryTranscriptHalves(
   sql: SqlExecutor,
+  actorId: string,
   rootId: string | null,
   wanted: ReadonlySet<string>,
 ): Map<string, TranscriptHalf> {
@@ -445,9 +473,10 @@ function queryTranscriptHalves(
            MAX(r.rationale)                                   AS rationale,
            MAX(CASE WHEN m.root_id IS NOT NULL THEN 1 ELSE 0 END) AS settled
     FROM head_journal j
-    LEFT JOIN head_runs r ON r.root_id = j.root_id
-    LEFT JOIN head_merge_results m ON m.root_id = j.root_id
-    WHERE j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
+    LEFT JOIN head_runs r ON r.actor_id = j.actor_id AND r.root_id = j.root_id
+    LEFT JOIN head_merge_results m ON m.actor_id = j.actor_id AND m.root_id = j.root_id
+    WHERE j.actor_id = ${actorId}
+      AND j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
       AND (${rootId} IS NULL OR j.root_id = ${rootId})
     GROUP BY j.root_id`;
   const halves = new Map<string, TranscriptHalf>();

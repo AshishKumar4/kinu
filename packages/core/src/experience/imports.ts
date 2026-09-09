@@ -36,6 +36,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { sqlCheckList } from '../identity/schema';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
@@ -78,8 +79,9 @@ export interface ImportedExperienceRow {
 
 export function initImportedExperienceTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS imported_experience (
-    id               TEXT PRIMARY KEY,
-    library_id       TEXT NOT NULL UNIQUE,
+    actor_id         TEXT NOT NULL,
+    id               TEXT NOT NULL,
+    library_id       TEXT NOT NULL,
     kind             TEXT NOT NULL CHECK (kind IN (${sqlCheckList(EXPERIENCE_KINDS)})),
     key              TEXT NOT NULL,
     title            TEXT NOT NULL,
@@ -89,8 +91,16 @@ export function initImportedExperienceTable(execRaw: RawSqlExec): void {
     status           TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
     turn_ids         TEXT NOT NULL,
     imported_at      INTEGER NOT NULL,
-    corroborated_at  INTEGER
+    corroborated_at  INTEGER,
+    PRIMARY KEY (actor_id, id)
   )`);
+  // "Already imported here" is a question about THIS actor's adopted set: two
+  // actors of one workspace may each adopt the same library entry into their own
+  // facts, and a table-wide unique index would refuse the second as a duplicate.
+  execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_imported_experience_library
+    ON imported_experience(actor_id, library_id)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_imported_experience_status
+    ON imported_experience(actor_id, status, imported_at DESC)`);
 }
 
 interface RawImportRow {
@@ -126,13 +136,17 @@ function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
 
 export function listImportedExperience(
   sql: SqlExecutor,
+  actor: ActorHandle,
   options: { status?: ImportStatus; limit?: number } = {},
 ): ImportedExperienceRow[] {
+  actor.assertCurrent();
   const limit = options.limit ?? 100;
   const rows = options.status
-    ? sql<RawImportRow>`SELECT * FROM imported_experience WHERE status = ${options.status}
+    ? sql<RawImportRow>`SELECT * FROM imported_experience
+        WHERE actor_id = ${actor.actorId} AND status = ${options.status}
         ORDER BY imported_at DESC LIMIT ${limit}`
-    : sql<RawImportRow>`SELECT * FROM imported_experience ORDER BY imported_at DESC LIMIT ${limit}`;
+    : sql<RawImportRow>`SELECT * FROM imported_experience WHERE actor_id = ${actor.actorId}
+        ORDER BY imported_at DESC LIMIT ${limit}`;
   return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
 
@@ -158,7 +172,7 @@ export function stageImport(
   }
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
   if (!verdict.ok) {
-    recordMisevolutionVeto(rt.storage.sql, {
+    recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'import',
       violation: verdict,
       detail: `${entry.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
@@ -169,8 +183,10 @@ export function stageImport(
     };
   }
 
+  rt.actor.assertCurrent();
   const existing = rt.storage.sql<{ status: ImportStatus }>`
-    SELECT status FROM imported_experience WHERE library_id = ${entry.id} LIMIT 1`[0];
+    SELECT status FROM imported_experience
+    WHERE actor_id = ${rt.actor.actorId} AND library_id = ${entry.id} LIMIT 1`[0];
   if (existing) {
     return {
       ok: false,
@@ -182,9 +198,9 @@ export function stageImport(
 
   const id = `imp-${nanoid()}`;
   void rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+      (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        status, turn_ids, imported_at, corroborated_at)
-    VALUES (${id}, ${entry.id}, ${entry.kind}, ${entry.key}, ${entry.title},
+    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.kind}, ${entry.key}, ${entry.title},
             ${JSON.stringify(entry.payload)}, ${entry.evidence}, ${entry.sourceWorkspace},
             'provisional', '[]', ${now}, NULL)`;
 
@@ -203,11 +219,12 @@ export function stageImport(
  * Called only when a turn actually received an outcome — an ungraded turn
  * carries no verdict, so binding to it would throw the evidence away.
  */
-export function bindPendingImports(sql: SqlExecutor, turnId: string): void {
-  const pending = listImportedExperience(sql, { status: 'provisional', limit: 200 })
+export function bindPendingImports(sql: SqlExecutor, actor: ActorHandle, turnId: string): void {
+  const pending = listImportedExperience(sql, actor, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.length === 0);
   for (const row of pending) {
-    void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])} WHERE id = ${row.id}`;
+    void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
+      WHERE actor_id = ${actor.actorId} AND id = ${row.id}`;
   }
 }
 
@@ -236,7 +253,7 @@ export async function settleImportsForTurn(
   verdict: 'accepted' | 'rejected',
   now = nowMs(),
 ): Promise<ImportSettlement> {
-  const riding = listImportedExperience(rt.storage.sql, { status: 'provisional', limit: 200 })
+  const riding = listImportedExperience(rt.storage.sql, rt.actor, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.includes(turnId));
   const settlement: ImportSettlement = { corroborated: [], discarded: [] };
 
@@ -251,15 +268,17 @@ export async function settleImportsForTurn(
     // `promoteImport` path is an upsert or a keyed archive entry, so promoting
     // twice adopts one artifact. The marker only stops a resumed review from
     // appending a second settlement for an import already dispositioned.
-    if (effectAlreadyDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id)) continue;
+    if (effectAlreadyDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id)) continue;
     if (verdict === 'accepted' && await promoteImport(rt, row, turnId)) {
       void rt.storage.sql`UPDATE imported_experience
-          SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${row.id}`;
-      recordEffectDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id);
+          SET status = 'corroborated', corroborated_at = ${now}
+          WHERE actor_id = ${rt.actor.actorId} AND id = ${row.id}`;
+      recordEffectDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id);
       settlement.corroborated.push({ ...row, status: 'corroborated', corroboratedAt: now });
     } else {
-      void rt.storage.sql`DELETE FROM imported_experience WHERE id = ${row.id}`;
-      recordEffectDone(rt.storage.sql, IMPORT_SETTLED_SCOPE, row.id);
+      void rt.storage.sql`DELETE FROM imported_experience
+        WHERE actor_id = ${rt.actor.actorId} AND id = ${row.id}`;
+      recordEffectDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id);
       settlement.discarded.push(row);
     }
   }
@@ -310,7 +329,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       // row — the same store every other lesson lives in, so prompt weaving,
       // memory search and re-publication all read it through one path. A
       // MEMORY.md copy would be a second home for text the ledger owns.
-      recordLesson(rt.storage.sql, {
+      recordLesson(rt.storage.sql, rt.actor, {
         turnIds: [turnId],
         text: `${row.payload.text}\n(${from})`,
         source: 'import',
@@ -323,7 +342,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       return true;
     }
     case 'fact': {
-      createFactsStore(rt.storage.sql).upsert(row.payload.key, row.payload.value, {
+      createFactsStore(rt.storage.sql, rt.actor).upsert(row.payload.key, row.payload.value, {
         confidence: row.payload.confidence,
         source: `experience:${row.sourceWorkspace}`,
       });
@@ -343,7 +362,7 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       // tombstone written after the await, it cannot be missing while the
       // scaffold exists. That is the whole reason this link is prose.
       const marker = importedScaffoldMarker(row.id);
-      const pending = getPendingScaffold(rt.storage.sql);
+      const pending = getPendingScaffold(rt.storage.sql, rt.actor);
       if (pending?.rationale.includes(marker)) return true;
       const proposed = await modifyScaffold(
         rt,

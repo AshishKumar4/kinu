@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/search-store.ts b/packages/core/src/mcts/search-store.ts
-index 0f76c5a65..839ca0ca0 100644
+index 50719837f..8ab8746df 100644
 --- a/packages/core/src/mcts/search-store.ts
 +++ b/packages/core/src/mcts/search-store.ts
-@@ -237,7 +237,7 @@ export class MctsSearchStore {
-    *  A swarm does NOT call this: its progress is derived from its tree
+@@ -266,7 +266,7 @@ export class MctsSearchStore {
     *  ({@link ResumableSwarm}), so its only live-row write is {@link touch}. */
    checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
+     this.actor.assertCurrent();
 -    void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
 +    void this.sql`UPDATE mcts_search_runs SET iteration=${budget}, budget=${iteration}, updated_at=${now}
-       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+       WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
    }
  

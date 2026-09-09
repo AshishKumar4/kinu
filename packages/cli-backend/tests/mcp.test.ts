@@ -5,7 +5,8 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
 import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -53,13 +54,16 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
 }
 
 function sessionWithModel(model: LanguageModel) {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
+  // reading the database's own filename back, and refuses a runtime whose path
+  // does not match it (`requireLocalDatabasePath`).
+  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('mcp', 'agent.db'),
+    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];
@@ -89,15 +93,32 @@ describe('connectMcpServers', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test('a tool call gets the full call budget, not the startup budget', async () => {
-    // The 5s startup timeout used to apply to tool calls too, so any MCP tool
-    // doing real work (a fetch, a query, a build) failed. The fixture sleeps
-    // past that budget; cfg.timeoutMs still bounds it.
+  test('a tool call outlives every bound this module used to impose', async () => {
+    // The 5s startup timeout used to apply to tool calls too, and then a 60s
+    // SDK default replaced it. Neither is here now: the fixture sleeps past the
+    // first, and only a server's own `timeoutMs` config would bound it.
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });
     try {
       await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
+
+  test('the caller cancels a running tool call; nothing else ends it early', async () => {
+    const conn = await connectMcpServers({
+      echo: { command: 'node', args: [fixtureServer] },
+    });
+    try {
+      const stop = new AbortController();
+      const running = conn.call('echo', 'slow', { ms: 30_000 }, stop.signal);
+      const started = Date.now();
+      stop.abort();
+      await expect(running).rejects.toBeInstanceOf(Error);
+      // The rejection is the abort, not a wait for the fixture's own sleep.
+      expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       await conn.close();
     }

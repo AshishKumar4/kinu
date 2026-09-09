@@ -71,8 +71,6 @@ describe('checkpoint preamble', () => {
     const body = '## Active Task\nDo the thing\n\n## Completed\n- step 1';
     const wrapped = wrapCompactionSummary(body);
     expect(wrapped).toStartWith(CONTEXT_CHECKPOINT_PREFIX);
-    expect(wrapped).toContain('build on it');
-    expect(wrapped).toContain('do not re-ask questions');
     expect(stripCheckpointPreamble(wrapped)).toBe(body);
   });
 

@@ -22,6 +22,7 @@ import {
   snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index';
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
+import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
 
 
 async function seedSource(src: TestWorkspace) {
@@ -29,6 +30,7 @@ async function seedSource(src: TestWorkspace) {
   // has to seed the table too — production's own DDL, from one definition.
   src.execRaw(SDK_SESSION_DDL);
   void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
+  const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'SRC-1', ownerUserId: '' }).createMain({ name: 'source-agent' });
   await writeSoul(src.vfs, src.sql, 'help with testing');
   // Both stores, same ids and same edges — which is what the projection
   // maintains in production. `m3` is past the cut and must not come across.
@@ -38,17 +40,18 @@ async function seedSource(src: TestWorkspace) {
     { id: 'm3', parent: 'm2', role: 'user', text: 'post-fork-point', at: '1970-01-01 00:00:03' },
   ] as const;
   for (const m of chain) {
-    void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${m.parent}, ${m.role}, ${m.text}, ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${''}, ${m.parent}, ${m.role},
+    void src.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
+              ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${''}, ${m.parent}, ${m.role},
               ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
               ${m.at})`;
   }
   void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
-  void src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
+  actor.config.setModel('@cf/moonshotai/kimi-k2.6');
 }
 
 describe('fork pipeline (end-to-end)', () => {
@@ -56,7 +59,8 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     // Simulate the fork DO's onStart bootstrap
-    void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
+    void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'FORK-DO-ID'}, ${'fork-bootstrap'}, ${999})`;
+    new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'FORK-DO-ID', ownerUserId: '' }).createMain({ name: 'fork-bootstrap' });
     await writeSoul(tgt.vfs, tgt.sql, 'default');
 
     await seedSource(src);
@@ -112,8 +116,8 @@ describe('fork pipeline (end-to-end)', () => {
     expect(marker[0]!.content).toContain('forked from workspace');
     expect(marker[0]!.content).toContain('source-agent');
 
-    // agent_config — model copied, display_name overwritten
-    const cfg = new Map(tgt.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`.map(r => [r.key, r.value]));
+    // actor_config — model copied, display_name overwritten
+    const cfg = new Map(tgt.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config`.map(r => [r.key, r.value]));
     expect(cfg.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
     expect(cfg.get('display_name')).toBe('my-fork');
   });
@@ -122,8 +126,10 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
+    const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'S', ownerUserId: '' }).createMain({ name: 's' });
     await writeSoul(src.vfs, src.sql, 'p');
-    void src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
+    void src.sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+      VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
 

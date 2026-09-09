@@ -18,16 +18,20 @@ const CSS_LABEL = css.match(/\.p-combobox-no-clear\s*>\s*\[aria-label="([^"]+)"\
 /** The label ModelPicker hands Kumo for the same button. */
 const TSX_LABEL = picker.match(/const CLEAR_LABEL_UNUSED = "([^"]+)"/)?.[1];
 
-describe('combobox clear affordance', () => {
-  test('the stylesheet still has a rule to hide it', () => {
-    // Guards the guard: without the rule there is nothing to keep in step, and
-    // the equality below would compare undefined to undefined.
-    expect(CSS_LABEL).toBeDefined();
-    expect(TSX_LABEL).toBeDefined();
-  });
+// THE GUARD'S GUARD, as a load-time precondition rather than a test of its
+// own. With no rule and no constant there is nothing to keep in step, and the
+// equality below then compares undefined to undefined and passes — which is
+// exactly the state a rename produces. `expect(CSS_LABEL).toBeDefined()` said
+// so in a case that asserted nothing about the affordance; a throw here says
+// the same thing louder, cannot be skipped, and names both sides.
+if (CSS_LABEL === undefined || TSX_LABEL === undefined) {
+  throw new Error('combobox clear affordance: nothing to compare — '
+    + `index.css rule label=${String(CSS_LABEL)}, ModelPicker label=${String(TSX_LABEL)}`);
+}
 
+describe('combobox clear affordance', () => {
   test('the label the picker sends is the label the stylesheet hides', () => {
-    expect(TSX_LABEL).toBe(CSS_LABEL!);
+    expect(TSX_LABEL).toBe(CSS_LABEL);
   });
 
   test('only a clearable picker keeps the clear button', () => {

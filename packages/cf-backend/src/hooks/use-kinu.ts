@@ -45,6 +45,7 @@ import {
   type SessionRecovery,
 } from "./session-recovery";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
+import { terminalChatError, type ChatTurnError } from "./chat-turn-error";
 import type { AsyncResource } from "./use-async-resource";
 import { pruneSlateReloads } from "../components/surfaces/presence";
 
@@ -99,18 +100,6 @@ export interface BranchRun {
  *  The same shape the durable rows resolve to, so the thread places a live
  *  steer and the row it becomes through one function. See read-models/transcript.ts. */
 export type { InlineSteer as SteerRun } from "@kinu.run/core";
-
-/** A turn that ended without an answer, and whether the server is REPLAYING an
- *  older one rather than reporting this session's.
- *
- *  The distinction is the whole difference between "your turn just failed" and
- *  "the last thing that happened here failed, some time ago". The server keeps
- *  its terminal record until a later turn supersedes it, so a workspace left
- *  after a failure re-serves it on every connect. */
-export interface ChatTurnError {
-  body: string;
-  replayed: boolean;
-}
 
 export interface ForkLineage {
   sourceWorkspaceId: string;
@@ -184,42 +173,7 @@ export interface WorkspaceSnapshot {
   branchRuns: Array<{ branchId: string; task: string; status: "running" }>;
 }
 
-const PlanAnnotationTextPositionSchema = v.object({
-  parentTagName: v.string(),
-  parentIndex: v.number(),
-  textOffset: v.number(),
-});
-const PlanAnnotationMathTargetSchema = v.object({
-  blockId: v.string(),
-  tex: v.string(),
-  displayMode: v.boolean(),
-});
-const PlanReviewSchema = v.object({
-  id: v.string(),
-  sessionId: v.string(),
-  revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
-  content: v.string(),
-  status: v.picklist(["pending", "changes_requested", "approved", "superseded"]),
-  annotations: v.array(v.object({
-    id: v.string(),
-    blockId: v.string(),
-    startOffset: v.number(),
-    endOffset: v.number(),
-    type: v.picklist(["DELETION", "COMMENT", "GLOBAL_COMMENT"]),
-    text: v.optional(v.string()),
-    originalText: v.string(),
-    createdA: v.number(),
-    author: v.optional(v.string()),
-    startMeta: v.optional(PlanAnnotationTextPositionSchema),
-    endMeta: v.optional(PlanAnnotationTextPositionSchema),
-    mathTargets: v.optional(v.array(PlanAnnotationMathTargetSchema)),
-  })),
-  feedback: v.nullable(v.string()),
-  handoffAccepted: v.boolean(),
-  createdAt: v.number(),
-  updatedAt: v.number(),
-  decidedAt: v.nullable(v.number()),
-});
+import { PlanReviewSchema, WorkspacePlanReferenceSchema, type WorkspacePlanReference } from "@kinu.run/core";
 
 const MctsRowSchema = v.object({
   id: v.string(),
@@ -318,6 +272,22 @@ const SubordinateActivityEventSchema = v.object({
   timestamp: v.number(),
 });
 
+/**
+ * The one frame the arrival plumbing consumes: a plan reference and nothing
+ * else, because a workspace announces THAT a plan exists and the exact
+ * authorized read is what says anything about it.
+ *
+ * Exported so a caller that PUSHES this frame builds it through the same
+ * schema this hook parses it with — the gallery's transport fixture does, and
+ * its `type` comes off `entries.type.literal` rather than a second copy of the
+ * event name. A fixture with a stale name is otherwise a frame this hook
+ * silently drops, which a browser gate sees as a timeout three steps later.
+ */
+export const WorkspacePlanUpdatedFrameSchema = v.strictObject({
+  type: v.literal("workspace_plan_updated"),
+  reference: WorkspacePlanReferenceSchema,
+});
+
 const SocketMessageSchema = v.variant("type", [
   v.object({ type: v.literal("workspace_renamed"), displayName: v.optional(v.string()) }),
   // The server's statement of what this conversation IS, sent unconditionally
@@ -367,6 +337,7 @@ const SocketMessageSchema = v.variant("type", [
   }),
   v.looseObject({ type: v.literal("signal_card") }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
+  WorkspacePlanUpdatedFrameSchema,
   v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
   SubordinateActivityEventSchema,
   v.object({
@@ -675,6 +646,28 @@ export function useWorkspaceRpc(agentId: string) {
   return { rpc, connectionStatus };
 }
 
+/**
+ * One arrived plan reference, and the claim that spends it.
+ *
+ * A `workspace_plan_updated` frame carries a reference and nothing else, so
+ * the pane that resolves it is the only place that learns whether the exact
+ * read authorized it. That is why the reference stays exposed for as long as
+ * this connection holds it, long after the hint was acted on: the pane
+ * re-reads it every cycle, which is what keeps the arrived plan reachable in
+ * the history it merges.
+ *
+ * `claim` answers the other question — has this connection already ACTED on
+ * this reference? — and says yes exactly once. That memory belongs to the
+ * connection, not to a pane: panes are remounted by every conversation
+ * switch, and an honoured hint that replays on the fresh mount takes the
+ * reader off the conversation they just opened. Both halves ride in one value
+ * so they cannot be half-wired through the components that thread them.
+ */
+export interface WorkspacePlanArrival {
+  readonly reference: WorkspacePlanReference;
+  claim(reference: WorkspacePlanReference): boolean;
+}
+
 
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
@@ -777,6 +770,20 @@ export function useKinu(target?: string | KinuActorAddress) {
   // slates_changed broadcast re-lists at once and bumps the remount
   // counter of every open tab among its ids.
   const [slates, setSlates] = useState<SlateSummary[]>([]);
+  const knownSlates = useRef<Set<string> | null>(null);
+  const knownPorts = useRef<Set<string> | null>(null);
+  const [previewFocus, setPreviewFocus] = useState<string | null>(null);
+  const [planFocus, setPlanFocus] = useState<string | null>(null);
+  const [arrivedReference, setArrivedReference] = useState<WorkspacePlanReference | null>(null);
+  // Two different memories, kept apart because they answer two different
+  // questions. `knownWorkspacePlans` is which references this connection has
+  // been TOLD about, so a repeated frame is not a second arrival.
+  // `claimedWorkspacePlans` is which ones a pane has already ACTED on, so an
+  // honoured hint never fires twice — not on the next read cycle, and not on
+  // the fresh pane a conversation switch mounts.
+  const knownWorkspacePlans = useRef(new Set<string>());
+  const claimedWorkspacePlans = useRef(new Set<string>());
+  const knownPlans = useRef(new Set<string>());
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
@@ -909,15 +916,15 @@ export function useKinu(target?: string | KinuActorAddress) {
         }));
       } else if (data?.type === "cf_agent_stream_resuming") {
         resumedRequestIds.current.add(data.id);
-      } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
+      } else {
         // Terminal-error frame. During a live stream the transport also
         // surfaces it as useChat's `error`; on connect the server REPLAYS
         // the last terminal error with a stale request id the transport
-        // drops — this handler is the only place that frame is seen.
-        setChatError({
-          body: data.body?.trim() ? data.body : "The turn failed with an unknown error.",
-          replayed: data.id !== undefined && resumedRequestIds.current.has(data.id),
-        });
+        // drops — this handler is the only place that frame is seen. The
+        // RULE lives in `chat-turn-error.ts`, where an inverted replay test
+        // or a dropped `done` check fails a test instead of reading correct.
+        const failed = data === null ? null : terminalChatError(data, resumedRequestIds.current);
+        if (failed !== null) setChatError(failed);
       }
     }, [actorAddress.workspace]),
   };
@@ -1070,6 +1077,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (!agent) return;
     const onOpen = async () => {
+      knownPorts.current = null;
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
@@ -1116,7 +1124,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         return;
       }
       try {
-        await rpc("getSubordinateSnapshot", []);
+        // Any ACKNOWLEDGED frame answers the liveness question; this one is the
+        // read the tab already depends on, so a corpse fails the ping and the
+        // load identically instead of two surfaces disagreeing about the socket.
+        await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
       } catch (error) {
         setSourceError("snapshot", errorMessage(error));
@@ -1191,7 +1202,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTabPresence,
   ), [refreshCurrentLiveResource, rpc]);
 
-  const applySlates = useCallback((listing: SlateSummary[]) => {
+  const applySlates = useCallback((listing: SlateSummary[], announce = false) => {
+    const previous = knownSlates.current;
+    if (announce && previous !== null) {
+      const added = listing.find(slate => !previous.has(slate.id));
+      if (added) setPreviewFocus(`slate:${added.id}`);
+    }
+    knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
     setSlates(listing);
     setSlateReloads((previous) => pruneSlateReloads(previous, listing));
   }, []);
@@ -1199,7 +1216,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const refreshSlates = useCallback(() => refreshCurrentLiveResource(
     "slates",
     () => rpc<{ slates: SlateSummary[]; problems: SlateProblem[] }>("listSlates", []).then((listing) => listing.slates),
-    applySlates,
+    (listing) => applySlates(listing, true),
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
@@ -1385,7 +1402,18 @@ export function useKinu(target?: string | KinuActorAddress) {
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
           const plan = parsePlanReview(msg.plan);
-          if (plan) setActivePlan(plan);
+          if (plan) {
+            const key = `${plan.id}:${plan.revision}`;
+            if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
+            knownPlans.current.add(key);
+            setActivePlan(plan);
+          }
+        } else if (!isSubordinate && msg.type === 'workspace_plan_updated') {
+          const key = JSON.stringify(msg.reference);
+          if (!knownWorkspacePlans.current.has(key)) {
+            knownWorkspacePlans.current.add(key);
+            setArrivedReference(msg.reference);
+          }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
           if (roster) {
@@ -1424,7 +1452,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
-    const results = await Promise.all(["workspace", "sandbox"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "sandbox", "laptop"].map(async (executor) => {
       try {
         const result = await rpc<{
           ports: Array<{ port: number; url: string; name?: string }>;
@@ -1438,13 +1466,21 @@ export function useKinu(target?: string | KinuActorAddress) {
         } satisfies ExecutorPortRefresh;
       }
     }));
+    await refreshCurrentLiveResource("slates", () => rpc<{ slates: SlateSummary[] }>("listSlates", []).then(list => list.slates), applySlates);
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
       setPreviewError(next.error);
+      if (next.error === null) {
+        const ids = next.ports.map(port => `${port.executor}:${port.port}`);
+        const previousIds = knownPorts.current;
+        const added = previousIds === null ? undefined : ids.find(id => !previousIds.has(id));
+        if (added) setPreviewFocus(`preview:${added}`);
+        knownPorts.current = new Set([...(previousIds ?? []), ...ids]);
+      }
       return next.ports;
     });
-  }, [rpc]);
+  }, [rpc, refreshCurrentLiveResource, applySlates]);
   // Timer ticks and user/reconnect refreshes may overlap. Each cycle retains
   // its own task through settlement instead of borrowing a global catch sink.
   const liveRefreshTaskId = useRef(0);
@@ -1557,7 +1593,11 @@ export function useKinu(target?: string | KinuActorAddress) {
       for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
       setExecutorOutputs(outputs);
     }
-    if (isSourceCurrent("plan")) setActivePlan(parsePlanReview(snap.activePlan));
+    if (isSourceCurrent("plan")) {
+      const loadedPlan = parsePlanReview(snap.activePlan);
+      if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
+      setActivePlan(loadedPlan);
+    }
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
     if (isSourceCurrent("slates")) applySlates(snap.slates);
     // REPLACE, never merge. The durable rows are the authority for what is
@@ -1581,7 +1621,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    const snapshot = await rpc<SubordinateSnapshot>("getSubordinateSnapshot", []);
+    // `getActorSnapshot`, not the facet-era `getSubordinateSnapshot`: the method
+    // this used to call went with the SubordinateAgent class, and the same
+    // capability is answered in process by the root now, keyed on the actor
+    // name this tab is looking at. The name is what the root resolves through
+    // its directory, so a tab cannot ask about an actor that is not a child of
+    // this workspace.
+    const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
     if (!isCurrent()) return;
     setAgentStatus({
       name: snapshot.name,
@@ -1596,7 +1642,9 @@ export function useKinu(target?: string | KinuActorAddress) {
       model: snapshot.model ?? "",
       forkLineage: null,
     });
-    setActivePlan(parseActivePlanReview(snapshot.activePlan));
+    const loadedPlan = parseActivePlanReview(snapshot.activePlan);
+    if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
+    setActivePlan(loadedPlan);
     setSteerRuns(snapshot.pendingSteers);
   }
   // Roster loads may overlap across reconnects; their generation decides which
@@ -1665,6 +1713,14 @@ export function useKinu(target?: string | KinuActorAddress) {
     setPreviewError(null);
     setBackgroundJobs([]);
     setSlates([]);
+    knownSlates.current = null;
+    knownPorts.current = null;
+    knownPlans.current.clear();
+    knownWorkspacePlans.current.clear();
+    claimedWorkspacePlans.current.clear();
+    setArrivedReference(null);
+    setPreviewFocus(null);
+    setPlanFocus(null);
     setSlateReloads(new Map());
     setPendingConsents([]);
     setActivePlan(null);
@@ -1676,6 +1732,25 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSubordinateEvents([]);
     setSignalCards([]);
   }, [workspace, subordinate]);
+
+  /** Spend one arrived reference. True exactly once per reference for the
+   *  lifetime of this connection, false forever after. Claiming records only
+   *  the key it was handed: a newer arrival is a different key, so honouring
+   *  one hint can never suppress the next, and the held reference itself is
+   *  never cleared — the pane keeps resolving it so the arrived plan stays in
+   *  the history it merges. */
+  const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
+    const key = JSON.stringify(reference);
+    if (claimedWorkspacePlans.current.has(key)) return false;
+    claimedWorkspacePlans.current.add(key);
+    return true;
+  }, []);
+  const workspacePlanArrival = useMemo<WorkspacePlanArrival | null>(
+    () => arrivedReference === null
+      ? null
+      : { reference: arrivedReference, claim: claimWorkspacePlan },
+    [arrivedReference, claimWorkspacePlan],
+  );
 
   /**
    * Start a turn with this text and these attachments.
@@ -1901,6 +1976,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     executeInExecutor,
     /** Exposed ports across the canonical Workspace and Sandbox executors. */
     pinnedPorts,
+    previewFocus, planFocus,
+    /** The plan reference this connection was last told about, paired with the
+     *  claim that spends it. Null until a frame arrives. */
+    workspacePlanArrival,
     previewError,
     refreshExposedPorts,
     /** Background jobs — the Work surface's Now half and its journal. */

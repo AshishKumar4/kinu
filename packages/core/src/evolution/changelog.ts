@@ -15,6 +15,7 @@ import * as v from 'valibot';
 import { CHANGE_KIND_GLYPH } from '../tui-presentation';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
+import type { ActorHandle } from '../state/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
@@ -95,14 +96,16 @@ export interface BuildChangelogOptions {
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-function scaffoldStatusChangeAt(sql: SqlExecutor): Map<number, number> {
+function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<number, number> {
   // Promotions/rollbacks flip a status flag on an existing row, so written_at
   // alone would hide them from the unseen window. The durable run_events log
   // records both decisions with a timestamp — fold it in where present.
   const byVersion = new Map<number, number>();
+  actor.assertCurrent();
   const rows = sql<{ type: string; payload: string; ts: string }>`
     SELECT type, payload, ts FROM run_events
-    WHERE type IN ('scaffold_promotion', 'scaffold_rollback')`;
+    WHERE actor_id = ${actor.actorId}
+      AND type IN ('scaffold_promotion', 'scaffold_rollback')`;
   for (const r of rows) {
     const at = Date.parse(r.ts);
     if (!Number.isFinite(at)) continue;
@@ -121,9 +124,9 @@ function scaffoldStatusChangeAt(sql: SqlExecutor): Map<number, number> {
   return byVersion;
 }
 
-function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
-  const archive = listScaffoldArchive(sql, 100).filter((e) => e.version > 0);
-  const changedAt = scaffoldStatusChangeAt(sql);
+function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
+  const archive = listScaffoldArchive(sql, actor, 100).filter((e) => e.version > 0);
+  const changedAt = scaffoldStatusChangeAt(sql, actor);
   return archive.map((e) => {
     const verb =
       e.status === 'current' ? 'Promoted scaffold'
@@ -206,13 +209,15 @@ type FactChangelogEntry = ChangelogEntry & {
   revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
 };
 
-function factEntries(sql: SqlExecutor, limit: number): FactChangelogEntry[] {
+function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactChangelogEntry[] {
+  actor.assertCurrent();
   const rows = sql<{
     key: string; value_json: string; confidence: number;
     source: string | null; last_observed_at: number;
   }>`
     SELECT key, value_json, confidence, source, last_observed_at
-    FROM agent_facts ORDER BY last_observed_at DESC LIMIT ${limit}`;
+    FROM agent_facts WHERE actor_id = ${actor.actorId}
+    ORDER BY last_observed_at DESC LIMIT ${limit}`;
   return rows.map((r) => {
     // Facts written before the value was JSON-encoded are stored as raw text —
     // the one parse failure this read treats as a value.
@@ -234,10 +239,11 @@ function factEntries(sql: SqlExecutor, limit: number): FactChangelogEntry[] {
 
 function factAggregate(
   sql: SqlExecutor,
+  actor: ActorHandle,
   limit: number,
   since: number | undefined,
 ): ChangelogEntry | null {
-  const items = factEntries(sql, limit)
+  const items = factEntries(sql, actor, limit)
     .filter((entry) => since === undefined || entry.at > since);
   if (items.length === 0) return null;
   const at = items.reduce((newest, entry) => Math.max(newest, entry.at), 0);
@@ -253,8 +259,8 @@ function factAggregate(
   };
 }
 
-function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  return listGepaRuns(sql, limit)
+function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  return listGepaRuns(sql, actor, limit)
     .filter((r) => r.status === 'completed')
     .map((r) => ({
       id: `gepa:${r.runId}`,
@@ -271,9 +277,9 @@ function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
 /** Evolved prompt sections. The one self-change that moves what the model reads
  *  on every turn, so the evidence line leads with the byte trade — the operator
  *  auditing prompt growth should not have to open a diff to see it. */
-function promptSectionEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const trials = promptSectionTrialRecord(sql);
-  return listPromptSectionVersions(sql, limit).map((row) => {
+function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const trials = promptSectionTrialRecord(sql, actor);
+  return listPromptSectionVersions(sql, actor, limit).map((row) => {
     const bytes = Buffer.byteLength(row.source, 'utf8');
     const delta = bytes - row.incumbentBytes;
     const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} → ${String(bytes)})`;
@@ -346,8 +352,8 @@ const REFINEMENT_DISPOSITION_PROSE = {
  * failures" is not an action; taking back what the review changed is, and that
  * is one child per change.
  */
-function refinementEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  return createRefinementStore(sql).list(limit).map((request) => {
+function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  return createRefinementStore(sql, actor).list(limit).map((request) => {
     const trigger = request.trigger === 'explicit'
       ? 'you asked for it'
       : 'unresolved corrections accumulated';
@@ -401,8 +407,8 @@ function refinementEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   });
 }
 
-function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const rows = listReplayEvals(sql, limit + 1);
+function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const rows = listReplayEvals(sql, actor, limit + 1);
   return rows.slice(0, limit).map((r, index) => {
     const previous = rows[index + 1];
     // A move is only called improved/declined when the two intervals don't
@@ -465,9 +471,9 @@ function outcomeItemEvidence(row: TurnOutcomeRow): string {
 }
 
 function outcomeEntry(
-  sql: SqlExecutor, since: number | undefined, limit: number,
+  sql: SqlExecutor, actor: ActorHandle, since: number | undefined, limit: number,
 ): ChangelogEntry | null {
-  const rows = listTurnOutcomes(sql, { limit: 200 })
+  const rows = listTurnOutcomes(sql, actor, { limit: 200 })
     .filter((r) => since === undefined || r.createdAt > since);
   if (rows.length === 0) return null;
   const count = (k: string) => rows.filter((r) => r.outcome === k).length;
@@ -505,19 +511,21 @@ function outcomeEntry(
  * Assemble the digest from the durable ledgers, newest first. Pure read —
  * call it at session end, on demand (RPC / slash command), whenever.
  */
-export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {}): ChangelogEntry[] {
+export function buildChangelog(
+  sql: SqlExecutor, actor: ActorHandle, opts: BuildChangelogOptions = {},
+): ChangelogEntry[] {
   const limit = opts.limit ?? 50;
   const entries = [
-    ...scaffoldEntries(sql),
+    ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
-    ...gepaEntries(sql, limit),
-    ...replayEntries(sql, limit),
-    ...promptSectionEntries(sql, limit),
-    ...refinementEntries(sql, limit),
+    ...gepaEntries(sql, actor, limit),
+    ...replayEntries(sql, actor, limit),
+    ...promptSectionEntries(sql, actor, limit),
+    ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
-  const facts = factAggregate(sql, limit, opts.since);
+  const facts = factAggregate(sql, actor, limit, opts.since);
   if (facts) entries.push(facts);
-  const outcomes = outcomeEntry(sql, opts.since, limit);
+  const outcomes = outcomeEntry(sql, actor, opts.since, limit);
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
   return entries.slice(0, limit);
@@ -535,13 +543,15 @@ const UNSEEN_WINDOW_LIMIT = 99;
  * eval, a GEPA pass) as well as changes, and only the changes can be kept or
  * reverted.
  */
-export function listUnseenChangelog(sql: SqlExecutor, seenAt: number): ChangelogEntry[] {
-  return buildChangelog(sql, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
+export function listUnseenChangelog(
+  sql: SqlExecutor, actor: ActorHandle, seenAt: number,
+): ChangelogEntry[] {
+  return buildChangelog(sql, actor, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
 }
 
 /** Entries newer than the seen marker — the badge count. */
-export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
-  return listUnseenChangelog(sql, seenAt).length;
+export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenAt: number): number {
+  return listUnseenChangelog(sql, actor, seenAt).length;
 }
 
 // ── The one text renderer (TUI overlay + classic print + tests) ──
@@ -587,14 +597,17 @@ export interface ChangelogRevertResult {
 
 async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise<ChangelogRevertResult> {
   const sql = rt.storage.sql;
+  const actor = rt.actor;
+  actor.assertCurrent();
   const row = sql<{ status: string }>`
-    SELECT status FROM scaffold_versions WHERE version = ${version} LIMIT 1`[0];
+    SELECT status FROM scaffold_versions
+    WHERE actor_id = ${actor.actorId} AND version = ${version} LIMIT 1`[0];
   if (!row) return { ok: false, error: `scaffold v${version} not found` };
 
   if (row.status === 'pending') {
     // Discard the in-trial pending through the existing decision machinery
     // (restores the live file from the current version, flips the status).
-    const pending = getPendingScaffold(sql);
+    const pending = getPendingScaffold(sql, actor);
     if (!pending || pending.version !== version) {
       return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
     }
@@ -610,7 +623,8 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
   // one atomic statement retires this version and promotes its predecessor,
   // then the live view is refreshed from the predecessor's canonical source.
   const prev = sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE version < ${version}
+    SELECT version FROM scaffold_versions
+    WHERE actor_id = ${actor.actorId} AND version < ${version}
     ORDER BY version DESC LIMIT 1`[0];
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
@@ -629,20 +643,22 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
  */
 function revertPromptSection(
   sql: SqlExecutor,
+  actor: ActorHandle,
   sectionId: string,
   version: number,
 ): ChangelogRevertResult {
   const row = sql<{ status: string }>`
     SELECT status FROM prompt_section_versions
-    WHERE section_id = ${sectionId} AND version = ${version} LIMIT 1`[0];
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
+      AND version = ${version} LIMIT 1`[0];
   if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
 
   if (row.status === 'pending') {
-    const pending = getPendingPromptSection(sql, sectionId);
+    const pending = getPendingPromptSection(sql, actor, sectionId);
     if (!pending || pending.version !== version) {
       return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
     }
-    applyPromptSectionDecision(sql, pending, 'rollback');
+    applyPromptSectionDecision(sql, actor, pending, 'rollback');
     return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
   }
   if (row.status !== 'current') {
@@ -651,13 +667,14 @@ function revertPromptSection(
 
   const prev = sql<{ version: number }>`
     SELECT version FROM prompt_section_versions
-    WHERE section_id = ${sectionId} AND version < ${version} AND status = 'historical'
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
+      AND version < ${version} AND status = 'historical'
     ORDER BY version DESC LIMIT 1`[0];
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
-    WHERE section_id = ${sectionId} AND version = ${version}`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
   if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
   void sql`UPDATE prompt_section_versions SET status = 'current'
-    WHERE section_id = ${sectionId} AND version = ${prev.version}`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${prev.version}`;
   return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
 }
 
@@ -680,7 +697,7 @@ export async function executeChangelogRevert(
       if (!sectionId || !Number.isInteger(version) || version <= 0) {
         return { ok: false, error: `invalid prompt-section target: ${action.target}` };
       }
-      return revertPromptSection(ctx.rt.storage.sql, sectionId, version);
+      return revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version);
     }
     case 'fact_forget': {
       if (!ctx.facts.recall(action.target)) {
@@ -720,7 +737,7 @@ export async function revertChangelogEntryById(
   ctx: ChangelogRevertContext,
   id: string,
 ): Promise<ChangelogRevertResult> {
-  const entries = buildChangelog(ctx.rt.storage.sql, { limit: 200 });
+  const entries = buildChangelog(ctx.rt.storage.sql, ctx.rt.actor, { limit: 200 });
   const findEntry = (candidates: ReadonlyArray<ChangelogEntry>): ChangelogEntry | undefined => {
     for (const candidate of candidates) {
       if (candidate.id === id) return candidate;

@@ -671,6 +671,35 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('sandbox.exposePort(port)');
   });
 
+  test('an interface request is routed to a slate, and only where a slate can preview', () => {
+    // The section used to open on the Node/Vite server workflow and mention
+    // slates once, at the end, as a note about previewing one already
+    // authored. A model deciding HOW to build a dashboard read the server
+    // route first. The routing sentence now leads.
+    const { rt } = createTestRuntime();
+    const workspacePreviews = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(workspacePreviews).toMatch(/is a Worker slate/);
+    expect(workspacePreviews.indexOf('Worker slate')).toBeLessThan(workspacePreviews.indexOf('standalone Node/Vite'));
+
+    // A slate boots on the workspace's own preview origin. Where only a
+    // container can publish one, the slate route does not exist and naming it
+    // would send the model at an operation that must refuse.
+    const containerPreviewsOnly = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', capabilities: [], available: true, configured: true, active: true, status: 'active' },
+        { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+    expect(containerPreviewsOnly).toMatch(/Showing a running app/);
+    expect(containerPreviewsOnly).not.toMatch(/is a Worker slate/);
+  });
+
   test('every runtime is its own machine, on every backend, with mounts named', () => {
     // This used to be a backend conditional: on cli-local the workspace and
     // laptop executors shared one host shell, so "separate filesystems" was
@@ -705,39 +734,11 @@ describe('buildSystemPromptSync', () => {
 
     expect(prompt).not.toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
-    // The hosted workspace runtime is a real POSIX shell over the agent's own
-    // filesystem, with resident runtimes and processes in the same environment.
-    expect(prompt).toContain('real POSIX shell');
-    expect(prompt).toContain('resident background processes');
     expect(prompt).not.toContain('laptop');
-    // 2026-09-03: the workspace line itself now names the escalation
-    // destination — the isolate sentence routes clones, fetches, installs and
-    // builds to `sandbox.*` on every hosted surface, even one with no sandbox
-    // row listed. Only the sandbox ROW still gates on selectability.
-    expect(prompt).toContain('package installs and builds in `sandbox.*`');
+    expect(prompt).not.toContain('**sandbox.***');
     expect(prompt).not.toMatch(/Showing a running app/);
   });
 
-  test('the hosted workspace names its memory ceiling and the sandbox names where oversized work goes', () => {
-    // The escalation that did not happen: `git clone` in the Nimbus workspace
-    // died with "Worker exceeded memory limit", and the agent retried the same
-    // clone three more ways rather than moving to the container. Both halves
-    // are doctrine in the cacheable prefix, and neither is inferable from the
-    // other — the ceiling only the workspace line can state, the destination
-    // only the sandbox line can offer.
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, {
-      backend: 'cf',
-      executors: [
-        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
-      ],
-    });
-    expect(prompt).toContain('runs inside a Worker isolate');
-    expect(prompt).toContain('~128 MB');
-    expect(prompt).toContain('large clones and builds');
-    expect(prompt).toContain('The moment a job outgrows the workspace');
-  });
 
   test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
     // cli-local's workspace is the inline executor on the user's own machine

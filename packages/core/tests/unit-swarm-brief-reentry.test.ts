@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs';
 import { HeadJournal } from '../src/heads/journal';
 import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
@@ -10,6 +11,7 @@ import { runSwarm } from '../src/strategy/swarm-run';
 import { initSwarmNodeRecords, reenterSwarm } from '../src/strategy/swarm-resume';
 import { planLevel, resumedWaves } from '../src/strategy/swarm-level';
 import { branchPrompt } from '../src/strategy/swarm-expansion';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const TASK = 'Find the two independent causes of stale coupon reads';
 const BRIEFS = [
@@ -40,10 +42,15 @@ function model() {
 
 describe('a node keeps its assigned question across re-entry', () => {
   test('the durable node list names each question instead of repeating the run task', async () => {
-    const { rt } = createTestRuntime();
-    const result = await runSwarm({ rt, model: model(), mode: 'build', logger: createRecordingLogger() }, resolved());
+    const { rt, db } = createTestRuntime();
+    // A real actor per node: this run actually executes its nodes, and each one
+    // is its own actor of the one workspace database.
+    const result = await runSwarm({
+      rt, model: model(), mode: 'build', logger: createRecordingLogger(),
+      hostNode: hostedSeatsOver({ rt, db }).hostNode,
+    }, resolved());
     if ('reason' in result) throw new Error(result.error);
-    const journal = new HeadJournal(rt.storage.sql);
+    const journal = new HeadJournal(rt.storage.sql, rt.actor);
     const run = journal.listRuns(1)[0];
     if (!run) throw new Error('The swarm left no run to inspect');
     expect(run.heads.map((head) => head.task).sort()).toEqual(BRIEFS.map((brief) => brief.task).sort());
@@ -56,25 +63,27 @@ describe('a node keeps its assigned question across re-entry', () => {
     initSearchTables(rt.storage.execRaw);
     initMctsSearchTable(rt.storage.execRaw);
     initSwarmNodeRecords(rt.storage.execRaw);
-    const ledger = new MctsSearchStore(sql);
-    const journal = new HeadJournal(sql);
+    const ledger = new MctsSearchStore(sql, rt.actor);
+    const journal = new HeadJournal(sql, rt.actor);
     ledger.begin({
       rootId: 'root', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 6, branches: 2, mode: 'build', maxDepth: 3 }, budget: 6, now: 1,
     });
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation) VALUES ('root', 'root', ${TASK}, '')`;
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, depth, task, observation)
-      VALUES ('parent', 'root', 'root', 1, ${TASK}, 'parent result')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${rt.actor.actorId}, 'root', 'root', ${TASK}, '')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, task, observation)
+      VALUES (${rt.actor.actorId}, 'parent', 'root', 'root', 1, ${TASK}, 'parent result')`;
     for (const [index, brief] of BRIEFS.entries()) {
       journal.insertSpawn({
         id: `child-${index}`, rootId: 'root', parentId: 'parent', depth: 2,
         task: brief.task, rationale: brief.prompt, mode: 'build', inheritedContext: [],
         budget: { maxDepth: 1, spawnedAt: 2 }, mergeStrategy: 'synthesize',
+        loop: defaultLoopOrigin('node'),
       });
     }
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, depth, task, observation)
-      VALUES ('child-0', 'parent', 'root', 2, 'Inspect cache invalidation', 'settled result')`;
-    const reentry = reenterSwarm({ sql, ledger, journal }, { task: TASK, now: 3 });
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, task, observation)
+      VALUES (${rt.actor.actorId}, 'child-0', 'parent', 'root', 2, 'Inspect cache invalidation', 'settled result')`;
+    const reentry = reenterSwarm({ sql, ledger, journal, actor: rt.actor }, { task: TASK, now: 3 });
     const wave = resumedWaves(reentry)[0];
     if (!wave) throw new Error('The unfinished level was lost');
     const config = resolved();

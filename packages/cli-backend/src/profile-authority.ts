@@ -12,7 +12,7 @@
  * surface has — routed nothing at all: `ensureProfile()` threw
  * "this runtime has no profile resolver" after the search had already spent
  * real model calls. Resolution is a property of the WORKSPACE (its durable
- * `agent_config`, its catalog authority, its provider plane), not of the chat
+ * `actor_config`, its catalog authority, its provider plane), not of the chat
  * loop on top of it, so it is built where the runtime is built and a session
  * refines its inputs rather than supplying the capability.
  */

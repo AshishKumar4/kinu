@@ -123,7 +123,7 @@ function tools(
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     executeTools: nodeExecBuilder,
-    effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
   });
 }
 
@@ -173,19 +173,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       create: async () => ({
         name: 's',
         displayName: 'S',
-        subordinate: {
-          name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 's',
         displayName: 'S',
-        subordinate: {
-          name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S', applied: true }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
@@ -218,7 +212,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       // The claim table is created by `initWorkspaceSchema`, which this runtime
       // already ran, so the once-only boundary is wired over the SAME SQL the
       // backends give it rather than a stand-in that records nothing.
-      effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
@@ -461,7 +455,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
     const { rt } = createTestRuntime();
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql }));
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor }));
     // No facts wired: remember/recall/forget are absent, matching the native
     // tool's own action-enum gating.
     expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
@@ -483,7 +477,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       forget: (key: string) => { store.delete(key); },
       recentTopK: () => [], all: () => [],
     };
-    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, facts }));
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts }));
     expect(Object.keys(provider.tools)).toContain('remember');
     await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
     expect(store.get('user.tz')?.value).toBe('UTC');
@@ -645,7 +639,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
           injected = Object.keys(surface.craftedTools());
           return nodeExecBuilder(surface);
         },
-        effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
       });
     } finally {
       restore();

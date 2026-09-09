@@ -36,9 +36,10 @@ import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
-import { Database } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { MissionGovernor } from '../src/mission-budget';
 import {
   createAgentsCodemodeProvider, type AgentsToolDeps,
@@ -296,11 +297,11 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
 
 /** A runtime whose workspace holds the reference implementation, so the `file` tool has
  *  something real to return. Shared by both harnesses below. */
-async function workspace(): Promise<{ rt: AgentRuntime }> {
-  const { rt } = createTestRuntime();
+async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
+  const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
-  return { rt };
+  return { rt, db };
 }
 
 /* ── The run ──────────────────────────────────────────────────────────────── */
@@ -310,18 +311,22 @@ async function run(input: {
   readonly branches: number;
   readonly proposeAtDepth1: boolean;
 }) {
-  const { rt } = await workspace();
+  const { rt, db } = await workspace();
   const logger = createRecordingLogger();
   const { model, script } = workingNode({ proposeAtDepth1: input.proposeAtDepth1 });
   const startedAt = Date.now();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger, },
+    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
   const wallClockMs = Date.now() - startedAt;
+  // Scoped: the run's search ledger is the CALLER's (`initRunLedgers` binds
+  // `rt.actor`), and each node is now its own actor over this same database, so
+  // an unscoped `SELECT *` would fold a node's own tree rows into this count.
   const nodes = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
-  return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql), wallClockMs };
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
+  return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql, rt.actor), wallClockMs };
 }
 
 describe('a depth-2 swarm of tool-using agents, end to end', () => {
@@ -526,10 +531,10 @@ describe('the run a reader gets back', () => {
     // passes for the wrong reason, which is the defect this repository keeps finding.
     expect(nodes.length).toBeGreaterThan(0);
     const journalled = rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_journal`[0]?.n ?? 0;
+      SELECT COUNT(*) AS n FROM head_journal WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
     expect(journalled).toBeGreaterThan(0);
 
-    const page = readExplorationCanvas(rt.storage.sql);
+    const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0]!;
     expect(entry.run.hasSearchTree).toBe(true);
@@ -551,14 +556,14 @@ describe('the run a reader gets back', () => {
     expect(entry.params?.search?.judgeSamplesRequested).toBeNull();
     expect(entry.params?.search?.judgeSamplesRealised).toBeNull();
     // And the permalink read says the same thing about the same run.
-    expect(readExplorationRun(rt.storage.sql, entry.run.id)).toEqual(entry);
+    expect(readExplorationRun(rt.storage.sql, rt.actor, entry.run.id)).toEqual(entry);
   }, 180_000);
 
   test('the ledger row says the run settled, with what it actually spent', async () => {
     const { rt, result } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
-    const ledger = new MctsSearchStore(rt.storage.sql).list(10);
+    const ledger = new MctsSearchStore(rt.storage.sql, rt.actor).list(10);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({
       engine: 'swarm',
@@ -630,17 +635,17 @@ describe('the mission ledger a search charges', () => {
     readonly branches: number;
     readonly tokens?: number;
   }) {
-    const { rt } = await workspace();
-    const db = new Database(':memory:');
-    const governor = new MissionGovernor({
-      storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
-    });
+    const { rt, db } = await workspace();
+    // The governor over the workspace's OWN storage and actor, not a second
+    // database beside it: a mission cap is that actor's ledger in that actor's
+    // workspace, and the run being capped writes to this one.
+    const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
     governor.declare(LABEL, input.tokens === undefined ? {} : { tokens: input.tokens });
     governor.activate([LABEL]);
     const { model, script } = workingNode({ proposeAtDepth1: true });
     const deps: AgentsToolDeps = {
       mode: 'build',
-      fork: { rt, model },
+      fork: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
       budget: governor,
     };
     const provider = createAgentsCodemodeProvider(() => deps);
@@ -653,8 +658,12 @@ describe('the mission ledger a search charges', () => {
       depth: input.depth,
       branches: input.branches,
     });
+    // Scoped like `run()`'s: the run's search ledger is the CALLER's, and each
+    // node is its own actor over this same database now, so an unscoped read
+    // would fold a node's own tree rows into the caller's count.
     const nodes = rt.storage.sql<SearchNode>`
-      SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+      SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+      ORDER BY depth ASC, created_at ASC`;
     return { governor, script, nodes, out: v.parse(SwarmOutputSchema, out) };
   }
 

@@ -39,11 +39,13 @@ import {
 } from '../../packages/core/src/index';
 import { DIGEST_LIMIT, JsonObjectSchema, JsonValueSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
   formatAdoptedSpend, infraBoundary,
+  createTestActorsOver,
   liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
@@ -672,7 +674,8 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
  * `tool_call_start`, the type every earlier counter read, is emitted by nothing.
  */
 function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }>[] {
-  const recorder = new RunEventRecorder(makeSql(db));
+  const sql = makeSql(db);
+  const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
   // A walk, for the same reason readLedgerTotals walks: an episode's rows are
   // the whole assertion, and a window over them would make a missing `args`
   // indistinguishable from a row the read never reached.
@@ -910,7 +913,10 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     const empty = new Database(join(dir, 'unaccounted.db'));
     opened.push(empty);
     initWorkspaceSchema(makeWorkspaceSchemaSql(empty));
-    recordLiveModelEpisode(makeSql(empty));
+    // `initWorkspaceSchema` creates the actor tables but issues nobody, and an
+    // unmeasured episode still belongs to an actor. This is that workspace's
+    // real main actor, over the same file.
+    recordLiveModelEpisode(makeSql(empty), createTestActorsOver(empty).main);
     const spent = liveModelSpend();
 
     // The episode did NOT silently add a zero to the call count...

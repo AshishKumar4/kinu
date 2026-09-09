@@ -19,6 +19,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   isNegativeOutcome,
   listTurnOutcomes,
@@ -49,7 +50,8 @@ export const DEFAULT_REPLAY_SAMPLE_SIZE = 20;
 
 export function initReplayTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS replay_evals (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     ran_at INTEGER NOT NULL,
     sample_size INTEGER NOT NULL,
     accepted_n INTEGER NOT NULL,
@@ -59,8 +61,12 @@ export function initReplayTables(execRaw: RawSqlExec): void {
     scaffold_version INTEGER,
     details TEXT NOT NULL,
     score_lo REAL,
-    score_hi REAL
+    score_hi REAL,
+    PRIMARY KEY (actor_id, id)
   )`);
+  // The curve is read newest-first WITHIN one actor, so the owner leads.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_replay_evals_actor
+             ON replay_evals(actor_id, ran_at DESC, id DESC)`);
 }
 
 export interface ReplayInstanceResult {
@@ -87,6 +93,8 @@ export interface ReplayEvalSummary {
 
 export interface RunReplayEvalOpts {
   sql: SqlExecutor;
+  /** The actor whose ledger this pass samples and whose curve it extends. */
+  actor: ActorHandle;
   /** Judge LLM (rt.judgeModel ?? rt.llm). */
   judge: LLM;
   /** Re-run a task against the CURRENT config; returns the response text. */
@@ -146,8 +154,12 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
   const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
   // Balanced sample, newest first: regressions guard (accepted) + the
   // failures the system should have learned from (corrected/frustrated).
-  const negatives = listTurnOutcomes(opts.sql, { limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES });
-  const accepted = listTurnOutcomes(opts.sql, { limit: size - negatives.length, outcomes: ['accepted'] });
+  const negatives = listTurnOutcomes(opts.sql, opts.actor, {
+    limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES,
+  });
+  const accepted = listTurnOutcomes(opts.sql, opts.actor, {
+    limit: size - negatives.length, outcomes: ['accepted'],
+  });
   const sample = [...negatives, ...accepted];
   if (sample.length === 0) return null;
 
@@ -182,11 +194,12 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     results,
   };
 
+  opts.actor.assertCurrent();
   void opts.sql`INSERT INTO replay_evals
-      (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version,
+      (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version,
        details, score_lo, score_hi)
     VALUES
-      (${summary.id}, ${summary.ranAt}, ${summary.sampleSize}, ${summary.acceptedCount},
+      (${opts.actor.actorId}, ${summary.id}, ${summary.ranAt}, ${summary.sampleSize}, ${summary.acceptedCount},
        ${summary.negativeCount}, ${summary.meanScore}, ${summary.loss},
        ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
        ${interval.lo}, ${interval.hi})`;
@@ -194,13 +207,15 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
 }
 
 /** The persisted loss curve, newest first — what the UI could chart. */
-export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary[] {
+export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50): ReplayEvalSummary[] {
+  actor.assertCurrent();
   const rows = sql<{
     id: string; ran_at: number; sample_size: number; accepted_n: number;
     negative_n: number; mean_score: number; loss: number;
     scaffold_version: number | null; details: string;
     score_lo: number | null; score_hi: number | null;
-  }>`SELECT * FROM replay_evals ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
+  }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
+      ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
   return rows.map((r) => {
     // Malformed details are the one tolerable corruption here: the summary
     // numbers live in the row's own columns, so the point on the curve stands.

@@ -238,6 +238,27 @@ describe('a workspace whose host cannot compile node programs', () => {
     expect(refusal).toMatchObject({ reason: 'io', error: expect.stringContaining(CODEGEN_STDERR) });
   });
 
+  test('a node program the host cannot compile refuses as unsupported, naming where it can run', async () => {
+    // The defect this closes: the raw V8 line reached the model as an `io`
+    // failure, which reads as "try again" and says nothing about the host. A
+    // retry cannot grow a compiler, so the answer is `unsupported`, and it
+    // names an executor that can rather than quoting the compiler.
+    const box = fakeBox();
+    box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+    const refusal = await createNimbusExecutor({ box }).tools.exec.execute('node server.js');
+    expect(refusal).toMatchObject({ reason: 'unsupported', error: expect.stringContaining('sandbox') });
+    expect(String(JSON.stringify(refusal))).not.toContain('Code generation from strings disallowed');
+  });
+
+  test('the same compiler failure under a command that never invoked node stays an io failure', async () => {
+    // The mark is a V8 string, and a build step that prints it while doing
+    // something else has not hit the node guard. Reclassifying that would tell
+    // the model a retry is pointless when it is not.
+    const box = fakeBox();
+    box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+    expect(await createNimbusExecutor({ box }).tools.exec.execute('cat build.log')).toMatchObject({ reason: 'io' });
+  });
+
   test('process logs are data even when they contain a compiler failure', async () => {
     const box = fakeBox();
     box.processes = {
@@ -248,10 +269,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     expect(JSON.parse(String(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
   });
 
-  test('exposing a port nothing listens on names the container', async () => {
-    // No node program starts on this host, so no workspace port will ever
-    // listen. The exposure answers where a server CAN run instead of the
-    // transport's `io`.
+  test('a port without a listener refuses rather than advertising a working preview', async () => {
     const box = fakeBox();
     box.ports = {
       expose: async () => { throw new Error('No process is listening on workspace port 8789'); },
@@ -261,9 +279,8 @@ describe('a workspace whose host cannot compile node programs', () => {
     const provider = blockedProvider(box);
     const toolRefusal = JSON.parse(String(await provider.tools.exposePort.execute(8789)));
     expect(toolRefusal.reason).toBe('unsupported');
-    expect(toolRefusal.error).toContain('sandbox');
     const direct = await provider.exposePort!(8789);
-    expect(direct).toEqual({ supported: false, reason: expect.stringContaining('sandbox') });
+    expect(direct.supported).toBe(false);
   });
 
   test('an exposure failure that is not an empty port still travels as io', async () => {

@@ -46,7 +46,8 @@ import {
 } from './registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
-import type { NodeLoopHost } from '../strategy/node-agent';
+import type { ActorReference } from '../state/actor-handle';
+import type { SubordinateBirth } from '../subordinates/birth';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
@@ -70,7 +71,8 @@ import {
   localMissionScope, readMissionLimits, MissionBudgetExhausted,
   type MissionGovernor, type MissionScope,
 } from '../mission-budget';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
+import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../prompting/surface';
@@ -93,20 +95,24 @@ import {
 } from '../utils/json';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
-// The deps implementation rides the workspace DO's facet substrate: spawn =
-// subAgent(SubordinateAgent, name) + seeded identity + roster row; assign /
-// message publish `subordinate_task` events into the subordinate's EventLog
-// (drained as its programmatic turn); reports come back as
-// `subordinate_report` events on the parent.
+// The deps implementation rides the workspace's ONE actor host: spawn =
+// `ActorHost.acquire` over a `workspace_actors` row + roster row, which binds
+// the child's session and stores over the SAME workspace database rather than
+// giving it one of its own; assign / message publish `subordinate_task` events
+// into the subordinate's own actor-scoped EventLog (drained as its programmatic
+// turn); reports come back as `subordinate_report` events on the parent.
 
 export type SubordinateStatus = 'idle' | 'working' | 'awaiting_input' | 'dismissed';
 
-/** One row of the workspace_subordinates roster: lifecycle and task facts
+/** One row of the actor_subordinates roster: lifecycle and task facts
  *  ONLY. The title and role a subordinate presents live in its own
- *  agent_config (subordinates/support.ts SubordinateDescriptorSource) — the
+ *  actor_config (subordinates/support.ts SubordinateDescriptorSource) — the
  *  parent never mirrors them. */
 export interface SubordinateRosterEntry {
   name: string;
+  actorReference: ActorReference | null;
+  birth: SubordinateBirth | null;
+  deleteRequested: boolean;
   createdBy: 'orchestrator' | 'user';
   status: SubordinateStatus;
   currentTask: string | null;
@@ -336,13 +342,20 @@ const ASSIGN_NOTES = {
  * workspace to measure in. Wired under the `fork` key on
  * {@link AgentsToolDeps}; both backends construct the same typed contract.
  *
- * `runSwarmAction` reads `rt`, `model`, `nodeHost`, `provisionNodeHome`,
+ * `runSwarmAction` reads `rt`, `model`, `provisionNodeHome`,
  * `reportNodeDelta` and `compactShared`. The members exist because the
  * backends' one builder produces the whole bag, not because this module
  * dispatches a strategy.
  */
 export interface AgentsForkDeps {
+  /** The CALLER's runtime — the actor that invoked the fork. Not any node's. */
   rt: AgentRuntime;
+  /**
+   * Acquire the hosted logical actor ONE swarm node runs as, by that node's
+   * identity. One call per node: each node is its own actor of this workspace,
+   * over the one workspace database.
+   */
+  hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
   /**
    * The ONE seam that turns a resolved tier's model SPEC into the model a
@@ -376,16 +389,6 @@ export interface AgentsForkDeps {
    *  absence makes the gate blend and say so. */
   costModel?: () => CostModel;
   /**
-   * Where a tool-using swarm node's loop runs, resolved per call.
-   *
-   * A FACTORY for the same reason `costModel` is: a
-   * backend may not be able to build one until the actor has an owner, so
-   * resolving it at dispatch keeps the refusal where it can be reported rather
-   * than at wiring time. Absent is a backend with no facets, and then a node's
-   * loop runs in this isolate — the same body, without a storage boundary.
-   */
-  nodeHost?: () => NodeLoopHost;
-  /**
    * The host-owned provisioner for one node's private home. The provisioner is
    * async because a hosted Nimbus session owns the filesystem; a synchronous
    * `SqliteVFS` view is only one possible implementation, not the contract.
@@ -405,31 +408,27 @@ export interface AgentsForkDeps {
    * then the loop runs as the origin — see
    * {@link NodeAgentDeps.runtimeForWorkspace}.
    */
-  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace) => Promise<AgentRuntime>;
+  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /**
    * Where a node's transient output frames go while a step is still being
    * produced — the backend's own broadcast channel, resolved per call for the
-   * same reason {@link nodeHost} is.
+   * same reason {@link costModel} is.
    *
-   * A HOSTED node does not use this: its facet publishes to the parent over the
-   * RPC it already holds. This is the IN-ISOLATE half, where there is no facet
-   * and the loop runs beside the socket. Absent is a backend with nothing
-   * watching, and costs a node nothing — the frames are superseded by its steps.
+   * A node's loop runs in the isolate that ran the search, beside the socket,
+   * so this is the whole of the channel rather than one transport's half.
+   * Absent is a backend with nothing watching, and costs a node nothing — the
+   * frames are superseded by its steps.
    */
   reportNodeDelta?: () => PublishHeadStream;
   /**
    * Where the run's DURABLE journal writes are announced — a node appearing, a
    * step landing, a report filing.
    *
-   * The twin of {@link reportNodeDelta}, and wired on BOTH transports rather
-   * than only the in-isolate one: a node's journal rows are the PARENT's
-   * whichever isolate produced them, so the announcement belongs to the parent
-   * either way. That asymmetry is the defect this closes — a hosted node's
-   * steps announced (they cross to the parent's `recordHeadStep`) while its
-   * spawn and its report did not, and an in-isolate node announced nothing at
-   * all, so a live search's own surface learned about it on a poll clock.
+   * The twin of {@link reportNodeDelta}: a node's journal rows are the PARENT's,
+   * so the announcement belongs to the parent — and until it existed a live
+   * search's own surface learned about a node on a poll clock.
    *
-   * A factory for {@link nodeHost}'s reason. Absent is a backend with nothing
+   * A factory for {@link costModel}'s reason. Absent is a backend with nothing
    * watching, and then the journal writes in silence.
    *
    * WIRED ON CF ONLY, beside {@link reportNodeDelta}, which is cf-only for the
@@ -1418,7 +1417,7 @@ async function runSwarmAction(
   // off the SAME record the role, tier and model do: read here, before the axes
   // resolve, because `resolveSwarm` needs it and the claim happens later.
   const started = redrive && input.preset === undefined
-    ? readStartedSwarmProfile(fork.rt.storage, input.task)
+    ? readStartedSwarmProfile(fork.rt.storage, fork.rt.actor, input.task)
     : null;
   const preset: SwarmPreset = input.preset
     ?? delegated?.resolved.defaultPreset
@@ -1479,17 +1478,12 @@ async function runSwarmAction(
   // what they returned rather than deciding anything itself.
   const origin = fork.originContext?.();
   const signal = toolOptions?.abortSignal;
-  // Resolved here rather than at wiring time, so a backend that cannot build a
-  // host yet refuses where the refusal is reportable. Absent is what runs the
-  // node's loop in this isolate.
-  const host = fork.nodeHost?.();
-  // The transient frames an IN-ISOLATE node publishes. Only wired when this
-  // isolate is also the one holding the socket, which is exactly the case a
-  // hosted node's own facet-to-parent RPC covers instead.
-  const publishHeadStream = host ? undefined : fork.reportNodeDelta?.();
-  // The durable announcement, wired on BOTH transports: the journal a node's
-  // rows land in is this isolate's whichever isolate ran the node, so this is
-  // never the hosted case's business to replace.
+  // The transient frames a node publishes while a step is still being produced.
+  // Wired wherever the backend holds the socket, which is every backend now that
+  // a node's loop runs in the isolate that ran the search.
+  const publishHeadStream = fork.reportNodeDelta?.();
+  // The durable announcement: the journal a node's rows land in is the parent's,
+  // so this is the parent's own channel rather than the node's.
   const announceHeadActivity = fork.announceHeadActivity?.();
   // A host constructs the provisioner around its authoritative filesystem. It
   // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
@@ -1498,7 +1492,7 @@ async function runSwarmAction(
   // And the runtime the node's loop uses once it has that home. Wired only
   // beside the provisioner, because re-credentialing a runtime with no
   // credential to use is nothing.
-  const runtimeForWorkspace = provisionHome ? fork.runtimeForNodeWorkspace?.() : undefined;
+  const runtimeForWorkspace = fork.runtimeForNodeWorkspace?.();
   /**
    * ONE TYPED LITERAL, for the reason `call` above gives about itself, and it
    * applies harder here: every field is checked against `SwarmRunDeps`, where
@@ -1513,6 +1507,10 @@ async function runSwarmAction(
    */
   const runDeps: SwarmRunDeps = {
     rt,
+    // Per-node actor acquisition, forwarded not derived: the backend owns what a
+    // hosted node's runtime and role are, and every node of this search gets its
+    // own actor over the one workspace database.
+    hostNode: fork.hostNode,
     model: fork.model,
     mode,
     // Frozen at dispatch so `context:'fork'` survives a background re-drive and a
@@ -1537,7 +1535,6 @@ async function runSwarmAction(
     // caller set is enforced while the money is still there to save.
     mission: mission?.scope,
     signal,
-    host,
     publishHeadStream,
     announceHeadActivity,
     provisionHome,

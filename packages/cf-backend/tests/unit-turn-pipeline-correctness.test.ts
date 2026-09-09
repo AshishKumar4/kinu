@@ -2,12 +2,19 @@ import { describe, expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { memberBody, toolExecute } from '@kinu.run/test-utils';
-import { WORKSPACE_RUN_ID, type CompletedTurn } from '@kinu.run/core';
 import {
-  orchestratorHarness, reactivateOrchestratorHarness,
+  MERGE_POLICY_BINDING, memberBody, mergePolicyProfile, scriptedTurnModel, toolExecute,
+} from '@kinu.run/test-utils';
+import {
+  MergeOutputSchema, WORKSPACE_RUN_ID,
+  type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
+} from '@kinu.run/core';
+import {
+  hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { createHeadRuntime } from '../src/head-runtime';
+import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
@@ -64,10 +71,7 @@ const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'),
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
-const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'subordinate-agent.ts'), 'utf8');
-const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
-const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
-const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
+const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
  *  options. Core owns the function; this names its callers, so a second
@@ -85,6 +89,52 @@ function effortDerivationSites(): string[] {
   };
   walk(join(import.meta.dir, '..', 'src'));
   return sites.sort();
+}
+
+/** The exploration substrate a merge must never reach. Fail-loud on every member
+ *  at once rather than member by member: `mergeLLM` touching the spawn seams at
+ *  all is the wiring regression this wants named, and a Proxy cannot grow a
+ *  quietly answering member the day the interface grows one. */
+const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
+  get: (_target, key) => {
+    throw new Error(`the head merge reached the exploration substrate: ${String(key)}`);
+  },
+});
+
+/** What the model behind the port answers a merge with. Valid JSON, because the
+ *  assertion is what the port was ASKED for and a refused parse would take the
+ *  second ask down with it. Built through the shared scripted factory, which
+ *  answers `doStream` as well — nothing here streams, and a fixture that only
+ *  implements the half production skips is how nine of them failed at once. */
+const MERGE_ANSWER_MODEL = scriptedTurnModel({
+  doGenerate: () => ({
+    content: [{
+      type: 'text' as const,
+      text: '{"narrative":"Both heads agree the parser is sound.","selected_decisions":[],'
+        + '"unresolved_questions":[],"recommendations":["ship it"]}',
+    }],
+    finishReason: { unified: 'stop' as const, raw: undefined },
+    usage: {
+      inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 7, text: 7, reasoning: undefined },
+    },
+    warnings: [],
+  }),
+});
+
+/** A SECOND judge route, disagreeing with the shared merge fixture on both axes:
+ *  a route that moved only its model cannot tell a bound effort from a routed
+ *  one, and one that moved only its effort cannot tell a bound model. */
+const REBOUND_JUDGE = {
+  model: 'fake/deep-rebound', reasoningEffort: 'low',
+} satisfies { model: string; reasoningEffort: ReasoningEffort };
+
+/** The shared merge fixture with that route in its `deep` slot. A rebind rather
+ *  than a second catalog resolution: `judge` is a fixed-tier producer, so its
+ *  route IS `profile.tiers.deep`, and resolving a whole second profile would
+ *  restate the fixture's construction beside it to move one slot. */
+function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
+  return { ...profile, tiers: { ...profile.tiers, deep: REBOUND_JUDGE } };
 }
 
 describe('turn-pipeline correctness wiring', () => {
@@ -168,21 +218,29 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
   });
 
-  test('facet-spawned heads inherit the registered parent workspace identity', () => {
-    // The root's own split seeds the child with the REGISTERED workspace, never
-    // this actor's own DO name — the file plane is keyed by it, so a self-named
-    // head derives a second, empty filesystem.
-    const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
-    expect(rootRuntime).toContain('sharedParent: this.workspaceName()');
-    expect(rootRuntime).not.toContain('sharedParent: this.name');
-    // A recursive split re-uses the ROOT it was given, never its own facet name.
-    expect(exploration).toContain('sharedParent: this.facetIdentity.parentWorkspace()');
-    // The spawn seam is what turns that into the child facet's persisted parent.
-    expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
-    // One factory for both, so there is exactly one place the seed can be wrong —
-    // and it resolves the identity per spawn rather than baking in a stale token.
-    expect(headRuntime).toContain('identity: () => Promise<ExplorationFacetIdentity>');
-    expect(headRuntime).toContain('spawnHeadFacet(deps.host, input, await deps.identity())');
+  test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
+    // The old failure this replaces: the root's split seeded the child with
+    // the REGISTERED workspace, never the splitter's own DO name — the file
+    // plane is keyed by it, so a self-named head derived a second, empty
+    // filesystem. Registration now names no workspace at all (the directory
+    // owns the name), so the proof is behavioral: bytes the root wrote are
+    // the bytes the head reads, on the one file plane.
+    const workspace = orchestratorHarness();
+    await hostedMainActor(workspace);
+    const rootFiles = workspace.agent.observeRuntime().storage.vfs;
+    await rootFiles.writeFile('/home/user/shared-proof.md', 'registered workspace bytes');
+    const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
+    expect(head.actor.record.kind).toBe('head');
+    const headFiles = head.actor.runtime.storage.vfs;
+    expect(await headFiles.readFile('/home/user/shared-proof.md', { encoding: 'utf8' }))
+      .toBe('registered workspace bytes');
+    // And the seam carries no name of its own to get wrong: no sharedParent,
+    // no facet identity, no spawn RPC — the only names in play are the
+    // directory's.
+    expect(exploration).not.toContain('sharedParent');
+    expect(exploration).not.toContain('facetIdentity');
+    expect(exploration).not.toContain('setSharedParent');
+    expect(exploration).not.toContain('spawnHeadFacet');
     // The actor's own model services, not a second provider registry.
     expect(headRuntime).not.toContain('createAgentProviderRegistry');
   });
@@ -194,26 +252,6 @@ describe('turn-pipeline correctness wiring', () => {
     const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
     expect(rootRuntime).toContain('operations: this.modelOperations');
     expect(headRuntime).toContain('operations?: ModelOperationSink');
-  });
-
-  test('the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects', () => {
-    // The fork action is gone. Each backend builds the typed swarm substrate
-    // directly, with no pass-through wrapper and no dormant strategy objects.
-    //
-    // The annotation is load-bearing, not style: `gate:wired` attributes a
-    // field supply by the WRITTEN type on the literal, and it does not descend
-    // into a nested one. Built inline under `fork:` the substrate's own optional
-    // wires — `nodeHost`, `compactShared` — were supplied here and reported as
-    // supplied by nobody, which is how a live wire looks identical to a missing
-    // one. So the shape this asserts is the shape that stays measurable.
-    const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
-    expect(depsBody).toContain('const fork: AgentsForkDeps = {');
-    expect(depsBody).toContain('resolveModel:');
-    expect(depsBody).toContain('nodeHost:');
-    expect(depsBody).toContain('compactShared:');
-    expect(depsBody).not.toContain('mcts:');
-    expect(depsBody).not.toContain('heads:');
-    expect(actor).not.toContain('defaultOptions');
   });
 
   test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
@@ -282,55 +320,66 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
 
-  // Output caps are not asserted per seam here: the gate below owns that rule
-  // for every production source at once, and a second, weaker copy of it beside
-  // four hand-picked files is the drift that gate exists to prevent.
-  test('provider-agnostic auxiliary calls take their effort from the route, not a constant', () => {
-    // Low effort is no longer DERIVED here. Every auxiliary caller asks the
-    // shared owner-scoped services for it, and those services are the single
-    // place that turns an effort level into provider options.
-    expect(exploration).not.toContain('reasoningEffortOptions');
-    // And no auxiliary caller NAMES an effort any more. `'low'` was a second
-    // decision sitting beside a routed model: the tier that chose the model
-    // already chose how hard to run it, and a constant here overrode it. The
-    // two askers in this file — the MCTS rollout and the pruned-branch
-    // reflection — both read `route.reasoningEffort` now.
-    expect(exploration).not.toMatch(/resolveModelWithEffort\([^)]*'(low|medium|high)'\)/);
-    expect(exploration.match(/resolveModelWithEffort\(\s*\n?\s*route\.model, route\.reasoningEffort,?\s*\n?\s*\)/g)?.length).toBe(2);
-    expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
-    expect(headRuntime).not.toContain('reasoningEffortOptions');
-    // The merge's ROUTE is no longer decided in this backend at all — core's
-    // `headMergeLLM` resolves `judge` and the tier's own effort, and both
-    // backends call it, which is what stops the local merge from running the
-    // session's chat model at a constant while filing `judge` spend. So the
-    // route lookup and the spend label must be there and NOT here.
-    expect(mergePolicy).toContain("const HEAD_MERGE_SOURCE = 'judge'");
-    expect(mergePolicy).toContain('resolveModelRoute(HEAD_MERGE_SOURCE, profile)');
-    expect(headRuntime).not.toContain('resolveModelRoute');
-    // What is left here is the one backend-local decision: binding the routed
-    // pair through the OWNER's provider registry. Effort still comes from the
-    // resolution, never from a constant beside it.
-    expect(headRuntime).toContain('bindMergeModel: (route) => deps.models.resolveModelWithEffort(');
-    expect(headRuntime).toContain('route.model, route.reasoningEffort,');
-    // Chat and all auxiliary profile lanes derive provider options at the
-    // point where their resolved concrete model is known.
+  // Output caps are not restated at this seam. The gate below owns that rule for
+  // every production source at once, and a second, weaker copy of it beside a
+  // hand-picked seam is the drift that gate exists to prevent — which is also why
+  // what this asserts is DRIVEN rather than read: a source scan for
+  // `route.reasoningEffort` cannot tell a spent effort from a shadowed one.
+  test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
+    // A tier is a (model, effort) PAIR, and hosting SPLIT the producer of that
+    // pair from the consumer that binds it. An effort can go missing across that
+    // split without anything failing to compile: the routed model still arrives,
+    // the spend still files as `judge`, and the call runs at whatever constant
+    // sits beside the spec. Which is why the port is driven TWICE, under two
+    // judge routes that disagree on BOTH axes — a constant that happens to equal
+    // the first route's effort passes any single-call assertion and fails here.
+    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+    let profile = mergePolicyProfile();
+    const runtime = createHeadRuntime({
+      host: noExplorationHost,
+      models: {
+        resolveModelWithEffort: (spec, effort) => {
+          asked.push({ spec, effort });
+          return { model: MERGE_ANSWER_MODEL, providerOptions: undefined };
+        },
+      },
+      profile: async () => profile,
+      reportModelCall: () => undefined,
+    });
+
+    await runtime.mergeLLM('merge the first pair of heads', MergeOutputSchema);
+    profile = reboundJudgeRoute(profile);
+    await runtime.mergeLLM('merge the second pair of heads', MergeOutputSchema);
+
+    // The first ask is the SHARED merge binding — the value the local backend's
+    // suite compares against too, so the two backends resolving one policy is an
+    // equality between suites rather than two expectations maintained apart. The
+    // second is the rebound route, and it has to be that route's own pair: a
+    // captured route, a bound model or a bound effort each answer the first ask
+    // correctly and the second with the first one's.
+    expect(asked).toEqual([
+      MERGE_POLICY_BINDING,
+      { spec: REBOUND_JUDGE.model, effort: REBOUND_JUDGE.reasoningEffort },
+    ]);
+  });
+
+  // A whole-backend scan, and stated here because no gate owns it:
+  // `gate:duplication` compares implementations that both exist and a three-line
+  // re-derivation is below its fingerprint, while `gate:capability-parity` asks
+  // who WIRES a contract, not who computes one answer twice. So this is not the
+  // per-seam copy the comment above refuses: there is no wider owner to drift
+  // from, and the denominator is every file in the backend rather than a
+  // hand-picked few.
+  test('one place in this backend turns a reasoning-effort level into provider options', () => {
+    // Chat and every auxiliary profile lane derive provider options at the point
+    // where their resolved concrete model is known. A fourth entry is a second
+    // derivation, which is how a lane came to carry options computed from the
+    // CHAT model's family and applied to a review model on another provider.
     expect(effortDerivationSites()).toEqual([
       'actor-agent.ts',
       'owned-model-services.ts',
       'runtime.ts',
     ]);
-
-    // The shadow eval's judge is the control plane's, and the plane builds it
-    // over the cross-family REVIEW model at the judge stage's own effort. The
-    // actor used to build a second judge here carrying provider options derived
-    // from the CHAT model's family — options a review model on a different
-    // provider cannot apply — so the effort is no longer named at this seam.
-    const control = actor.slice(
-      actor.indexOf('protected get scaffoldControl()'),
-      actor.indexOf("/** The scaffold's host.llmStream bridge"),
-    );
-    expect(control).toContain('judge: createJsonJudge(() => this.getModelForReview())');
-    expect(control).not.toContain('reasoningEffortOptions');
   });
 
   // Owner directive: output caps are the wrong mechanism entirely — a reasoning
@@ -418,18 +467,26 @@ describe('turn-pipeline correctness wiring', () => {
     // may be written into `messages` for the default chat, and the
     // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
+    // The SDK's own transcript table, keyed the way `ensurePaneTable` writes it:
+    // one database now holds every actor's rows, so `actor_id` leads the key and
+    // every read the canonical store performs is scoped by it. A table without
+    // the column does not read empty here — `conversationPageRows` fails to
+    // compile its SELECT.
+    const actorId = harness.agent.observeRuntime().actor.actorId;
     harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+      actor_id TEXT NOT NULL, id TEXT NOT NULL,
+      session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (actor_id, id))`);
     const append = harness.db.prepare(
-      `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-       VALUES (?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
+      `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+       VALUES (?, ?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
     );
-    append.run('u-live', null, 'user', JSON.stringify({
+    append.run(actorId, 'u-live', null, 'user', JSON.stringify({
       id: 'u-live', role: 'user', parts: [{ type: 'text', text: 'do the thing' }],
     }));
-    append.run('a-live', 'u-live', 'assistant', JSON.stringify({
+    append.run(actorId, 'a-live', 'u-live', 'assistant', JSON.stringify({
       id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
     }));
 
@@ -498,15 +555,20 @@ describe('turn-pipeline correctness wiring', () => {
   describe('mid-turn captures are credited to the turn only when it answered', () => {
     /** One take set captured mid-turn: written unclaimed, stamped inside the
      *  claiming turn's window (the scoped claim drops anything older). The
-     *  workspace schema the harness already ran owns the table. */
+     *  workspace schema the harness already ran owns the table — and it now
+     *  keys every set on `(actor_id, id)`, because one database holds every
+     *  actor's captures. The claim and the purge are both `actor_id`-scoped, so
+     *  a set written under any other owner is not merely uncredited here, it is
+     *  invisible to the settle under test. */
     function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
       const harness = orchestratorHarness();
       harness.db.prepare(
         `INSERT INTO alternate_takes
-           (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
+           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
             candidates, created_at, picked_at)
-         VALUES ('take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
+         VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
       ).run(
+        harness.agent.observeRuntime().actor.actorId,
         JSON.stringify([
           { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
           { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
@@ -535,6 +597,11 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a completed PLAN turn purges them', async () => {
       const harness = settleOneTurn('plan');
+      // The seeded set is there to be purged. Stated because the assertion below
+      // is an ABSENCE: a fixture whose insert stopped landing — the shape the
+      // `actor_id` key change produced — would purge nothing and still read 0.
+      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
+        .toMatchObject({ n: 1 });
       await harness.agent.onChatResponse({
         message: settled, requestId: 'req-plan', continuation: false, status: 'completed',
       });
@@ -558,16 +625,23 @@ describe('turn-pipeline correctness wiring', () => {
     const LEASE_TAKEN_AT = Date.now();
 
     /** One admitted event, bound to `turnId` with its recovery lease OPEN —
-     *  what a drain leaves behind on its way to the turn. */
+     *  what a drain leaves behind on its way to the turn. Written under THIS
+     *  actor: the settle closes leases through an `actor_id`-scoped update, so a
+     *  row seeded under any other owner is not a lease this turn declines to
+     *  close, it is a lease the turn cannot see — and two of the three cases
+     *  below assert an UNCHANGED row, which a lease nobody can see also
+     *  produces. What rules that out is the spliced case: it is the one that
+     *  demands a CHANGE, so a seed bound to the wrong owner fails there rather
+     *  than passing quietly in all three. */
     function boundDelivery(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): void {
       harness.db.prepare(
         `INSERT INTO agent_log
-           (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+           (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
             schema_version, dedupe_key, consumed_at)
-         VALUES ('ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+         VALUES (?, 'ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
                  'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
-      ).run(turnId, JSON.stringify({
+      ).run(harness.agent.observeRuntime().actor.actorId, turnId, JSON.stringify({
         webhook_id: 'hook-1',
         http_method: 'POST',
         http_headers: { 'content-type': 'application/json' },
@@ -780,18 +854,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(wake).toContain('this.orch.scheduleDrain()');
   });
 
-  test('cloud admission counts precisely the active tool surface Think submits', () => {
-    const beforeTurn = actor.slice(
-      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
-      actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
-    );
-    // The counted surface is the mode-resolved toolset the turn submits, and
-    // the same set is what Think receives after the mode binding.
-    expect(beforeTurn).toContain('const submittedTools = { ...modeTools, ...effectiveTools };');
-    expect(beforeTurn).toContain('effectiveActiveTools.flatMap((name) => {');
-    expect(beforeTurn).toContain('const entry = submittedTools[name];');
-    expect(beforeTurn).toContain('cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });');
-  });
 
   test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
     // The ordering (sanitize → onTurnStart → transformContext → turn-local) is

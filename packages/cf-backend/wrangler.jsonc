@@ -106,10 +106,13 @@
   "durable_objects": {
     "bindings": [
       // The binding NAME is load-bearing beyond routing: it is the workspace
-      // host namespace the fabric resolves every hosted workspace's facets
-      // through (`hostNamespace: 'OrchestratorAgent'` in
-      // src/nimbus-programmatic.ts). Rename it and the supervisor entrypoint
-      // resolves a namespace that does not exist.
+      // host namespace the fabric resolves every hosted workspace through
+      // (`hostNamespace: 'OrchestratorAgent'` in src/nimbus-programmatic.ts).
+      // Rename it and the supervisor entrypoint resolves a namespace that does
+      // not exist. This is now the ONLY actor-bearing class: every logical
+      // actor in a workspace — the main actor, hired subordinates, ask-by-role
+      // temporaries, branching heads, swarm nodes, MCTS rollout branches —
+      // lives inside one object of this namespace, over its one SQLite.
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by the stable Kinu userId derived from the verified email.
@@ -174,9 +177,12 @@
   // Durable Object class this Worker has is declared new here. The earlier
   // `v1`..`v3` history (which also registered and then retired `NimbusSession`)
   // belonged to a Worker whose storage no longer exists, and so did the
-  // `ExplorationAgent` class it registered: `SubordinateAgent` hosts every
-  // facet mode now, and a facet class sits in no tag and has no binding
-  // above because it is reached through `subAgent()` rather than by name.
+  // `ExplorationAgent` class it registered. There is no facet class in this
+  // list and never was one — a facet carried no binding and sat in no tag,
+  // because it was reached through `subAgent()` rather than by name — and
+  // there is no facet class in the Worker any longer either: hosted logical
+  // actors need no class of their own, so nothing was removed from this list
+  // and nothing needs adding to it.
   //
   // What an operator does before deploying this configuration: delete the old
   // Worker (its Durable Object namespaces, and every object in them, go with
@@ -343,6 +349,14 @@
   // docs/EMAIL-INGRESS.md. Until then the binding is inert: inbound mail
   // never arrives and outbound sends skip quietly.
   "send_email": [{ "name": "EMAIL" }],
+  // The deployed Worker version, as Cloudflare itself names it: the ONE real
+  // installed-build identity reachable from inside a Durable Object. A durable
+  // turn claim records which build ran a turn on the BUILTIN loop
+  // (packages/core/src/orchestrator/actor-claims.ts), and without this binding
+  // that claim records the build as unknown rather than naming the placeholder
+  // package version. Costs nothing — Cloudflare fills `id`/`tag`/`timestamp` at
+  // deploy time — and is inert until the next deploy carries it.
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Workers AI binding. Serves platform-side work billed to THIS account:
   // embeddings, HTML→markdown, and the `ai-gateway` provider's chat transport
   // (providers/gateway-binding-fetch.ts) — binding calls are pre-authenticated
@@ -532,6 +546,12 @@
       // Staging has the binding for parity but no EMAIL_DOMAIN — the Mission
       // Inbox stays off (no routing rule points here; outbound sends skip).
       "send_email": [{ "name": "EMAIL" }],
+      // Spelled out here because `version_metadata` is NOT inherited — wrangler
+      // says so itself on a staging dry run ("exists at the top level, but not
+      // on env.staging"). Staging runs the same Durable Object code and writes
+      // the same durable turn claims, so without this binding every staging
+      // claim records its build as unknown while production names it.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       "ai": { "binding": "AI" },
       // Staging's OWN datasets. Analytics Engine datasets are account-scoped, so
       // a shared name is an eval run writing into the numbers an operator reads —

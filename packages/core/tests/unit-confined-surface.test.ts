@@ -10,6 +10,7 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadCapture } from '../src/heads/head-inference';
 import { buildHeadToolSet, type HeadSplitResult } from '../src/heads/head-tools';
@@ -18,6 +19,7 @@ import { initHeadsTables } from '../src/heads/schema';
 import { runNodeAgent, type NodeAgentDeps, type NodeAgentInput } from '../src/strategy/node-agent';
 import type { HeadInput } from '../src/heads/types';
 import type { WebSearchProvider } from '../src/web/index';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const stubWeb: WebSearchProvider = {
   search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
@@ -32,6 +34,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
     ...overrides,
   };
 }
@@ -114,9 +117,9 @@ describe('head function-form execute_tools resolves over the allowed surface', (
 
 describe('node proposal merges after the execute_tools finish', () => {
   test('the function never sees propose_branch, and propose still grants', async () => {
-    const { rt } = createTestRuntime();
+    const { rt, db } = createTestRuntime();
     initHeadsTables(rt.storage.execRaw);
-    const journal = new HeadJournal(rt.storage.sql);
+    const journal = new HeadJournal(rt.storage.sql, rt.actor);
     let seen: readonly string[] | null = null;
     const executeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);
@@ -185,7 +188,10 @@ describe('node proposal merges after the execute_tools finish', () => {
       }),
     };
     const deps: NodeAgentDeps = {
-      rt,
+      // One seat for this node, over the caller's own database — `rt` is not a
+      // node dep any more, because a shared handle would give every node of a
+      // wave one actor.
+      hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model,
       journal,
       logger: createRecordingLogger(),

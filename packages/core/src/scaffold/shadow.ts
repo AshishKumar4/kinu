@@ -27,7 +27,16 @@
  *   scaffold_trial_queue         — one row per trial awaiting execution
  *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
  *
- * Auto-promotion is ON by default at the agent level (agent_config
+ * ACTOR-SCOPED. A shared host holds several issued actors in one database and
+ * each evolves its own loop, so `scaffold_versions.status = 'current'` is a
+ * PER-ACTOR pointer and a version number is allocated within the actor — two
+ * actors both have a v1. Every statement below carries `actor_id`, and it sits
+ * in the primary key of both tables this module owns: keyed on `id` alone one
+ * actor's trial would satisfy another's `ON CONFLICT` idempotency, and a bare
+ * `pending_version` predicate counts a stranger's trials into this actor's
+ * promotion gate.
+ *
+ * Auto-promotion is ON by default at the agent level (actor_config
  * auto_promote_scaffold, config/store.ts): the misevolution gate + shadow
  * veto + archive are the safety net, and every promotion lands in the
  * Evolution Changelog where the operator can revert it. Set the key to
@@ -38,6 +47,7 @@ import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
@@ -48,8 +58,8 @@ import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 
 /** One turn's contribution of trial evidence. Kept after the queue row is
  *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
- *  scored, so `ON CONFLICT(id) DO NOTHING` stops protecting anything and a
- *  replayed queueing would have the same turn scored twice. */
+ *  scored, so `ON CONFLICT(actor_id, id) DO NOTHING` stops protecting anything
+ *  and a replayed queueing would have the same turn scored twice. */
 const TRIAL_SCOPE = 'shadow_trial';
 
 export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
@@ -192,7 +202,8 @@ export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
 
 export function initShadowTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS scaffold_evaluations (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     current_version INTEGER NOT NULL,
     pending_version INTEGER NOT NULL,
     task TEXT NOT NULL,
@@ -202,18 +213,21 @@ export function initShadowTables(execRaw: RawSqlExec): void {
     pending_score REAL,
     winner TEXT,
     judge_rationale TEXT,
-    evaluated_at INTEGER NOT NULL
+    evaluated_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_eval_pending ON scaffold_evaluations(pending_version)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_eval_pending ON scaffold_evaluations(actor_id, pending_version)`);
   execRaw(`CREATE TABLE IF NOT EXISTS scaffold_trial_queue (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     pending_version INTEGER NOT NULL,
     task TEXT NOT NULL,
     current_output TEXT NOT NULL,
     context TEXT NOT NULL,
-    queued_at INTEGER NOT NULL
+    queued_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_trial_queue_pending ON scaffold_trial_queue(pending_version)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_trial_queue_pending ON scaffold_trial_queue(actor_id, pending_version)`);
   // The queue row is deleted the moment its trial is scored, so the tombstone
   // that outlives it is part of this queue's contract.
   initEffectTombstoneTable(execRaw);
@@ -302,6 +316,7 @@ export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessag
  */
 export function queueShadowTrial(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: {
     pendingVersion: number;
     task: string;
@@ -318,29 +333,34 @@ export function queueShadowTrial(
     now?: number;
   },
 ): 'queued' | 'queue_full' {
+  actor.assertCurrent();
   // Ahead of the depth check: a trial that has already run is not competing for
   // a queue slot, and `queue_full` would be a false refusal.
-  if (args.id !== undefined && effectAlreadyDone(sql, TRIAL_SCOPE, args.id)) return 'queued';
-  if (countQueuedShadowTrials(sql, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
+  if (args.id !== undefined && effectAlreadyDone(sql, actor, TRIAL_SCOPE, args.id)) return 'queued';
+  if (countQueuedShadowTrials(sql, actor, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
   // DO NOTHING, not a replace: the row the first queueing wrote is the one the
   // runner may already have taken, and overwriting it would re-open work that
   // has moved on.
-  void sql`INSERT INTO scaffold_trial_queue (id, pending_version, task, current_output, context, queued_at)
-      VALUES (${args.id ?? `trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
+  void sql`INSERT INTO scaffold_trial_queue (actor_id, id, pending_version, task, current_output, context, queued_at)
+      VALUES (${actor.actorId}, ${args.id ?? `trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
               ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})
-      ON CONFLICT(id) DO NOTHING`;
+      ON CONFLICT(actor_id, id) DO NOTHING`;
   return 'queued';
 }
 
 /** Trials awaiting execution for a version, oldest first. */
-export function listQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number): QueuedShadowTrial[] {
+export function listQueuedShadowTrials(
+  sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
+): QueuedShadowTrial[] {
+  actor.assertCurrent();
   type Row = {
     id: string; pending_version: number; task: string; current_output: string;
     context: string; queued_at: number;
   };
   const rows = sql<Row>`
     SELECT id, pending_version, task, current_output, context, queued_at
-    FROM scaffold_trial_queue WHERE pending_version = ${pendingVersion}
+    FROM scaffold_trial_queue
+    WHERE actor_id = ${actor.actorId} AND pending_version = ${pendingVersion}
     ORDER BY queued_at ASC`;
   return rows.map((r) => ({
     id: r.id,
@@ -365,9 +385,13 @@ function parseTrialContext(raw: string): ModelMessage[] {
 
 /** How many trials are queued but not yet run — the evidence a pending version
  *  is owed and does not have. */
-export function countQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number): number {
+export function countQueuedShadowTrials(
+  sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
+): number {
+  actor.assertCurrent();
   const rows = sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE pending_version = ${pendingVersion}`;
+    SELECT COUNT(*) AS n FROM scaffold_trial_queue
+    WHERE actor_id = ${actor.actorId} AND pending_version = ${pendingVersion}`;
   return rows[0]?.n ?? 0;
 }
 
@@ -376,9 +400,10 @@ export function countQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number
  *  putting it back. Recorded for every id, not only keyed ones: this function
  *  cannot tell which caller owed the queueing, and the wrong guess is a trial
  *  scored twice. */
-export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
-  recordEffectDone(sql, TRIAL_SCOPE, id);
-  void sql`DELETE FROM scaffold_trial_queue WHERE id = ${id}`;
+export function dropQueuedShadowTrial(sql: SqlExecutor, actor: ActorHandle, id: string): void {
+  actor.assertCurrent();
+  recordEffectDone(sql, actor, TRIAL_SCOPE, id);
+  void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId} AND id = ${id}`;
 }
 
 
@@ -386,9 +411,16 @@ export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
  *  evidence about ONE candidate: once that candidate is promoted or rolled
  *  back, running it would score a version no longer under trial. Pass null to
  *  clear the queue entirely. */
-export function purgeQueuedShadowTrials(sql: SqlExecutor, keepVersion: number | null): void {
-  if (keepVersion === null) void sql`DELETE FROM scaffold_trial_queue`;
-  else void sql`DELETE FROM scaffold_trial_queue WHERE pending_version != ${keepVersion}`;
+export function purgeQueuedShadowTrials(
+  sql: SqlExecutor, actor: ActorHandle, keepVersion: number | null,
+): void {
+  actor.assertCurrent();
+  if (keepVersion === null) {
+    void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId}`;
+  } else {
+    void sql`DELETE FROM scaffold_trial_queue
+      WHERE actor_id = ${actor.actorId} AND pending_version != ${keepVersion}`;
+  }
 }
 
 /**
@@ -396,18 +428,19 @@ export function purgeQueuedShadowTrials(sql: SqlExecutor, keepVersion: number | 
  * in flight. Pending is the version with status='pending' (we only allow
  * one in flight at a time).
  */
-export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
+export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): PendingScaffold | null {
+  actor.assertCurrent();
   type Row = { version: number; written_at: number; rationale: string };
   const rows = sql<Row>`
     SELECT version, written_at, rationale FROM scaffold_versions
-    WHERE status = 'pending'
+    WHERE actor_id = ${actor.actorId} AND status = 'pending'
     ORDER BY version DESC LIMIT 1`;
   if (rows.length === 0) return null;
   const r = rows[0];
   type CountRow = { winner: string | null; n: number };
   const counts = sql<CountRow>`
     SELECT winner, COUNT(*) AS n FROM scaffold_evaluations
-    WHERE pending_version = ${r.version}
+    WHERE actor_id = ${actor.actorId} AND pending_version = ${r.version}
     GROUP BY winner`;
   let trials = 0, pendingWins = 0, currentWins = 0, ties = 0;
   for (const c of counts) {
@@ -428,9 +461,12 @@ export function getPendingScaffold(sql: SqlExecutor): PendingScaffold | null {
  * cycles the numbering is non-contiguous (e.g. current=v2 while pending=v5),
  * so `pending - 1` points at a rolled_back/historical row.
  */
-export function getCurrentScaffoldVersion(sql: SqlExecutor): number | null {
+export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: ActorHandle): number | null {
+  actor.assertCurrent();
   const rows = sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'current' ORDER BY version DESC LIMIT 1`;
+    SELECT version FROM scaffold_versions
+    WHERE actor_id = ${actor.actorId} AND status = 'current'
+    ORDER BY version DESC LIMIT 1`;
   return rows[0]?.version ?? null;
 }
 
@@ -457,7 +493,10 @@ export interface ShadowVerdict {
  * pending → top) so the operator sees risk first. `winRate` is over decisive
  * (non-tie) trials. Returns an empty verdict when no pending version is given.
  */
-export function readShadowVerdict(sql: SqlExecutor, version: number | null): ShadowVerdict {
+export function readShadowVerdict(
+  sql: SqlExecutor, actor: ActorHandle, version: number | null,
+): ShadowVerdict {
+  actor.assertCurrent();
   if (version == null) {
     return { version: null, trials: [], summary: { trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 } };
   }
@@ -467,7 +506,8 @@ export function readShadowVerdict(sql: SqlExecutor, version: number | null): Sha
   };
   const rows = sql<Row>`
     SELECT id, task, current_score, pending_score, winner, judge_rationale, evaluated_at
-    FROM scaffold_evaluations WHERE pending_version = ${version}
+    FROM scaffold_evaluations
+    WHERE actor_id = ${actor.actorId} AND pending_version = ${version}
     ORDER BY CASE winner WHEN 'current' THEN 0 WHEN 'tie' THEN 1 ELSE 2 END, evaluated_at DESC`;
   let pendingWins = 0, currentWins = 0, ties = 0;
   for (const r of rows) {
@@ -487,6 +527,14 @@ export function readShadowVerdict(sql: SqlExecutor, version: number | null): Sha
   };
 }
 
+/** Read immutable version storage, never the live alias used by activation. */
+export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
+  const versioned = `${rt.identity.scaffold.path}.v${version}`;
+  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+  if (!await scaffoldVfs.exists(versioned)) return null;
+  return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
+}
+
 /** Read the scaffold code for a specific version.
  *
  * Prefers the versioned backup file `scaffold/agent.js.v{N}` because it's the
@@ -498,15 +546,9 @@ export function readShadowVerdict(sql: SqlExecutor, version: number | null): Sha
  * MUST read the versioned file to recover the pending code (used by
  * `applyPromotionDecision('promote')` to swap the live file).
  */
-export async function readScaffoldVersion(
-  rt: AgentRuntime,
-  version: number,
-): Promise<string | null> {
-  const versioned = `${rt.identity.scaffold.path}.v${version}`;
-  const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
-  if (await scaffoldVfs.exists(versioned)) {
-    return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
-  }
+export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
+  const versioned = await readVersionedScaffoldSource(rt, version);
+  if (versioned !== null) return versioned;
   // No versioned backup — happens for v0 (the bootstrap writes the live file
   // but not a versioned backup). Fall back to live ONLY for the version the
   // live file actually IS, which is the status='current' row. Asked (`exists`)
@@ -522,7 +564,7 @@ export async function readScaffoldVersion(
   // judge noise, and with autoApply promote a version whose source does not
   // exist. That is the same defect modify.ts's gate 4 is written to avoid, and
   // the only test over the path accepted both outcomes so it never fired.
-  if (version !== getCurrentScaffoldVersion(rt.storage.sql)) return null;
+  if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
   return await rt.identity.scaffold.read();
 }
 
@@ -538,13 +580,17 @@ export async function readScaffoldVersion(
  * is the record that the expensive, tool-touching part already ran — and its
  * contents are the verdict the promotion decision was owed.
  */
-export function scoredShadowTrial(sql: SqlExecutor, trialId: string): ShadowTrialVerdict | null {
+export function scoredShadowTrial(
+  sql: SqlExecutor, actor: ActorHandle, trialId: string,
+): ShadowTrialVerdict | null {
+  actor.assertCurrent();
   const rows = sql<{
     current_score: number; pending_score: number;
     winner: ShadowTrialVerdict['winner']; judge_rationale: string;
   }>`
     SELECT current_score, pending_score, winner, judge_rationale
-    FROM scaffold_evaluations WHERE id = ${`eval-${trialId}`} LIMIT 1`;
+    FROM scaffold_evaluations
+    WHERE actor_id = ${actor.actorId} AND id = ${`eval-${trialId}`} LIMIT 1`;
   const row = rows[0];
   if (row === undefined) return null;
   return {
@@ -557,6 +603,7 @@ export function scoredShadowTrial(sql: SqlExecutor, trialId: string): ShadowTria
 
 export function recordShadowEvaluation(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: {
     currentVersion: number;
     pendingVersion: number;
@@ -571,6 +618,7 @@ export function recordShadowEvaluation(
     trialId?: string;
   },
 ): ShadowEvaluationRow {
+  actor.assertCurrent();
   const id = args.trialId === undefined ? `eval-${nanoid()}` : `eval-${args.trialId}`;
   const row: ShadowEvaluationRow = {
     id,
@@ -584,13 +632,13 @@ export function recordShadowEvaluation(
     evaluated_at: nowMs(),
   };
   void sql`INSERT INTO scaffold_evaluations
-    (id, current_version, pending_version, task, current_output, pending_output,
+    (actor_id, id, current_version, pending_version, task, current_output, pending_output,
      current_score, pending_score, winner, judge_rationale, evaluated_at)
-    VALUES (${row.id}, ${row.current_version}, ${row.pending_version},
+    VALUES (${actor.actorId}, ${row.id}, ${row.current_version}, ${row.pending_version},
             ${row.task}, ${args.currentOutput}, ${args.pendingOutput},
             ${row.current_score}, ${row.pending_score},
             ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})
-    ON CONFLICT(id) DO NOTHING`;
+    ON CONFLICT(actor_id, id) DO NOTHING`;
   return row;
 }
 
@@ -674,6 +722,7 @@ export async function applyPromotionDecision(
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
+  rt.actor.assertCurrent();
   const sql = rt.storage.sql;
   if (decision === 'promote') {
     // The pending's canonical source is its version file, written before the
@@ -686,7 +735,7 @@ export async function applyPromotionDecision(
     }
     const misevolution = checkMisevolution(pendingCode);
     if (!misevolution.ok) {
-      recordMisevolutionVeto(sql, {
+      recordMisevolutionVeto(sql, rt.actor, {
         surface: 'scaffold', violation: misevolution,
         detail: `promotion of v${pending.version} vetoed; rolled back instead`,
       });
@@ -696,10 +745,14 @@ export async function applyPromotionDecision(
     // One statement — the old-current retirement and the pending promotion
     // are a single atomic write on every backend, so no crash window can
     // leave zero or two current rows.
+    // Scoped to this actor: the pointer is per-actor, so an unscoped retirement
+    // would demote every OTHER actor's live version to 'historical' and leave
+    // them running a program nothing points at.
     void sql`UPDATE scaffold_versions
         SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
-        WHERE version = ${pending.version}
-           OR (status = 'current' AND version != ${pending.version})`;
+        WHERE actor_id = ${rt.actor.actorId}
+          AND (version = ${pending.version}
+               OR (status = 'current' AND version != ${pending.version}))`;
     // Pointer committed. The live file is the rebuildable view, refreshed
     // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
@@ -708,8 +761,8 @@ export async function applyPromotionDecision(
   // Rollback: the pointer never moved, so retiring the pending IS the whole
   // state change. The view refresh afterwards only heals drift.
   void sql`UPDATE scaffold_versions SET status = 'rolled_back'
-      WHERE version = ${pending.version}`;
-  const currentVersion = getCurrentScaffoldVersion(sql) ?? (pending.version - 1);
+      WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
+  const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
   const currentCode = await readScaffoldVersion(rt, currentVersion);
   if (currentCode != null) {
     await rt.identity.scaffold.write(currentCode);

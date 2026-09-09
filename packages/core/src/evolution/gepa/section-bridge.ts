@@ -31,6 +31,7 @@
  */
 
 import type { SqlExecutor } from '../../types/primitives';
+import type { ActorHandle } from '../../state/actor-handle';
 import { renderThrownChain } from '../../obs/error';
 import { checkMisevolution } from '../../scaffold/misevolution';
 import { PROMPT_SECTIONS } from '../../prompting/section-templates';
@@ -43,7 +44,7 @@ import {
 import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
 import { runGepa } from './engine';
 import type {
-  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
+  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM, GepaProgressHooks,
 } from './types';
 
 /**
@@ -66,8 +67,11 @@ export function findPromptSectionTarget(sectionId: string): PromptSection<string
   return PROMPT_SECTION_TARGETS.find((section) => section.id === sectionId);
 }
 
-export interface RunSectionGepaOpts<I = unknown, E = unknown> {
+export interface RunSectionGepaOpts<I = unknown, E = unknown> extends GepaProgressHooks {
   sql: SqlExecutor;
+  /** Whose prompt section is being evolved. The incumbent, the candidate rows
+   *  and the run ledger are all that actor's. */
+  actor: ActorHandle;
   /** Which registered section to evolve. */
   sectionId: string;
   /** Held-out instances the winner is selected on. */
@@ -79,7 +83,6 @@ export interface RunSectionGepaOpts<I = unknown, E = unknown> {
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
   budget?: GepaConfig<I, E>['budget'];
-  onIteration?: GepaConfig<I, E>['onIteration'];
 }
 
 export interface RunSectionGepaResult {
@@ -122,7 +125,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     };
   }
 
-  const seed = incumbentSectionSource(opts.sql, section);
+  const seed = incumbentSectionSource(opts.sql, opts.actor, section);
   // The contract the builder will supply values for. A candidate that declares
   // anything else renders a prompt with a hole in it or throws mid-turn, so it
   // is rejected in-loop rather than after it has been scored.
@@ -137,6 +140,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     reflectionLm: opts.reflectionLm,
     budget: opts.budget,
     onIteration: opts.onIteration,
+    onCandidate: opts.onCandidate,
     constraints: {
       maxSizeBytes: PROMPT_SECTION_MAX_BYTES,
       customCheck: (source) => {
@@ -179,7 +183,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     + `${String(Buffer.byteLength(winner.source, 'utf8'))} bytes against `
     + `${String(Buffer.byteLength(seed, 'utf8'))}.`;
 
-  const proposal = proposePromptSection(opts.sql, {
+  const proposal = proposePromptSection(opts.sql, opts.actor, {
     section,
     source: winner.source,
     rationale,

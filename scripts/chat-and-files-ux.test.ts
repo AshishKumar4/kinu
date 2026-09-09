@@ -138,6 +138,11 @@ interface Observed {
     mutationHeight: number;
     ground: string;
     pageGround: string;
+    /** The mode the page actually rendered in, so a colour claim cannot be
+     *  satisfied by the wrong theme. */
+    mode: string | null;
+    /** What the preview card shows while the run is still folded. */
+    collapsedPreview: { text: string | null; height: number; folded: string | null };
   };
 }
 
@@ -305,8 +310,20 @@ async function run(): Promise<Observed> {
 
     const tools = await browser.newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
-    await tools.evaluateOnNewDocument(() => localStorage.setItem('kinu-mode', 'light'));
+    // `theme` is the key the pre-paint script in gallery.html reads (hooks/
+    // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
+    // default mode, and the light-mode assertion below then photographs dark.
+    await tools.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'light'); });
     await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
+    await tools.reload({ waitUntil: 'networkidle0' });
+    // The run's preview call points at the gallery's preview origin, which no
+    // server here answers. Serve it, so what is asserted below is a frame that
+    // really rendered rather than an element that merely exists.
+    await tools.setRequestInterception(true);
+    tools.on('request', async (request) => {
+      if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) { await request.continue(); return; }
+      await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
+    });
     await tools.reload({ waitUntil: 'networkidle0' });
     await tools.waitForSelector('[data-tool-group]');
     const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
@@ -321,8 +338,21 @@ async function run(): Promise<Observed> {
         mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
         ground: getComputedStyle(group).backgroundColor,
         pageGround: getComputedStyle(document.body).backgroundColor,
+        mode: document.documentElement.dataset.mode ?? null,
       };
     });
+    // The preview card, read while the group is still folded: the reader has
+    // clicked nothing, and the app the turn started is on screen.
+    const previewFrameHandle = await tools.waitForSelector('[data-tool-group] iframe');
+    if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
+    const previewDocument = await previewFrameHandle.contentFrame();
+    if (!previewDocument) throw new Error('the preview frame created no document');
+    await previewDocument.waitForSelector('[data-run-preview]');
+    const collapsedPreview = {
+      text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
+      height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
+      folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
+    };
     await tools.click('[data-tool-group-toggle]');
     await tools.waitForFunction(
       () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
@@ -331,7 +361,7 @@ async function run(): Promise<Observed> {
       '[data-tool-group] [data-tool-state]',
       (rows) => rows.length,
     );
-    const toolActivity = { ...collapsedActivity, expandedRows };
+    const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
     await tools.close();
 
     const files = await browser.newPage();
@@ -610,8 +640,22 @@ describe('large tool runs, as the activity timeline draws them', () => {
     expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
   });
 
+  test('the app a mid-run call started is on screen before any click', () => {
+    // The fold's budget is spent on failures and changes, and this call is
+    // neither — so before this rule it was one of the rows "Show 46 more
+    // calls" hid, and the running app the turn produced was reachable only by
+    // expanding a 54-row list.
+    const { collapsedPreview } = observed.toolActivity;
+    expect(collapsedPreview.folded).toBe('false');
+    expect(collapsedPreview.text).toBe('the running app');
+    expect(collapsedPreview.height).toBeGreaterThan(200);
+  });
+
   test('light mode uses a recessed activity ground instead of white cards', () => {
     const activity = observed.toolActivity;
+    // First: that this page IS light. Without it the two colour assertions
+    // below are satisfied by the default dark theme, where they say nothing.
+    expect(activity.mode).toBe('light');
     expect(activity.ground).not.toBe(activity.pageGround);
     expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
@@ -1343,17 +1387,41 @@ describe('history and roster request generations at actual hook boundaries', () 
       const page = await browser.newPage();
       await page.goto(`${origin}/gallery.html?frame=rosterauthority`, { waitUntil: 'networkidle0' });
       await page.click('[data-roster-local-rename]');
+      // POSITIVE FIRST: the local transition really landed.
       await page.waitForFunction(
         () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
         { timeout: 10_000 },
       );
       await page.click('[data-roster-release]');
-      // The old server row spells "Checkout coupon bug". Once released it must
-      // remain stale and cannot reclaim the public local transition.
-      await page.waitForFunction(
-        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
-        { timeout: 10_000 },
-      );
+
+      // The old server row spells "Checkout coupon bug", and the local edit
+      // retired every read in flight, so the released list must publish
+      // NOTHING. That is a claim about something NOT happening, and the proof
+      // cannot be another `waitForFunction` on the rename: that condition is
+      // already true, returns at once, and passed whatever the roster did
+      // next. It cannot be a task-queue drain either — the publish rides
+      // `startTransition`, which React is free to defer past any number of
+      // turns, so a short drain reports "not yet" as "never".
+      //
+      // So the window is explicit and the observation is the timeout: watch
+      // FOR THE CLOBBER, bounded, and require that it never arrives. Under a
+      // roster that failed to retire the read, the stale spelling appears well
+      // inside this window and the case fails naming it. Only the window
+      // running out means "never"; a crashed page or a detached frame is a
+      // different failure and must not read as a pass.
+      let clobbered = true;
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('[data-roster-probe]')?.textContent?.includes('Checkout coupon bug') === true,
+          { timeout: 5_000 },
+        );
+      } catch (cause) {
+        if (!(cause instanceof TimeoutError)) throw cause;
+        clobbered = false;
+      }
+      expect(clobbered).toBe(false);
+      expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
+        .toBe('checkout-fixes:Renamed locally');
       await page.close();
     });
   }, 240_000);

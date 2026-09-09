@@ -7,6 +7,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { testActorHandle } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import {
   initTurnOutcomeTables, recordTurnOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
@@ -21,12 +23,14 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
-  return { db, sql };
+  // A real bound handle: the ledger is actor-scoped, so a fixture that could
+  // not fail `assertCurrent` would not be exercising the store these tests read.
+  return { db, sql, actor: testActorHandle(sql) };
 }
 
 /** A ledger shaped like a real one: mostly accepted, a few corrections, fewer
  *  frustrations, spread over time and across two scaffold versions. */
-function seedLedger(sql: ReturnType<typeof makeSql>, spec: {
+function seedLedger(sql: ReturnType<typeof makeSql>, actor: ActorHandle, spec: {
   accepted?: number; corrected?: number; frustrated?: number;
   source?: 'classifier' | 'explicit'; version?: number; startAt?: number;
 } = {}): void {
@@ -34,7 +38,7 @@ function seedLedger(sql: ReturnType<typeof makeSql>, spec: {
   let n = 0;
   const write = (outcome: TurnOutcome, count: number): void => {
     for (let i = 0; i < count; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `turn-${spec.version ?? 1}-${outcome}-${i}`,
         outcome,
         confidence: 0.8,
@@ -58,7 +62,7 @@ function predictionOf(sql: ReturnType<typeof makeSql>, outcomeId: string): TurnO
   return sql<{ outcome: TurnOutcome }>`SELECT outcome FROM turn_outcomes WHERE id = ${outcomeId}`[0].outcome;
 }
 
-type OutcomeLabelInput = Parameters<typeof recordOutcomeLabels>[1]['labels'][number];
+type OutcomeLabelInput = Parameters<typeof recordOutcomeLabels>[2]['labels'][number];
 
 function outcomeLabel(outcomeId: string, label: OutcomeLabel): OutcomeLabelInput {
   return { outcomeId, label };
@@ -111,9 +115,9 @@ describe('allocateLabelBudget', () => {
 
 describe('sampleForLabeling', () => {
   test('stratifies across verdicts instead of drowning in the majority one', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 800, corrected: 130, frustrated: 45 });
-    const items = sampleForLabeling(sql, { size: 100 });
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 800, corrected: 130, frustrated: 45 });
+    const items = sampleForLabeling(sql, actor, { size: 100 });
 
     expect(items).toHaveLength(100);
     const verdicts = items.map((item) => predictionOf(sql, item.outcomeId));
@@ -125,9 +129,9 @@ describe('sampleForLabeling', () => {
   });
 
   test('spreads across the ledger in time rather than taking a corner of it', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 400 });
-    const times = sampleForLabeling(sql, { size: 40 }).map((item) => item.createdAt).sort((a, b) => a - b);
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 400 });
+    const times = sampleForLabeling(sql, actor, { size: 40 }).map((item) => item.createdAt).sort((a, b) => a - b);
     const span = 399 * 60_000;
     // First and last draws sit near the ends of the ledger's whole history.
     expect(times[0] - 1_700_000_000_000).toBeLessThan(span * 0.1);
@@ -135,15 +139,15 @@ describe('sampleForLabeling', () => {
   });
 
   test('only draws turns the classifier graded', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 30, corrected: 10 });
-    seedLedger(sql, { accepted: 30, corrected: 10, source: 'explicit', version: 2, startAt: 1_800_000_000_000 });
-    recordTurnOutcome(sql, {
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 30, corrected: 10 });
+    seedLedger(sql, actor, { accepted: 30, corrected: 10, source: 'explicit', version: 2, startAt: 1_800_000_000_000 });
+    recordTurnOutcome(sql, actor, {
       turnId: 'ended', outcome: 'abandoned', confidence: 1, source: 'session_end',
       userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 1, now: 1_900_000_000_000,
     });
 
-    const items = sampleForLabeling(sql, { size: 100 });
+    const items = sampleForLabeling(sql, actor, { size: 100 });
     expect(items).toHaveLength(40);
     for (const item of items) {
       const row = sql<{ source: string; outcome: string }>`
@@ -154,33 +158,33 @@ describe('sampleForLabeling', () => {
   });
 
   test('a second draw tops the set up instead of re-asking', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 60, corrected: 20 });
-    const first = sampleForLabeling(sql, { size: 20 });
-    recordOutcomeLabels(sql, {
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 60, corrected: 20 });
+    const first = sampleForLabeling(sql, actor, { size: 20 });
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: first.map((item) => outcomeLabel(item.outcomeId, 'accepted')),
     });
 
-    const second = sampleForLabeling(sql, { size: 20 });
+    const second = sampleForLabeling(sql, actor, { size: 20 });
     const alreadySeen = new Set(first.map((item) => item.outcomeId));
     expect(second).toHaveLength(20);
     expect(second.some((item) => alreadySeen.has(item.outcomeId))).toBe(false);
   });
 
   test('is deterministic, and an empty ledger draws nothing', () => {
-    const { sql } = setup();
-    expect(sampleForLabeling(sql, { size: 100 })).toEqual([]);
-    seedLedger(sql, { accepted: 50, corrected: 20 });
-    expect(sampleForLabeling(sql, { size: 30 })).toEqual(sampleForLabeling(sql, { size: 30 }));
+    const { sql, actor } = setup();
+    expect(sampleForLabeling(sql, actor, { size: 100 })).toEqual([]);
+    seedLedger(sql, actor, { accepted: 50, corrected: 20 });
+    expect(sampleForLabeling(sql, actor, { size: 30 })).toEqual(sampleForLabeling(sql, actor, { size: 30 }));
   });
 
   test('the drawn order does not follow the strata', () => {
     // A file whose items arrive grouped by verdict would leak the answer the
     // labeler is being asked for.
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 300, corrected: 100, frustrated: 60 });
-    const verdicts = sampleForLabeling(sql, { size: 90 }).map((item) => predictionOf(sql, item.outcomeId));
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 300, corrected: 100, frustrated: 60 });
+    const verdicts = sampleForLabeling(sql, actor, { size: 90 }).map((item) => predictionOf(sql, item.outcomeId));
     const runs = verdicts.filter((v, i) => i === 0 || v !== verdicts[i - 1]).length;
     expect(runs).toBeGreaterThan(verdicts.length / 2);
   });
@@ -278,22 +282,22 @@ describe('the labeling file', () => {
 
 describe('the gold label ledger', () => {
   test('is append-only: a re-label adds a row and the newest wins', () => {
-    const { sql } = setup();
-    recordOutcomeLabels(sql, { labeler: 'owner', labels: [{ outcomeId: 'outc-1', label: 'accepted' }], now: 100 });
-    recordOutcomeLabels(sql, { labeler: 'owner', labels: [{ outcomeId: 'outc-1', label: 'corrected' }], now: 200 });
+    const { sql, actor } = setup();
+    recordOutcomeLabels(sql, actor, { labeler: 'owner', labels: [{ outcomeId: 'outc-1', label: 'accepted' }], now: 100 });
+    recordOutcomeLabels(sql, actor, { labeler: 'owner', labels: [{ outcomeId: 'outc-1', label: 'corrected' }], now: 200 });
 
-    expect(listOutcomeLabels(sql)).toHaveLength(2);
-    expect(goldLabels(sql).get('outc-1')?.label).toBe('corrected');
+    expect(listOutcomeLabels(sql, actor)).toHaveLength(2);
+    expect(goldLabels(sql, actor).get('outc-1')?.label).toBe('corrected');
   });
 
   test('carries who labeled and when', () => {
-    const { sql } = setup();
-    recordOutcomeLabels(sql, {
+    const { sql, actor } = setup();
+    recordOutcomeLabels(sql, actor, {
       labeler: 'ashish',
       labels: [{ outcomeId: 'outc-2', label: 'frustrated' }],
       now: 12_345,
     });
-    const row = goldLabels(sql).get('outc-2');
+    const row = goldLabels(sql, actor).get('outc-2');
     expect(row?.labeler).toBe('ashish');
     expect(row?.createdAt).toBe(12_345);
   });
@@ -301,22 +305,22 @@ describe('the gold label ledger', () => {
   test('every label counts, however many passes it took', () => {
     // A windowed read would silently drop the turns the oldest labels speak
     // for, and the estimate would quietly narrow to the recent ones.
-    const { sql } = setup();
+    const { sql, actor } = setup();
     for (let pass = 0; pass < 12; pass++) {
-      recordOutcomeLabels(sql, {
+      recordOutcomeLabels(sql, actor, {
         labeler: 'owner',
         labels: Array.from({ length: 60 }, (_, i) => outcomeLabel(`outc-${pass}-${i}`, 'accepted')),
         now: 1000 + pass,
       });
     }
-    expect(goldLabels(sql).size).toBe(720);
-    expect(listOutcomeLabels(sql, 10)).toHaveLength(10);
+    expect(goldLabels(sql, actor).size).toBe(720);
+    expect(listOutcomeLabels(sql, actor, 10)).toHaveLength(10);
   });
 
   test('reads as empty when nothing has been labeled yet', () => {
-    const { sql } = setup();
-    expect(listOutcomeLabels(sql)).toEqual([]);
-    expect(goldLabels(sql).size).toBe(0);
+    const { sql, actor } = setup();
+    expect(listOutcomeLabels(sql, actor)).toEqual([]);
+    expect(goldLabels(sql, actor).size).toBe(0);
   });
 });
 
@@ -324,9 +328,9 @@ describe('the gold label ledger', () => {
 
 describe('calibrationReport', () => {
   test('an unlabeled ledger reports uncalibrated, not a number', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 200, corrected: 40, frustrated: 12 });
-    const report = calibrationReport(sql);
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 200, corrected: 40, frustrated: 12 });
+    const report = calibrationReport(sql, actor);
 
     expect(report.universe).toBe(252);
     expect(report.labeled).toBe(0);
@@ -343,28 +347,28 @@ describe('calibrationReport', () => {
   });
 
   test('a partially labeled ledger names the verdict it cannot correct', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 200, corrected: 40, frustrated: 12 });
-    const drawn = sampleForLabeling(sql, { size: 200 })
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 200, corrected: 40, frustrated: 12 });
+    const drawn = sampleForLabeling(sql, actor, { size: 200 })
       .filter((item) => predictionOf(sql, item.outcomeId) !== 'frustrated');
-    recordOutcomeLabels(sql, {
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: drawn.map((item) => outcomeLabel(item.outcomeId, 'accepted')),
     });
 
-    const report = calibrationReport(sql);
+    const report = calibrationReport(sql, actor);
     expect(report.gap?.kind).toBe('unlabeled_strata');
     expect(report.gap?.strata).toEqual(['frustrated']);
     expect(renderCalibrationReport(report)).toContain('"frustrated"');
   });
 
   test('labels turn into a measured profile and a corrected rate', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 800, corrected: 130, frustrated: 45 });
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 800, corrected: 130, frustrated: 45 });
     // A classifier that misses corrections: a fifth of what it called
     // "accepted" was really a correction, and it over-called frustration.
-    const drawn = sampleForLabeling(sql, { size: 120 });
-    recordOutcomeLabels(sql, {
+    const drawn = sampleForLabeling(sql, actor, { size: 120 });
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: drawn.map((item, i) => {
         const predicted = predictionOf(sql, item.outcomeId);
@@ -378,7 +382,7 @@ describe('calibrationReport', () => {
       }),
     });
 
-    const report = calibrationReport(sql);
+    const report = calibrationReport(sql, actor);
     expect(report.gap).toBeNull();
     expect(report.labeled).toBe(120);
     expect(report.accuracy).not.toBeNull();
@@ -404,10 +408,10 @@ describe('calibrationReport', () => {
   });
 
   test('unclear verdicts are stored, excluded, and counted out loud', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 100, corrected: 40, frustrated: 20 });
-    const drawn = sampleForLabeling(sql, { size: 60 });
-    recordOutcomeLabels(sql, {
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 100, corrected: 40, frustrated: 20 });
+    const drawn = sampleForLabeling(sql, actor, { size: 60 });
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: drawn.map((item, i) => outcomeLabel(
         item.outcomeId,
@@ -415,18 +419,18 @@ describe('calibrationReport', () => {
       )),
     });
 
-    const report = calibrationReport(sql);
+    const report = calibrationReport(sql, actor);
     expect(report.unclear).toBe(10);
     expect(report.labeled).toBe(50);
-    expect(listOutcomeLabels(sql)).toHaveLength(60);
+    expect(listOutcomeLabels(sql, actor)).toHaveLength(60);
     expect(renderCalibrationReport(report)).toContain('10 unclear (excluded)');
   });
 
   test('a label whose turn is gone informs nothing and is reported as orphaned', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 40, corrected: 20 });
-    const drawn = sampleForLabeling(sql, { size: 60 });
-    recordOutcomeLabels(sql, {
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 40, corrected: 20 });
+    const drawn = sampleForLabeling(sql, actor, { size: 60 });
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: [
         ...drawn.map((item) => outcomeLabel(item.outcomeId, predictionOf(sql, item.outcomeId))),
@@ -434,7 +438,7 @@ describe('calibrationReport', () => {
       ],
     });
 
-    const report = calibrationReport(sql);
+    const report = calibrationReport(sql, actor);
     expect(report.orphaned).toBe(1);
     expect(report.labeled).toBe(60);
   });
@@ -442,18 +446,18 @@ describe('calibrationReport', () => {
   test('turns with an explicit user verdict are left out of the correction', () => {
     // They are already ground truth; folding them in would dilute the measured
     // error profile toward zero.
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 100, corrected: 30 });
-    seedLedger(sql, { accepted: 50, corrected: 50, source: 'explicit', version: 2, startAt: 1_800_000_000_000 });
-    expect(calibrationReport(sql).universe).toBe(130);
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 100, corrected: 30 });
+    seedLedger(sql, actor, { accepted: 50, corrected: 50, source: 'explicit', version: 2, startAt: 1_800_000_000_000 });
+    expect(calibrationReport(sql, actor).universe).toBe(130);
   });
 
   test('each scaffold version is corrected from its own observed rate', () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 200, corrected: 100, version: 1 });
-    seedLedger(sql, { accepted: 300, corrected: 30, version: 2, startAt: 1_800_000_000_000 });
-    const drawn = sampleForLabeling(sql, { size: 100 });
-    recordOutcomeLabels(sql, {
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 200, corrected: 100, version: 1 });
+    seedLedger(sql, actor, { accepted: 300, corrected: 30, version: 2, startAt: 1_800_000_000_000 });
+    const drawn = sampleForLabeling(sql, actor, { size: 100 });
+    recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: drawn.map((item, i) => outcomeLabel(
         item.outcomeId,
@@ -463,7 +467,7 @@ describe('calibrationReport', () => {
       )),
     });
 
-    const report = calibrationReport(sql);
+    const report = calibrationReport(sql, actor);
     const [older, newer] = report.segments;
     expect(older.scaffoldVersion).toBe(1);
     expect(newer.scaffoldVersion).toBe(2);
@@ -475,8 +479,8 @@ describe('calibrationReport', () => {
   });
 
   test('an empty ledger says so without throwing', () => {
-    const { sql } = setup();
-    const report = calibrationReport(sql);
+    const { sql, actor } = setup();
+    const report = calibrationReport(sql, actor);
     expect(report.universe).toBe(0);
     expect(report.gap?.kind).toBe('no_population');
     expect(renderCalibrationReport(report)).toContain('0 classifier-graded turns');

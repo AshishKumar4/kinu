@@ -275,7 +275,8 @@ function renderToolCall(call: ToolCallRecord): string {
   const result = call.result === undefined
     ? ''
     : `\n    → ${evidenceWindow(stableStringify(call.result), EVIDENCE_BUDGETS.patternToolCall)}`;
-  return `  - ${call.name}(${args})${result}`;
+  const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
+  return `  - ${call.name}(${args}) outcome=${outcome}${result}`;
 }
 
 /**
@@ -367,7 +368,7 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     '- "nit": worth recording, not worth interrupting for.',
     '  e.g. "The three sequential writes to the same module could have been one edit. Nothing to redo — worth knowing next time."',
     '- "concern": the agent should weigh this before its next step.',
-    '  e.g. "You read the run result as a pass, but its text starts `Error (exit 3)`. Confirm the command succeeded before building on it."',
+    '  e.g. "The recorded run outcome failed with execution.exitCode 3, but you treated it as successful. Fix the command failure before relying on its result."',
     '- "blocker": continuing without addressing this wastes the work.',
     '  e.g. "The migration ran against the live database before the suite ran once. Stop and confirm a backup exists before continuing."',
     '',

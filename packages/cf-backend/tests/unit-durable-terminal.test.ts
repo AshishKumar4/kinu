@@ -869,9 +869,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     };
     // The QUEUE, not the ledger row: a completed effect is pruned once its
     // sequence closes, and what the gate is about is whether the candidate got
-    // scored against this turn at all.
-    const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number =>
-      rowCount(harness, 'scaffold_trial_queue');
+    // scored against this turn at all. Counted under this harness's own actor:
+    // the queue is per-actor, and `rowCount` is the unscoped oracle the
+    // non-actor-keyed ledgers above use.
+    const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number => v.parse(
+      v.object({ n: v.number() }),
+      harness.db.query('SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE actor_id = ?')
+        .get(harness.agent.observeRuntime().actor.actorId),
+    ).n;
 
     // The completed build turn: the trial IS owed, which is what makes the three
     // refusals below a gate rather than a broken declaration.
@@ -997,11 +1002,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   test('an effect this build does not implement is blocked by name, never skipped', async () => {
     const harness = orchestratorHarness();
     expect(harness.agent.harnessBeginTerminalTransition('u-alien', 'a-alien')).toBe('first');
+    // Filed under the workspace's OWN actor: `terminal_effects` is keyed by
+    // `actor_id` and the resume reads its suffix as this agent, so a row seeded
+    // under any other id is simply not in the set the refusal is asked about.
     harness.db.prepare(
       `INSERT INTO terminal_effects
-         (sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
-       VALUES ('u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
-    ).run();
+         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
+       VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
+    ).run(harness.agent.observeRuntime().actor.actorId);
 
     await harness.agent.harnessResumeTerminalTransitions();
 

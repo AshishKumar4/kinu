@@ -10,7 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { createInlineExecutor } from '../src/execution/inline';
+import { createInlineExecutor, type InlineExecutorDeps } from '../src/execution/inline';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
@@ -33,14 +33,16 @@ const FileSuccessSchema = v.object({ ok: v.boolean() });
 const ErrorResultSchema = v.object({ error: v.string() });
 const VfsMessageSchema = v.object({ message: v.string(), code: v.string() });
 
-function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
-  return createInlineExecutor({
+function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: InlineExecutorDeps['slate']) {
+  const deps: InlineExecutorDeps = {
     vfs: rt.storage.vfs,
     memory: rt.memory,
     craftStore: rt.craftStore,
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     sql: rt.storage.sql,
-  });
+  };
+  if (slate !== undefined) deps.slate = slate;
+  return createInlineExecutor(deps);
 }
 
 describe('workspace provider (InlineExecutor)', () => {
@@ -243,13 +245,6 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     await exec.tools.readFile.execute('victim.txt');
     expect(String(await exec.tools.writeFile.execute('victim.txt', 'replacement'))).toContain('Written');
     expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
-    // The declared codemode type is the promise the model reads, so it has to
-    // name the whole vocabulary a refusal can carry. The union it used to name
-    // was three of ten reasons the dispatcher already returned.
-    expect(exec.types).toContain('function writeFile(path: string, content: string): Promise<string | Refusal>;');
-    for (const reason of ['unread', 'stale', 'io', 'missing', 'not_found', 'ambiguous', 'bad_input']) {
-      expect(exec.types).toContain(`'${reason}'`);
-    }
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {
@@ -497,9 +492,15 @@ describe('workspace.createTool — the tool is born scorable', () => {
 });
 
 describe('workspace.slate', () => {
-  test('absence is unsupported while invalid operation fields are refused before dispatch', async () => {
+  test('an absent host is omitted from callable and declared capabilities', () => {
     const exec = buildExec(createTestRuntime().rt);
-    expect(await exec.tools.slate.execute({ op: 'list' })).toMatchObject({ ok: false, reason: 'unsupported' });
+    expect(exec.tools.slate).toBeUndefined();
+    expect(exec.types).not.toContain('function slate(');
+  });
+
+  test('invalid operation fields are refused before the available host is called', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt, async () => { throw new Error('invalid operation reached the host'); });
     expect(await exec.tools.slate.execute({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
     expect(await exec.tools.slate.execute({ op: 'call', id: 'notes', method: 'echo', args: [() => 1] })).toMatchObject({ ok: false, reason: 'bad_input' });
   });

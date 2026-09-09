@@ -105,6 +105,7 @@ import { Composer, type ChatMode, type ComposerNotice } from "@/components/Compo
 import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
+import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
@@ -141,7 +142,8 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
-  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries,
+  missingSubordinateHistory,
+  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
@@ -403,7 +405,14 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (answer !== null) return Promise.resolve(answer);
   }
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
-    return rosterAuthorityHold.promise;
+    // CLONED PER CALL. A `Response` body can be read once, and the provider
+    // has more than one read in flight against this route (mount plus its
+    // re-run), so handing every caller the same object made the second read
+    // fail on a consumed body — and a released list that nobody can parse
+    // cannot overwrite anything. The case watching for that overwrite then
+    // could not fail whatever the roster did, which is the opposite of a
+    // fixture's job.
+    return rosterAuthorityHold.promise.then((held) => held.clone());
   }
   const response = STUB.get(path);
   if (response !== undefined && (!init?.method || init.method === "GET")) {
@@ -773,7 +782,25 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
+function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]) {
+  const request = v.parse(SubordinateInspectionRequestSchema, input);
+  if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
+  if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
+  // The exact read a plan-arrival hint is resolved through. It answers the ONE
+  // reference it was asked for or nothing at all: a reference to a revision this
+  // fixture never issued is `missing`, the same refusal the real existing-only
+  // inspection returns, so a stale hint cannot paint a neighbouring plan.
+  if (request.view === 'plan') {
+    const plan = plans.find(item => item.id === request.id && item.revision === request.revision);
+    return plan
+      ? { view: 'plan', path: request.path, plan }
+      : missingSubordinateHistory(request.path);
+  }
+  throw new Error('Unexpected gallery plan inspection');
+}
+const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === 'inspectSubordinate') return rpcResult(galleryPlanInspection(args?.[0], [])).json<T>();
   // A read whose answer is a RECORD, where the blanket `[]` below is not a
   // smaller version of the right answer but a shape the caller dereferences.
   // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
@@ -904,6 +931,7 @@ let galleryAgentPlan: PlanReview = {
 };
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
     const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
@@ -955,10 +983,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
     return rpcResult({ ok: true, name, historyKept: true }).json<T>();
   }
-  if (method === "getSubordinateSnapshot") {
-    // The facet's own view. Identity mirrors the roster; the mission stays
+  if (method === "getActorSnapshot") {
+    // The hosted actor's own view, answered by the ROOT now rather than by a
+    // facet over a stub. Identity mirrors the roster; the mission stays
     // internal — the header renders the ROSTER title, never this field.
-    const latest = GALLERY_SUBS.at(-1);
+    const [name] = v.parse(v.tuple([v.string()]), args);
+    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
@@ -2170,6 +2200,17 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
       ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
       : stubRpc<T>(method, args);
   };
+}
+
+/**
+ * The beat `?stage=N` pins, clamped to the stages that exist. A query with no
+ * `stage` — or one that is not a number — pins nothing, and `ForkLiveFrame`
+ * then advances itself; see it for why liveness needs both.
+ */
+function pinnedLiveStage(search: string): number | null {
+  const asked = new URLSearchParams(search).get("stage");
+  const wanted = asked === null ? Number.NaN : Number(asked);
+  return Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null;
 }
 
 /**
@@ -4387,6 +4428,17 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   }),
 ];
 
+/**
+ * A long run carrying the three shapes the fold has to tell apart: fifty
+ * observations, three consequential changes, and one call that put a running
+ * app on screen.
+ *
+ * The preview call is an `observe`-shaped port exposure sitting between the
+ * scan and the changes, deliberately: an effect classification has no reason
+ * to keep it, and it is neither the first row nor the last. So it is the row
+ * that proves the preview rule rather than the mutation rule or an accident
+ * of position.
+ */
 const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   id: "tc-large-run", role: "assistant",
   parts: [
@@ -4398,6 +4450,7 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
       input: { action: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
       output: "…",
     })),
+    { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "sandbox", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
     { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
     { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
     { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { action: "update", id: "t4", status: "done" }, output: "ok" },
@@ -5181,14 +5234,7 @@ async function mount() {
   else if (frame === "forkrunning") {
     node = <Shell surface="Exploration" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
-  else if (frame === "forklive") {
-    // `?stage=N` pins the beat. Absent, the frame advances itself — see
-    // ForkLiveFrame for why liveness needs both.
-    const asked = new URLSearchParams(location.search).get("stage");
-    const wanted = asked === null ? Number.NaN : Number(asked);
-    node = <ForkLiveFrame
-      pinned={Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null} />;
-  }
+  else if (frame === "forklive") node = <ForkLiveFrame pinned={pinnedLiveStage(location.search)} />;
   else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
     // The one dynamic import in this dispatch, and it stays one: the page pulls d3
     // and the whole tree renderer, so every frame that does not open it must not
@@ -5303,6 +5349,10 @@ async function mount() {
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
+  // Owns a real root connection for the plan-arrival hint, so its reads need a
+  // server; the surfaces themselves still read the frame's own fixture props.
+  else if (frame === "previewtabs") { serveGalleryRpc(stubRpc); node = <PreviewTabsGallery />; }
+  else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;

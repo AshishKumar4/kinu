@@ -103,19 +103,9 @@ const hostedPreviewProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
-const slateFacetProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-facet-probe.ts', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-facet-probe.js', import.meta.url)),
-  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
-  conditions: ['workerd', 'worker', 'browser'],
-  target: 'es2022',
-  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
-  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
-}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
-
-const retainedFacetProbe = buildSync({
-  entryPoints: [fileURLToPath(new URL('./tests/workerd/retained-facet-probe.mjs', import.meta.url))],
-  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/retained-facet-probe.js', import.meta.url)),
+const planAnnounceProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/plan-announce-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
   alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
@@ -157,22 +147,21 @@ export default defineConfig({
           })),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
         }, {
-          workerLoaders: { LOADER: {} },
-          name: 'slate-facet-probe', ...workerCompatibility,
-          modules: slateFacetProbe.map((file) => ({
-            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
-            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
-          })),
-          durableObjects: { SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', useSQLite: true } },
-        }, {
-          name: 'retained-facet-probe', ...workerCompatibility,
-          modules: retainedFacetProbe.map((file) => ({
+          // The child resolves its workspace through a binding named exactly
+          // `OrchestratorAgent`, because that is the name the production
+          // `workspaceOwner()` reads off `env`. Same class, same script as the
+          // outer `PLAN_ANNOUNCE_ROOT`, so both address one object.
+          name: 'plan-announce-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: planAnnounceProbe.map((file) => ({
             type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
             path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
           })),
           durableObjects: {
-            RETAINED_FACET_SDK: { className: 'FacetReadRoot', useSQLite: true },
-            RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            // The owner's plane the root's runtime reaches once an owner is
+            // claimed, which is what registers the child actor this probe
+            // rosters.
+            UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
           name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
@@ -211,6 +200,7 @@ export default defineConfig({
           UNBOUNDED_TURN_PROBE: { className: 'UnboundedTurnProbeDO', useSQLite: true },
           SPEND_PROBE: { className: 'SpendProbeDO', useSQLite: true },
           TERMINAL_EFFECT_PROBE: { className: 'TerminalEffectProbeDO', useSQLite: true },
+          DB_CAPABILITY_PROBE: { className: 'DbCapabilityProbeDO', useSQLite: true },
           FIBER_RECOVERY_PROBE: { className: 'FiberRecoveryProbeAgent', useSQLite: true },
           FORK_SOURCE: { className: 'ForkSourceProbeDO', useSQLite: true },
           FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
@@ -219,9 +209,7 @@ export default defineConfig({
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
-          SLATE_FACET_ROOT: { className: 'SlateFacetRootProbe', scriptName: 'slate-facet-probe', useSQLite: true },
-          RETAINED_FACET_SDK: { className: 'FacetReadRoot', scriptName: 'retained-facet-probe', useSQLite: true },
-          RETAINED_FACET_ACTOR: { className: 'OrchestratorAgent', scriptName: 'retained-facet-probe', useSQLite: true },
+          PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },

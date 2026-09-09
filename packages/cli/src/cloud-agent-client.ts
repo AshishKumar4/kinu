@@ -277,8 +277,10 @@ export interface CloudAgentClientOptions {
   agentName: string;
   /** DO instance name on the orchestrator-agent namespace. */
   cloudName: string;
-  /** Direct facet beneath `cloudName`, when this client is an additional
-   * agent rather than the root workspace conversation. */
+  /** Which LOGICAL ACTOR beneath `cloudName` this client addresses, when it is
+   * an additional agent rather than the root workspace conversation. It names a
+   * hosted actor of that workspace, not a store of its own: the whole
+   * subordinate tree lives in the root's one workspace database. */
   subordinateName?: string;
   /** Recorder controls for this process's diagnostic transcript. */
   transcript?: CliSessionOptions;
@@ -519,7 +521,7 @@ export class CloudAgentClient implements AgentClient {
     return this.callParentHttp(method, schema, args);
   }
 
-  private callParentHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+  private callParentHttp<Input, T = Input>(method: string, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
     return callAgentRpc(this.origin, this.token, this.cloudName, method, schema, args);
   }
 
@@ -731,8 +733,9 @@ export class CloudAgentClient implements AgentClient {
     return result;
   }
 
-  /** Open the direct facet socket for an additional agent while retaining the
-   * parent workspace name for ticket scope and parent-owned actions. */
+  /** Address an additional agent — a hosted actor of the same workspace —
+   * while retaining the parent workspace name for ticket scope and
+   * parent-owned actions. */
   openAdditionalAgent(name: string): CloudAgentClient {
     return new CloudAgentClient({
       origin: this.origin,

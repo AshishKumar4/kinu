@@ -27,6 +27,8 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 import {
   cellOccupants, describeObjective, initExplorationRecordsTable, objectiveIdOf,
   recordExploration, recordHandleOf, verifierDigestOf,
@@ -73,11 +75,30 @@ const FLOOR: Floor = {
 
 const T0 = 1_700_000_000_000;
 
-function store(): SqlExecutor {
+/**
+ * The seeded store and the actor it belongs to.
+ *
+ * A leaderboard is per ACTOR now: `exploration_records` is keyed
+ * `(actor_id, record_key)`, so a seed and a read that used different handles
+ * would come back empty and read as a pagination bug. One actor, threaded
+ * through both, is what keeps that impossible here.
+ */
+interface RecordStore {
+  readonly sql: SqlExecutor;
+  readonly actor: ActorHandle;
+}
+
+function store(): RecordStore {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initExplorationRecordsTable(makeExecRaw(db));
-  return sql;
+  const execRaw = makeExecRaw(db);
+  initExplorationRecordsTable(execRaw);
+  return { sql, actor: createTestActors(sql, execRaw).main };
+}
+
+/** The store pair as the leading `(sql, actor)` arguments every read takes. */
+function spread(store: RecordStore): [SqlExecutor, ActorHandle] {
+  return [store.sql, store.actor];
 }
 
 function write(over: Partial<ExplorationWrite>): ExplorationWrite {
@@ -113,10 +134,10 @@ const PASS_HANDLE: RecordObjectiveHandle = recordHandleOf({ identity: PASS, floo
  *           FIVE occupants, three of them TIED on value and two of those three sharing
  *           `first_recorded_at`, so a page boundary inside the tie is reachable.
  */
-function seeded(): SqlExecutor {
-  const sql = store();
+function seeded(): RecordStore {
+  const { sql, actor } = store();
   for (const [index, value] of [41, 23, 88].entries()) {
-    recordExploration(sql, {
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({ artifact: `calls-${String(index)}`, value, at: T0 + index }),
     });
@@ -132,7 +153,7 @@ function seeded(): SqlExecutor {
     ['len=long', 0.58, T0 + 16],
   ];
   for (const [index, [descriptor, value, at]] of partitioned.entries()) {
-    recordExploration(sql, {
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({
         identity: PASS, floor: FLOOR, descriptor, value, at,
@@ -140,7 +161,7 @@ function seeded(): SqlExecutor {
       }),
     });
   }
-  return sql;
+  return { sql, actor };
 }
 
 /** Walk a paged read to exhaustion, asserting the walk TERMINATES and returning every
@@ -164,7 +185,7 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
     // `recordExploration`, or write a constant in place of one, and this goes red — the
     // re-hash no longer lands on the key. That is what makes the denormalisation safe to
     // read rather than a second copy that has to be trusted.
-    const sql = seeded();
+    const { sql } = seeded();
     const rows = sql<{
       objective_id: string; metric: string; unit: string;
       direction: string; scale: string; verifier_digest: string;
@@ -193,23 +214,23 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
   test('a re-record fills blank identity columns from the writer-held identity', () => {
     // The writer holds the identity that hashes to the row's own key, so the
     // fill is derived rather than guessed. Simulated by blanking the columns.
-    const sql = store();
-    recordExploration(sql, { publication: OPEN, write: write({ value: 40 }) });
+    const { sql, actor } = store();
+    recordExploration(sql, actor, { publication: OPEN, write: write({ value: 40 }) });
     void sql`UPDATE exploration_records SET metric = NULL, unit = NULL, direction = NULL,
                scale = NULL, verifier_digest = NULL`;
-    expect(describeObjective(sql, CALLS_HANDLE)).toEqual({ identity: null, rows: 1 });
+    expect(describeObjective(sql, actor, CALLS_HANDLE)).toEqual({ identity: null, rows: 1 });
 
     // A BETTER value, because the monotone rule refuses anything else — the backfill
     // rides the write that was going to happen, not a repair pass nobody triggers.
-    expect(recordExploration(sql, { publication: OPEN, write: write({ value: 12 }) }).kind)
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write({ value: 12 }) }).kind)
       .toBe('recorded');
-    expect(describeObjective(sql, CALLS_HANDLE)).toEqual({ identity: CALLS, rows: 1 });
+    expect(describeObjective(sql, actor, CALLS_HANDLE)).toEqual({ identity: CALLS, rows: 1 });
   });
 });
 
 describe('listRecordObjectives — the discovery read the store had none of', () => {
   test('both comparable sets, each saying what it MEASURED', () => {
-    const page = listRecordObjectives(seeded());
+    const page = listRecordObjectives(...spread(seeded()));
     expect(page.status).toBe('end');
     expect(page.items.length).toBeGreaterThan(0);
     expect(page.items.map((item) => [item.metric, item.unit, item.direction, item.scale])).toEqual([
@@ -228,7 +249,7 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
     // while holding 3 rows — a set that covers a cell reporting coverage of nothing.
     // `COUNT(DISTINCT descriptor)` skips NULLs, so this is the SQL's default behaviour
     // and not a hypothetical.
-    const items = listRecordObjectives(seeded()).items;
+    const items = listRecordObjectives(...spread(seeded())).items;
     expect(items.length).toBeGreaterThan(0);
     const byMetric = new Map(items.map((item) => [item.metric, item]));
     expect(byMetric.get('oracle_calls')?.cells).toBe(1);
@@ -240,7 +261,7 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
   test("`best` is each set's best in ITS OWN direction, across every cell", () => {
     // The two sets disagree about which way better is, so a read that hardcoded one
     // reports the worst row of the other as its leader.
-    const items = listRecordObjectives(seeded()).items;
+    const items = listRecordObjectives(...spread(seeded())).items;
     expect(items.length).toBeGreaterThan(0);
     const byMetric = new Map(items.map((item) => [item.metric, item]));
     expect(byMetric.get('oracle_calls')?.best?.value).toBe(23);
@@ -252,11 +273,11 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
     // THE RED DIRECTION: remove the `HAVING MAX(metric) IS NOT NULL` and this set is
     // listed — which means choosing a direction to sort a column of unlabelled reals by.
     // The listing must not invent one; see the module header.
-    const sql = seeded();
+    const { sql, actor } = seeded();
     void sql`UPDATE exploration_records SET metric = NULL, unit = NULL, direction = NULL,
                scale = NULL, verifier_digest = NULL
              WHERE objective_id = ${CALLS_HANDLE.objectiveId}`;
-    const items = listRecordObjectives(sql).items;
+    const items = listRecordObjectives(sql, actor).items;
     expect(items.length).toBeGreaterThan(0);
     expect(items.map((item) => item.metric)).toEqual(['pass_rate']);
   });
@@ -265,42 +286,42 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
     // A populated set reported as empty is the one answer a caller acts on by doing
     // nothing. Rows that exist and cannot be described are a fault, and an unknown
     // handle is an empty page — the two must not look alike.
-    const sql = seeded();
+    const { sql, actor } = seeded();
     void sql`UPDATE exploration_records SET metric = NULL, direction = NULL
              WHERE objective_id = ${CALLS_HANDLE.objectiveId}`;
-    expect(() => listRecordCells(sql, CALLS_HANDLE)).toThrow(/before the store recorded/);
-    expect(() => readRecordCell(sql, { ...CALLS_HANDLE, descriptor: null }))
+    expect(() => listRecordCells(sql, actor, CALLS_HANDLE)).toThrow(/before the store recorded/);
+    expect(() => readRecordCell(sql, actor, { ...CALLS_HANDLE, descriptor: null }))
       .toThrow(/before the store recorded/);
     // …and a handle the store genuinely holds nothing under is an empty page.
     const unknown: RecordObjectiveHandle = { objectiveId: 'nope', floorDigest: null };
-    expect(listRecordCells(sql, unknown)).toEqual({ status: 'end', items: [] });
-    expect(readRecordCell(sql, { ...unknown, descriptor: null })).toEqual({ status: 'end', items: [] });
+    expect(listRecordCells(sql, actor, unknown)).toEqual({ status: 'end', items: [] });
+    expect(readRecordCell(sql, actor, { ...unknown, descriptor: null })).toEqual({ status: 'end', items: [] });
   });
 
   test('the walk pages without repeating or dropping a set', () => {
-    const sql = seeded();
-    const whole = listRecordObjectives(sql).items;
+    const { sql, actor } = seeded();
+    const whole = listRecordObjectives(sql, actor).items;
     expect(whole.length).toBeGreaterThan(1);
-    const paged = walk((cursor) => listRecordObjectives(sql, cursor, 1));
+    const paged = walk((cursor) => listRecordObjectives(sql, actor, cursor, 1));
     expect(paged.map((item) => item.objectiveId)).toEqual(whole.map((item) => item.objectiveId));
   });
 
   test('a cursor naming a set the store no longer holds RAISES', () => {
-    const sql = seeded();
-    const first = listRecordObjectives(sql, null, 1);
+    const { sql, actor } = seeded();
+    const first = listRecordObjectives(sql, actor, null, 1);
     expect(first.status).toBe('more');
     if (first.status !== 'more') return;
     void sql`DELETE FROM exploration_records WHERE objective_id = ${PASS_HANDLE.objectiveId}`;
-    expect(() => listRecordObjectives(sql, first.next, 1)).toThrow(StaleCursorError);
+    expect(() => listRecordObjectives(sql, actor, first.next, 1)).toThrow(StaleCursorError);
     // A cursor that is not even parseable is stale too — an unreadable position must not
     // report everything behind it as exhausted.
-    expect(() => listRecordObjectives(sql, { after: 'not json' }, 1)).toThrow(StaleCursorError);
+    expect(() => listRecordObjectives(sql, actor, { after: 'not json' }, 1)).toThrow(StaleCursorError);
   });
 });
 
 describe('listRecordCells — the grid, with the no-partition cell distinguished', () => {
   test("a partitioned set's cells, each with its own elite and occupancy", () => {
-    const page = listRecordCells(seeded(), PASS_HANDLE);
+    const page = listRecordCells(...spread(seeded()), PASS_HANDLE);
     expect(page.items.length).toBeGreaterThan(0);
     expect(page.items.map((cell) => [cell.descriptor, cell.occupants, cell.elite?.value])).toEqual([
       ['len=long', 2, 0.6],
@@ -314,12 +335,12 @@ describe('listRecordCells — the grid, with the no-partition cell distinguished
     // null cell vanishes entirely — `descriptor = NULL` is unknown for every row. The
     // empty-string cell is here because a delimited cursor would collapse the two, which
     // is why the cursor is JSON.
-    const sql = seeded();
-    recordExploration(sql, {
+    const { sql, actor } = seeded();
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({ descriptor: '', artifact: 'unnamed cell artifact', value: 19, at: T0 + 3 }),
     });
-    const cells = listRecordCells(sql, CALLS_HANDLE).items;
+    const cells = listRecordCells(sql, actor, CALLS_HANDLE).items;
     expect(cells.length).toBeGreaterThan(0);
     expect(cells.map((cell) => [cell.descriptor, cell.occupants])).toEqual([
       [null, 3],
@@ -334,17 +355,17 @@ describe('listRecordCells — the grid, with the no-partition cell distinguished
     // The boundary that matters here is the FIRST one: the no-partition cell sorts ahead
     // of every named cell, so a seek that compared descriptors directly would restart at
     // the null cell forever or skip past every named one.
-    const sql = seeded();
-    recordExploration(sql, {
+    const { sql, actor } = seeded();
+    recordExploration(sql, actor, {
       publication: OPEN,
       write: write({
         identity: PASS, floor: FLOOR, descriptor: null, value: 0.51,
         artifact: 'unpartitioned pass artifact', at: T0 + 17,
       }),
     });
-    const whole = listRecordCells(sql, PASS_HANDLE).items;
+    const whole = listRecordCells(sql, actor, PASS_HANDLE).items;
     expect(whole.map((cell) => cell.descriptor)).toEqual([null, 'len=long', 'len=medium', 'len=short']);
-    const paged = walk((cursor) => listRecordCells(sql, PASS_HANDLE, cursor, 1));
+    const paged = walk((cursor) => listRecordCells(sql, actor, PASS_HANDLE, cursor, 1));
     expect(paged.map((cell) => cell.descriptor)).toEqual(whole.map((cell) => cell.descriptor));
     expect(paged.map((cell) => cell.occupants)).toEqual(whole.map((cell) => cell.occupants));
   });
@@ -352,15 +373,15 @@ describe('listRecordCells — the grid, with the no-partition cell distinguished
 
 describe('readRecordCell — an unbounded population, paged', () => {
   test("a cell's population comes back best first, in the objective's direction", () => {
-    const sql = seeded();
-    const page = readRecordCell(sql, { ...PASS_HANDLE, descriptor: 'len=short' });
+    const { sql, actor } = seeded();
+    const page = readRecordCell(sql, actor, { ...PASS_HANDLE, descriptor: 'len=short' });
     expect(page.status).toBe('end');
     expect(page.items.length).toBeGreaterThan(0);
     expect(page.items.map((row) => row.value)).toEqual([0.71, 0.5, 0.5, 0.5, 0.44]);
     // The unpaged occupancy read the archive admits against agrees exactly, because both
     // are the same query body.
     expect(page.items.map((row) => row.artifactDigest)).toEqual(
-      cellOccupants(sql, { identity: PASS, floor: FLOOR, descriptor: 'len=short' })
+      cellOccupants(sql, actor, { identity: PASS, floor: FLOOR, descriptor: 'len=short' })
         .map((row) => row.artifactDigest),
     );
   });
@@ -370,15 +391,15 @@ describe('readRecordCell — an unbounded population, paged', () => {
     // of those share `first_recorded_at`, so pages of two put a boundary INSIDE the tie
     // — twice. A seek on `value` alone drops the rest of the tie; a non-strict seek
     // repeats the boundary row. A walk whose page never crosses a tie sees neither.
-    const sql = seeded();
+    const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const whole = readRecordCell(sql, handle, null, 100).items;
+    const whole = readRecordCell(sql, actor, handle, null, 100).items;
     expect(whole).toHaveLength(5);
     const tied = whole.filter((row) => row.value === 0.5);
     expect(tied.length).toBeGreaterThan(1);
 
     for (const limit of [1, 2, 3, 4]) {
-      const paged = walk((cursor) => readRecordCell(sql, handle, cursor, limit));
+      const paged = walk((cursor) => readRecordCell(sql, actor, handle, cursor, limit));
       const digests = paged.map((row) => row.artifactDigest);
       expect(digests).toEqual(whole.map((row) => row.artifactDigest));
       expect(new Set(digests).size).toBe(whole.length);
@@ -386,15 +407,15 @@ describe('readRecordCell — an unbounded population, paged', () => {
   });
 
   test('a page that says `more` names its own resume point, and `end` cannot be faked', () => {
-    const sql = seeded();
+    const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const first = readRecordCell(sql, handle, null, 2);
+    const first = readRecordCell(sql, actor, handle, null, 2);
     expect(first.status).toBe('more');
     if (first.status !== 'more') return;
     // The cursor is the LAST DELIVERED row's identity, so the next page starts strictly
     // after it — not at it.
     expect(first.next.after).toBe(first.items[1]?.artifactDigest);
-    const second = readRecordCell(sql, handle, first.next, 2);
+    const second = readRecordCell(sql, actor, handle, first.next, 2);
     expect(second.items.map((row) => row.artifactDigest))
       .not.toContain(first.items[1]?.artifactDigest);
     // A FULL page is not an exhausted one: 5 occupants at 2 per page is 2 + 2 + 1, and
@@ -402,18 +423,18 @@ describe('readRecordCell — an unbounded population, paged', () => {
     // reported about a query that ran off the end of the data.
     expect(second.status).toBe('more');
     if (second.status !== 'more') return;
-    const third = readRecordCell(sql, handle, second.next, 2);
+    const third = readRecordCell(sql, actor, handle, second.next, 2);
     expect(third.status).toBe('end');
     expect(third.items).toHaveLength(1);
   });
 
   test('a cursor for an occupant that left the cell RAISES', () => {
-    const sql = seeded();
+    const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const first = readRecordCell(sql, handle, null, 2);
+    const first = readRecordCell(sql, actor, handle, null, 2);
     if (first.status !== 'more') throw new Error('the fixture must page');
     void sql`DELETE FROM exploration_records WHERE artifact_digest = ${first.next.after}`;
-    expect(() => readRecordCell(sql, handle, first.next, 2)).toThrow(StaleCursorError);
+    expect(() => readRecordCell(sql, actor, handle, first.next, 2)).toThrow(StaleCursorError);
   });
 
   test('the unfloored set reads through `IS`, and the floored one is a different set', () => {
@@ -421,14 +442,14 @@ describe('readRecordCell — an unbounded population, paged', () => {
     // declared no floor — reads as empty everywhere. And the same objective under a floor
     // is a DIFFERENT comparable set, which is what keeps a corrected floor separable from
     // a wrong one.
-    const sql = seeded();
-    const unfloored = readRecordCell(sql, { ...CALLS_HANDLE, descriptor: null });
+    const { sql, actor } = seeded();
+    const unfloored = readRecordCell(sql, actor, { ...CALLS_HANDLE, descriptor: null });
     expect(unfloored.items.length).toBeGreaterThan(0);
     expect(unfloored.items.map((row) => row.value)).toEqual([23, 41, 88]);
 
     const floored = recordHandleOf({ identity: CALLS, floor: FLOOR });
     expect(floored.floorDigest).not.toBeNull();
-    expect(readRecordCell(sql, { ...floored, descriptor: null }))
+    expect(readRecordCell(sql, actor, { ...floored, descriptor: null }))
       .toEqual({ status: 'end', items: [] });
   });
 });

@@ -146,7 +146,6 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
     // never from the existence of an agent.db.
     roster: () => listLocalRefsAllProjects(),
     dbPath: () => dbPath,
-    childDbPath: (_parent, child) => join(agentDir(AGENT_NAME), '.kinu', 'agents', child, 'agent.db'),
     open: async (_ref, db, path) => {
       const opened = await openWorkspaceCLI(db, path, openConfig);
       runtime = opened.rt;

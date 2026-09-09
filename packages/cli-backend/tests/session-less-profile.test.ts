@@ -18,10 +18,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/core';
-import { createAgentConfigStore, initAgentConfigTable } from '@kinu.run/core';
-import { createInlineWorkspace } from '@kinu.run/core/identity';
 import { openWorkspaceCLI } from '../src/open';
-import { makeSql, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { STATIC_MODEL_SPEC, staticModelPlane } from '../src/profile-authority';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -41,19 +39,9 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   tempDirs.push(dir);
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
-  db.exec(`CREATE TABLE workspace_identity (
-    id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    owner_user_id TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  );`);
-  db.run('INSERT INTO workspace_identity (id, name) VALUES (?, ?)', ['ws-1', 'jarvis']);
-  const inline = createInlineWorkspace(db);
-  await inline.vfs.writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
-  if (storedModel !== undefined) {
-    initAgentConfigTable((ddl) => db.exec(ddl));
-    createAgentConfigStore(makeSql(db)).setModel(storedModel);
-  }
+  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, hostRoot: null, agentName: 'jarvis' });
+  await (rt.agentStateVfs ?? rt.storage.vfs).writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
+  if (storedModel !== undefined) rt.actor.config.setModel(storedModel);
   return { db, dbPath };
 }
 
@@ -115,7 +103,7 @@ describe('a local runtime opened without a session', () => {
 
     const profile = await rt.ensureProfile?.();
 
-    // `agent_config.model` spelled in full by the same registry the routed-lane
+    // `actor_config.model` spelled in full by the same registry the routed-lane
     // factory resolves through — the durable row a session reads, not a
     // constant chosen here.
     expect(profile?.tier.model).toBe('openai-compat/my-model');

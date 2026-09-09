@@ -35,6 +35,25 @@ describe('reachability gate', () => {
     expect(scan('')).toEqual([KEY]);
   });
 
+  test('the declaring file installing it into an object literal IS a caller', () => {
+    // Not self-reference: the object is handed out, and the consumer calls the
+    // member under the PROPERTY's name. `recordHeadStep` shipped this shape and
+    // was reported "no caller anywhere" while running on every head step -
+    // installed as `ExplorationHostSeams.recordStep`, consumed as `reportStep`.
+    const installer = `
+export class OrchestratorAgent {
+  @callable()
+  async listDeferredApprovals(): Promise<string[]> { return []; }
+
+  private seams() {
+    return { review: () => this.listDeferredApprovals() };
+  }
+}
+`;
+    const found = findUnreachable(new Map([['agent.ts', installer]])).unreachable.map(keyOf);
+    expect(found).toEqual([]);
+  });
+
   test('a string literal in argument position is a caller', () => {
     expect(scan(`const load = () => rpc('listDeferredApprovals', []);`)).toEqual([]);
   });

@@ -6,49 +6,54 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { selectNode } from '../src/mcts/uct';
 import { initSearchTables } from '../src/mcts/schemas';
 
+/** One search ledger and the actor that owns it. `search_nodes` is keyed
+ *  `(actor_id, id)`, so the seeded rows and the selection have to name the
+ *  same handle or the tree the selector walks is empty. */
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw);
-  return { db, sql };
+  const actor = createTestActors(sql, execRaw).main;
+  return { db, sql, actor };
 }
 
 describe('UCT selection', () => {
   test('returns null on empty tree', () => {
-    const { sql } = setup();
-    expect(selectNode(sql, 'r')).toBeNull();
+    const { sql, actor } = setup();
+    expect(selectNode(sql, actor, 'r')).toBeNull();
   });
 
   test('selects the only open node', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'root', 'test', 0, 0, 'open')`;
-    const node = selectNode(sql, 'r');
+    const { sql, actor } = setup();
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'root', 'test', 0, 0, 'open')`;
+    const node = selectNode(sql, actor, 'r');
     expect(node).not.toBeNull();
     expect(node!.id).toBe('root');
   });
 
   test('never selects pruned nodes', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'pruned1', 'test', 0.99, 100, 'pruned')`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql, 'r');
+    const { sql, actor } = setup();
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'pruned1', 'test', 0.99, 100, 'pruned')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql, actor, 'r');
     expect(node!.id).toBe('open1');
   });
 
   test('never selects failed nodes', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'failed1', 'test', 0.99, 100, 'failed')`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql, 'r');
+    const { sql, actor } = setup();
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'failed1', 'test', 0.99, 100, 'failed')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'open1', 'test', 0.1, 1, 'open')`;
+    const node = selectNode(sql, actor, 'r');
     expect(node!.id).toBe('open1');
   });
 
@@ -65,71 +70,71 @@ describe('UCT selection', () => {
   });
 
   test('selects higher-value node when exploration bonus is equal', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // Two nodes with same visits (so same exploration bonus)
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'low', 'test', 0.3, 5, 'open')`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'high', 'test', 0.9, 5, 'open')`;
-    const node = selectNode(sql, 'r');
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'low', 'test', 0.3, 5, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'high', 'test', 0.9, 5, 'open')`;
+    const node = selectNode(sql, actor, 'r');
     expect(node!.id).toBe('high');
   });
 
   test('#5: root keeps a non-zero exploration term so it can re-widen across iterations', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // After iteration 1: root visited, children already expanded. Under the old
     // ln(N(parent))=ln(1)=0 the root's UCT collapsed to its value and it could
     // never be re-selected to add MORE breadth (frozen at N=branches). With the
     // synthetic root parent-visit it retains a strictly-positive exploration
     // bonus and becomes selectable once its children are well-visited.
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'root', NULL, 't', 0.5, 2, 'open')`;
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'c1', 'root', 't', 0.5, 1, 'open')`;
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'c2', 'root', 't', 0.5, 1, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'root', NULL, 't', 0.5, 2, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'c1', 'root', 't', 0.5, 1, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'c2', 'root', 't', 0.5, 1, 'open')`;
 
     // Fresh children deepen first, but once they are well-visited the root's
     // surviving exploration term makes it the UCT-max → the tree re-widens.
-    void sql`UPDATE search_nodes SET visits = 50 WHERE id IN ('c1','c2')`;
-    const reselect = selectNode(sql, 'r')!;
+    void sql`UPDATE search_nodes SET visits = 50 WHERE actor_id = ${actor.actorId} AND id IN ('c1','c2')`;
+    const reselect = selectNode(sql, actor, 'r')!;
     expect(reselect.id).toBe('root');
   });
 
   test('WP-A4: depth-capped nodes are skipped, not fatal — a shallower node is still selected', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // The UCT-max node sits AT the depth cap; a lower-scoring node sits below it.
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
-        VALUES ('r', 'deep', 'test', 0.99, 1, 'open', 3)`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
-        VALUES ('r', 'shallow', 'test', 0.1, 1, 'open', 1)`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, depth)
+        VALUES (${actor.actorId}, 'r', 'deep', 'test', 0.99, 1, 'open', 3)`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, depth)
+        VALUES (${actor.actorId}, 'r', 'shallow', 'test', 0.1, 1, 'open', 1)`;
     // Old behavior aborted the whole search on the deep argmax. Now selection
     // skips it and returns the shallower node so the budget keeps flowing.
-    const node = selectNode(sql, 'r', undefined, 3);
+    const node = selectNode(sql, actor, 'r', undefined, 3);
     expect(node!.id).toBe('shallow');
   });
 
   test('WP-A4: returns null only when every open node is at/beyond the cap', () => {
-    const { sql } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, depth)
-        VALUES ('r', 'capped', 'test', 0.9, 1, 'open', 5)`;
-    expect(selectNode(sql, 'r', undefined, 5)).toBeNull();
-    expect(selectNode(sql, 'r', undefined, 6)!.id).toBe('capped');
+    const { sql, actor } = setup();
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, depth)
+        VALUES (${actor.actorId}, 'r', 'capped', 'test', 0.9, 1, 'open', 5)`;
+    expect(selectNode(sql, actor, 'r', undefined, 5)).toBeNull();
+    expect(selectNode(sql, actor, 'r', undefined, 6)!.id).toBe('capped');
   });
 
   test('exploration bonus favors less-visited nodes', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // Root with many visits
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'root', NULL, 'test', 0.5, 100, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'root', NULL, 'test', 0.5, 100, 'open')`;
     // Well-visited child
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'visited', 'root', 'test', 0.6, 50, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'visited', 'root', 'test', 0.6, 50, 'open')`;
     // Barely-visited child (should get higher exploration bonus)
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'fresh', 'root', 'test', 0.5, 1, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'fresh', 'root', 'test', 0.5, 1, 'open')`;
 
-    const node = selectNode(sql, 'r');
+    const node = selectNode(sql, actor, 'r');
     // fresh should be selected: it has visits=1 so exploration bonus is high
     // UCT(fresh) = 0.5 + √2 * √(ln(100)/1) ≈ 0.5 + 1.414 * √4.605 ≈ 0.5 + 3.03 = 3.53
     // UCT(visited) = 0.6 + √2 * √(ln(100)/50) ≈ 0.6 + 1.414 * √0.092 ≈ 0.6 + 0.43 = 1.03
@@ -151,14 +156,14 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
   const W = Math.SQRT2;
 
   function selectAmongSiblings(exploreVisits: number): string {
-    const { sql } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status)
-        VALUES ('r', 'root', NULL, 't', 0.9, 10000, 'terminal')`;
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth)
-        VALUES ('r', 'exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
-    void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth)
-        VALUES ('r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
-    return selectNode(sql, 'r', W)!.id;
+    const { sql, actor } = setup();
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
+        VALUES (${actor.actorId}, 'r', 'root', NULL, 't', 0.9, 10000, 'terminal')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth)
+        VALUES (${actor.actorId}, 'r', 'exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth)
+        VALUES (${actor.actorId}, 'r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
+    return selectNode(sql, actor, 'r', W)!.id;
   }
 
   test('a 20-visit low-value sibling still out-explores the exploited node (log₁₀ would not)', () => {

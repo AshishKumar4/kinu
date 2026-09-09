@@ -19,7 +19,7 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema,
+  JsonObjectSchema, openWorkspaceMainActor,
   ProfileCatalogEnvelopeSchema,
   type JsonObject,
   type LLMProviderConfig,
@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import {
-  CLOUD_PROXY_PROVIDER_IDS,
+  makeSql, CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
   createFileCodexAuthStore,
   ensureSecretDir,
@@ -86,7 +86,7 @@ export interface KinuAgentConfig {
   name: string;
   mode: AgentMode;
   /** Cloud workspaces only: the server-side title cache. A local agent's
-   *  title lives in its own database (`agent_config.display_name`) and is
+   *  title lives in its own database (`actor_config.display_name`) and is
    *  never mirrored here. */
   displayName?: string;
   alias?: string;
@@ -392,13 +392,10 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   const db = new Database(dbPath);
   try {
     const present = db.query<{ n: number }, []>(
-      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'agent_config'`,
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'actor_config'`,
     ).get();
     if (!present || present.n === 0) return null;
-    const row = db.query<{ value: string }, [string]>(
-      `SELECT value FROM agent_config WHERE key = 'display_name'`,
-    ).get('display_name');
-    return row?.value ?? null;
+    return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
   } finally {
     db.close();
   }

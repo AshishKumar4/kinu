@@ -15,12 +15,14 @@
  *
  * Uses real Agent SDK APIs for infrastructure:
  *   Fibers   → Agent.runFiber() (durable, checkpoint/resume via stash)
- *   Branches → Agent.subAgent() (Facets — co-located child DOs)
+ *   Branches → hosted logical actors of kind 'branch' on the root's one SQLite
+ *              (exploration-hosting.ts). They were `Agent.subAgent()` facets —
+ *              a co-located child Durable Object per rollout — until open-38.
  *   LLM      → provider registry (Workers AI uses the user's Cloudflare OAuth)
  */
 
 import type {
-  AgentRuntime, BranchHandle,
+  AgentRuntime, ActorHandle, BranchHandle,
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
@@ -31,13 +33,14 @@ import type {
   WriteObserver,
   ModelCallSink, SpendSource, ResolvedTurnProfile,
   SlateCallResult, SlateOperation,
+  ActorClaimStore, ChildContextResolver, ContextEventRecorder,
 } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell,
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
-  withMountTable, standardMounts,
+  withMountTable, standardMounts, contextMount,
   withApprovalGatedShell, createInheritedApprovalPolicy,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
@@ -45,8 +48,8 @@ import {
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
-  createAgentConfigStore, initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, resolveModelRoute, REASONING_EFFORT_FOR_STAGE,
+  initAgentConfigTable, initActorTables,
+  parseModelSpec, reasoningEffortOptions, resolveModelRoute,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -55,7 +58,7 @@ import type { SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution } from './node-home';
 import type { HostedNodeHome } from './node-home';
 export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
@@ -66,7 +69,6 @@ import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
-import { abortExplorationFacet, deleteExplorationFacet, spawnBranchFacet, type FacetHost } from "./facet-spawn";
 import {
   createHubDeviceTransport,
   type DeviceHubClient,
@@ -81,23 +83,27 @@ import {
 import { ownerCaller, type UserCaller } from "./user/workspace-capability";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import {
-  agentAffinityKey, exploreRollout, formatInheritedContext, normalizeUsage, reflectRollout, type BranchRoute,
+  agentAffinityKey, normalizeUsage,
 } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 
 /**
  * The agent surface these runtime builders need — the bare agents-SDK `Agent`
- * members, nothing from Think. Narrow on purpose: `SubordinateAgent` extends
- * `ActorAgent`, and the seed decides which surface a facet answers, so these
- * builders stay reachable from a facet in head mode or node mode without
- * requiring `Think` here.
+ * members, nothing from Think and nothing about facets.
+ *
+ * Three members, and the narrowness is the point: this factory builds the
+ * runtime of a LOGICAL actor, which on this backend is never a Durable Object of
+ * its own. Every actor in a workspace — the main actor, a hired subordinate, an
+ * ask-by-role temporary, a head, a node, a rollout branch — is built over the
+ * ROOT object's `name`, `sql` and `runFiber`, and what makes their runtimes
+ * differ is the `ActorRuntimeIdentity` below, never a different host.
  *
  * `env`/`ctx` are `protected` on the DurableObject base (not reachable by these
  * free functions), but the runtime is conceptually an extension of the agent and
- * legitimately needs them. A subclass (which DOES have access) passes `this`
+ * legitimately needs them. The root (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'> & FacetHost;
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
 
 export interface CFRuntimeAccess {
   readonly env: Env;
@@ -106,12 +112,12 @@ export interface CFRuntimeAccess {
    * The workspace's process/port/runtime/exec plane, for the named durable
    * shell.
    *
-   * Supplied by the actor rather than built here, because only the actor knows
-   * whether it OWNS the workspace. An orchestrator hands over a box composed
-   * over its own `ctx.storage.sql`; a subordinate or exploration facet — its own
-   * Durable Object with its own SQLite, sharing the orchestrator's tree — hands
-   * over a client onto that orchestrator. Both satisfy `NimbusSandboxHandle`, so
-   * nothing downstream of this line can tell them apart.
+   * ONE box per workspace, shared by every actor hosted in it: this is the plane
+   * a subordinate was hired to work in, and the reason a child must not compose
+   * one of its own is that composing one produces a SECOND, EMPTY filesystem
+   * (tests/unit-head-fork.test.ts). What separates two actors on it is
+   * `shellId` — cwd and exported env — and the credential their commands and
+   * their file tools both carry.
    */
   workspaceBox(shellId: string): NimbusSandboxHandle;
   /** The turn's ledger + budget, when this actor has one — ActorAgent
@@ -141,33 +147,47 @@ export function bindAgentSql(agent: Pick<Agent<Env>, 'sql'>): SqlExecutor {
 }
 
 /**
- * The actor's identity bootstrap + exec-plane keying — the two things that
- * differ between a top-level workspace DO and a facet actor riding it.
+ * WHICH LOGICAL ACTOR this runtime belongs to, and where its planes are keyed.
  *
- * The orchestrator passes its own owner lookup (workspace_identity) and its
- * DO name; a facet actor passes its own owner row and the PARENT workspace
- * name, so it shares the authoritative workspace, sandbox container, and
- * device consent instead of materializing fresh planes keyed by facet name.
- * A fork's window onto its parent is not configured here: it is an EXECUTOR
- * the facet registers post-construction (`createParentExecutor`), the same way
- * the sandbox and the device are.
+ * Every actor in a cf workspace is hosted by one Durable Object, so this — not
+ * the host — is the whole of what makes two runtimes different. `actor` scopes
+ * every store to one `actor_id` in the workspace's one database; `shellId` and
+ * `scaffoldPath` give it its own cwd and its own promoted program on the shared
+ * tree; `workspaceName` is the REGISTERED workspace whose exec planes
+ * (workspace, sandbox, /pc consent) it rides, and is the same value for every
+ * actor in it.
  */
 export interface ActorRuntimeIdentity {
+  actor: ActorHandle;
+  /**
+   * Is this the workspace's own MAIN actor.
+   *
+   * STATED, never inferred. The test used to be `agent.name ===
+   * actor.workspaceName`, which worked only because a child was a different
+   * Durable Object with a different `name`. Hosted in the root's isolate every
+   * actor shares that name, so the comparison answers `true` for a subordinate
+   * and would hand it the root's shell-approval authority — standing grants
+   * included — instead of the inherited policy that can only narrow.
+   */
+  rootActor: boolean;
   /** Owner userId, or null while unclaimed. Resolved per call — never cached
    *  here, so a first use before owner claim can't bake in null. */
   ownerUserId(): string | null;
   /** The workspace whose exec planes (workspace, sandbox, /pc consent) this
-   *  actor rides. */
+   *  actor rides. The SAME string for every actor in one workspace: a child
+   *  that named itself here would derive a second, empty filesystem, which is
+   *  the regression tests/unit-head-fork.test.ts pins. */
   workspaceName: string;
   /** Stable shell state within the shared workspace session. Distinct actors
    * share files, processes and ports without sharing cwd or exported env. */
   shellId: string;
-  /** Live scaffold file for this actor. The default agent owns the canonical
-   * workspace scaffold; facets keep their independently versioned control
-   * program under the same workspace's internal actor directory. */
+  /** Live scaffold file for this actor. The main actor owns the canonical
+   * workspace scaffold; every hosted actor keeps its independently versioned
+   * control program under its own `.kinu/agents/<storage-key>/` subtree. */
   scaffoldPath: string;
-  /** The workspace capability token this actor presents to the UserDO — its
-   *  own for a workspace DO, its parent's for a facet. Null until claimed. */
+  /** The workspace capability token this actor presents to the UserDO. ONE
+   *  token per workspace: a hosted actor is attenuated exactly as the workspace
+   *  is, never more widely. Null until claimed. */
   capabilityToken(): string | null;
 }
 
@@ -293,13 +313,6 @@ export type CFRuntime = AgentRuntime & {
 /** Optional hooks the orchestrator can inject into the CF runtime. */
 export interface CFRuntimeHooks {
   /**
-   * Fires synchronously from workspace.createTool after a successful
-   * create/update. The execute_tools sandbox does not need it because it reads
-   * craftStore.list() on every call; other adapters can use it for eager
-   * notification.
-   */
-  onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
-  /**
    * Where a 'gate'-tier command goes when nobody is there to approve it — the
    * owner's parked-action queue (core's safety/deferred-approval.ts). A thunk,
    * and read at exec time, for the two reasons the runtime's other thunks are:
@@ -337,15 +350,63 @@ export interface CFRuntimeHooks {
   /** Resolve a profile for durable work that starts without a chat turn. */
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   /**
-   * A facet's own identity: the ONE shared Nimbus session, addressed as this
-   * facet on both planes.
+   * This actor's own identity on the ONE shared Nimbus session, on BOTH planes.
    *
-   * Present, commands run as the facet's uid from its home and its file plane
-   * acts as the same uid; absent, this runtime is the ORIGIN's. Never a second
-   * filesystem either way — the session, the bytes and the mount table are the
-   * same, and only the credential differs.
+   * Present, commands run as the actor's uid from its home and its file plane
+   * acts as the same uid; absent, this runtime is the session user's. Never a
+   * second filesystem either way — the session, the bytes and the mount table
+   * are the same, and only the credential differs. Both halves or neither: a
+   * runtime whose commands were the actor's while its file tools stayed the
+   * session user could not write its own home (measured `EACCES`) and could
+   * write a sibling's.
    */
   workspaceExecution?: HostedNodeHome;
+  /**
+   * The actor's per-step context plane, mounted as FILES.
+   *
+   * What a turn was admitted against, what each step consumed, and the same for
+   * whatever this actor hires or splits into — addressable rather than merely
+   * recorded. `children` is built by the actor host (`childContextResolver`
+   * over its own binder and directory), so a child's plane is opened under the
+   * directory's authority and never by a caller that happens to know an id.
+   *
+   * Omitted by a runtime built outside the actor host (a test fixture, a
+   * pre-claim probe), and then the mount table simply carries one fewer entry.
+   */
+  contextPlane?: {
+    readonly actorId: string;
+    claims(): ActorClaimStore;
+    /**
+     * Where a context edit's two events go — `staged` at authoring,
+     * `activated` at the boundary that took it.
+     *
+     * NULL in this tree, and deliberately not a stub: the port is satisfied by
+     * `RunEventRecorder` only once the `context_edit` run-event variant exists
+     * beside it, and until then `null` says "this plane records no events"
+     * rather than claiming an emission nothing would receive. A refused edit
+     * emits nothing either way, so the plane's behaviour is unchanged.
+     */
+    events(): ContextEventRecorder | null;
+    readonly children: ChildContextResolver;
+  };
+  /**
+   * WHERE AN MCTS ROLLOUT BRANCH COMES FROM.
+   *
+   * A branch used to be a Facet — `subAgent()` plus a bootstrap sequence plus a
+   * private SQLite plus a reclaim — and this factory built that spawner itself
+   * out of the agent host. It is now a hosted logical actor of kind
+   * `'branch'`, acquired from the workspace's one `ActorHost`, which is a
+   * question only the root can answer: the host holds the directory. So the
+   * seam arrives as a hook instead of being constructed here.
+   *
+   * Omitted leaves `spawnBranch`/`abortBranch` refusing rather than absent,
+   * because `AgentRuntime` does not make them optional and a search that
+   * silently ran no rollouts is worse than one that says it cannot.
+   */
+  branches?: {
+    spawn(branchId: string): Promise<BranchHandle>;
+    abort(branchId: string): Promise<void>;
+  };
 }
 
 /**
@@ -405,12 +466,12 @@ export function createCFRuntime(
   // craft stores above do — and it reads config during construction, not only
   // on demand. An exploration facet builds its whole head runtime on its OWN
   // storage, which no `initWorkspaceSchema` touches, so without this every head
-  // dies on `no such table: agent_config` before its first step. These are that
+  // dies on `no such table: actor_config` before its first step. These are that
   // facet's own settings, as a subordinate facet's are its own; a head's MODEL
   // is not read here — it arrives with the HeadInput the spawner built.
   initAgentConfigTable(execRaw);
   // The rest of what a runtime's own storage carries, for the same reason and
-  // by the same measurement: `agent_config` was the first table an exploration
+  // by the same measurement: `actor_config` was the first table an exploration
   // facet was found to be missing, not the only one. The workspace executor
   // registered below is handed this same `sql`, and its `listTools` quotes the
   // crafted-tool quality columns ON `crafted_tools`, and its `createTool` seeds
@@ -422,7 +483,7 @@ export function createCFRuntime(
   // identity or fork lineage of its own, which is exactly a facet's; on a root
   // it is the idempotent prefix of the `initWorkspaceSchema` its attach runs.
   initActorTables(execRaw, sql);
-  const memoryConfig = createAgentConfigStore(sql);
+  const memoryConfig = actor.actor.config;
 
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
@@ -459,12 +520,12 @@ export function createCFRuntime(
   const schedule = createRealSchedule(agent);
   // The scaffold is workspace state: written by the session user, read by
   // whichever actor this runtime belongs to.
-  const identity = createIdentity(agent, access.ctx, originVfs, sql, actor.scaffoldPath);
+  const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Execution router — manages workspace plus the separate sandbox and laptop.
   // Live shell-approval policy every gated exec boundary consults (`run`'s
   // workspace/router dispatch and every ExecutorProvider's exec — see
-  // execution/approval.ts). `mode` reads agent_config directly off the SAME
+  // execution/approval.ts). `mode` reads actor_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
   // `deferrals` is what stops an unattended run dying on its first `sudo`: with
@@ -474,17 +535,25 @@ export function createCFRuntime(
   // A getter, so the queue is resolved at exec time like every other member of
   // this policy — see ShellApprovalPolicy's own doc on live reads.
   //
-  // ROOT vs FACET. `agent.name === actor.workspaceName` is the same test the
-  // sandbox handle uses below to decide who owns the container. A facet — a
-  // head, a subordinate — is a different Durable Object with its own empty
-  // `agent_config`, and grants are only ever written to the ROOT's, so a facet
-  // reading its own store found no grants and no mode and re-asked for consent
-  // the owner had already given on the workspace. Every agent in a workspace
-  // shares one container, so it must share that container's granted
-  // capabilities — or a subset, never a superset. `createInheritedApprovalPolicy`
-  // is that rule: the root's answers, intersected with any narrowing the facet
-  // recorded for itself, and no `remember`, so a facet can never widen.
-  const isRootActor = agent.name === actor.workspaceName;
+  // MAIN vs HOSTED, and it is STATED rather than derived — see `rootActor` on
+  // ActorRuntimeIdentity above for why the old `agent.name ===
+  // actor.workspaceName` test had to go. There is no name to compare any more:
+  // every actor of a workspace is a logical actor of the ONE object and answers
+  // to that one name, so the comparison returns true for a subordinate. Nor is
+  // there a second split for it to agree with — the container is keyed on
+  // `workspaceName` (`sandboxIdForWorkspace` below), which is the same string
+  // for every actor, so all of them ride one container unconditionally.
+  //
+  // What survives is the grants question, and it is now decided by the actor's
+  // registered KIND. `actor_config` is `actor_id`-scoped in the one database and
+  // grants are only ever written to MAIN's rows, so a hosted actor reading its
+  // own found no grants and no mode and re-asked for consent the owner had
+  // already given on the workspace. Every agent in a workspace shares one
+  // container, so it must share that container's granted capabilities — or a
+  // subset, never a superset. `createInheritedApprovalPolicy` is that rule: the
+  // root's answers, intersected with any narrowing the hosted actor recorded for
+  // itself, and no `remember`, so it can never widen.
+  const isRootActor = actor.rootActor;
   const approvalPolicy: ShellApprovalPolicy = isRootActor
     ? {
       mode: () => memoryConfig.getShellApprovalMode(),
@@ -511,10 +580,23 @@ export function createCFRuntime(
   // reach foreign machines through this same object; state services above keep
   // `baseWorkspaceVfs`, because they must never snapshot or index foreign
   // bytes.
-  const agentFileVfs = withMountTable(
-    observedWorkspaceVfs,
-    standardMounts((name) => executionRouter.getProvider(name)),
-  );
+  // The agent's ONE file plane: the observed workspace tree, plus `/pc` for a
+  // connected device and `/sandbox` for the bound container resolved live from
+  // the router, plus this actor's own context plane when it is hosted. The
+  // context mount is LAST because it is the only entry that is per-actor: two
+  // actors share every other mount and never share this one.
+  const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
+  const plane = hooks.contextPlane;
+  if (plane) {
+    mounts.push(contextMount({
+      // The stores are a THUNK, read live at every file call: a plane outlives
+      // one turn, and a mount must not capture a store bound to an identity
+      // that has since been retired.
+      stores: () => ({ actorId: plane.actorId, claims: plane.claims(), events: plane.events() }),
+      children: plane.children,
+    }));
+  }
+  const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     // FALSE, with the bucket bound. `runtimeCatalog` declares that this
@@ -533,8 +615,6 @@ export function createCFRuntime(
       // sql is used by workspace.listTools() to read the crafted tools' EMA
       // quality columns.
       sql,
-      // Optional eager notification; the execute_tools sandbox live-reads CraftStore.
-      onToolRegistered: hooks.onToolRegistered,
       // Shares the native `file` tool's turn ledger/budget with workspace.*
       // (editFile's gate, readFile/writeFile's observe). The thunks are passed
       // unconditionally and read the supplied turn accumulator only when called.
@@ -620,7 +700,7 @@ export function createCFRuntime(
       // container's own affair and happens in KinuSandbox.onStart, inside the
       // blockConcurrencyWhile that no exec can jump ahead of. The predicate this
       // replaced ("only the container's owner may decide a restore") existed to
-      // stop a facet reading its own empty `agent_config` and latching the
+      // stop a facet reading its own empty `actor_config` and latching the
       // container as restored; with the state on the container's own object
       // there is one reader, one writer, and nothing to arbitrate.
       // The executor carries its own file view over this same handle, for the
@@ -745,16 +825,16 @@ export function createCFRuntime(
   }));
 
   const runtime: CFRuntime = {
-    storage: { vfs: agentFileVfs, sql, execRaw },
+    actor: actor.actor,
+    storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
     get advisorLlm() { return profileLane('advisor'); },
-    spawnBranch: createFacetSpawner(agent, env, actor),
-    abortBranch: createFacetAborter(agent),
-    releaseBranch: createFacetReleaser(agent),
+    spawnBranch: (branchId) => requireBranches(hooks).spawn(branchId),
+    abortBranch: (branchId) => requireBranches(hooks).abort(branchId),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,
@@ -1001,131 +1081,37 @@ function createRealSchedule(agent: AgentHost): Schedule {
 // ── Identity ─────────────────────────────────────────────────────
 
 function createIdentity(
-  agent: AgentHost,
-  ctx: DurableObjectState,
+  actor: ActorHandle,
   vfs: CoreVFS,
   sql: SqlExecutor,
   scaffoldPath: string,
 ): Identity {
   return {
-    id: ctx.id.toString(),
-    name: agent.name,
+    id: actor.actorId,
+    name: actor.name,
     // Core's ONE scaffold surface (scaffold/surface.ts): `.vN` files are the
     // canonical source, `scaffold_versions.status='current'` is the single
     // current pointer, and exists()/read() resolve POINTER-FIRST so a stale
     // live view is healed by the next activation instead of served.
-    scaffold: createScaffoldSurface({ vfs, sql, path: scaffoldPath }),
+    scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
   };
 }
 
-// ── MCTS branches via real Facets (spawn seam: facet-spawn.ts) ───
-
-function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
-  return async (branchId: string): Promise<BranchHandle> => {
-    try {
-      return await spawnBranchFacet(agent, branchId, {
-        ownerUserId: actor.ownerUserId(),
-        capabilityToken: actor.capabilityToken(),
-        // Without this a branch has no parent stub, so it cannot reach the
-        // profile that decides its tier — and `mcts` is `invocation`-routed, so
-        // every branch ran the account default at an effort nothing chose while
-        // the turn it belongs to may be on any tier its role selected. It grants
-        // no runtime: containment stays with the branch never calling
-        // `facetRuntime()`, which unit-exploration-containment.test.ts pins.
-        sharedParent: actor.workspaceName,
-      });
-    } catch (err) {
-      diagnostics.failure('mcts.branch_facet_spawn_failed', toKinuError({
-        doing: 'spawning a branch facet',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { branchId });
-      return createInlineBranch(agent, env);
-    }
-  };
-}
-
-function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<void> {
-  return async (branchId: string) => { abortExplorationFacet(agent, branchId); };
-}
+// ── MCTS branches as hosted logical actors (spawn seam: exploration-hosting.ts) ───
 
 /**
- * TERMINAL release, and the reason this is a separate factory from the aborter
- * above rather than a rename of it: `deleteSubAgent` WIPES the facet's SQLite,
- * which is charged to the ROOT DO's shared ~10 GB quota whose overflow is an
- * uncatchable reset. Merely aborting a branch leaves that database behind
- * forever, because branch ids are never reused.
+ * The branch seam, or a refusal that names what is missing.
  *
- * Safe to wipe only because the MCTS engine calls this in the terminal
- * `finally` of an iteration — strictly after that iteration's reflection has
- * already read the branch's own `traces` table. Anything earlier is data loss,
- * which is why mid-flight cancellation still goes through `createFacetAborter`.
- *
- * A branch that fell back to `createInlineBranch` has no facet at all, so
- * releasing one must be harmless: `ctx.facets.delete` does not raise for an
- * absent facet, and the catch below covers the remaining case anyway.
- *
- * Reported rather than thrown, and this is the one place in the module where
- * that is the LOUDER choice: `mcts/engine.ts` releases through
- * `Promise.allSettled`, which discards rejections, so throwing here would
- * produce silence at exactly the moment a database was stranded. A leaked facet
- * database spends the quota whose overflow resets the whole workspace.
+ * `AgentRuntime.spawnBranch`/`abortBranch` are not optional, so a runtime built
+ * without the hook cannot simply omit them. It refuses instead: a search that
+ * silently ran zero rollouts and one that could not reach its host are
+ * different facts, and only the second is worth a message.
  */
-function createFacetReleaser(agent: AgentHost): (branchId: string) => Promise<void> {
-  return async (branchId: string) => {
-    try {
-      await deleteExplorationFacet(agent, branchId);
-    } catch (err) {
-      diagnostics.failure('mcts.branch_facet_storage_leaked', toKinuError({
-        doing: "reclaiming a branch facet's storage",
-        cause: err,
-        otherwise: 'io',
-      }), { branchId });
-    }
-  };
+function requireBranches(hooks: CFRuntimeHooks): NonNullable<CFRuntimeHooks['branches']> {
+  const branches = hooks.branches;
+  if (!branches) {
+    throw new KinuError('missing', 'This actor runtime was built without a branch host, so it cannot run MCTS rollouts.');
+  }
+  return branches;
 }
 
-/**
- * Inline branch fallback — used when Facets are unavailable.
- *
- * Storage isolation (lean/Kinu/MCTS/StorageIsolation.lean: branch storage
- * disjoint from the orchestrator's) is enforced STRUCTURALLY by capturing only
- * the LLM config, never the agent reference or its storage. The closure has
- * no path to agent.sql or agent.ctx.storage.
- */
-function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
-  // Capture only env (not agent.sql / agent.ctx.storage) so the branch
-  // closure satisfies StorageIsolation. Stored credentials are not available
-  // here — with a null UserDO stub the registry's sync default skips the
-  // credential-gated workers-ai and uses the env-bound ai-gateway, which
-  // needs no credential reads.
-  const reg = createAgentProviderRegistry({
-    env,
-    userDO: null,
-    appTitle: 'Kinu (inline branch)',
-    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
-  });
-  const spec = reg.normalizeSpecSync(null);
-  // The same rollout every facet runs, at the rollout stage's effort for this
-  // model's own provider family; a fallback branch is scored beside a facet one.
-  const route = (): BranchRoute => {
-    const providerOptions = reasoningEffortOptions(
-      REASONING_EFFORT_FOR_STAGE.mcts_rollout, parseModelSpec(spec).provider,
-    );
-    const model = reg.resolveModel(spec);
-    return providerOptions ? { model, providerOptions } : { model };
-  };
-
-  return {
-    explore: (history, craftedTools, languages, mode, siblings = []) => exploreRollout(route(), {
-      mode,
-      context: formatInheritedContext(history),
-      craftedTools,
-      languages,
-      siblings,
-    }),
-    // No trace table on this path, so the attempt is empty and the shared
-    // prompt drops its heading.
-    generateReflection: (task, outcome) => reflectRollout(route(), { task, attempt: '', outcome }),
-  };
-}
