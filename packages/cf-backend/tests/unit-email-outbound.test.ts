@@ -12,7 +12,7 @@ import {
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver, createTestRuntime } from '@kinu.run/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
@@ -20,12 +20,12 @@ import {
 import { EmailOutbox } from '../src/email/outbox';
 import { sqlExec } from './helpers/user-do';
 
-function makeSql(): SqlExec {
-  return sqlExec(new Database(':memory:'));
+function makeExec(db: Database): SqlExec {
+  return sqlExec(db);
 }
 
 function freshOutbox(): EmailOutbox {
-  return new EmailOutbox(makeSql());
+  return new EmailOutbox(makeExec(new Database(':memory:')));
 }
 
 const SentEmailSchema = v.object({
@@ -63,17 +63,19 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
 
 describe('inbound email → turn → threaded reply (the full flow at the seams)', () => {
   function setup(sendOpts: { fail?: boolean } = {}) {
-    const sql = makeSql();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const db = new Database(':memory:');
+    const exec = makeExec(db);
+    initEventsHubTables(exec);
+    const actor = createTestActorsOver(db).main;
+    const log = new EventLog(exec, actor);
     const { binding, sent } = fakeSendBinding(sendOpts);
-    const outbox = new EmailOutbox(sql);
-    const replies = new ReplyChannelStore(sql, {
+    const outbox = new EmailOutbox(exec);
+    const replies = new ReplyChannelStore(exec, actor, {
       email_thread: createEmailThreadDispatcher(() => ({
         email: binding, agentDisplayName: 'Scout', outbox,
       })),
     });
-    return { sql, log, replies, sent };
+    return { sql: exec, log, replies, sent };
   }
 
   async function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {

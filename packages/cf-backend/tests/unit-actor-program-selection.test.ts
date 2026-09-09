@@ -1,12 +1,35 @@
+/**
+ * NOTE ON THE SHRUNK MATRIX. Every case here used to run twice, over
+ * `test.each(['orchestrator', 'subordinate'])`, because a subordinate was a
+ * SEPARATE Durable Object running its own copy of the turn machinery and "does
+ * the non-root kind do this too" was a real, open question.
+ *
+ * It is not open any more, and it is no longer this file's question. Every
+ * non-root actor is a logical actor whose turns run on one `ActorSession`
+ * through the shared runner, so the four non-root kinds are asserted together —
+ * with a STRONGER property than this matrix had — in
+ * `tests/unit-loop-contract.test.ts`: the pinned version is selected with the
+ * live alias POISONED, the claim records `program_version` and
+ * `program_digest`, and a promotion does not move a claim already admitted,
+ * for root, hired, temporary, head and node.
+ *
+ * What remains here is the ROOT's arm, and it remains because it is genuinely
+ * different machinery: the workspace root drives Think's own turn loop rather
+ * than an `ActorSession`, so nothing in the loop-contract suite covers it —
+ * and this file drives a scripted MODEL, so it is the one place the marker is
+ * proven to have actually RUN rather than to have been selected. Deleting this
+ * arm to "avoid duplication" would delete the only proof of the one path that
+ * is not shared, and the only end-to-end execution proof of any of them.
+ */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { orchestratorHarness } from './helpers/actor-harness';
 import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { TurnContext } from '@cloudflare/think';
 
-test.each(['orchestrator', 'subordinate'])('the real %s Think turn uses preselected versioned source, not the live alias', async kind => {
-  const harness = kind === 'orchestrator' ? orchestratorHarness() : subordinateHarness();
+test('the real Think turn uses preselected versioned source, not the live alias', async () => {
+  const harness = orchestratorHarness();
   const { agent, db } = harness;
   agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text: 'default inference' }], finishReason: { unified: 'stop', raw: undefined },
@@ -30,8 +53,8 @@ test.each(['orchestrator', 'subordinate'])('the real %s Think turn uses preselec
   expect(JSON.stringify(result.message)).not.toContain('wrong-live-alias');
 });
 
-test.each(['orchestrator', 'subordinate'])('the real %s cancelAllChats stops new selected-program effects and preserves its cause', async kind => {
-  const { agent, db } = kind === 'orchestrator' ? orchestratorHarness() : subordinateHarness();
+test('the real cancelAllChats stops new selected-program effects and preserves its cause', async () => {
+  const { agent, db } = orchestratorHarness();
   agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text: 'unused default' }], finishReason: { unified: 'stop', raw: undefined },
     usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },

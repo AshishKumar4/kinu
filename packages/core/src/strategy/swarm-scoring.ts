@@ -443,7 +443,7 @@ export async function scoreExpansion(input: {
       : null,
   };
   candidates.push(candidate);
-  recordSwarmNode(sql, {
+  recordSwarmNode(sql, rt.actor, {
     rootId,
     nodeId: expansion.id,
     record: {
@@ -454,7 +454,7 @@ export async function scoreExpansion(input: {
     },
     now: Date.now(),
   });
-  insertSearchNode(sql, {
+  insertSearchNode(sql, rt.actor, {
     nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
     task: resolved.task, action: '', observation: expansion.artifact,
     codeUsed: null, depth: expansion.depth, msgId: null,
@@ -495,10 +495,11 @@ export async function scoreExpansion(input: {
     searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
   }
   if (score !== null) {
-    backpropagate(sql, expansion.id, score);
+    backpropagate(sql, rt.actor, expansion.id, score);
   } else if (outcome && outcome.kind !== 'pareto') {
     const status = outcome.kind === 'sealed' ? 'terminal' : 'failed';
-    void sql`UPDATE search_nodes SET status = ${status} WHERE id = ${expansion.id}`;
+    void sql`UPDATE search_nodes SET status = ${status}
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
   }
   const rank = outcome?.kind === 'scored'
     ? outcome.measurement.value

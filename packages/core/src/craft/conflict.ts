@@ -81,7 +81,7 @@ export async function upsertCraftedTool(
 ): Promise<{ accepted: boolean; vetoReason?: string }> {
   const misevolution = checkMisevolution(candidate.code);
   if (!misevolution.ok) {
-    recordMisevolutionVeto(rt.storage.sql, {
+    recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'craft', violation: misevolution, detail: `extracted tool "${candidate.name}" rejected`,
     });
     return { accepted: false, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };

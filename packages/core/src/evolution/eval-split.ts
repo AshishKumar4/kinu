@@ -198,18 +198,23 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
   // rows where the backend keeps one, plain `messages` otherwise — the same
   // authority every other conversational reader answers from.
   //
-  // Only the `messages` arm carries the actor predicate. The pane store is
-  // created and written by the agents SDK and has no `actor_id` column, so a
-  // predicate there would match nothing.
+  // BOTH arms carry the actor predicate. The pane store used to be the agents
+  // SDK's own table with no `actor_id` column; the host owns that definition now
+  // (identity/fork.ts `ensurePaneTable`) and keys it `(actor_id, id)` for the
+  // same reason `messages` is keyed that way — a pane message id is minted per
+  // actor and the ancestry walk climbs `parent_id` to `id`.
   const rows = hasPaneStore(sql)
     ? sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
                turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
         FROM evolution_events e
-        JOIN assistant_messages turn ON turn.id = json_extract(e.data, '$.turnId')
-        JOIN assistant_messages ask ON ask.id = turn.parent_id
-        WHERE e.type = ${ADVISOR_EVENT_TYPE}
-          AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
+        JOIN assistant_messages turn ON turn.actor_id = ${actor.actorId}
+          AND turn.id = json_extract(e.data, '$.turnId')
+        JOIN assistant_messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
+        WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
+          AND NOT EXISTS (
+            SELECT 1 FROM turn_outcomes o
+            WHERE o.actor_id = ${actor.actorId} AND o.turn_id = turn.id)
         ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`.map(flattenAdvisorTexts)
     : sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
@@ -218,8 +223,10 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
         JOIN messages turn ON turn.actor_id = ${actor.actorId}
           AND turn.id = json_extract(e.data, '$.turnId')
         JOIN messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
-        WHERE e.type = ${ADVISOR_EVENT_TYPE}
-          AND NOT EXISTS (SELECT 1 FROM turn_outcomes o WHERE o.turn_id = turn.id)
+        WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
+          AND NOT EXISTS (
+            SELECT 1 FROM turn_outcomes o
+            WHERE o.actor_id = ${actor.actorId} AND o.turn_id = turn.id)
         ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
   return rows.map((row) => {
     const data = v.parse(AdvisorRowDataSchema, parseJsonValue(row.data));
@@ -313,8 +320,8 @@ function advisorDraw(row: AdvisorNegativeRow): EvalDraw {
  *  out, the split says so via `degeneracy` instead of quietly overlapping. */
 export function buildOutcomeEvalSplit(sql: SqlExecutor, actor: ActorHandle, budget: number): OutcomeEvalSplit {
   const size = Math.max(2, Math.floor(budget));
-  const ledgerNegatives = listTurnOutcomes(sql, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
-  const accepted = listTurnOutcomes(sql, { limit: size, outcomes: ['accepted'] });
+  const ledgerNegatives = listTurnOutcomes(sql, actor, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
+  const accepted = listTurnOutcomes(sql, actor, { limit: size, outcomes: ['accepted'] });
   // Enough to fill every negative slot the ledger cannot, before the clamps
   // below decide how many of those slots the final draw actually has.
   const advisorRows = advisorNegatives(sql, actor, size - ledgerNegatives.length);

@@ -15,11 +15,11 @@ import {
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
-function makeSql(): SqlExec {
-  return sqlExec(new Database(':memory:'));
+function makeExec(db: Database): SqlExec {
+  return sqlExec(db);
 }
 
 interface TestAgent {
@@ -71,11 +71,13 @@ function makeNetwork() {
   const network = new Map<string, TestAgent>();
 
   function addAgent(name: string, userId: string): TestAgent {
-    const sql = makeSql();
+    const db = new Database(':memory:');
+    const sql = makeExec(db);
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const actor = createTestActorsOver(db).main;
+    const log = new EventLog(sql, actor);
     const dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {};
-    const replyChannels = new ReplyChannelStore(sql, dispatchers);
+    const replyChannels = new ReplyChannelStore(sql, actor, dispatchers);
     const { vfs, files } = createMemoryVfs();
     let agent: TestAgent | null = null;
     const hub = new PeerHub({

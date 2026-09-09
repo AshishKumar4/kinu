@@ -62,12 +62,14 @@ function seedSearch(db: Database, actorId: string, run: {
   /** The ensemble a candidate was OBSERVED to sample, as the engine records it. */
   realised?: number;
 }): void {
+  // The tree is keyed `(actor_id, id)` like every other actor-private ledger,
+  // so the seed names the owner the canvas read below is scoped to.
   const insert = db.query(`INSERT INTO search_nodes
-    (id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
-    VALUES (?, ?, ?, ?, ?, '', ?, 1, 0.5, 'open', ?)`);
-  insert.run(run.rootId, null, run.rootId, run.task, '', 0, run.at);
+    (actor_id, id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, '', ?, 1, 0.5, 'open', ?)`);
+  insert.run(actorId, run.rootId, null, run.rootId, run.task, '', 0, run.at);
   for (let i = 0; i < run.nodes; i++) {
-    insert.run(`${run.rootId}-b${i}`, run.rootId, run.rootId, run.task, `branch ${i}`, 1, run.at + i + 1);
+    insert.run(actorId, `${run.rootId}-b${i}`, run.rootId, run.rootId, run.task, `branch ${i}`, 1, run.at + i + 1);
   }
   db.query(`INSERT INTO mcts_search_runs
     (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
@@ -367,8 +369,9 @@ describe('readExplorationCanvas', () => {
     seedSearch(db, actorId, { rootId: 'growing', task: 'still going', at: 1_000, nodes: 1 });
     seedSearch(db, actorId, { rootId: 'settled', task: 'done', at: 5_000, nodes: 1 });
     db.query(`INSERT INTO search_nodes
-      (id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
-      VALUES ('growing-late', 'growing', 'growing', 'still going', 'late', '', 1, 1, 0.5, 'open', 9_000)`).run();
+      (actor_id, id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
+      VALUES (?, 'growing-late', 'growing', 'growing', 'still going', 'late', '', 1, 1, 0.5, 'open', 9_000)`)
+      .run(actorId);
 
     const page = readExplorationCanvas(sql, actor, null, 1);
     expect(page.items.map((entry) => entry.run.id)).toEqual(['settled']);
@@ -429,7 +432,7 @@ describe('Pareto canvas evidence', () => {
       ['pareto-b1', { quality: 0.8, cost: 2 }],
       ['pareto-b2', { quality: 0.7, cost: 12 }],
     ] as const) {
-      recordSwarmNode(sql, {
+      recordSwarmNode(sql, actor, {
         rootId: 'pareto',
         nodeId,
         record: {

@@ -41,7 +41,7 @@ import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs"
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
-  isForeignAgentNamespacePath, directSubordinateRoute,
+  isForeignAgentNamespacePath, hostedActorRoute,
 } from "./agent-routing";
 import { handlePcRequest } from "./pc-handler";
 import { servePreviewRequest } from "./preview-proxy";
@@ -83,13 +83,14 @@ import {
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 
+// The ONE actor-bearing Durable Object class. Every logical actor in a
+// workspace — the main actor, a hired subordinate, an ask-by-role temporary, a
+// branching head, a swarm node, an MCTS rollout branch — is hosted by this one
+// object over its one SQLite. There is no second exported agent class and no
+// facet class: `SubordinateAgent` existed only to give a child its own
+// database, and with the database gone the class, its worker registration and
+// its migration-tag-free facet registration go with it.
 export { OrchestratorAgent } from "./orchestrator";
-// SubordinateAgent is the single Facet class for parallel sub-agent work.
-// Subordinate mode: the Think turn loop over delegated work. MCTS mode:
-// explore() / generateReflection() — short rollouts. Head mode: initHead() /
-// runAsHead() / abortHead() — multi-step branching heads. Node mode:
-// initNode() / runAsNode() — hosted swarm nodes.
-export { SubordinateAgent } from "./subordinate-agent";
 export { KinuSandbox } from "./kinu-sandbox";
 // The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
 // (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
@@ -123,9 +124,10 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 //   OrchestratorAgent carries the `OrchestratorAgent` durable_objects binding
 //     in wrangler.jsonc, the fabric's `hostNamespace`, and the `/agents/*`
 //     route.
-//   SubordinateAgent carries no binding and sits in no migration tag. It runs
-//     as a facet of an OrchestratorAgent through `ActorAgent.facetClass()`,
-//     resolved by name the same way.
+//   There is no facet class to register. Every actor is hosted by the
+//     OrchestratorAgent above, so nothing is resolved by class name beneath it
+//     and the SDK's recursive `/sub/{class}/{key}` router has nothing to reach
+//     (agent-routing.ts refuses that segment on the public transport).
 //   KinuSandbox carries the `KinuSandbox` durable_objects binding (bound as
 //     `Sandbox`) and the `containers` entry of the same class.
 //   CodemodeEgress carries the loopback stub `codemodeEgress()` hands to
@@ -622,7 +624,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
     // binding by slug, and its facet router recursively resolves literal
     // /sub/{class}/{name} segments. The closed-path rejection above keeps
-    // UserDO, KinuSandbox and the facet class worker-side-only.
+    // UserDO and KinuSandbox worker-side-only, and now refuses the `sub`
+    // segment outright: there is no facet class left for it to resolve.
     const denial = await ensureAgentOwnership(env, identity, agentName);
     if (denial) return denial;
     // Now the path's workspace name is evidence: this account has been shown to
@@ -650,17 +653,19 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // 1 MiB frame ceiling, and PTY bytes are neither.
     const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
     if (terminalResp) return terminalResp;
-    let routedRequest = reqWithId;
-    const subordinate = directSubordinateRoute(url.pathname);
-    if (subordinate) {
+    // A hosted actor's chat is checked here and routed UNCHANGED. The old shape
+    // rewrote the path — substituting the facet's physical storage key into the
+    // SDK's `/sub/{class}/{key}` hop — because the target was a different
+    // Durable Object. It is the same object now, so the only thing left to do
+    // before handing the request over is refuse a name this workspace does not
+    // host, which keeps a 404/403 at the edge instead of inside the actor.
+    const hosted = hostedActorRoute(url.pathname);
+    if (hosted) {
       const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
-      const target = await root.resolveSubordinateClientKey(subordinate.name);
+      const target = await root.resolveHostedActorRoute(hosted.name);
       if ('reason' in target) return Response.json(target, { status: target.reason === 'missing' ? 404 : target.reason === 'denied' ? 403 : 500 });
-      const targetUrl = new URL(reqWithId.url);
-      targetUrl.pathname = `${subordinate.prefix}${encodeURIComponent(target.storageKey)}${subordinate.suffix}`;
-      routedRequest = new Request(targetUrl, reqWithId);
     }
-    const agentResp = await routeAgentRequest(routedRequest, env);
+    const agentResp = await routeAgentRequest(reqWithId, env);
     if (agentResp) return agentResp;
   }
 

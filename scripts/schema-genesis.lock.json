@@ -1,5 +1,6 @@
 {
   "activity_log@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "event",
     "detail",
@@ -23,15 +24,6 @@
     "step_index",
     "recorded_at"
   ],
-  "actor_identity@packages/core/src/state/facet-identity.ts": [
-    "id",
-    "user_id",
-    "capability_token",
-    "parent_workspace",
-    "actor_reference",
-    "logical_name",
-    "storage_key"
-  ],
   "actor_program_state@packages/core/src/tools/state-codemode.ts": [
     "actor_id",
     "key",
@@ -39,6 +31,7 @@
     "updated_at"
   ],
   "actor_subordinates@packages/core/src/subordinates/roster.ts": [
+    "actor_id",
     "name",
     "created_by",
     "status",
@@ -97,6 +90,7 @@
     "last_observed_at"
   ],
   "agent_log@packages/core/src/events/hub/schema.ts": [
+    "actor_id",
     "id",
     "kind",
     "turn_id",
@@ -125,6 +119,7 @@
     "updated_at"
   ],
   "alternate_takes@packages/core/src/mcts/takes.ts": [
+    "actor_id",
     "id",
     "turn_id",
     "session_id",
@@ -138,6 +133,7 @@
     "picked_at"
   ],
   "assistant_messages@packages/core/src/identity/fork.ts": [
+    "actor_id",
     "id",
     "session_id",
     "parent_id",
@@ -205,6 +201,7 @@
     "force_compaction"
   ],
   "completed_turns@packages/core/src/evolution/session-window.ts": [
+    "actor_id",
     "id",
     "turn",
     "followup",
@@ -271,6 +268,7 @@
     "last_used_at"
   ],
   "deferred_approvals@packages/core/src/safety/deferred-approval.ts": [
+    "actor_id",
     "id",
     "command",
     "executor",
@@ -312,11 +310,13 @@
     "kind"
   ],
   "effect_tombstones@packages/core/src/identity/effect-tombstones.ts": [
+    "actor_id",
     "scope",
     "key",
     "recorded_at"
   ],
   "evolution_events@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "type",
     "message",
@@ -324,6 +324,7 @@
     "created_at"
   ],
   "executor_output@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "executor",
     "command",
@@ -344,6 +345,7 @@
     "published_at"
   ],
   "exploration_records@packages/core/src/strategy/records.ts": [
+    "actor_id",
     "record_key",
     "objective_id",
     "floor_digest",
@@ -371,21 +373,8 @@
     "scale",
     "verifier_digest"
   ],
-  "facet_activation@packages/cf-backend/src/facet-activation.ts": [
-    "id",
-    "payload"
-  ],
-  "facet_model_operation_outbox@packages/cf-backend/src/subordinate-agent.ts": [
-    "id",
-    "event_json"
-  ],
-  "fibers@packages/cli-backend/src/fiber.ts": [
-    "id",
-    "name",
-    "snapshot",
-    "created_at"
-  ],
   "fibers@packages/core/src/identity/schema.ts": [
+    "actor_id",
     "id",
     "name",
     "snapshot",
@@ -432,6 +421,7 @@
     "published"
   ],
   "gepa_candidates@packages/core/src/evolution/gepa/persistence.ts": [
+    "actor_id",
     "id",
     "run_id",
     "parent_id",
@@ -444,6 +434,7 @@
     "accepted"
   ],
   "gepa_runs@packages/core/src/evolution/gepa/persistence.ts": [
+    "actor_id",
     "run_id",
     "target",
     "target_ref",
@@ -526,6 +517,7 @@
     "created_at"
   ],
   "imported_experience@packages/core/src/experience/imports.ts": [
+    "actor_id",
     "id",
     "library_id",
     "kind",
@@ -540,15 +532,18 @@
     "corroborated_at"
   ],
   "instruction_approval_migrations@packages/core/src/safety/instruction-trust.ts": [
+    "actor_id",
     "scope"
   ],
   "instruction_approvals@packages/core/src/safety/instruction-trust.ts": [
+    "actor_id",
     "scope",
     "path",
     "digest",
     "decision"
   ],
   "lessons@packages/core/src/evolution/outcomes.ts": [
+    "actor_id",
     "id",
     "turn_ids",
     "text",
@@ -592,6 +587,7 @@
     "created_at"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
+    "actor_id",
     "label",
     "parent_label",
     "limit_usd",
@@ -613,6 +609,7 @@
     "seen_at"
   ],
   "outcome_ensemble_labels@packages/core/src/evolution/outcomes.ts": [
+    "actor_id",
     "id",
     "outcome_id",
     "model",
@@ -620,6 +617,7 @@
     "created_at"
   ],
   "outcome_labels@packages/core/src/evolution/outcomes.ts": [
+    "actor_id",
     "id",
     "outcome_id",
     "label",
@@ -627,18 +625,21 @@
     "created_at"
   ],
   "pattern_extractions@packages/core/src/evolution/outcomes.ts": [
+    "actor_id",
     "effect_key",
     "answer",
     "created_at"
   ],
   "pending_steers@packages/cf-backend/src/actor-agent.ts": [
     "seq",
+    "actor_id",
     "id",
     "turn_id",
     "mode",
     "text"
   ],
   "plan_reviews@packages/core/src/plans/review.ts": [
+    "actor_id",
     "id",
     "session_id",
     "revision",
@@ -660,6 +661,7 @@
     "session_id"
   ],
   "prompt_section_evaluations@packages/core/src/prompting/section-store.ts": [
+    "actor_id",
     "id",
     "section_id",
     "pending_version",
@@ -671,6 +673,7 @@
     "evaluated_at"
   ],
   "prompt_section_versions@packages/core/src/prompting/section-store.ts": [
+    "actor_id",
     "section_id",
     "version",
     "source",
@@ -680,6 +683,7 @@
     "written_at"
   ],
   "proposed_tasks@packages/core/src/curriculum/proposer.ts": [
+    "actor_id",
     "id",
     "task",
     "rationale",
@@ -689,6 +693,7 @@
     "status"
   ],
   "refinement_requests@packages/core/src/evolution/refinement.ts": [
+    "actor_id",
     "id",
     "trigger",
     "scope",
@@ -760,6 +765,7 @@
     "updated_at"
   ],
   "replay_evals@packages/core/src/evolution/replay.ts": [
+    "actor_id",
     "id",
     "ran_at",
     "sample_size",
@@ -773,6 +779,7 @@
     "score_hi"
   ],
   "reply_channels@packages/core/src/events/hub/schema.ts": [
+    "actor_id",
     "id",
     "event_id",
     "kind",
@@ -841,6 +848,7 @@
     "pathology"
   ],
   "search_nodes@packages/core/src/mcts/schemas.ts": [
+    "actor_id",
     "id",
     "parent_id",
     "root_id",
@@ -945,6 +953,7 @@
     "created_at"
   ],
   "subordinate_identity@packages/core/src/subordinates/support.ts": [
+    "actor_id",
     "id",
     "name",
     "mission",
@@ -956,6 +965,7 @@
     "gid"
   ],
   "swarm_node_records@packages/core/src/strategy/swarm-resume.ts": [
+    "actor_id",
     "node_id",
     "root_id",
     "record_json",
@@ -972,6 +982,7 @@
     "created_at"
   ],
   "terminal_effects@packages/core/src/orchestrator/terminal-effects.ts": [
+    "actor_id",
     "sequence_id",
     "effect_key",
     "effect_name",
@@ -993,22 +1004,14 @@
     "recorded_at"
   ],
   "tool_effect_claims@packages/core/src/tools/effect-claim.ts": [
+    "actor_id",
     "turn_id",
     "normalized_call_id",
     "call_digest",
     "result_json"
   ],
-  "traces@packages/cf-backend/src/subordinate-agent.ts": [
-    "id",
-    "step",
-    "text"
-  ],
-  "traces@packages/cli-backend/src/branch-worker.ts": [
-    "id",
-    "step",
-    "text"
-  ],
   "triggers@packages/core/src/events/hub/schema.ts": [
+    "actor_id",
     "id",
     "kind",
     "spec",
@@ -1024,16 +1027,19 @@
     "fire_count"
   ],
   "turn_craft_usage@packages/cf-backend/src/orchestrator.ts": [
+    "actor_id",
     "message_id",
     "tool_names",
     "created_at"
   ],
   "turn_feedback@packages/cf-backend/src/orchestrator.ts": [
+    "actor_id",
     "message_id",
     "feedback",
     "created_at"
   ],
   "turn_outcomes@packages/core/src/evolution/outcomes.ts": [
+    "actor_id",
     "id",
     "turn_id",
     "session_id",
@@ -1173,6 +1179,7 @@
     "fork_lease_expires_at"
   ],
   "vfs_baseline@packages/core/src/read-models/workspace-diff.ts": [
+    "actor_id",
     "generation",
     "path",
     "content",

@@ -80,11 +80,12 @@ export function scoreExploration(sql: SqlExecutor, actor: ActorHandle, limit = 1
   const runs = searched.map<SearchRunScore>((run) => {
     const terminal = sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
-      WHERE root_id = ${run.id} AND status = 'terminal'`[0]?.n ?? 0;
+      WHERE actor_id = ${actor.actorId} AND root_id = ${run.id} AND status = 'terminal'`[0]?.n ?? 0;
     const take = sql<{ winner_node_id: string }>`
       SELECT t.winner_node_id FROM alternate_takes t
       JOIN search_nodes n ON n.id = t.winner_node_id
-      WHERE n.root_id = ${run.id}`[0];
+      WHERE n.actor_id = ${actor.actorId} AND t.actor_id = ${actor.actorId}
+        AND n.root_id = ${run.id}`[0];
     return {
       id: run.id,
       branches: run.branches,
@@ -187,7 +188,8 @@ export function scoreSettleVisibility(
       present: treePresent,
       roots: !treePresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM search_nodes
-        WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
+        WHERE actor_id = ${actor.actorId}
+          AND root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
   ];
 

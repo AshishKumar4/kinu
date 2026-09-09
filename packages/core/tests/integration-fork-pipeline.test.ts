@@ -43,8 +43,8 @@ async function seedSource(src: TestWorkspace) {
     void src.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
               ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${''}, ${m.parent}, ${m.role},
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${''}, ${m.parent}, ${m.role},
               ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
               ${m.at})`;
   }

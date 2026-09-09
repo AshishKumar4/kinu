@@ -15,6 +15,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { BackgroundJobStore } from '../jobs/store';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { Usage } from '../usage';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
@@ -137,6 +138,10 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
 
 export interface RunTimelineDeps {
   readonly sql: SqlExecutor;
+  /** Whose timeline. The evolution stream and the search tree below are
+   *  per-actor, exactly as `run_events` already is — a bare read would let a
+   *  sibling sharing the database contribute spans to this actor's timeline. */
+  readonly actor: ActorHandle;
   readonly events: RunEventRecorder;
   readonly jobs: BackgroundJobStore;
   /** The in-flight run, when a turn is running — the default focus. */
@@ -193,7 +198,8 @@ export function getRunTimeline(
   }
   // 2) Agent-level evolution events — PRESERVE the `data` payload.
   const evolutionRows = deps.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
-    SELECT id, type, message, data, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
+    SELECT id, type, message, data, created_at FROM evolution_events
+    WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
   for (const r of evolutionRows) {
     spans.push({
       ts: r.created_at, kind: classifyEvolutionType(r.type), label: r.message || r.type,
@@ -203,7 +209,8 @@ export function getRunTimeline(
   }
   // 3) MCTS search nodes.
   const nodes = deps.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
-    SELECT id, action, value, status, created_at FROM search_nodes ORDER BY created_at DESC LIMIT ${limit}`;
+    SELECT id, action, value, status, created_at FROM search_nodes
+    WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
   for (const n of nodes) {
     spans.push({
       ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,

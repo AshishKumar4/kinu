@@ -105,12 +105,12 @@ describe('the merged timeline is closed against every caller value', () => {
     const { recorder, sql, actor } = seededRuns(1);
     for (let i = 0; i < runs; i++) {
       recorder.emit('run-0000', { type: 'error', message: `e${i}` });
-      void sql`INSERT INTO evolution_events (id, type, message, created_at)
-        VALUES (${`ev-${i}`}, ${'note'}, ${`m${i}`}, ${1000 + i})`;
+      void sql`INSERT INTO evolution_events (actor_id, id, type, message, created_at)
+        VALUES (${actor.actorId}, ${`ev-${i}`}, ${'note'}, ${`m${i}`}, ${1000 + i})`;
     }
     return {
       deps: {
-        sql, events: recorder, jobs: new BackgroundJobStore(sql, actor), currentRunId: 'run-0000',
+        sql, actor, events: recorder, jobs: new BackgroundJobStore(sql, actor), currentRunId: 'run-0000',
       },
       recorder,
     };

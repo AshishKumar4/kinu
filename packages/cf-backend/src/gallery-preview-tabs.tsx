@@ -15,7 +15,7 @@ const ROOT_PLAN: PlanReview = { id: 'plan-dashboard', sessionId: 'default', revi
  *  for — no amount of "Older plans / more actors" reaches this one. */
 const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', revision: 3, content: '# Courier rollout\n\nStage the rollout and verify the receipt.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 30, updatedAt: 30, decidedAt: null };
 /** The reference that arrival carries, built THROUGH the wire schema — as
- *  `subordinate-agent` builds the one it really broadcasts. A fixture literal
+ *  the hosted subordinate rung builds the one it really broadcasts. A fixture literal
  *  that drifted from the contract would reach the hook as a frame it drops,
  *  and the gate would see that as a timeout somewhere further on. */
 const ARRIVAL_REFERENCE = v.parse(WorkspacePlanReferenceSchema, {

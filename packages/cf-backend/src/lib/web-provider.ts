@@ -2,8 +2,8 @@
  * The one cf-side construction of the shared web-search/fetch provider
  * (core web/provider.ts): Worker global fetch + optional owner-scoped auth
  * (Tavily upgrade) + env.AI.toMarkdown as the HTML→markdown override.
- * OrchestratorAgent and SubordinateAgent both build through here so the
- * wiring cannot drift between them.
+ * Every actor builds its web-search provider through here — the main actor and
+ * every hosted actor alike — so the wiring cannot drift between them.
  */
 
 import {

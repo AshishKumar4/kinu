@@ -225,10 +225,10 @@ const SHARED_TRANSPORTS = {
   makeScaffoldLLMStream: 'createScaffoldLLMStream',
   markChangelogSeen: 'markChangelogSeen',
   pickAlternateTake: 'pickAlternateTake',
-  // Core builds the durable steer rows (fallback id + both metadata keys,
-  // inseparable); what stays per backend is transport — DO messages vs SQLite
-  // rows — and each side's own broadcast channel.
-  recordLandedSteers: 'describeLandedSteers',
+  // `recordLandedSteers` was here while a cf actor class and the CLI session
+  // both transported core's `describeLandedSteers`. The facet cutover left it a
+  // private method on ActorAgent alone, so it is neither a twin nor a
+  // two-sided transport any more — removed, not hoisted.
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
   requestRefinement: 'requestRefinement',
@@ -269,7 +269,6 @@ const SHARED_TRANSPORTS = {
 const CF_CLASSES = [
   ['packages/cf-backend/src/actor-agent.ts', 'ActorAgent'],
   ['packages/cf-backend/src/orchestrator.ts', 'OrchestratorAgent'],
-  ['packages/cf-backend/src/subordinate-agent.ts', 'SubordinateAgent'],
 ] as const;
 const CLI_CLASS = ['packages/cli-backend/src/local-session.ts', 'LocalAgentSession'] as const;
 

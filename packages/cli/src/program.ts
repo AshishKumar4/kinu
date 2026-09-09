@@ -31,6 +31,7 @@ import {
   mctsCommand,
   memoryCommand,
   releaseCommand,
+  actorsCommand,
   stateCommand,
   spendCommand,
   stopCommand,
@@ -330,6 +331,13 @@ export function buildProgram(): Command {
       .description('List or cancel background jobs')
       .option('--json', 'Print raw JSON'),
   ).action(wrapAction(jobsCommand));
+
+  program
+    .command('actors <name> [actorId]')
+    .helpGroup(INSPECT)
+    .description('List every logical actor this workspace holds, or show one by id')
+    .option('--json', 'Print raw JSON')
+    .action(wrapAction(actorsCommand));
 
   program
     .command('state <name>')

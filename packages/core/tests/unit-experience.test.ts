@@ -96,8 +96,19 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   db.exec(`CREATE TABLE IF NOT EXISTS evolution_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
+  // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
+  // leads the key because `messages` is keyed `(actor_id, id)`, so two actors'
+  // turns really do present the same message id — and a bare `message_id`
+  // primary key let one actor's thumbs overwrite a sibling's through the
+  // writer's ON CONFLICT. A fixture on the old shape would take the reader's
+  // `actor_id` predicate down with `no such column`.
   db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
-    message_id TEXT PRIMARY KEY, feedback TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+    actor_id   TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, message_id)
+  )`);
 
   const facts = createFactsStore(rt.storage.sql, rt.actor);
   // The seam the cloud backend implements over the UserDO capability gate: a
@@ -180,7 +191,7 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
 /** Graded turns the live version served — the probation the publish bar reads. */
 function serveGradedTurns(ws: Workspace, version: number, count: number, from = Date.now()): void {
   for (let i = 0; i < count; i++) {
-    recordTurnOutcome(ws.rt.storage.sql, {
+    recordTurnOutcome(ws.rt.storage.sql, ws.rt.actor, {
       turnId: `served-v${version}-${i}`, outcome: 'accepted', confidence: 1,
       source: 'classifier', userMessage: 'ship the thing', assistantResponse: 'shipped',
       scaffoldVersion: version, now: from + i,
@@ -190,8 +201,8 @@ function serveGradedTurns(ws: Workspace, version: number, count: number, from = 
 
 /** Grade a turn the way an explicit thumbs does — no LLM in the loop. */
 async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | 'negative'): Promise<void> {
-  void ws.rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
-    VALUES (${turnId}, ${feedback}, ${Date.now()})`;
+  void ws.rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
+    VALUES (${ws.rt.actor.actorId}, ${turnId}, ${feedback}, ${Date.now()})`;
   await ws.engine.reviewTurn({
     turnId,
     sessionId: 'default',
@@ -206,7 +217,7 @@ async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | '
 }
 
 async function importedRows(ws: Workspace) {
-  return listImportedExperience(ws.rt.storage.sql);
+  return listImportedExperience(ws.rt.storage.sql, ws.rt.actor);
 }
 
 // ── what a workspace has earned the right to share ──────────────────────────
@@ -229,7 +240,7 @@ describe('publishing is gated on local evidence', () => {
   test('a provisional lesson is refused; corroborating it makes it shareable', async () => {
     const ws = workspace('alpha', ownerLibrary());
     const sources = publishSources(ws);
-    const provisional = recordLesson(ws.rt.storage.sql, {
+    const provisional = recordLesson(ws.rt.storage.sql, ws.rt.actor, {
       turnIds: ['t1'], text: 'Check the build before claiming success.', source: 'turn_reflection', status: 'provisional',
     });
     expect(await findPublishable(sources, 'lesson', provisional)).toEqual({
@@ -237,7 +248,7 @@ describe('publishing is gated on local evidence', () => {
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
     });
 
-    const corroborated = recordLesson(ws.rt.storage.sql, {
+    const corroborated = recordLesson(ws.rt.storage.sql, ws.rt.actor, {
       turnIds: ['t2'], text: 'Wrangler needs the account id in CI.', source: 'session_reflection', status: 'corroborated',
     });
     const candidate = await findPublishable(sources, 'lesson', corroborated);
@@ -263,7 +274,7 @@ describe('publishing is gated on local evidence', () => {
     proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
     ws.facts.upsert('deploy.target', 'kinu.workers.dev', { confidence: 1 });
-    recordLesson(ws.rt.storage.sql, {
+    recordLesson(ws.rt.storage.sql, ws.rt.actor, {
       turnIds: [], text: 'provisional prose', source: 'turn_reflection', status: 'provisional',
     });
 
@@ -462,7 +473,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     });
     // The lesson's real home is the corroborated lessons ledger, not a
     // MEMORY.md copy.
-    expect(listLessons(beta.rt.storage.sql, { status: 'corroborated' })
+    expect(listLessons(beta.rt.storage.sql, beta.rt.actor, { status: 'corroborated' })
       .some(l => l.text.includes('Read the error before rerunning.'))).toBe(true);
 
     const rows = await importedRows(beta);
@@ -630,8 +641,8 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     // check. The window runs from the first served turn through now, so it
     // still counts.
     const vetoAt = first + DEFAULT_SHADOW_CONFIG.minTrials + 5000;
-    void alpha.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
-      VALUES ('misevolution_veto', 'Misevolution veto (test)', ${JSON.stringify({ surface: 'scaffold' })}, ${vetoAt})`;
+    void alpha.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
+      VALUES (${alpha.rt.actor.actorId}, 'misevolution_veto', 'Misevolution veto (test)', ${JSON.stringify({ surface: 'scaffold' })}, ${vetoAt})`;
     const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version), vetoAt + 1000);
     expect('refused' in refused && refused.refused).toBe(
       `scaffold v1 drew 1 misevolution veto during its ${DEFAULT_SHADOW_CONFIG.minTrials}-turn `
@@ -645,8 +656,8 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
     const version = await promoteScaffold(alpha, scaffoldSrc('v1'));
     const first = 1_700_000_000_000;
     serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials, first);
-    void alpha.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
-      VALUES ('misevolution_veto', 'Misevolution veto (test)', ${'not-json'}, ${first + 1})`;
+    void alpha.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
+      VALUES (${alpha.rt.actor.actorId}, 'misevolution_veto', 'Misevolution veto (test)', ${'not-json'}, ${first + 1})`;
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
     try {
@@ -892,22 +903,22 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     const beta = workspace('beta', ownerLibrary());
     const goodPayload = JSON.stringify({ kind: 'lesson', text: 'Read the error before rerunning.' });
     void beta.rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+      (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        status, turn_ids, imported_at, corroborated_at)
-      VALUES ('imp-good', 'exp-good', 'lesson', 'k1', 't1', ${goodPayload}, 'e', 'alpha', 'provisional', '[]', 1, NULL)`;
+      VALUES (${beta.rt.actor.actorId}, 'imp-good', 'exp-good', 'lesson', 'k1', 't1', ${goodPayload}, 'e', 'alpha', 'provisional', '[]', 1, NULL)`;
     void beta.rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+      (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        status, turn_ids, imported_at, corroborated_at)
-      VALUES ('imp-bad-json', 'exp-bad-json', 'lesson', 'k2', 't2', ${goodPayload}, 'e', 'alpha', 'provisional', 'not-json{{{', 2, NULL)`;
+      VALUES (${beta.rt.actor.actorId}, 'imp-bad-json', 'exp-bad-json', 'lesson', 'k2', 't2', ${goodPayload}, 'e', 'alpha', 'provisional', 'not-json{{{', 2, NULL)`;
     void beta.rt.storage.sql`INSERT INTO imported_experience
-      (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
+      (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        status, turn_ids, imported_at, corroborated_at)
-      VALUES ('imp-bad-shape', 'exp-bad-shape', 'lesson', 'k3', 't3', ${goodPayload}, 'e', 'alpha', 'provisional', '[123]', 3, NULL)`;
+      VALUES (${beta.rt.actor.actorId}, 'imp-bad-shape', 'exp-bad-shape', 'lesson', 'k3', 't3', ${goodPayload}, 'e', 'alpha', 'provisional', '[123]', 3, NULL)`;
 
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
     try {
-      expect(listImportedExperience(beta.rt.storage.sql).map((row) => row.id)).toEqual(['imp-good']);
+      expect(listImportedExperience(beta.rt.storage.sql, beta.rt.actor).map((row) => row.id)).toEqual(['imp-good']);
       expect(log.emitted.map((line) => line.event)).toContain('experience.import_row_unreadable');
     } finally {
       restore();
@@ -943,7 +954,7 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
     await gradeTurn(beta, 'turn-1', 'positive');
 
-    const adopted = listLessons(beta.rt.storage.sql, { status: 'corroborated' })
+    const adopted = listLessons(beta.rt.storage.sql, beta.rt.actor, { status: 'corroborated' })
       .find((lesson) => lesson.text.includes('Read the error before rerunning.'));
     if (!adopted) throw new Error('the imported lesson was not adopted');
     expect(adopted.turnIds).toContain('turn-1');

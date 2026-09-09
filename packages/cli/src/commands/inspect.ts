@@ -22,7 +22,9 @@ import {
   getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
+  getLocalActorInfo,
   getLocalReleaseBoard,
+  listLocalActors,
   listLocalEvents,
   listLocalExecutors,
   listLocalGepaRuns,
@@ -114,6 +116,44 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
   }
   if (cancelled.length > 0) console.log(`${OK('cancelled')} ${plural(cancelled.length, 'background job')}`);
   console.log(`${WARN('local foreground turns are process-local')} use Ctrl+C in the terminal running that turn.`);
+}
+
+/**
+ * Every logical actor this workspace holds, and optionally what ONE of them did.
+ *
+ * The terminal's half of owner inspection. A workspace is one database holding
+ * N actors — the main agent, its hires, its heads, its swarm nodes — so "which
+ * agents are in here" is a question with an answer for the first time, and a
+ * dismissed hire's rows are still part of it. Retired actors are listed by
+ * default and flagged, because their history is retained on purpose and a
+ * lister that hid them would report the workspace as smaller than its archive.
+ *
+ * NOTHING IS STARTED. Both reads go through the directory row and `actor_id`,
+ * never through a handle or a session, which is what makes inspecting a retired
+ * actor possible at all — it has no handle left to issue.
+ *
+ * LOCAL ONLY, stated rather than faked: the cloud workspace answers this
+ * through its own authorized inspection surface in the web UI, and there is no
+ * RPC on the deployment that returns the actor directory. A cloud target is
+ * refused with that reason instead of being shown an empty list.
+ */
+// `async` for `wrapAction`'s contract, not for any awaited work: both reads are
+// synchronous because neither opens an actor.
+export async function actorsCommand(name: string, actorId?: string, opts: InspectOpts = {}): Promise<void> {
+  const target = resolveAgentTarget(name);
+  if (target.mode === 'cloud') {
+    throw new Error(
+      'kinu actors reads the local workspace database directly; the deployment exposes no actor-directory RPC. '
+      + 'Use the web workspace view for a cloud agent.',
+    );
+  }
+  if (actorId !== undefined) {
+    const info = getLocalActorInfo(target.localName, actorId);
+    if (!info) throw new Error(`No actor ${actorId} was ever issued in workspace ${target.name}.`);
+    printData(decodeJsonValue({ value: info }), opts);
+    return;
+  }
+  printData(decodeJsonValue({ value: listLocalActors(target.localName) }), opts);
 }
 
 export async function stateCommand(name: string, opts: InspectOpts = {}): Promise<void> {

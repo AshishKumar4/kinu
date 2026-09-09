@@ -17,11 +17,11 @@ import {
 import {
   routeInboundEmail, type EmailDeliveryTarget,
 } from '../src/email/route';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
-function makeSql(): SqlExec {
-  return sqlExec(new Database(':memory:'));
+function makeExec(db: Database): SqlExec {
+  return sqlExec(db);
 }
 
 const DOMAIN = 'agents.example.com';
@@ -37,10 +37,12 @@ function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
 }
 
 function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
-  const sql = makeSql();
-  initEventsHubTables(sql);
-  const log = new EventLog(sql);
-  const replies = new ReplyChannelStore(sql, {});
+  const db = new Database(':memory:');
+  const exec = makeExec(db);
+  initEventsHubTables(exec);
+  const actor = createTestActorsOver(db).main;
+  const log = new EventLog(exec, actor);
+  const replies = new ReplyChannelStore(exec, actor, {});
   const { vfs, files } = createMemoryVfs();
   const deps: EmailIngressDeps = {
     log, replies,
@@ -50,7 +52,7 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
     vfs,
     ...overrides,
   };
-  return { deps, log, replies, sql, files };
+  return { deps, log, replies, sql: exec, files };
 }
 
 function incoming(overrides: Partial<IncomingEmail> = {}): IncomingEmail {

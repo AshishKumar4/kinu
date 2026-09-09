@@ -28,7 +28,7 @@ import {
   MERGE_POLICY_BINDING, MERGE_POLICY_SPEND_SOURCE, mergePolicyProfile,
 } from '@kinu.run/test-utils';
 import { createHeadRuntime } from '../src/head-runtime';
-import type { FacetHost } from '../src/facet-spawn';
+import type { ExplorationHostSeams } from '../src/exploration-hosting';
 
 /** A scripted merge model: valid JSON unless the test says otherwise. Every
  *  call's options are handed back so a suite can read the REQUEST this backend
@@ -53,15 +53,39 @@ function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLan
 const GOOD_MERGE =
   '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}';
 
-/** The spawn substrate, fail-loud: mergeLLM must never reach it, so any touch
- *  is a wiring regression this suite wants named, not absorbed. */
-const neverHost: FacetHost = {
-  actorDirectory() { throw new Error('mergeLLM reached actor registration'); },
-  facetClass() { throw new Error('mergeLLM reached the spawn substrate'); },
-  facetHomes() { throw new Error('mergeLLM reached the spawn substrate'); },
-  subAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
-  abortSubAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
-  deleteSubAgent() { throw new Error('mergeLLM reached the spawn substrate'); },
+/**
+ * The exploration substrate, fail-loud: `mergeLLM` must never reach it, so any
+ * touch is a wiring regression this suite wants named, not absorbed.
+ *
+ * Every member refuses, the `host` included — a hosted head is acquired from
+ * the workspace's one `ActorHost` now, so "the spawn substrate" is that host
+ * plus the seams a run reads around it rather than a facet class and an
+ * identity thunk. A member that answered would let a merge quietly acquire an
+ * actor while this suite stayed green.
+ */
+const neverHost: ExplorationHostSeams = {
+  host: {
+    acquire() { throw new Error('mergeLLM acquired a hosted actor'); },
+    hosted() { throw new Error('mergeLLM read the hosted actor set'); },
+    describe() { throw new Error('mergeLLM read the actor directory'); },
+    bindStores() { throw new Error("mergeLLM bound an actor's stores"); },
+    list() { throw new Error('mergeLLM listed the hosted actors'); },
+    run() { throw new Error('mergeLLM ran work as a hosted actor'); },
+    release() { throw new Error('mergeLLM released a hosted actor'); },
+    releaseAll() { throw new Error('mergeLLM released every hosted actor'); },
+    retire() { throw new Error('mergeLLM retired a hosted actor'); },
+    resumable() { throw new Error('mergeLLM read the resumable claims'); },
+  },
+  register() { throw new Error('mergeLLM reached actor registration'); },
+  profile() { throw new Error('mergeLLM resolved an exploration profile'); },
+  resolveModel() { throw new Error('mergeLLM resolved a model through the seams'); },
+  webSearch() { throw new Error('mergeLLM reached the web search provider'); },
+  nodeHome() { throw new Error('mergeLLM provisioned a node home'); },
+  executeTool() { throw new Error('mergeLLM built an execute_tools surface'); },
+  recordStep() { throw new Error('mergeLLM recorded a head step'); },
+  publishDelta() { throw new Error('mergeLLM published a head stream frame'); },
+  mission() { throw new Error('mergeLLM read the mission ledger'); },
+  split() { throw new Error('mergeLLM reached the recursive split'); },
 };
 
 function runtimeWith(text: string) {
@@ -73,7 +97,6 @@ function runtimeWith(text: string) {
   const calls: LanguageModelV3CallOptions[] = [];
   const runtime = createHeadRuntime({
     host: neverHost,
-    identity: async () => { throw new Error('mergeLLM resolved a facet identity'); },
     models: {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });

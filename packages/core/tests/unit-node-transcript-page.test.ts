@@ -20,6 +20,7 @@ import {
   HeadJournal, initHeadsTables, type HeadInput,
 } from '../src/index';
 import { readNodeTranscript } from '../src/read-models/node-transcript';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const RUN = 'run-page';
 const NODE = 'node-page';
@@ -30,6 +31,7 @@ function spawn(id: string, rootId: string): HeadInput {
     task: `do ${id}`, mode: 'build', rationale: 'because',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('node'),
   };
 }
 
@@ -100,8 +102,8 @@ describe('node transcript paging', () => {
   test('a rollout — no steps at all — pages as empty', () => {
     const ws = createTestWorkspace();
     const wsActor = createTestActors(ws.sql, ws.execRaw).main;
-    void ws.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
-      VALUES ('r', 'roll-1', null, ${'the task'}, ${'proposal one'}, ${'a proposal'}, 0.5, 1, 1, 'open')`;
+    void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES (${wsActor.actorId}, 'r', 'roll-1', null, ${'the task'}, ${'proposal one'}, ${'a proposal'}, 0.5, 1, 1, 'open')`;
     const view = readNodeTranscript(ws.sql, wsActor, 'r', 'roll-1');
     expect(view!.origin).toBe('rollout');
     expect(view!.steps).toEqual({ status: 'end', items: [] });
@@ -123,10 +125,10 @@ describe('the search path names the run it belongs to', () => {
   function seedSearch(rootAction: string) {
     const ws = createTestWorkspace();
     const actor = createTestActors(ws.sql, ws.execRaw).main;
-    void ws.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
-      VALUES ('r', 'r', null, ${'Audit every reader of coupon.kind — the checkout package'}, ${rootAction}, '', 0, 0, 0, 'open')`;
-    void ws.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
-      VALUES ('r', 'n1', 'r', ${'Audit every reader of coupon.kind'}, ${'Walk the cart serializer'}, 'a proposal', 0.7, 2, 1, 'open')`;
+    void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES (${actor.actorId}, 'r', 'r', null, ${'Audit every reader of coupon.kind — the checkout package'}, ${rootAction}, '', 0, 0, 0, 'open')`;
+    void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+      VALUES (${actor.actorId}, 'r', 'n1', 'r', ${'Audit every reader of coupon.kind'}, ${'Walk the cart serializer'}, 'a proposal', 0.7, 2, 1, 'open')`;
     return { sql: ws.sql, actor };
   }
 

@@ -21,6 +21,7 @@ import { HEAD_USAGE_COLUMNS, initHeadsTables } from '../src/heads/schema';
 import { USAGE_FIELDS } from '../src/usage';
 import type { HeadInput, HeadReport, MergeResult } from '../src/heads/index';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 /** Every usage column of one head, named through the map rather than by hand: a
  *  column added to `HEAD_USAGE_COLUMNS` is asserted below without editing here. */
@@ -62,6 +63,7 @@ const spawn = (id: string, rootId: string): HeadInput => ({
   id, rootId, parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
   mode: 'build', inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
   mergeStrategy: 'synthesize',
+  loop: defaultLoopOrigin('head'),
 });
 
 const report = (id: string, usage: HeadReport['usage']): HeadReport => ({

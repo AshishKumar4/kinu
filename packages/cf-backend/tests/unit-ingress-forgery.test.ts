@@ -241,7 +241,10 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     expect(v.parse(RefusalSchema, await response.json())).toEqual({ error: 'signature mismatch' });
     // The object WAS woken — the signature is checked in the workspace's own
     // storage, which is the point of doing it there — and it published nothing.
-    expect(ws.activations).toEqual([WORKSPACE]);
+    // Derived from the harness agent: the delivery URL mints with the agent's
+    // workspace name, while the email address above resolves through the
+    // workspace identity — two names for two routes, and this is the URL's.
+    expect(ws.activations).toEqual([ws.harness.agent.name]);
     expect(await ws.events('webhook')).toEqual([]);
   });
 

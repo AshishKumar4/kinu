@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { createTestActorsOver, toolExecute } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -66,7 +66,7 @@ function setup() {
   initPlanReviewTable(makeExecRaw(db));
   let id = 0;
   let now = 100;
-  const store = new PlanReviewStore(makeSql(db), {
+  const store = new PlanReviewStore(makeSql(db), createTestActorsOver(db).main, {
     newId: () => `plan-${++id}`,
     now: () => ++now,
   });

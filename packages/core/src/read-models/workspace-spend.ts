@@ -238,7 +238,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
     offTurnShare: measuredTokens === undefined || measuredTokens === 0
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
-    missions: listMissionSpend(deps.sql),
+    missions: listMissionSpend(deps.sql, deps.actor),
   };
 }
 

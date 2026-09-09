@@ -25,6 +25,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
@@ -34,7 +35,6 @@ import { readSearchTree } from './search-tree';
 import { paretoFront, type ParetoAxis, type ParetoEvidence } from '../strategy/objective';
 import { readSwarmNodeRecords } from '../strategy/swarm-resume';
 import { mapPage, type Page, type SeekCursor } from './page';
-import type { ActorHandle } from '../state/actor-handle';
 
 /** One run on the canvas, with everything the canvas draws for it. */
 export interface ExplorationCanvasRun {
@@ -111,18 +111,20 @@ function composeRuns(
     // settlement tag: the tag admitted one half per run, so the swarm's tree — four
     // rows and a winner — was dropped before the response was serialised, and no
     // client could recover what the server never sent.
-    tree: run.hasSearchTree ? readSearchTree(sql, run.id) : [],
+    tree: run.hasSearchTree ? readSearchTree(sql, actor, run.id) : [],
     head: run.hasNodeTranscripts ? journal.readRun(run.id) : null,
-    frontier: readParetoFrontier(sql, run.id),
+    frontier: readParetoFrontier(sql, actor, run.id),
   }));
 }
 
 
-function readParetoFrontier(sql: SqlExecutor, rootId: string): ParetoFrontier | null {
+function readParetoFrontier(
+  sql: SqlExecutor, actor: ActorHandle, rootId: string,
+): ParetoFrontier | null {
   const table = sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
   if (table.length === 0) return null;
-  const candidates = readSwarmNodeRecords(sql, rootId).flatMap(({ nodeId, record }) =>
+  const candidates = readSwarmNodeRecords(sql, actor, rootId).flatMap(({ nodeId, record }) =>
     record.outcome?.kind === 'pareto'
       ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]
       : []);

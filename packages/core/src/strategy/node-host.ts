@@ -68,6 +68,17 @@ export interface NodeLoopResult {
   readonly reported: CapturedReport | null;
   readonly granted: BranchDecision | null;
   readonly produced: readonly ModelMessage[];
+  /**
+   * What the executor the loop actually ran on could execute.
+   *
+   * Reported by the loop rather than read off the caller, because the two are
+   * not the same runtime: a node with a provisioned home runs on a rebuilt
+   * runtime, and a hosted node runs on the host's. Reading the caller's list to
+   * parse a hosted node's proposal is reading one runtime's capability as
+   * another's — and the proposal fence (`readProposalCode`) is exactly what
+   * that list decides.
+   */
+  readonly languages: readonly [string, ...string[]];
 }
 
 /**

@@ -104,17 +104,18 @@ async function ensembleHarness() {
   // model services, which under bun have no provider to resolve. Everything
   // downstream of resolution — the LLM construction, both sinks — is the
   // real production path.
-  Object.assign(harness.agent, {
-    providerRegistry: (): AgentProviderRegistry => judgeRegistry([
-      ['fake-a/m1', judgeModel()],
-      ['fake-b/m1', judgeModel()],
-    ]),
-  });
+  harness.agent.overrideProviderRegistry(judgeRegistry([
+    ['fake-a/m1', judgeModel()],
+    ['fake-b/m1', judgeModel()],
+  ]));
 
-  // A hand-labeled ledger: what the panel stands in for.
+  // A hand-labeled ledger: what the panel stands in for. The records belong to
+  // the workspace's own actor: outcome rows are actor-scoped precisely so one
+  // actor's grading cannot read or exhaust another's.
   const sql = sqlOver(harness.db);
+  const actor = openWorkspaceMainActor(sql);
   for (let i = 0; i < 3; i++) {
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: `turn-${i}`,
       outcome: 'accepted',
       confidence: 0.8,
@@ -126,8 +127,9 @@ async function ensembleHarness() {
       now: 1_700_000_000_000 + i * 60_000,
     });
   }
-  const ids = sql<{ id: string }>`SELECT id FROM turn_outcomes ORDER BY created_at`;
-  recordOutcomeLabels(sql, {
+  const ids = sql<{ id: string }>`SELECT id FROM turn_outcomes WHERE actor_id = ${actor.actorId} ORDER BY created_at`;
+  expect(ids.length).toBe(3);
+  recordOutcomeLabels(sql, actor, {
     labeler: 'owner',
     labels: ids.map((row) => ({ outcomeId: row.id, label: 'accepted' })),
     now: 1_700_100_000_000,

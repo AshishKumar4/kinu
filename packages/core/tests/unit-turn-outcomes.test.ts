@@ -4,7 +4,8 @@
  * and the provisional-lesson corroboration mechanics.
  */
 import { describe, test, expect } from 'bun:test';
-import { makeSql, createMockLLM, createTestActor, createTestWorkspace } from './helpers';
+import { makeSql, createMockLLM, createTestActor, createTestWorkspace, SDK_SESSION_DDL } from './helpers';
+import type { ActorHandle } from '../src/state/actor-handle';
 import {
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
@@ -247,20 +248,20 @@ describe('execution-sourced rows are priced and labelled as proxies', () => {
 
 describe('the verdict reason is durable', () => {
   test('evidence round-trips, and a verdict that is its own evidence stores none', () => {
-    const { sql } = setup();
-    recordTurnOutcome(sql, {
+    const { sql, actor } = setup();
+    recordTurnOutcome(sql, actor, {
       turnId: 'm1', outcome: 'corrected', confidence: 0.9, source: 'classifier',
       userMessage: 'u', assistantResponse: 'a', followup: 'no, the other one',
       evidence: 'the user restated the request with a correction', now: 100,
     });
     // A thumb carries no reason to store — `source` already says everything
     // there is to know about how that verdict was reached.
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: 'm2', outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a', now: 200,
     });
 
-    const [newest, oldest] = listTurnOutcomes(sql);
+    const [newest, oldest] = listTurnOutcomes(sql, actor);
     expect(newest.evidence).toBeNull();
     expect(oldest.evidence).toBe('the user restated the request with a correction');
   });
@@ -268,82 +269,82 @@ describe('the verdict reason is durable', () => {
 
 describe('turn_outcomes ledger', () => {
   test('record + list, newest first', () => {
-    const { sql } = setup();
-    recordTurnOutcome(sql, {
+    const { sql, actor } = setup();
+    recordTurnOutcome(sql, actor, {
       turnId: 'm1', outcome: 'accepted', confidence: 0.8, source: 'classifier',
       userMessage: 'task one', assistantResponse: 'answer one', now: 100,
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: 'm2', outcome: 'corrected', confidence: 0.9, source: 'classifier',
       userMessage: 'task two', assistantResponse: 'answer two', followup: 'no, fix it', now: 200,
     });
-    const rows = listTurnOutcomes(sql);
+    const rows = listTurnOutcomes(sql, actor);
     expect(rows.map((r) => r.turnId)).toEqual(['m2', 'm1']);
     expect(rows[0].followup).toBe('no, fix it');
-    expect(listTurnOutcomes(sql, { outcomes: ['corrected', 'frustrated'] })).toHaveLength(1);
+    expect(listTurnOutcomes(sql, actor, { outcomes: ['corrected', 'frustrated'] })).toHaveLength(1);
   });
 
   test('explicit feedback replaces the classifier verdict for the same turn', () => {
-    const { sql } = setup();
-    recordTurnOutcome(sql, {
+    const { sql, actor } = setup();
+    recordTurnOutcome(sql, actor, {
       turnId: 'm1', outcome: 'accepted', confidence: 0.6, source: 'classifier',
       userMessage: 't', assistantResponse: 'a', now: 100,
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: 'm1', outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 't', assistantResponse: 'a', now: 200,
     });
-    const rows = listTurnOutcomes(sql);
+    const rows = listTurnOutcomes(sql, actor);
     expect(rows).toHaveLength(1);
     expect(rows[0].outcome).toBe('corrected');
     expect(rows[0].source).toBe('explicit');
   });
 
   test('a rare outcome buried under many newer rows is still returned', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     // The failures the optimizer learns from, followed by far more accepted
     // turns than any candidate window: a JS-side filter over a bounded window
     // drops them silently, which truncates the whole evolution signal.
     for (let i = 0; i < 3; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `neg${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
         userMessage: 'fix', assistantResponse: 'wrong', now: 1000 + i,
       });
     }
     for (let i = 0; i < 500; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `pos${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: 'ok', assistantResponse: 'fine', now: 2000 + i,
       });
     }
-    expect(listTurnOutcomes(sql, { limit: 10, outcomes: ['corrected', 'frustrated'] })
+    expect(listTurnOutcomes(sql, actor, { limit: 10, outcomes: ['corrected', 'frustrated'] })
       .map((r) => r.turnId)).toEqual(['neg2', 'neg1', 'neg0']);
     // The limit now bounds the rows actually wanted, not a pre-filter window.
-    expect(listTurnOutcomes(sql, { limit: 4, outcomes: ['accepted'] })).toHaveLength(4);
-    expect(listTurnOutcomes(sql, { limit: 2 }).map((r) => r.turnId)).toEqual(['pos499', 'pos498']);
-    expect(listTurnOutcomes(sql, { outcomes: [] })).toEqual([]);
+    expect(listTurnOutcomes(sql, actor, { limit: 4, outcomes: ['accepted'] })).toHaveLength(4);
+    expect(listTurnOutcomes(sql, actor, { limit: 2 }).map((r) => r.turnId)).toEqual(['pos499', 'pos498']);
+    expect(listTurnOutcomes(sql, actor, { outcomes: [] })).toEqual([]);
   });
 
   test('hasNegativeOutcome keys on the given turn ids', () => {
-    const { sql } = setup();
-    recordTurnOutcome(sql, { turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a' });
-    recordTurnOutcome(sql, { turnId: 'bad', outcome: 'frustrated', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a' });
-    expect(hasNegativeOutcome(sql, ['good'])).toBe(false);
-    expect(hasNegativeOutcome(sql, ['good', 'bad'])).toBe(true);
-    expect(hasNegativeOutcome(sql, [])).toBe(false);
+    const { sql, actor } = setup();
+    recordTurnOutcome(sql, actor, { turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a' });
+    recordTurnOutcome(sql, actor, { turnId: 'bad', outcome: 'frustrated', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a' });
+    expect(hasNegativeOutcome(sql, actor, ['good'])).toBe(false);
+    expect(hasNegativeOutcome(sql, actor, ['good', 'bad'])).toBe(true);
+    expect(hasNegativeOutcome(sql, actor, [])).toBe(false);
   });
 });
 
 describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
   test('aggregates accepted/negative per serving version and blends into win-rates', () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     for (let i = 0; i < 3; i++) {
-      recordTurnOutcome(sql, { outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
+      recordTurnOutcome(sql, actor, { outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
     }
-    recordTurnOutcome(sql, { outcome: 'corrected', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
-    recordTurnOutcome(sql, { outcome: 'abandoned', confidence: 1, source: 'session_end', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
+    recordTurnOutcome(sql, actor, { outcome: 'corrected', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
+    recordTurnOutcome(sql, actor, { outcome: 'abandoned', confidence: 1, source: 'session_end', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
 
-    const rates = realOutcomeScaffoldRates(sql);
+    const rates = realOutcomeScaffoldRates(sql, actor);
     expect(rates.get(1)).toEqual({ accepted: 3, negative: 1 }); // abandoned is not decisive
 
     const entry: ScaffoldArchiveEntry = {
@@ -363,19 +364,21 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
 describe('advisor negatives use the canonical pane conversation', () => {
   test('a pane-only cloud turn supplies advisor input and answer', () => {
     const ws = setup();
-    ws.execRaw(`CREATE TABLE assistant_messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME NOT NULL)`);
-    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u-pane'}, ${''}, ${null}, ${'user'},
+    // The pane store as production creates it (`ForkTargetWriter.ensurePaneTable`),
+    // seeded under the same actor the advisor read predicates: the note, the
+    // answer and the ask it climbs to all have to name one owner, or the join
+    // answers an empty set instead of the turn.
+    ws.execRaw(SDK_SESSION_DDL);
+    void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${ws.actor.actorId}, ${'u-pane'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ id: 'u-pane', role: 'user', parts: [{ type: 'text', text: 'inspect the deploy' }] })},
               ${'2026-08-16 22:00:00'})`;
-    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
+    void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${ws.actor.actorId}, ${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
               ${JSON.stringify({ id: 'a-pane', role: 'assistant', parts: [{ type: 'text', text: 'I only guessed' }] })},
               ${'2026-08-16 22:00:01'})`;
-    void ws.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-      VALUES (${'advisor-pane'}, ${'advisor_note'}, ${'should have delegated'},
+    void ws.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+      VALUES (${ws.actor.actorId}, ${'advisor-pane'}, ${'advisor_note'}, ${'should have delegated'},
               ${JSON.stringify({ severity: 'concern', class: 'missed-capability', turnId: 'a-pane' })}, ${2000})`;
 
     const split = buildOutcomeEvalSplit(ws.sql, ws.actor, 2);
@@ -385,15 +388,17 @@ describe('advisor negatives use the canonical pane conversation', () => {
 });
 
 describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () => {
-  function seed(sql: ReturnType<typeof makeSql>, negatives: number, accepted: number) {
+  function seed(
+    sql: ReturnType<typeof makeSql>, actor: ActorHandle, negatives: number, accepted: number,
+  ) {
     for (let i = 0; i < negatives; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
         userMessage: `fix task ${i}`, assistantResponse: `bad answer ${i}`, followup: `correction ${i}`, now: 1000 + i,
       });
     }
     for (let i = 0; i < accepted; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: `good task ${i}`, assistantResponse: `good answer ${i}`, now: 2000 + i,
       });
@@ -406,7 +411,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('train = failures to fix; val = HELD-OUT failures + accepted guards, with no overlap', () => {
     const { sql, actor } = setup();
-    seed(sql, 5, 5);
+    seed(sql, actor, 5, 5);
     const split = buildOutcomeEvalSplit(sql, actor, 8);
 
     // Budget 8 → 4 failures drawn, of which round(4/3) = 1 is held out.
@@ -431,11 +436,11 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('failures far older than the accepted rows still reach train/val', () => {
     const { sql, actor } = setup();
-    seed(sql, 5, 0);
+    seed(sql, actor, 5, 0);
     // The optimizer's targets are the OLDEST rows here. A bounded pre-filter
     // window would leave the split with nothing to optimize toward.
     for (let i = 0; i < 400; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: 'ok', assistantResponse: 'fine', now: 5000 + i,
       });
@@ -448,7 +453,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('no instance is ever on both sides, across every budget', () => {
     const { sql, actor } = setup();
-    seed(sql, 9, 9);
+    seed(sql, actor, 9, 9);
     for (const budget of [2, 3, 4, 5, 6, 8, 12, 18, 24]) {
       const split = buildOutcomeEvalSplit(sql, actor, budget);
       const trainTurns = new Set(split.train.map(turnOf));
@@ -491,7 +496,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     });
     recorder.emit('run-1', { type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
-    seed(sql, 1, 0);
+    seed(sql, actor, 1, 0);
 
     const instance = buildOutcomeEvalSplit(sql, actor, 2).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
@@ -502,7 +507,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('negatives backfill when accepted turns are scarce (and vice versa)', () => {
     const { sql, actor } = setup();
-    seed(sql, 6, 1);
+    seed(sql, actor, 6, 1);
     // 5 failures drawn (backfilling the 2 the accepted pool can't cover) →
     // round(5/3) = 2 held out, 3 to train on, plus the 1 accepted guard.
     const split = buildOutcomeEvalSplit(sql, actor, 6);
@@ -514,7 +519,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('the newest failures are the held-out ones — a forward-in-time holdout', () => {
     const { sql, actor } = setup();
-    seed(sql, 4, 0); // recorded oldest-first: "fix task 0" … "fix task 3"
+    seed(sql, actor, 4, 0); // recorded oldest-first: "fix task 0" … "fix task 3"
     const split = buildOutcomeEvalSplit(sql, actor, 8);
     expect(split.val.map((i) => i.input)).toEqual(['fix task 3']);
     expect(split.train.map((i) => i.input)).toEqual(['fix task 2', 'fix task 1', 'fix task 0']);
@@ -522,7 +527,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('a single failure cannot be held out — the split says so instead of overlapping', () => {
     const { sql, actor } = setup();
-    seed(sql, 1, 3);
+    seed(sql, actor, 1, 3);
     const split = buildOutcomeEvalSplit(sql, actor, 8);
     expect(split.train).toHaveLength(1);
     expect(split.heldOutNegatives).toBe(0);
@@ -533,7 +538,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
   test('no negatives yet → empty train set, flagged (never the accepted set)', () => {
     const { sql, actor } = setup();
-    seed(sql, 0, 3);
+    seed(sql, actor, 0, 3);
     const split = buildOutcomeEvalSplit(sql, actor, 6);
     expect(split.val).toHaveLength(3);
     expect(split.train).toHaveLength(0);
@@ -552,24 +557,24 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
 
 describe('lessons ledger — provisional until corroborated', () => {
   test('a negative outcome on a tied turn corroborates provisional lessons', () => {
-    const { sql } = setup();
-    recordLesson(sql, { turnIds: ['m7'], text: 'always check the year', source: 'turn_reflection', status: 'provisional' });
-    recordLesson(sql, { turnIds: ['m8'], text: 'unrelated lesson', source: 'turn_reflection', status: 'provisional' });
+    const { sql, actor } = setup();
+    recordLesson(sql, actor, { turnIds: ['m7'], text: 'always check the year', source: 'turn_reflection', status: 'provisional' });
+    recordLesson(sql, actor, { turnIds: ['m8'], text: 'unrelated lesson', source: 'turn_reflection', status: 'provisional' });
 
-    const upgraded = corroborateLessonsForTurn(sql, 'm7', 999);
+    const upgraded = corroborateLessonsForTurn(sql, actor, 'm7', 999);
     expect(upgraded).toHaveLength(1);
     expect(upgraded[0].text).toBe('always check the year');
     expect(upgraded[0].status).toBe('corroborated');
 
-    expect(listLessons(sql, { status: 'corroborated' })).toHaveLength(1);
-    expect(listLessons(sql, { status: 'provisional' })).toHaveLength(1);
+    expect(listLessons(sql, actor, { status: 'corroborated' })).toHaveLength(1);
+    expect(listLessons(sql, actor, { status: 'provisional' })).toHaveLength(1);
     // Idempotent: a second negative on the same turn upgrades nothing new.
-    expect(corroborateLessonsForTurn(sql, 'm7')).toHaveLength(0);
+    expect(corroborateLessonsForTurn(sql, actor, 'm7')).toHaveLength(0);
   });
 
   test('session lessons tied to a window corroborate from any window turn', () => {
-    const { sql } = setup();
-    recordLesson(sql, { turnIds: ['t1', 't2', 't3'], text: 'window pattern', source: 'session_reflection', status: 'provisional' });
-    expect(corroborateLessonsForTurn(sql, 't2')).toHaveLength(1);
+    const { sql, actor } = setup();
+    recordLesson(sql, actor, { turnIds: ['t1', 't2', 't3'], text: 'window pattern', source: 'session_reflection', status: 'provisional' });
+    expect(corroborateLessonsForTurn(sql, actor, 't2')).toHaveLength(1);
   });
 });

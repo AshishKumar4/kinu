@@ -39,7 +39,7 @@ function sessions() {
     // memoized ledger production uses rather than a fixture beside it.
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
     const actor: ActorSession = new ActorSession({ runtime, claims: stores.claims, installedBuild: null, orchestration: {
-      engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql),
+      engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
         enqueueTurn: async () => { throw new Error('this bounded actor fixture must not enqueue another turn'); },

@@ -15,7 +15,6 @@
   "//files": "The decorated-class test and the probes that import production actors need production `Env`, not the workerd runner's probe bindings, so they are compiled HERE against their actual source closure while the separate workerd project checks its own runner and RPC client contracts. This list and that project's `exclude` are one decision in two files: a probe named in exactly one of them is either checked twice under the wrong globals or, worse, checked by nothing at all.",
   "files": [
     "tests/workerd/decorated-agent.test.ts",
-    "tests/workerd/slate-facet-probe.ts",
     "tests/workerd/plan-announce-probe.ts"
   ]
 }

@@ -149,7 +149,8 @@ export function listRejectedProposals(
 
   const vetoes = sql<{ message: string; data: string | null; created_at: number }>`
     SELECT message, data, created_at FROM evolution_events
-    WHERE type = 'misevolution_veto' ORDER BY created_at DESC LIMIT ${limit}`;
+    WHERE actor_id = ${actor.actorId} AND type = 'misevolution_veto'
+    ORDER BY created_at DESC LIMIT ${limit}`;
   for (const veto of vetoes) {
     // `data` is written by recordMisevolutionVeto in this same package, so a
     // payload that will not parse is corruption in our own row, not a foreign

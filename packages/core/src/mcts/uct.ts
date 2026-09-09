@@ -10,6 +10,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { DEFAULT_CONFIG } from '../config';
 
@@ -44,6 +45,7 @@ import { DEFAULT_CONFIG } from '../config';
  */
 export function selectNode(
   sql: SqlExecutor,
+  actor: ActorHandle,
   rootId: string,
   W: number = DEFAULT_CONFIG.mcts.explorationWeight,
   maxDepth: number = DEFAULT_CONFIG.mcts.maxDepth,
@@ -56,8 +58,9 @@ export function selectNode(
       s.*,
       COALESCE(p.visits, max(2, s.visits)) AS parent_visits
     FROM search_nodes s
-    LEFT JOIN search_nodes p ON s.parent_id = p.id
-    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
+    LEFT JOIN search_nodes p ON p.actor_id = s.actor_id AND s.parent_id = p.id
+    WHERE s.actor_id = ${actor.actorId} AND s.root_id = ${rootId}
+      AND s.status = 'open' AND s.depth < ${maxDepth}
     ORDER BY (
       s.value + ${W} * sqrt(
         (log(max(2.0, COALESCE(p.visits, max(2, s.visits)))) / log(exp(1.0))) /

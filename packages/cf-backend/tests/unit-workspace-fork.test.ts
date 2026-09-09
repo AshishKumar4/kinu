@@ -14,7 +14,7 @@ async function source() {
   await writeSoul(ws.vfs, ws.sql, 'p');
   void ws.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
-  return ws;
+  return { ...ws, actor };
 }
 
 function harness(options: {
@@ -62,7 +62,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness();
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).resolves.toEqual({ workspaceId: 'TGT', forkPointMs: 1 });
     expect(h.calls[0]).toBe('reserve:source-fork');
     expect(h.calls.some((call) => call.includes(':begin:'))).toBe(true);
@@ -75,7 +75,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness({ conflict: true });
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('agent name already exists');
     expect(h.calls).toEqual(['reserve:source-fork']);
   });
@@ -85,14 +85,14 @@ describe('cloud fork ownership transaction', () => {
     const frame = harness({ copyError: new Error('frame failed') });
     await expect(deliverCloudFork({
       registry: frame.registry, caller, target: frame.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('frame failed');
     expect(frame.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
 
     const publish = harness({ publishError: new Error('publish failed') });
     await expect(deliverCloudFork({
       registry: publish.registry, caller, target: publish.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('publish failed');
     expect(publish.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });
@@ -105,7 +105,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness();
     await deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     });
 
     const staged = h.calls.filter((call) => call.startsWith('frame:') && !call.includes(':commit:'));
@@ -122,7 +122,7 @@ describe('cloud fork ownership transaction', () => {
     const h = harness({ renewed: false });
     await expect(deliverCloudFork({
       registry: h.registry, caller, target: h.target, name: 'source-fork',
-      source: { sql: src.sql, vfs: src.vfs, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
+      source: { sql: src.sql, vfs: src.vfs, actor: src.actor, untilMessageId: 'm1' }, ownerUserId: '0'.repeat(32),
     })).rejects.toThrow('no longer held by this transfer');
     expect(h.calls.at(-1)).toBe(`destroy:source-fork:${'0'.repeat(32)}`);
   });

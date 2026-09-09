@@ -59,7 +59,7 @@ function buildComponents(
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   const llm = createVercelAILLM(config.llm);
-  const schedule = createInlineSchedule(sql);
+  const schedule = createInlineSchedule(sql, actor);
 
   return buildRuntime({
     actor,

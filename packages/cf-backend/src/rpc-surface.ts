@@ -56,7 +56,6 @@
 import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
-import type { SubordinateAgent } from './subordinate-agent';
 import type { UserDO } from './user/user-do';
 
 /**
@@ -86,10 +85,10 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
 
 /**
  * The agents-SDK facet protocol: the `_cf_`-prefixed methods the SDK invokes on
- * a stub rather than on `this`. Facets (`SubordinateAgent` in every mode) live
- * on their parent DO, and every hop between a facet and its root crosses a
- * real RPC boundary (`_rootAlarmOwner()` resolves the root through
- * `getServerByName`), so sealing these would break sub-agents,
+ * a stub rather than on `this`. Kinu registers no facet class of its own any
+ * more, but the SDK still invokes this protocol on the ROOT object — clones,
+ * connection metadata and the root alarm owner all ride it — so sealing these
+ * would break the platform's own bookkeeping,
  * facet schedules, and sub-agent WebSocket bridging. Only the agent family
  * needs them; `UserDO` neither is a facet nor spawns one.
  *
@@ -366,7 +365,6 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
-  'nodeArbitrate',
   'onCredentialsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
@@ -407,7 +405,7 @@ const ORCHESTRATOR_METHODS = [
   'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',
-  'facetTurnProfile',
+  'getActorSnapshot',
   'getEmailIngress',
   'getRunEvents',
   'getRunEventsWire',
@@ -420,7 +418,6 @@ const ORCHESTRATOR_METHODS = [
   'listRuns',
   'openDeviceTerminal',
   'prepareTerminal',
-  'publishHeadStream',
   'rawCopyFromFork',
   'readExecutorFileChunk',
   'receivePeerMessage',
@@ -437,39 +434,32 @@ const ORCHESTRATOR_METHODS = [
   'transitionReleaseChange',
   'writeExecutorFileChunk',
   // The workspace's byte plane, for the facets that share it. Here rather than
-  // on the public transport for the same reason `rawCopyFromFork` is: these are
-  // how a facet reaches the object that owns the filesystem, and
-  // `NimbusExecOptions.cred` names a uid — a browser socket that could reach
-  // `workspaceBoxOp` could run a command as uid 0. `routeWorkspacePreview` is
-  // reached only by the preview edge, which has already verified the hostname's
-  // signature, and re-checks the capability handle inside the object.
+  // `routeWorkspacePreview` is reached only by the preview edge, which has
+  // already verified the hostname's signature, and re-checks the capability
+  // handle inside the object. `workspaceBoxOp` is GONE with the facets: it was
+  // a monomorphic file-forwarding RPC that existed because a facet was a
+  // separate object sharing its parent's tree, and `NimbusExecOptions.cred`
+  // names a uid, so it was the single widest thing on this transport. Hosted
+  // actors share the root's box directly, so nothing forwards a file operation
+  // and there is nothing to keep shut.
   'routeWorkspacePreview',
-  'workspaceBoxOp',
-  // A facet says one of its plans has a new revision, and this workspace tells
-  // its own clients a path/id/revision reference. Listed because the inherited
-  // `broadcast` deliberately is NOT: a generic string channel to every
-  // connected client is what this table exists to keep shut, so the narrow,
-  // parsed, single-event name is what a facet may reach instead. Never
-  // `@callable` — a browser holds the reader side of this, not the writer.
-  'announceSubordinatePlan',
-  // A facet's home, on the same byte plane and for the same reason: the
-  // answer carries the credential the session runs the facet's commands as,
-  // and the registry it is provisioned in exists only on this object.
-  'provisionFacetHome',
+  // A hosted actor's chat address, resolved through the directory: the edge
+  // refuses a name this workspace does not host before the request reaches the
+  // object. Answers a refusal, never a storage key — the physical key stopped
+  // appearing in a client-visible URL with the facet hop.
+  'resolveHostedActorRoute',
   'applyActorDirectory',
-  'resolveSubordinateClientKey',
-  // Introduced bindings and facet actors return through the stub transport,
-  // each stamping the actor it acts as. A browser cannot mint a caller.
+  // Introduced bindings return through the stub transport, each stamping the
+  // actor it acts as. A browser cannot mint a caller.
   'slateAs',
   'slateBindingCallAs',
   // The one method the supervisor entrypoint calls on the object that owns a
-  // workspace: a facet's filesystem calls arrive here through the composed
-  // `OrchestratorAgent` namespace. Listed (not sealed away) but never
-  // `@callable`, exactly like `workspaceBoxOp` — reachable by a Durable
-  // Object stub in this Worker, unreachable from the browser or CLI.
+  // workspace: a workspace process's filesystem calls arrive here through the
+  // composed `OrchestratorAgent` namespace. Listed (not sealed away) but never
+  // `@callable` — reachable by a Durable Object stub in this Worker,
+  // unreachable from the browser or CLI.
   'supervisorOp',
-  // A subagent asks its workspace what it is called: its prompt names the
-  // workspace it works in, and it holds only the slug.
+  // A client asks the workspace what it is called.
   'workspaceTitle',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
@@ -482,74 +472,30 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /**
- * What the parent orchestrator may call on a subordinate facet. A subordinate
- * carries its parent's capability token, so its reachable surface is kept to
- * the calls the parent actually makes; its chat surface arrives over the SDK's
- * sub-agent WebSocket bridge and is dispatched on `this`, not on a stub.
+ * THERE IS NO SECOND ACTOR SURFACE ANY MORE, and that is the whole of what this
+ * section used to hold.
  *
- * The parent half of a nested tree — seeding a child, admitting its reports — is
- * on ACTOR_AGENT_RPC_SURFACE, because a subordinate is now on both sides of that
- * relationship.
- */
-const SUBORDINATE_METHODS = [
-  'decidePlanReview',
-  'enqueueSubordinateTask',
-  'getActivePlanReview',
-  'getSubordinateSnapshot',
-  'getSubordinateStatus',
-  'setSubordinateIdentity',
-  'savePlanReviewAnnotations',
-  'setSubordinateNaming',
-] as const satisfies readonly (keyof SubordinateAgent)[];
-
-export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...ACTOR_AGENT_RPC_SURFACE,
-  ...SUBORDINATE_METHODS,
-];
-
-/**
- * What a spawner may call on an exploration facet: seed it, then run it. Its
- * reach back into the workspace goes the other way — a head holds an
- * orchestrator stub and mounts its file plane over ACTOR_AGENT_RPC_SURFACE — so
- * nothing else here needs to be reachable.
+ * Four exported allowlists lived here — `SUBORDINATE_RPC_SURFACE`,
+ * `EXPLORATION_RPC_SURFACE`, `SUBORDINATE_AGENT_BOOT_SURFACE` and the two
+ * method arrays behind them — because one facet class hosted four modes and a
+ * STUB could reach any method on it. Containment therefore had to be a runtime
+ * seal: a fresh facet sealed to the union of both families in its constructor,
+ * and whichever seed arrived (`setSubordinateIdentity` or `setSharedParent`)
+ * narrowed the instance so a head could not reach a subordinate seed and a
+ * subordinate could not reach `runAsHead`.
  *
- * One class hosts both families now, so these names are members of
- * SubordinateAgent beside the subordinate family's. The constructor seals the
- * boot surface below; the mode's own seed narrows the instance to exactly one
- * family's surface, which is what keeps a head from reaching subordinate
- * seeds (and the reverse) across a stub.
+ * None of it has anything left to protect. A hosted actor is not addressable
+ * over a stub at all: there is no object to hold a stub TO, no seed to push, and
+ * no mode to be told. `initHead`/`runAsHead`/`initNode`/`runAsNode`/
+ * `explore`/`generateReflection`/`setOwner`/`setSharedParent`/
+ * `setSubordinateIdentity`/`enqueueSubordinateTask` are all gone with the
+ * class; what replaced them are calls on objects the root already holds
+ * (`host.acquire`, `host.run`), reachable only by code inside this object.
+ * Containment rides the ACTOR — its `actor_id`-scoped rows, its own uid on both
+ * planes, its own directory row — instead of riding a seal over a wire.
+ *
+ * A hosted actor's CHAT surface is the orchestrator's own `@callable` surface,
+ * bound to that actor by the request path (`agent-routing.ts`), so it is
+ * governed by `ORCHESTRATOR_RPC_SURFACE` above and by nothing else.
  */
-const EXPLORATION_METHODS = [
-  'abortHead',
-  'slateBindingDispatch',
-  'explore',
-  'generateReflection',
-  'initHead',
-  'initNode',
-  'runAsHead',
-  'runAsNode',
-  'setOwner',
-  'setSharedParent',
-] as const satisfies readonly (keyof SubordinateAgent)[];
 
-export const EXPLORATION_RPC_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...EXPLORATION_METHODS,
-];
-
-/**
- * What a fresh facet seals to in its constructor, before any seed tells it
- * which family it is. The union of both families: the seal only ever narrows
- * (a seed shadows more names, never fewer), so the boot surface must admit
- * every seed. Each seed narrows to its own family's surface above.
- */
-export const SUBORDINATE_AGENT_BOOT_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...ACTOR_AGENT_RPC_SURFACE,
-  ...SUBORDINATE_METHODS,
-  ...EXPLORATION_METHODS,
-];

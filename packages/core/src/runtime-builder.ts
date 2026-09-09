@@ -49,6 +49,14 @@ export interface ModelLaneComponents {
 
 export interface RuntimeComponents {
   actor: ActorHandle;
+  /**
+   * Where THIS actor's promoted loop is installed, from
+   * {@link actorScaffoldPath}. Absent means the workspace's own
+   * `scaffold/agent.js` — correct for the root and wrong for everyone else,
+   * which is exactly the bug this field exists to make unrepresentable at a
+   * caller that hosts more than one actor.
+   */
+  scaffoldPath?: string;
   sql: SqlExecutor;
   transactionSync<T>(write: () => T): T;
   execRaw: RawSqlExec;
@@ -131,7 +139,10 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const identity: Identity = {
     id: components.actor.actorId,
     name: components.actor.name,
-    scaffold: createScaffoldSurface({ vfs: agentStateVfs, sql, actor: components.actor, path: 'scaffold/agent.js' }),
+    scaffold: createScaffoldSurface({
+      vfs: agentStateVfs, sql, actor: components.actor,
+      path: components.scaffoldPath ?? 'scaffold/agent.js',
+    }),
   };
   const lanes = components.modelLanes;
   const pinned: PinnedLanes = {};

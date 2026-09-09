@@ -12,24 +12,41 @@
  * @kinu.run/core so the CLI surface shares them verbatim.
  */
 
-import { callable, type AgentContext, type SubAgentClass } from "agents";
+import { callable, type AgentContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
-  facetHomeProvisioner, facetHomeReleaser,
-  type NimbusSandboxHandle, type NodeHomeHost,
+  explorationActorKey, buildHeadToolSet, collectDynamicContext, subordinateDelegatesOf,
+  createReportCodemodeProvider, HeadCapture, HeadController, SubordinateRosterStore,
+  recoverActorTurns, EventLog, actorReferenceOf,
+  type ActorHost, type BoundActor, type DynamicContext, type HeadInput,
+  type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
+  type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
+  type SqlExec, type SqlValue, type WorkspaceActor,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
-import { applyWorkspaceBoxOp, type WorkspaceBoxOp, type WorkspaceBoxResult } from "./workspace-box-rpc";
 import {
-  hostedFacetAgentName, type HostedFacetHomes, type HostedNodeHome,
-} from "./node-home";
+  createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
+} from "./actor-hosting";
+import {
+  reclaimSettledExplorationActors,
+  type ExplorationHostSeams,
+} from "./exploration-hosting";
+import {
+  admitHostedTask, relayHostedReport, reportSettlesRun, runHostedTask,
+  type HostedReportLedger, type SubordinateHostSeams,
+} from "./subordinate-hosting";
+import { createExecuteToolsFactory } from "./execute-tools";
+import { codemodeEgress } from "./codemode-egress";
+import type { SubordinateReportStatus } from "@kinu.run/core";
+import type { ToolSet } from "ai";
+import type { CFRuntime } from "./runtime";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "./events/webhook-route";
@@ -45,7 +62,7 @@ import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from "./lib/cron";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
-  EvolutionEngine, parseActorKey, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
+  EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
   summarizeSteps,
   usageReported,
@@ -171,7 +188,6 @@ import {
   type RecordObjectiveSummary, type RecordCellSummary,
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
-  type HeadStreamKind,
   buildPendingActions, type PendingAction,
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
@@ -201,7 +217,7 @@ import {
   // The one bound an untrusted caller's event-log page passes through.
   boundEventQuery,
   type WorkMode,
-  resolveModelRoute, type ResolvedTurnProfile,
+  resolveModelRoute,
   WORKSPACE_RUN_ID,
   projectJsonValue,
   type AgentSignal,
@@ -215,7 +231,6 @@ import {
 } from "./actor-agent";
 import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "./analytics/record";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
-import { SubordinateAgent } from "./subordinate-agent";
 import {
   createAgentSelfProvider,
   createReleaseCodemodeProvider,
@@ -232,7 +247,6 @@ import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionReque
 import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import { deliverCloudFork } from "./user/workspace-fork";
-import { deleteExplorationFacet, reconcileExplorationFacets, type ExplorationFacetLedgerStatus } from "./facet-spawn";
 import { agentEmailAddress } from "./email/inbound";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
@@ -254,6 +268,17 @@ import {
 } from "@kinu.run/core";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
+
+/**
+ * Admitted delegations one sweep pass drives, per activation.
+ *
+ * A ROW BUDGET rather than the whole queue, for the reason every other pass in
+ * this gate carries one: each item is a full inference turn, and a workspace
+ * that accumulated a backlog while nothing was connected must not try to pay
+ * for all of it in one alarm frame. A pass that fills its budget answers
+ * truncated and the wake drains the remainder on the next frame.
+ */
+const HOSTED_DELEGATION_DRAIN_BUDGET = 8;
 
 /** The tombstone scope recording that one turn's sleep-time fact update has been
  *  applied. The answer itself is kept in `sleep_time_updates`; this is the fact
@@ -507,9 +532,18 @@ export class OrchestratorAgent extends ActorAgent {
    * exploration head, a swarm node — and `sealRpcSurface` keeps it off the
    * public transport.
    */
-  async workspaceBoxOp(shellId: string, op: WorkspaceBoxOp): Promise<WorkspaceBoxResult> {
-    return await applyWorkspaceBoxOp(this.workspaceBox(shellId), op);
-  }
+  /**
+   * NOTHING FORWARDS A FILE OPERATION ANY MORE.
+   *
+   * `workspaceBoxOp(shellId, op)` was a monomorphic RPC over a 25-arm operation
+   * union, and it existed for exactly one reason: a facet was a separate
+   * Durable Object that shared its parent's tree but could not reach it, so
+   * `files.read`, `exec` and `ports.expose` all had to cross an isolate
+   * boundary. It was also the single widest thing on this stub transport, since
+   * `NimbusExecOptions.cred` names a uid. Hosted actors are handed the very
+   * handle this workspace composed (`WorkspaceHostSeams.workspaceBox`), so the
+   * union, its dispatcher and its client are gone rather than renamed.
+   */
 
   /**
    * The three things a facet home is made of — the uid-0 view, the principal
@@ -523,32 +557,349 @@ export class OrchestratorAgent extends ActorAgent {
       .then((privileged) => ({ ...privileged, sql: this.ctx.storage.sql }));
   }
 
-  facetHomes(): HostedFacetHomes {
+
+  private _actorHost: ActorHost | null = null;
+  /** Loop origins a creation site NAMED, read back by the host at first
+   *  acquire. In memory because a creation and its first acquire are one
+   *  activation; a later acquire finds the pointer already durable and the
+   *  host's seed short-circuits before it reads an origin at all. */
+  private readonly _chosenLoopOrigins = new Map<string, LoopOrigin>();
+
+  /**
+   * THE workspace's one actor host.
+   *
+   * One `createActorHost` over this object's own `sql`, `transactionSync` and
+   * `exec` — there is no second `Storage` to pass, which is the property
+   * open-38 exists to make structural rather than agreed. Every logical actor
+   * comes from here: a hired subordinate, an ask-by-role temporary, a branching
+   * head, a swarm node, an MCTS rollout branch.
+   */
+  protected actorHost(): ActorHost {
+    this._actorHost ??= createWorkspaceActorHost(this.workspaceHostSeams());
+    return this._actorHost;
+  }
+
+  protected actorDirectoryStore(): WorkspaceActorDirectory {
+    return this.workspaceActors();
+  }
+
+  /**
+   * Everything this workspace lends the actors it hosts.
+   *
+   * Read the two halves as different in kind, because they are: the immutable
+   * catalogs (env, box, profile authority, provider registry, pricing) are
+   * shared BY VALUE, while everything that accumulates per actor — event log,
+   * evolution engine, mission governor, broadcast — is built per actor inside
+   * `actor-hosting.ts` and is never this object's own. That split is what makes
+   * "a delegated task admitted for a subordinate does not drain on the
+   * workspace" true by construction rather than by convention.
+   */
+  /**
+   * The ONE adapter between the platform's `SqlStorage` and core's positional
+   * `SqlExec`.
+   *
+   * `SqlExec` is a two-line protocol — `exec(query, ...bindings)` returning
+   * something with `toArray()` — and the DO's `SqlStorage` is the platform
+   * object that happens to satisfy the call but not the type. Adapted at the
+   * seam rather than by widening core's port, and in ONE place rather than at
+   * each call site, so the two ports meet exactly once.
+   */
+  protected boundExec(): SqlExec {
+    return { exec: (query: string, ...bindings: SqlValue[]) => this.ctx.storage.sql.exec(query, ...bindings) };
+  }
+
+  private workspaceHostSeams(): WorkspaceHostSeams {
     return {
-      provision: (reference) => this.provisionFacetHome(reference),
+      env: this.env,
+      ctx: this.ctx,
+      agent: this,
+      exec: this.boundExec(),
+      sql: this.boundSql,
+      directory: this.workspaceActors(),
+      workspaceName: this.workspaceName(),
+      installedBuild: () => this.env.CF_VERSION_METADATA?.id ?? null,
+      ownerUserId: () => this.getOwnerUserId(),
+      capabilityToken: () => this.workspaceCapabilityToken(),
+      workspaceBox: (shellId) => this.workspaceBox(shellId),
+      homeHost: () => this.facetHomeHost(),
+      // This object's own runtime, for an inheriting child registered under
+      // main. The root's durable program is always readable because the root IS
+      // this runtime; `loopFor` explains why hosting is the wrong question.
+      rootRuntime: () => this.rt,
+      // ONE authority for every hosted turn, and deliberately the same one an
+      // actor chat resolves through: a role restriction that narrows a chat
+      // narrows a head identically, and a search whose branches ran under a
+      // profile this workspace never resolved is unreproducible, which is the
+      // reason the digest exists at all.
+      resolveProfile: (input) => this.hostedActorProfile(input),
+      reportModelCall: (report) => { this.reportModelCall(report); },
+      modelOperations: this.modelOperations,
+      pricing: () => this.modelCatalog.pricing(),
+      broadcast: (actorId, event) => {
+        // Stamped with the actor, so a subordinate's pane and the workspace's
+        // pane are never one stream on a shared socket.
+        this.broadcast(JSON.stringify({ ...event, actorId }));
+      },
+      enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
+      turnInFlight: (actorId) => {
+        const live = this.actorHost().hosted({
+          actorId,
+          workspaceId: this.actorHandle().workspaceId,
+          parentActorId: this.actorHandle().actorId,
+        });
+        return live !== null && live.session.inFlight;
+      },
+      setTimer: (fn, ms) => { this.host.setTimer(fn, ms); },
+      reconcileDurableWake: () => { this.durableWakeOwner()(); },
+      headRuntimeFor: () => this.getCFHeadRuntime(),
+      logActivity: (actorId, event, detail) => { this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`); },
+      slate: (actor, operation) => this.slateAs(
+        { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
+      ),
+      deferrals: () => this.deferralChannel(),
+      refinementLane: () => () => this.runRefinementLane(),
+      chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
     };
   }
 
   /**
-   * A facet's home on this workspace, provisioned where the registry lives.
+   * A programmatic turn for one hosted actor.
    *
-   * Deliberately NOT `@callable`: the answer carries a credential the session
-   * runs commands as. The caller is a facet of this workspace — a subordinate,
-   * a head, a swarm node — or an actor spawning one, and `sealRpcSurface`
-   * keeps it off the public transport. The kind and the id arrive, never a
-   * directory: the name is derived here, so a facet cannot ask for the
-   * workspace agent's home or another kind's.
+   * The actor's OWN event log is the durable queue, so admission is a write
+   * plus a drain on that actor's orchestration rather than a message pushed
+   * into this object's transcript. That is the whole difference from the root's
+   * own `enqueueTurn`, which goes through Think's message store because the
+   * root's turns ARE that transcript.
    */
-  async provisionFacetHome(reference: ActorReference): Promise<HostedNodeHome> {
-    const directory = this.workspaceActors();
-    const path = directory.storagePath(reference);
-    const actor = directory.describe(directory.validate(reference, path));
-    if (actor.kind === 'main' || actor.kind === 'branch') throw new KinuError('denied', 'This actor kind does not own a facet home.');
-    const provision = facetHomeProvisioner(this.facetHomeHost(), () => { directory.validate(reference, path); });
-    const home = await provision(hostedFacetAgentName(actor.kind, parseActorKey(actor.storageKey).id));
-    if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted facet requires its own credential.');
-    return { home: home.home, tmp: home.tmp, cred: home.cred };
+  private async enqueueHostedTurn(
+    actor: BoundActor, input: Parameters<WorkspaceHostSeams['enqueueTurn']>[1],
+  ): ReturnType<WorkspaceHostSeams['enqueueTurn']> {
+    const admitted = await admitHostedTask(this.subordinateSeams(), actor.reference, {
+      kind: 'message', body: input.text, mode: 'build',
+    });
+    return { status: admitted.admitted ? 'queued' : 'skipped' };
   }
+
+  /** What an exploration runner needs of this workspace. */
+  protected explorationSeams(): ExplorationHostSeams {
+    return {
+      host: this.actorHost(),
+      register: async ({ creationId, kind, loop }) => {
+        const entry = await this.actorDirectory({
+          action: 'register', creationId, name: explorationActorKey(creationId), kind, lifetime: 'task',
+        });
+        if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
+        return entry.reference;
+      },
+      // THIS actor's own role and tier, not the root's. The seam takes an
+      // `actor` to say whose profile it wants; resolving the root's here is what
+      // let a narrowed head run unrestricted.
+      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      webSearch: () => this.ownedModelServices.getWebSearchProvider(),
+      // The host's OWN provisioner, not a second one: `provisionHostedActorHome`
+      // is the single implementation `createWorkspaceActorHost` builds every
+      // hosted runtime over, keyed on the actor's storage key. Reporting through
+      // it is what makes the node's disclosed boundary and its real credential
+      // the same fact.
+      nodeHome: (actor) => provisionHostedActorHome(
+        { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
+        actor.record, actor.reference, 'node',
+      ),
+      executeTool: (runtime, webSearch) => {
+        const factory = createExecuteToolsFactory({
+          loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
+          sql: this.boundSql, workspace: this.workspaceName(), webSearch,
+        });
+        return (finished) => factory.toolFor(finished);
+      },
+      recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
+      publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
+      mission: (input) => {
+        const labels = input.missionLabels ?? [];
+        if (labels.length === 0) return null;
+        // In-process now: the ledger is this object's, and a hosted head runs
+        // in this isolate, so the guard/debit port is a pair of calls rather
+        // than the cross-Durable-Object RPC a facet had to make.
+        return {
+          labels,
+          port: {
+            guard: (seam, scope) => this.missionGuard(seam, scope),
+            debit: (tokens, opts) => this.missionDebit(tokens, opts),
+          },
+        };
+      },
+      // The splitting head's own actor and runtime are NOT needed here: the
+      // journal and the merge model are the workspace's, and the children are
+      // acquired from the same host by id. That is the C2 fix — one journal for
+      // the whole subtree — expressed as an argument this no longer takes.
+      split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
+    };
+  }
+
+  /** What the subordinate rung needs of this workspace. */
+  protected subordinateSeams(): SubordinateHostSeams {
+    return {
+      host: this.actorHost(),
+      sql: this.boundSql,
+      exec: this.boundExec(),
+      directory: this.workspaceActors(),
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      roster: (actor) => new SubordinateRosterStore(this.ctx.storage.sql, actor.handle),
+      vfs: () => this.rt.storage.vfs,
+      // The HIRE's own role, not the root's. A delegated turn's prompt and
+      // advertised tool surface are framed from this, so resolving the root's
+      // told a `scribe` child it had the workspace's whole surface.
+      profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      taskTools: (actor, runtime, reports, input) => this.hostedTaskTools(actor, runtime, reports, input),
+      dynamic: (actor) => this.hostedActorDynamicContext(actor),
+      mission: () => null,
+      announce: () => { this.broadcastSubordinatesChanged(); },
+      scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
+      temporary: () => this.temporaryAgentPort(),
+    };
+  }
+
+  /**
+   * The tool surface a hosted actor's DELEGATED turn admits.
+   *
+   * Built over THAT actor's runtime, so every file and command it reaches acts
+   * as its own uid on both planes, and narrowed to the confined builtin set a
+   * reporting agent gets — the same set a head runs on, because a delegated
+   * task and a head are the same shape of agent: given work, does it, reports.
+   * The one thing added is the `report` lane, and it writes the ledger the
+   * relay decision reads afterwards.
+   *
+   * `preBuiltExecuteTool` rather than `executeTools`: this is a CONFINED
+   * surface, so it finishes itself rather than carrying the actor clamp and the
+   * effect claim an owner chat's surface carries.
+   */
+  private hostedTaskTools(actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger, input: HeadInput): ToolSet {
+    const webSearch = this.ownedModelServices.getWebSearchProvider();
+    const factory = createExecuteToolsFactory({
+      loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
+      sql: this.boundSql, workspace: this.workspaceName(), webSearch,
+      // `report.*` in the sandbox as well as at the top level, on the factory's
+      // own provider seam — the same wiring the CLI gives the same capability.
+      // A thunk, so it reads the ledger-writing closure declared below rather
+      // than a copy of it taken at construction.
+      extraProviders: () => [createReportCodemodeProvider(() => report)],
+    });
+    const report = {
+      report: async (input: { status: SubordinateReportStatus; content: string }) => {
+        const relayed = await relayHostedReport(this.subordinateSeams(), actor, {
+          status: input.status, content: input.content, origin: 'report_tool',
+          mode: 'build', sequenceId: `live:${actor.record.name}:${nanoid()}`,
+        });
+        reports.spoke = true;
+        // Only a run-SETTLING report counts as the answer. The same predicate
+        // the ingress settles a waiter on, so the child cannot come to believe
+        // it has answered while its caller is still waiting.
+        reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+        return { id: relayed.id, disposition: relayed.disposition };
+      },
+    };
+    // The CONFINED builtin set a reporting agent gets — the same one a head
+    // runs on, because a delegated task and a head are the same shape of agent:
+    // given work, does it, reports. An owner chat with this actor is a different
+    // surface and is built where owner chats are built.
+    //
+    // THE CALLER'S `HeadInput`, not a second one built here. The runner claims
+    // the turn under this exact value and recovery verifies that claim, so a
+    // literal rebuilt at this site is how a turn gets claimed under one shape
+    // and tooled under another. `delegatedHeadInput` is the one builder.
+    return buildHeadToolSet({
+      input,
+      capture: new HeadCapture(),
+      rt: runtime,
+      executeTool: (finished: ToolSet) => factory.toolFor(finished),
+      webSearch,
+      split: () => { throw new KinuError('denied', 'a delegated task reports; it does not split'); },
+    });
+  }
+
+  /**
+   * The live plane a hosted actor's delegated turn reports per step.
+   *
+   * Its OWN hires and its OWN search roster, from its own stores — not this
+   * workspace's. `memoryTail` is absent and `missingCapabilities` empty, and
+   * both are facts: a delegated turn's framing is its brief rather than
+   * `MEMORY.md`, and a hosted actor connects no MCP servers of its own, so
+   * there is no unreachable server to name.
+   */
+  private hostedActorDynamicContext(actor: HostedActor): DynamicContext {
+    return collectDynamicContext({
+      rt: actor.runtime,
+      stores: actor.stores,
+      memoryTail: undefined,
+      missingCapabilities: [],
+      subordinateDelegates: () => subordinateDelegatesOf(
+        new SubordinateRosterStore(this.ctx.storage.sql, actor.handle).list(),
+      ),
+    });
+  }
+
+  /**
+   * A head splitting further, run in this isolate.
+   *
+   * The journal is the WORKSPACE's, and that was the C2 defect this fixes
+   * structurally rather than by discipline: a depth-1 head used to write its
+   * children's spawn and report rows into its OWN SQLite while their step rows
+   * were recorded on the root, so the surface's `head_journal` → `head_steps`
+   * join could never match and a depth-2 head was unreadable from anywhere. One
+   * database means one journal; the port below is a set of local calls where it
+   * used to be four cross-Durable-Object RPCs.
+   */
+  private async runHostedSplit(parent: HeadInput, request: HeadSplitRequest): Promise<HeadSplitResult> {
+    const journal: HeadJournalPort = {
+      recordSplit: async (rootId, rationale, spawnedAt) => { await this.headJournalRecordSplit(rootId, rationale, spawnedAt); },
+      insertSpawn: async (childInput) => { await this.headJournalInsertSpawn(childInput); },
+      recordReport: async (report) => { await this.headJournalRecordReport(report); },
+      cacheMerge: async (rootId, result, strategy) => { await this.headJournalCacheMerge(rootId, result, strategy); },
+    };
+    const runtimeForSplit = this.getCFHeadRuntime();
+    if (runtimeForSplit === undefined) {
+      throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
+    }
+    const controller = new HeadController(runtimeForSplit, journal);
+    const controllerInput: Parameters<HeadController['run']>[0] = {
+      parentHeadId: parent.id,
+      parentDepth: parent.depth,
+      rootId: parent.rootId,
+      inheritedContext: parent.inheritedContext,
+      request: { rationale: request.rationale, heads: [...request.heads], mergeStrategy: request.mergeStrategy },
+      parentBudget: parent.budget,
+      mode: parent.mode,
+      model: parent.model,
+    };
+    // A subtree charges the same mission its root does — otherwise a head
+    // escapes its budget simply by splitting again.
+    if (parent.missionLabels?.length) controllerInput.missionLabels = parent.missionLabels;
+    const result: MergeResult = await controller.run(controllerInput);
+    return {
+      narrative: result.mergedNarrative,
+      decisions: result.selectedDecisions,
+      unresolvedQuestions: result.unresolvedQuestions,
+      blindSpots: result.blindSpots,
+      childHeadIds: result.headIds,
+      headCount: result.costSummary.headCount,
+    };
+  }
+
+  /**
+   * A HOSTED ACTOR'S HOME IS NO LONGER AN RPC.
+   *
+   * `provisionFacetHome(reference)` was `@callable`-adjacent worker-side RPC:
+   * a facet ran in its own isolate, the uid table, the uid-0 view and the
+   * principal registry all live on THIS object, and `confinePrincipal` has no
+   * RPC — so a facet asked the owner for its home and the owner applied it
+   * here. Both halves are in this isolate now: the host provisions each actor's
+   * home from the same three members, keyed on the actor's immutable storage
+   * key, before it builds that actor's runtime
+   * (`actor-hosting.ts` → `hostedActorAgentName`). `facetHomeHost()` above is
+   * what it reaches them through, which is why that one survives.
+   */
 
   /**
    * A preview request the edge authenticated, routed into this workspace's port
@@ -627,7 +978,7 @@ export class OrchestratorAgent extends ActorAgent {
     const leases = this.eventLog.openDrainLeases();
     return leases.length === 0
       ? new Map<string, string>()
-      : answersForDrainTurns(this.boundSql, leases);
+      : answersForDrainTurns(this.boundSql, this.actorHandle(), leases);
   }
 
   /**
@@ -653,7 +1004,120 @@ export class OrchestratorAgent extends ActorAgent {
       || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
       || this.jobs.hasLiveJobsInWorkspace() || this.workspaceActors().hasRetirements()
-      || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions();
+      || this.subordinateRoster.hasPendingBirths() || this.subordinateRoster.hasPendingDeletions()
+      // An unsettled hosted claim, asked at limit 1 because presence is the
+      // whole question. Without this the recovery arm of `maintenanceWork` is
+      // unreachable on the one activation that needs it: a workspace whose ONLY
+      // owed work is an interrupted hosted turn armed no wake, so nothing
+      // dispatched the sweep that would have rebuilt it.
+      || this.actorHost().resumable(1).length > 0
+      // The same question for work ADMITTED but never started. `resumable`
+      // covers claims; a delegated task that no turn has taken yet holds none.
+      || this.hasAdmittedDelegations();
+  }
+  /**
+   * Whether ANY actor in this workspace holds an admitted delegation nothing
+   * has run yet — the arming half of the delegation drain.
+   *
+   * WORKSPACE-WIDE BY DESIGN, not by omission. This answers "does this OBJECT
+   * need to wake", not "what does this actor own". The alarm belongs to the
+   * workspace object and serves every actor in it, so scoping it to the root
+   * would make the object sleep through a hired child's admitted task — the
+   * same failure as the local daemon sleeping through a subordinate's due
+   * trigger, which is why `nextTriggerAt` takes a bare database and
+   * `hasLiveJobsInWorkspace`/`countRunningInWorkspace` are workspace-wide by
+   * contract. Bounded at one row, exactly as `resumable(1)` beside it is:
+   * presence is the whole question, and materializing the queue to answer it
+   * would read every child's backlog on every activation.
+   *
+   * The predicate matches `EventLog.pending`'s own: unbound (`turn_id IS
+   * NULL`) and neither deferred nor dismissed (`step_idx` -1 and -2), so the
+   * wake arms exactly when the drain has something to take.
+   */
+  private hasAdmittedDelegations(): boolean {
+    return this.boundExec().exec(
+      `SELECT 1 FROM agent_log
+       WHERE kind = 'event' AND variant = 'subordinate_task'
+         AND turn_id IS NULL AND (step_idx IS NULL OR step_idx >= 0)
+       LIMIT 1`,
+    ).toArray().length > 0;
+  }
+
+  /**
+   * ARM 2 OF THE ACTOR SWEEP: run the delegated turns this workspace admitted.
+   *
+   * A hired subordinate is a full actor whose work arrives as a row in its OWN
+   * event log — `admitHostedTask` writes it and arms the wake, and that is all
+   * admission may do: a turn run inside the admitting request would live
+   * exactly as long as the caller's activation, which is the `waitUntil` shape
+   * this cutover exists to remove. So the runner is here, on the durable wake,
+   * where nothing holds a request open.
+   *
+   * THE DOUBLE-EXECUTION GUARD IS `markConsumed` BEFORE THE `await`. It is
+   * synchronous, so it is atomic with respect to the event loop: the row leaves
+   * the pending set before this frame yields, and a concurrent or re-woken
+   * sweep reading `pending()` cannot see it. Every other ordering runs the turn
+   * twice — which for a delegated task means two answers to one `agents.ask`.
+   *
+   * A FAILED TURN LEAVES ITS LEASE OPEN, deliberately. `unbindStale` above
+   * re-pends it once the grace has passed, so the work is retried on a later
+   * frame rather than stranded; closing the lease on failure would drop the
+   * task silently, and re-pending it immediately would spin. The grace is
+   * non-zero because a Durable Object activation may be racing its own
+   * predecessor, which is the case `unbindStale` requires callers to state.
+   */
+  private async drainAdmittedDelegations(): Promise<boolean> {
+    const seams = this.subordinateSeams();
+    const exec = this.boundExec();
+    const now = Date.now();
+    let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
+    let truncated = false;
+    for (const record of this.workspaceActors().list()) {
+      if (record.kind !== 'subordinate') continue;
+      if (budget <= 0) { truncated = true; break; }
+      const reference: ActorReference = {
+        actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
+      };
+      try {
+        // `bindStores` and not `acquire`: the enumeration needs this child's
+        // handle over the one database and nothing else — no runtime, no
+        // session, no model — and it still refuses a retired or re-parented
+        // actor, so reading a child's queue is not a way around membership.
+        const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
+        log.unbindStale(STALE_EVENT_DELIVERY_MS, now);
+        for (const event of log.pending({ variant: 'subordinate_task', limit: budget })) {
+          if (budget <= 0) { truncated = true; break; }
+          if (event.variant !== 'subordinate_task') continue;
+          if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
+          const turnId = `evt-${nanoid()}`;
+          log.markConsumed(event.id, turnId, 0);
+          budget -= 1;
+          try {
+            // The EVENT ID is the relay's dedupe key, and it is the right one:
+            // it is stable across a re-delivery, so a report a recovered
+            // sequence replays is recognised as the one the parent already
+            // holds rather than counted as a second answer.
+            await runHostedTask(seams, reference, {
+              body: event.payload.body,
+              mode: event.payload.kinu_mode,
+              sequenceId: event.id,
+            });
+            log.markTurnCompleted(turnId);
+          } catch (cause) {
+            diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
+              doing: 'running a delegated turn this workspace admitted', cause, otherwise: 'io',
+            }), { workspace: this.name, actor: record.name });
+          }
+        }
+      } catch (cause) {
+        // One unreadable child must not end the sweep — the same per-actor
+        // isolation core's recovery arm applies for the same reason.
+        diagnostics.failure('subordinate.delegation_drain_failed', toKinuError({
+          doing: 'reading a hired actor\'s admitted delegations', cause, otherwise: 'io',
+        }), { workspace: this.name, actor: record.name });
+      }
+    }
+    return truncated;
   }
 
   /**
@@ -772,7 +1236,7 @@ export class OrchestratorAgent extends ActorAgent {
         // Idempotent: pick the soonest of (existing alarm, new ts).
         scheduleAt: (ts: number) => this.armTimer(ts),
       };
-      this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
+      this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, this.actorHandle(), alarmScheduler);
     }
     return this._triggerRegistry;
   }
@@ -811,7 +1275,7 @@ export class OrchestratorAgent extends ActorAgent {
         agentDisplayName: this.safeDisplayName(),
         outbox: this.emailOutbox,
       }));
-      this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
+      this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
         ws_session: wsDispatcher,
         // peer_back: route the answer to a peer ask back over the outbox
         // transport. Lazily bound — PeerHub needs this store to construct.
@@ -1245,11 +1709,17 @@ export class OrchestratorAgent extends ActorAgent {
     const retirement = (async (): Promise<ActorDirectoryResult> => {
       const entry = directory.apply(caller, path, input);
       await this.scheduleTerminalRetry(Date.now());
-      const descendants = [...path, entry.storageKey].map((name) => ({ className: this.facetClass().name, name }));
-      await this._cf_destroyDescendantFacet([...this.selfPath, ...descendants]);
-      if (entry.kind !== 'main' && entry.kind !== 'branch') {
-        await facetHomeReleaser(this.facetHomeHost())(hostedFacetAgentName(entry.kind, parseActorKey(entry.storageKey).id));
-      }
+      // The PHYSICAL half of a retirement is the host's, in one call: it drops
+      // the actor's runtime objects, cuts its `actor_id`-scoped rows inside the
+      // retirement transaction, and — only for a destroy — releases the bytes
+      // outside SQL (its home on the session, its `.kinu/agents/<key>/`
+      // subtree). What used to be here was two separate teardowns for the two
+      // things a facet owned: `_cf_destroyDescendantFacet` over the SDK's facet
+      // tree for the DATABASE, and a `facetHomeReleaser` for the home. Neither
+      // is reachable and neither has anything left to destroy.
+      await this.actorHost().retire(caller, {
+        reference: input.reference, name: input.name, destroy: true,
+      });
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
     })();
     this.actorRetirementsInFlight.set(input.reference.actorId, retirement);
@@ -1273,16 +1743,32 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  async resolveSubordinateClientKey(name: string): Promise<{ storageKey: string } | Refusal> {
+  /**
+   * Does this workspace host a chat-reachable actor under this LOGICAL name.
+   *
+   * The edge asks before it hands the request over, so a name this workspace
+   * does not host is a 404/403 at the boundary rather than a refusal inside an
+   * actor. It answers a REFUSAL or nothing — never a storage key, which is the
+   * change: the old `resolveSubordinateClientKey` handed one back so
+   * `server.ts` could substitute it into the SDK's `/sub/<class>/<key>` hop,
+   * which put a physical key in a client-visible URL. There is no hop and no
+   * rewrite; the root serves the actor itself.
+   *
+   * Still checks BOTH authorities, because they answer different questions: the
+   * directory says the actor exists and belongs to this workspace, and the
+   * roster says it is not dismissed. A dismissed subordinate keeps its rows
+   * (an archive is readable) and must not keep its chat.
+   */
+  async resolveHostedActorRoute(name: string): Promise<{ ok: true } | Refusal> {
     try {
       if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
       const row = this.subordinateRoster.get(name);
-      if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The subordinate is not available for client execution.');
+      if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The actor is not available for client execution.');
       const actor = this.workspaceActors().apply(this.actorHandle(), [], { action: 'validate', name, reference: row.actorReference });
-      if (actor.kind !== 'subordinate' || !this.hasSubAgent(this.facetClass(), actor.storageKey)) throw new KinuError('missing', 'The subordinate physical actor is absent.');
-      return { storageKey: actor.storageKey };
+      if (actor.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a chat-reachable actor.');
+      return { ok: true };
     } catch (cause) {
-      return refusalOf(toKinuError({ doing: 'resolving a logical subordinate client path', cause, otherwise: 'io' }));
+      return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
     }
   }
   /** The agents tool's peer deps over the cross-workspace transport. Owner
@@ -1421,9 +1907,6 @@ export class OrchestratorAgent extends ActorAgent {
     return ROOT_DELEGATION_BUDGET;
   }
 
-  facetClass(): SubAgentClass<SubordinateAgent> {
-    return SubordinateAgent;
-  }
 
   /** `agent.*` (self-steering) and `release.*` (the governed release lane —
    *  left the native surface; see tools/release-codemode.ts). Both read
@@ -1575,7 +2058,7 @@ export class OrchestratorAgent extends ActorAgent {
       takes: {
         credited: input.credited,
         startedAt: this.acc.startedAt,
-        takeIds: unclaimedAlternateTakeIds(this.boundSql),
+        takeIds: unclaimedAlternateTakeIds(this.boundSql, this.actorHandle()),
       },
       craftedToolsUsed: this.acc.craftedToolsUsed(),
       eventReplies: { answered: input.answeredDrains, requestId: input.result.requestId },
@@ -1628,9 +2111,9 @@ export class OrchestratorAgent extends ActorAgent {
           if (credited === null) {
             // A turn the captures cannot be attributed to: they competed for an
             // answer that is not there, so the next turn must not claim them.
-            purgeUnclaimedAlternateTakes(this.boundSql, takeIds);
+            purgeUnclaimedAlternateTakes(this.boundSql, this.actorHandle(), takeIds);
           } else {
-            claimAlternateTakesForTurn(this.boundSql, {
+            claimAlternateTakesForTurn(this.boundSql, this.actorHandle(), {
               turnId: credited, sessionId: 'default', startedAt, takeIds,
             });
           }
@@ -1641,9 +2124,9 @@ export class OrchestratorAgent extends ActorAgent {
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
         run: ({ messageId, toolNames }) => {
-          void this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
-                   VALUES (${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
-                   ON CONFLICT(message_id) DO UPDATE SET
+          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names, created_at)
+                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
+                   ON CONFLICT(actor_id, message_id) DO UPDATE SET
                      tool_names = excluded.tool_names, created_at = excluded.created_at`;
           return { status: 'completed' };
         },
@@ -1699,6 +2182,7 @@ export class OrchestratorAgent extends ActorAgent {
               await settlePendingBranch(
                 {
                   sql: this.boundSql,
+                  actor: this.actorHandle(),
                   sessionId: 'default',
                   broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
                 },
@@ -1720,7 +2204,7 @@ export class OrchestratorAgent extends ActorAgent {
             // terminal status. Owed, so the row stays and the wake comes back.
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
-          const outcome = settleBranchIntoTakes(this.boundSql, {
+          const outcome = settleBranchIntoTakes(this.boundSql, this.actorHandle(), {
             task,
             report,
             turnId, sessionId: 'default', liveText,
@@ -1754,7 +2238,7 @@ export class OrchestratorAgent extends ActorAgent {
           // model call whose result mutates the fact store, so the answer is
           // persisted before it is applied and the tombstone records that it was.
           const factKey = keyedScope(scope);
-          if (factKey !== undefined && effectAlreadyDone(this.boundSql, SLEEP_TIME_APPLIED, factKey)) {
+          if (factKey !== undefined && effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, factKey)) {
             return { status: 'completed', detail: 'the fact update for this turn already landed' };
           }
           await this.runSleepTimeCompute(
@@ -1910,7 +2394,7 @@ export class OrchestratorAgent extends ActorAgent {
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
         if (key !== undefined) {
-          recordEffectDone(this.boundSql, SLEEP_TIME_APPLIED, key);
+          recordEffectDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, key);
           void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
         }
         return applied;
@@ -2220,7 +2704,7 @@ export class OrchestratorAgent extends ActorAgent {
   protected get deferrals(): DeferredApprovalQueue {
     if (!this._deferrals) {
       this._deferrals = new DeferredApprovalQueue({
-        store: new DeferredApprovalStore(this.boundSql),
+        store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
         // Read through `this.orch` at DELIVERY time, never captured: this
         // getter is reachable from the runtime's own construction path.
         signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
@@ -2302,6 +2786,15 @@ export class OrchestratorAgent extends ActorAgent {
    * pre-onStart claimOwner route through here). No persistent schema-version is
    * tracked: a cold activation always re-runs, so newly-added tables in code
    * are created without migration bookkeeping.
+   *
+   * THREE PHASES, and the order is the contract. Plain DDL first; then the
+   * workspace's own identity and main-actor ROWS; only then anything that
+   * resolves this actor's handle. The directory refuses to issue a handle over
+   * a database with no identity row, so an actor-bound step hoisted above the
+   * bootstrap throws on every fresh workspace — and `claimOwner` swallows that
+   * throw as a diagnostic, which is how the same mistake stayed invisible: the
+   * flag stayed false, the claim wrote the rows itself, and the actor-bound
+   * half silently did not run until some later activation.
    */
   protected ensureSchema(): void {
     if (this._schemaReady) return;
@@ -2315,6 +2808,10 @@ export class OrchestratorAgent extends ActorAgent {
     // ── planes this root alone carries (declared per-root in
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
     initWebhookIngressTables(this.ctx.storage.sql);
+    // The workspace's OWN rows, before anything that needs a handle over them.
+    // `createMain` is idempotent, so a warm activation re-reads rather than
+    // re-writing, and the transaction is the one this bootstrap always had.
+    this.bootstrapWorkspaceActor();
     this.subordinateRoster.ensureSchema();
 
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
@@ -2323,10 +2820,20 @@ export class OrchestratorAgent extends ActorAgent {
     // writes here via setTurnFeedback, which re-scores the crafted tools used
     // in that turn — feedback is inherently asynchronous (it arrives after the
     // turn completes), so it can't be read at turn time.
+    //
+    // KEYED (actor_id, message_id), never message_id alone. A message id is
+    // minted PER ACTOR — `messages` is `PRIMARY KEY (actor_id, id)` for exactly
+    // this reason — so ids are not unique across the actors sharing this one
+    // database. Under a bare `message_id` primary key two actors' turns that
+    // collide do not error, they silently OVERWRITE each other's thumbs, and
+    // the graded-outcome read behind them grades one actor's turn with a
+    // sibling's verdict.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
-      message_id TEXT PRIMARY KEY,
+      actor_id   TEXT NOT NULL,
+      message_id TEXT NOT NULL,
       feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, message_id)
     )`);
     // Records which crafted tools each assistant turn used, keyed by the
     // assistant message id, so async thumbs feedback can re-score exactly
@@ -2339,16 +2846,27 @@ export class OrchestratorAgent extends ActorAgent {
       update_json TEXT NOT NULL,
       created_at  INTEGER NOT NULL
     )`);
+    // Same per-actor key as turn_feedback above, for the same reason: this is
+    // the table the thumbs re-score reads, so a bare message_id key would let
+    // one actor's feedback re-score a sibling's crafted tools.
     execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
-      message_id TEXT PRIMARY KEY,
+      actor_id   TEXT NOT NULL,
+      message_id TEXT NOT NULL,
       tool_names TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, message_id)
     )`);
     // The container's own lifecycle failures, so an incident is announced once
     // and stays readable afterwards. Owned by this root because the container
     // is the WORKSPACE's — a subordinate rides its parent's and has none of
     // its own to report.
     initSandboxLifecycleTable(execRaw);
+
+    // Moved out of the ActorAgent constructor: the extension's ports read the
+    // compaction store, which resolves this actor's handle, which needs the
+    // rows above to exist. `ensureSchema` is flag-gated, so this still runs
+    // exactly once.
+    this.registerCompactionExtension();
 
     this._schemaReady = true;
   }
@@ -2375,7 +2893,6 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
-    this.bootstrapWorkspaceActor();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
@@ -2527,7 +3044,36 @@ export class OrchestratorAgent extends ActorAgent {
     for (const pending of this.workspaceActors().retirements()) {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
     }
-    if (!this.activationRecoveryPending) return super.maintenanceWork();
+    // ARM 1 OF THE ACTOR SWEEP, and it runs BEFORE anything admits new work
+    // for these actors. A claim admitted and never settled is the only record
+    // that a hosted turn is owed, and reconciling it first is load-bearing:
+    // issue a second turn for an actor whose first still holds a claim and the
+    // per-actor serialization refuses it — an honest refusal, of the wrong
+    // turn. Core's ONE implementation, shared with the CLI, because a second
+    // copy is a second chance for one of them to be the unreached one, which
+    // is what had happened on both backends at once.
+    //
+    // HERE rather than in `maintenanceSweeps()`: this resumes TURNS, and
+    // `maintenanceSweeps` is synchronous and runs inside `onStart`'s
+    // `blockConcurrencyWhile`, where awaiting a whole agent turn trips
+    // `do.block_concurrency.cancel_ms` — the gate is cancelled and the Durable
+    // Object is RESET. The number is the catalog's, not retyped here.
+    // Turn-capable recovery belongs on the durable wake's alarm frame, which
+    // `owedWorkExists()` arms.
+    try {
+      await recoverActorTurns(this.actorHost());
+    } catch (cause) {
+      diagnostics.failure('actor.turn_recovery_failed', toKinuError({
+        doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
+      }), { workspace: this.name });
+    }
+    // ARM 2, STRICTLY AFTER ARM 1. A claim reconciled above is an actor free to
+    // take new work; drained first, this would issue a second turn for an actor
+    // whose previous one still holds a claim, and the per-actor serialization
+    // would refuse — honestly, but the wrong turn. Truncation is owed work, so
+    // it is reported to the caller the way every other budgeted pass reports it.
+    const delegationsTruncated = await this.drainAdmittedDelegations();
+    if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
     // AFTER the branch seal has drained, and the seal's own remainder is what
     // says so: a branch head still `running` from before the cutoff is a row
     // the LIMIT-256 seal has not reached, and the fork reconcile — which reads
@@ -2572,7 +3118,7 @@ export class OrchestratorAgent extends ActorAgent {
         }),
         logActivity: (event, detail) => this.logActivity(event, detail),
       });
-      await this.reclaimSettledExplorationFacets();
+      await this.reclaimSettledExplorationActors();
     } catch (cause) {
       diagnostics.failure('head.journal_reconcile_failed', toKinuError({
         doing: 'reconciling fork-journal heads a dead activation left running',
@@ -2580,33 +3126,32 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
-    return super.maintenanceWork();
+    return delegationsTruncated || await super.maintenanceWork();
   }
   /**
-   * Reclaim exploration facets a reset left behind, against the ledgers the
+   * Retire exploration ACTORS a reset left behind, against the ledgers the
    * fork reconciliation just settled (S13). Runs AFTER
    * `reconcileInterruptedForks` so a head it marked `interrupted` reads as
-   * resumable here, never terminal — only rows whose work is provably finished
-   * or taken over lose their facet storage.
+   * resumable here, never terminal.
+   *
+   * A much smaller claim than the facet sweep made. That one had to destroy
+   * DATABASES — an unreclaimed facet was a permanent SQLite inside this object,
+   * charged against a quota whose overflow is a reset rather than a catchable
+   * error — so it read the SDK's sub-agent registry and deleted storage on the
+   * strength of a ledger match. What is left behind now is a roster row and an
+   * `actor_id`-scoped set of rows in the one database, so being late costs
+   * nothing and the sweep is bookkeeping.
    */
-  protected async reclaimSettledExplorationFacets(): Promise<void> {
+  protected async reclaimSettledExplorationActors(): Promise<void> {
     try {
-      const { reclaimed } = await reconcileExplorationFacets(
-        {
-          list: () => this.listSubAgents(this.facetClass()).map((facet) => {
-            const actor = this.workspaceActors().storageEntry(this.actorHandle(), facet.name);
-            if (!actor) throw new KinuError('missing', 'The facet has no registered actor identity.');
-            return { name: actor.name, reference: actor.reference };
-          }),
-          delete: async (id, reference) => deleteExplorationFacet(this, id, reference),
-        },
-        (id) => this.explorationFacetLedgerStatus(id),
-        () => this.hasLiveExploration(),
-      );
-      if (reclaimed > 0) diagnostics.event('facet.settled_reclaimed', { reclaimed });
+      const { retired } = await reclaimSettledExplorationActors(this.explorationSeams(), {
+        readHead: (id) => this.headJournal.readHead(id),
+        hasLiveExploration: () => this.hasLiveExploration(),
+      });
+      if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
     } catch (err) {
-      diagnostics.failure('facet.reconciliation_failed', toKinuError({
-        doing: 'reclaiming exploration facets left behind by a reset',
+      diagnostics.failure('actor.reconciliation_failed', toKinuError({
+        doing: 'retiring exploration actors left behind by a reset',
         cause: err,
         otherwise: 'unavailable',
       }), { workspace: this.name });
@@ -2629,7 +3174,10 @@ export class OrchestratorAgent extends ActorAgent {
    * than either: the sweep already refuses to guess about an unledgered facet
    * while exploration is live, and a value nobody wrote is the same question.
    */
-  private explorationFacetLedgerStatus(id: string): ExplorationFacetLedgerStatus {
+  /** Kept as the one place the head journal's four statuses are read as a
+   *  lifecycle verdict; `reclaimSettledExplorationActors` asks the journal the
+   *  same question through its own `readHead` port. */
+  protected explorationFacetLedgerStatus(id: string): 'resumable' | 'terminal' | 'unknown' {
     const head = this.headJournal.readHead(id);
     if (!head) return 'unknown';
     if (headStatusUnsettled(head.status)) return 'resumable';
@@ -2817,14 +3365,14 @@ export class OrchestratorAgent extends ActorAgent {
   /** The LATEST search's tree only — settled earlier searches stay in
    *  search_nodes and must never shadow the run the operator is watching. */
   @callable() async getMctsTree() {
-    return readLatestSearchTree(this.boundSql);
+    return readLatestSearchTree(this.boundSql, this.actorHandle());
   }
 
   /** One named search's tree. The unified fork list can select a competed run
    *  that is not the latest, and `getMctsTree` would then answer with another
    *  search's branches under it. */
   @callable() async getSearchTree(rootId: string) {
-    return readSearchTree(this.boundSql, rootId);
+    return readSearchTree(this.boundSql, this.actorHandle(), rootId);
   }
 
   /**
@@ -2877,7 +3425,7 @@ export class OrchestratorAgent extends ActorAgent {
    * leaderboard drawn on a bare value shows a number that cannot be read.
    */
   @callable() async listRecordObjectives(request?: PageRequest): Promise<Page<RecordObjectiveSummary>> {
-    return listRecordObjectives(this.boundSql, request?.cursor ?? null, request?.limit);
+    return listRecordObjectives(this.boundSql, this.actorHandle(), request?.cursor ?? null, request?.limit);
   }
 
   /**
@@ -2889,7 +3437,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async listRecordCells(
     request: RecordObjectiveHandle & PageRequest,
   ): Promise<Page<RecordCellSummary>> {
-    return listRecordCells(this.boundSql, request, request.cursor ?? null, request.limit);
+    return listRecordCells(this.boundSql, this.actorHandle(), request, request.cursor ?? null, request.limit);
   }
 
   /**
@@ -2902,7 +3450,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async readRecordCell(
     request: RecordCellHandle & PageRequest,
   ): Promise<Page<ExplorationRecord>> {
-    return readRecordCell(this.boundSql, request, request.cursor ?? null, request.limit);
+    return readRecordCell(this.boundSql, this.actorHandle(), request, request.cursor ?? null, request.limit);
   }
 
   /**
@@ -2949,7 +3497,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  The CLI serves the same projection over bun:sqlite, so `kinu inspect
    *  mcts <id>` formats one shape however it reached it. */
   @callable() async getMctsNodeDetail(nodeId: string): Promise<SearchNodeDetail | null> {
-    return readSearchNodeDetail(this.boundSql, nodeId);
+    return readSearchNodeDetail(this.boundSql, this.actorHandle(), nodeId);
   }
 
   // ── Evolution Changelog — the self-change digest + revert (core builder) ──
@@ -2980,8 +3528,9 @@ export class OrchestratorAgent extends ActorAgent {
       // like the consolidation path.
       this._cachedTools = null;
       this._cachedToolsKey = '';
-      void this.sql`INSERT INTO evolution_events (type, message, created_at)
-        VALUES ('reflection', ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
+      void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
+        VALUES (${this.actorHandle().actorId}, 'reflection',
+                ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
     }
     return result;
   }
@@ -2994,7 +3543,7 @@ export class OrchestratorAgent extends ActorAgent {
   async listAlternateTakes(): Promise<Record<string, AlternateTakeSet>> {
     const byTurn: Record<string, AlternateTakeSet> = {};
     // Newest-first listing: keep the first (latest) set seen per turn.
-    for (const set of listAlternateTakeSets(this.boundSql, { limit: 100 })) {
+    for (const set of listAlternateTakeSets(this.boundSql, this.actorHandle(), { limit: 100 })) {
       if (set.turnId && !byTurn[set.turnId]) byTurn[set.turnId] = set;
     }
     return byTurn;
@@ -3003,7 +3552,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** The newest take set, picked or not — the TUI's /takes comparison source. */
   @callable()
   async latestAlternateTakes(): Promise<AlternateTakeSet | null> {
-    return latestAlternateTakeSet(this.boundSql);
+    return latestAlternateTakeSet(this.boundSql, this.actorHandle());
   }
 
   /**
@@ -3075,6 +3624,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
     return getRunTimeline({
       sql: this.boundSql,
+      actor: this.actorHandle(),
       events: this.eventRecorder,
       jobs: this.jobs,
       currentRunId: this._currentRunId,
@@ -3359,15 +3909,16 @@ export class OrchestratorAgent extends ActorAgent {
       throw new Error('messageId must be a non-empty string');
     }
     if (feedback === null) {
-      void this.sql`DELETE FROM turn_feedback WHERE message_id = ${messageId}`;
+      void this.sql`DELETE FROM turn_feedback
+        WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId}`;
       return { ok: true, messageId, feedback: null, rescored: 0 };
     }
     if (feedback !== 'positive' && feedback !== 'negative') {
       throw new Error(`feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
-    void this.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
-             VALUES (${messageId}, ${feedback}, ${Date.now()})
-             ON CONFLICT(message_id) DO UPDATE SET
+    void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
+             VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback}, ${Date.now()})
+             ON CONFLICT(actor_id, message_id) DO UPDATE SET
                feedback   = excluded.feedback,
                created_at = excluded.created_at`;
 
@@ -3375,7 +3926,8 @@ export class OrchestratorAgent extends ActorAgent {
     // quality. No-op when the turn used no crafted tools.
     let rescored = 0;
     const usageRows = this.sql<{ tool_names: string }>`
-      SELECT tool_names FROM turn_craft_usage WHERE message_id = ${messageId} LIMIT 1`;
+      SELECT tool_names FROM turn_craft_usage
+      WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
     if (usageRows[0]?.tool_names) {
       const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
       const names = parsedNames.success ? parsedNames.output : [];
@@ -3402,11 +3954,16 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** All recorded feedback keyed by message id — one round-trip so the chat
-   *  hydrates its thumbs marks on load instead of forgetting them. */
+   *  hydrates its thumbs marks on load instead of forgetting them.
+   *
+   *  THIS actor's marks. The ids are unique only within an actor, so an
+   *  unscoped read would hand this chat a sibling's thumbs under ids that
+   *  happen to collide. */
   @callable()
   async listTurnFeedback(): Promise<Record<string, 'positive' | 'negative'>> {
     const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
-      SELECT message_id, feedback FROM turn_feedback`;
+      SELECT message_id, feedback FROM turn_feedback
+      WHERE actor_id = ${this.actorHandle().actorId}`;
     return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
   }
 
@@ -3439,7 +3996,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** List recent GEPA optimisation runs for the UI. */
   @callable()
   async getGepaRuns(limit: number = 20): Promise<GepaRunSummary[]> {
-    return listGepaRuns(this.boundSql, limit);
+    return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
   // ── Replay-eval loss curve ──────────────────────────────────────
@@ -3448,7 +4005,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  data a loss chart would render. */
   @callable()
   async getReplayEvals(limit: number = 50): Promise<ReplayEvalSummary[]> {
-    return listReplayEvals(this.boundSql, limit);
+    return listReplayEvals(this.boundSql, this.actorHandle(), limit);
   }
 
   /** K_align: the correction rate per 100 graded turns, per scaffold version,
@@ -3456,7 +4013,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  telemetry alone, no benchmark and no judge. */
   @callable()
   async getAlignmentConvergence(): Promise<AlignmentConvergence> {
-    return alignmentConvergence(this.boundSql);
+    return alignmentConvergence(this.boundSql, this.actorHandle());
   }
 
   /** What hand labels establish about the turn-outcome classifier, and the
@@ -3464,13 +4021,13 @@ export class OrchestratorAgent extends ActorAgent {
    *  K_align above is the classifier's opinion until this one has numbers. */
   @callable()
   async getOutcomeCalibration(): Promise<CalibrationReport> {
-    return calibrationReport(this.boundSql);
+    return calibrationReport(this.boundSql, this.actorHandle());
   }
 
   /** Draw the next calibration set: turns for a human to judge blind. */
   @callable()
   async sampleOutcomeLabeling(size: number = DEFAULT_LABEL_BUDGET): Promise<LabelingItem[]> {
-    return sampleForLabeling(this.boundSql, { size });
+    return sampleForLabeling(this.boundSql, this.actorHandle(), { size });
   }
 
   /** Store a labeling pass. Append-only; ids the ledger no longer knows are
@@ -3480,14 +4037,14 @@ export class OrchestratorAgent extends ActorAgent {
     labeler: string,
     labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>,
   ): Promise<LabelIngestResult> {
-    return ingestOutcomeLabels(this.boundSql, { labeler, labels });
+    return ingestOutcomeLabels(this.boundSql, this.actorHandle(), { labeler, labels });
   }
 
   /** How the LLM panel scored against the owner's own labels, and whether it
    *  cleared the pre-registered bar to stand in for them. */
   @callable()
   async getOutcomeEnsemble(): Promise<EnsembleReport> {
-    return ensembleReport(this.boundSql);
+    return ensembleReport(this.boundSql, this.actorHandle());
   }
 
   /**
@@ -3524,7 +4081,7 @@ export class OrchestratorAgent extends ActorAgent {
   async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
     const registry = this.providerRegistry();
     const turnRoute = resolveModelRoute('agent', await this.routingProfile());
-    return runEnsemble(this.boundSql, {
+    return runEnsemble(this.boundSql, this.actorHandle(), {
       specs: async () => (await resolveEnsembleJudgeSelection({
         registry,
         specs: specs ?? null,
@@ -3561,15 +4118,15 @@ export class OrchestratorAgent extends ActorAgent {
     pareto: Array<{ candidateId: string; instanceId: string; score: number }>;
   }> {
     try {
-      const run = listGepaRuns(this.boundSql, 200).find((r) => r.runId === runId) ?? null;
-      const candidates = loadGepaCandidates(this.boundSql, runId).map((c) => ({
+      const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
+      const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
         id: c.id, parentId: c.parentId, source: c.source,
         scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
         aggregateScore: c.aggregateScore, createdAt: c.createdAt,
       }));
       // The membership table is core's; its loader derives the front from the
       // rows that persist. No raw SELECT across the package boundary.
-      const pareto = loadGepaParetoFront(this.boundSql, runId);
+      const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
       return { run, candidates, pareto };
     } catch (error) {
       if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
@@ -3669,28 +4226,21 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * What a head or node is producing RIGHT NOW, forwarded to open clients.
+   * `publishHeadStream` — the inbound RPC a FACET called to forward the frames
+   * it was producing — is GONE, and its `rpc-surface.ts` allowlist row with it.
    *
-   * The transient twin of {@link recordHeadStep}, and deliberately not shaped
-   * like it. `recordHeadStep` WRITES: it is the branch's durable trace, so it is
-   * traced, awaited by the caller, and the announcement rides the write. This
-   * one only BROADCASTS — no SQL, no state, nothing read back — because a frame
-   * is superseded by the step that contains it. That is what makes it safe to
-   * publish at display cadence: a lost frame costs a repaint, not a record.
+   * A duplicate rather than an unreached producer, and the difference is what
+   * decided this: at `0b6d36886` it already had no caller in this package
+   * either, because the callers were facets calling inbound over a stub, and
+   * the in-process replacement both EXISTS and is WIRED — `publishHeadStreamFrame`,
+   * reached by `reportNodeDelta` and by `ExplorationHostSeams.publishDelta`. A
+   * live implementation elsewhere is a duplicate; the only implementation with a
+   * departed caller is a producer, and those get wired instead.
    *
-   * Untraced for the same reason: a span per frame would drown the search's own
-   * spans in noise about a channel whose failure mode is a stale pixel.
-   *
-   * ONE CALL PER PROVIDER DELTA. That is the boundary the model's stream already
-   * drew, so a reader gets the bytes in the order they were produced and nothing
-   * has to be tuned. Call volume against this root's input gate is the open
-   * question here, and it is one to MEASURE on a real stream — a guessed batch
-   * size would cost live behaviour and hide the number.
+   * The allowlist row goes with the method deliberately: leaving it would keep
+   * the facet shape REACHABLE for a caller that no longer exists, which is the
+   * fail-closed surface `sealRpcSurface` exists to keep shut.
    */
-  @callable()
-  publishHeadStream(headId: string, kind: HeadStreamKind, delta: string): void {
-    this.publishHeadStreamFrame({ headId, kind, delta });
-  }
 
   /**
    * The immutable turn profile a facet of this workspace runs under.
@@ -3715,10 +4265,6 @@ export class OrchestratorAgent extends ActorAgent {
    * resolves one otherwise, which is what a durable head that outlived its
    * turn needs.
    */
-  @callable()
-  async facetTurnProfile(): Promise<ResolvedTurnProfile> {
-    return this.routingProfile();
-  }
 
   /**
    * One page of this workspace's portable archive — the owner's own copy of
@@ -3849,7 +4395,65 @@ export class OrchestratorAgent extends ActorAgent {
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const owner = this.getOwnerUserId();
     if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
-    return this.inspectSubordinateStorage(request, { owner, workspace: this.name, traversed: [], storagePath: [] });
+    return this.inspectSubordinateStorage(request, { owner, workspace: this.name });
+  }
+
+  /**
+   * ONE hosted actor's own identity, program and open work, for the tab that is
+   * looking at it.
+   *
+   * THE MIGRATION OF `getSubordinateSnapshot`, not an addition beside it. That
+   * RPC was on this same allowlist and answered exactly this capability; it
+   * existed as an RPC only because the display name, the role, the plan and the
+   * steers lived in a facet's PRIVATE database and the root could not read
+   * them. They are `actor_id`-scoped rows in the one workspace database now, so
+   * the same question is six local reads. One allowlist row out, one in, for the
+   * same capability — answered in process instead of by a second isolate over a
+   * stub.
+   *
+   * NAMED FOR THE ACTOR, not the kind. Every kind is an actor now, so a
+   * snapshot keyed to `subordinate` would be stale vocabulary on the day it
+   * landed. The SHAPE is honestly subordinate-shaped today and the name does not
+   * pretend otherwise: `mission` comes off the hire's birth seed, which a head
+   * or a node does not have — they carry a task and a rootId instead. So this
+   * serves any actor whose row the directory resolves, and a head asking it
+   * would get `mission: ''` rather than a lie; widening the shape for the
+   * exploration kinds is a change to the payload, not to this seam.
+   *
+   * READ-ONLY AND IT STARTS NOTHING: `bindStores`, never `acquire`. Reading a
+   * retained actor must not start work — an inspection RPC that acquired would
+   * break that invariant from outside the object, where core's own host suite
+   * cannot see it.
+   *
+   * AUTHORISED TWICE OVER. The workspace must have an owner, as every other
+   * owner-gated read here requires; and the name is resolved THROUGH THE
+   * DIRECTORY under this root's own handle, so it can only name a child of this
+   * root. A browser-reachable read that answered for any actor id handed to it
+   * would be the first cross-actor read reachable from outside this object.
+   */
+  @callable()
+  async getActorSnapshot(name: string) {
+    if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
+    const entry = this.subordinateRoster.requireExisting(name);
+    const reference = this.actorDirectoryStore().apply(
+      actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
+    ).reference;
+    const child = this.actorHost().bindStores(reference);
+    return {
+      name: entry.name,
+      displayName: child.stores.config.getDisplayName() ?? entry.name,
+      role: child.stores.config.getRoleSelection(),
+      mission: entry.birth?.seed.mission ?? '',
+      model: child.stores.config.getModel(),
+      activePlan: child.stores.planReviews.getActive('default'),
+      // The child's OWN acknowledged-but-not-landed steers, read with the
+      // child's actor id rather than this root's — the same rows and the same
+      // ordering `pendingSteerRuns()` reads for the workspace actor.
+      pendingSteers: this.boundSql<{ id: string; text: string }>`
+        SELECT id, text FROM pending_steers
+        WHERE actor_id = ${child.handle.actorId} ORDER BY seq ASC`
+        .map((row) => ({ ...row, state: 'queued' as const, atStep: null })),
+    };
   }
 
   /**
@@ -3950,7 +4554,7 @@ export class OrchestratorAgent extends ActorAgent {
       // rows are summed over the whole log, so this is the total rather than the
       // newest slice of it.
       spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql, actor: this.actorHandle() }),
-      log: readActivityLog(this.boundSql, logLimit),
+      log: readActivityLog(this.boundSql, this.actorHandle(), logLimit),
     };
   }
 
@@ -4118,7 +4722,8 @@ export class OrchestratorAgent extends ActorAgent {
     const crafted = craftedRaw.map(t => {
       // Quality lives on the crafted_tools row, so there is no craft_scores table to join.
       const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
+        SELECT score, uses FROM crafted_tools
+      WHERE actor_id = ${this.actorHandle().actorId} AND name = ${t.name} LIMIT 1`;
       return {
         name: t.name,
         description: t.description || "Crafted tool",
@@ -4262,13 +4867,20 @@ export class OrchestratorAgent extends ActorAgent {
    * `stdout_len` is the whole row's length, so the pane states what it is not
    * showing instead of presenting a prefix as the output. SQLite counts TEXT in
    * characters for both `length` and `substr`, so the two agree.
+   *
+   * SCOPED TO THIS ACTOR, and the predicate is not optional: `executor_output`
+   * is `PRIMARY KEY (actor_id, id)` and every write stamps the actor, so an
+   * `executor` name alone matches a SIBLING's rows too — the workspace box is
+   * shared, so two actors really do run commands on the same executor id. The
+   * `(actor_id, created_at DESC, id DESC)` index is exactly this read's.
    */
   async getExecutorOutput(executorId: string, limit: number = 50) {
     return this.sql<ExecutorOutputRow>`SELECT id, executor, command,
         substr(stdout, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stdout, length(stdout) AS stdout_len,
         substr(stderr, 1, ${EXECUTOR_OUTPUT_CLIP}) AS stderr, length(stderr) AS stderr_len,
         exit_code, created_at
-      FROM executor_output WHERE executor = ${executorId}
+      FROM executor_output
+      WHERE actor_id = ${this.actorHandle().actorId} AND executor = ${executorId}
       ORDER BY created_at DESC LIMIT ${limit}`;
   }
 
@@ -4391,8 +5003,8 @@ export class OrchestratorAgent extends ActorAgent {
         ? { stdout: result, stderr: '', exitCode: 0 }
         : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
 
-      void this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
-        VALUES (${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
+      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stderr, exit_code)
+        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${output.stdout}, ${output.stderr}, ${output.exitCode})`;
 
       this.broadcast(JSON.stringify({
         type: 'executor-output', executor: executorId, command, ...output, timestamp: Date.now(),
@@ -4402,8 +5014,8 @@ export class OrchestratorAgent extends ActorAgent {
     } catch (err) {
       const refusal = refusalOf(toKinuError({ doing: 'execute on ' + executorId, cause: err, otherwise: 'io' }));
       const errMsg = refusal.error;
-      void this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
-        VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
+      void this.sql`INSERT INTO executor_output (actor_id, executor, command, stderr, exit_code)
+        VALUES (${this.actorHandle().actorId}, ${executorId}, ${command}, ${errMsg}, ${1})`;
       // Broadcast on error too — symmetric with the success branch above.
       // Without this, the UI terminal silently swallows failures because
       // it renders only from broadcasts. (STABILITY-AUDIT §B4.)
@@ -4788,7 +5400,13 @@ export class OrchestratorAgent extends ActorAgent {
           caller,
           target: stubFor(name),
           name,
-          source: snapshot,
+          // The transport contract carries the two planes and the cut point;
+          // WHOSE rows those are is a question only this object can answer, and
+          // the answer is its own fenced handle — the same one `forkWorkspace`
+          // checked `untilMessageId` against a moment ago. Never a fresh handle
+          // and never a name off the wire: the frames read pane and message rows
+          // keyed per actor, so any other one snapshots a sibling.
+          source: { ...snapshot, actor: this.actorHandle() },
           ownerUserId,
         });
       },
@@ -4884,15 +5502,44 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * Forked bytes are copied, but approval rows are not authority that may be
    * copied. This marker lands before deliverCloudFork publishes the target in
-   * UserDO, so its first ActorAgent turn sees copied AGENTS.md and skills as
+   * UserDO, so the target's first turn sees copied AGENTS.md and skills as
    * unverified rather than as a legacy migration baseline.
+   *
+   * ONCE PER ACTOR, and that is new with the one-database cutover. The
+   * migration marker is keyed `(actor_id, scope)`, and a fork copies the source
+   * workspace's database — `workspace_actors` rows included — so the target
+   * hosts every actor the source had, not just a main actor. Marking only one
+   * of them would leave the others to grandfather the target's copied
+   * instruction files on their first `grandfatherExisting`, which is exactly
+   * the "copied paths start unverified" invariant this call exists to hold.
+   *
+   * The LIVE roster only. A retired actor takes no turn, so it grandfathers
+   * nothing; the point at which a restored actor needs its marker is its
+   * restoration, not this publication, and `openFenced` refuses a retired row
+   * anyway — a handle over a retired actor is not authority over anything.
+   *
+   * The fence is the fork name. This runs on the target between accepting the
+   * transfer and publishing it in UserDO, so the one thing that must still be
+   * true of every handle it opens is that this object IS that target: a marker
+   * written after a rename would key an authority decision to a workspace
+   * identity nobody asked about.
    */
   private markForkInstructionScopeMigrated(forkName: string): void {
-    new InstructionApprovalStore(
-      this.rt.storage.sql,
-      `cf:${forkName}`,
-      (body) => this.ctx.storage.transactionSync(body),
-    ).markMigratedEmpty();
+    const transaction = <Result>(body: () => Result): Result => this.ctx.storage.transactionSync(body);
+    const directory = this.workspaceActors();
+    const requireForkTarget = (): void => {
+      if (this.name !== forkName) {
+        throw new KinuError('denied', 'The fork instruction marker belongs to a workspace this object is not.');
+      }
+    };
+    for (const record of directory.list()) {
+      new InstructionApprovalStore(
+        this.rt.storage.sql,
+        directory.openFenced(record.actorId, requireForkTarget),
+        `cf:${forkName}`,
+        transaction,
+      ).markMigratedEmpty();
+    }
   }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
@@ -5010,8 +5657,8 @@ export class OrchestratorAgent extends ActorAgent {
     // so the override is documented, never silent.
     if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
       this.config.setAutoGepaEveryNTurns(everyN);
-      void this.sql`INSERT INTO evolution_events (type, message, created_at)
-        VALUES ('reflection', ${
+      void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
+        VALUES (${this.actorHandle().actorId}, 'reflection', ${
           `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
           `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
           `superseded by this default — run setAutoGepa(0) to disable again.`
@@ -5024,7 +5671,7 @@ export class OrchestratorAgent extends ActorAgent {
     // live passes would drive candidate scaffolds through the raw tool surface
     // concurrently and race each other's proposals.
     if (this._gepaTickRunning) return;
-    const recent = listGepaRuns(this.boundSql, 1)[0];
+    const recent = listGepaRuns(this.boundSql, this.actorHandle(), 1)[0];
     // A run left `running` is an INTERRUPTED pass, not a completed one. Taking it
     // as the cadence watermark counted its own turns against the next interval
     // and abandoned it until a whole cadence had accrued again — so it is owed
@@ -5087,18 +5734,18 @@ export class OrchestratorAgent extends ActorAgent {
       await pass();
       return;
     }
-    if (effectAlreadyDone(this.boundSql, scope, `${tick}:done`)) return;
-    if (effectAlreadyDone(this.boundSql, scope, `${tick}:entered`)) {
+    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`)) return;
+    if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`)) {
       diagnostics.event('evolution.interrupted_pass_abandoned', {
         workspace: this.name, lane: scope, tick,
       });
-      recordEffectDone(this.boundSql, scope, `${tick}:done`);
+      recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`);
       return;
     }
     const running = pass();
-    recordEffectDone(this.boundSql, scope, `${tick}:entered`);
+    recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`);
     await running;
-    recordEffectDone(this.boundSql, scope, `${tick}:done`);
+    recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`);
   }
 
   /**
@@ -5212,7 +5859,7 @@ export class OrchestratorAgent extends ActorAgent {
     requests: RefinementRequestView[]; debt: EvolutionDebt;
   }> {
     return {
-      requests: createRefinementStore(this.boundSql).list(limit).map(refinementRequestView),
+      requests: createRefinementStore(this.boundSql, this.actorHandle()).list(limit).map(refinementRequestView),
       debt: refinementDebt(this.refinementDeps),
     };
   }

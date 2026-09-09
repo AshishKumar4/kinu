@@ -53,7 +53,8 @@ import { readForkRun } from '../src/read-models/fork-runs';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
 } from '../src/heads/reconcile';
-import { runSwarm } from '../src/strategy/swarm-run';
+import { runSwarm, type SwarmRunDeps } from '../src/strategy/swarm-run';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
 import type { SwarmNodeRecord } from '../src/strategy/swarm-resume';
 import {
@@ -183,21 +184,27 @@ describe('swarm progress reads the durable tree, not the row', () => {
       rootId: 'mid-level', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
     });
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
-      VALUES ('mid-level', 'mid-level', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${actor.actorId}, 'mid-level', 'mid-level', ${TASK}, 'root')`;
     return { sql, ledger, actor };
   }
 
-  function expand(sql: SqlExecutor, ids: readonly (readonly [string, string | null])[], depth: number): void {
+  /** Grow the tree the way the engine grows it — one row per child, under the
+   *  RUN's own actor, because `search_nodes` is keyed `(actor_id, id)` and a
+   *  child written under any other owner is a node the run cannot select. */
+  function expand(
+    sql: SqlExecutor, actor: ActorHandle,
+    ids: readonly (readonly [string, string | null])[], depth: number,
+  ): void {
     for (const [id, parent] of ids) {
-      void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-        VALUES (${id}, ${parent}, 'mid-level', ${TASK}, 'node', ${depth})`;
+      void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+        VALUES (${actor.actorId}, ${id}, ${parent}, 'mid-level', ${TASK}, 'node', ${depth})`;
     }
   }
 
   test('a poll halfway through a level reads the children on disk, with no checkpoint written', () => {
     const { sql, ledger, actor } = treeAndLedger();
-    expand(sql, [['c1', 'mid-level'], ['c2', 'mid-level'], ['c3', 'mid-level']], 1);
+    expand(sql, actor, [['c1', 'mid-level'], ['c2', 'mid-level'], ['c3', 'mid-level']], 1);
 
     // Every reader agrees, and none of them read the row's integer columns:
     // those still hold what `begin` wrote, because nothing has written since.
@@ -213,11 +220,11 @@ describe('swarm progress reads the durable tree, not the row', () => {
   });
 
   test('after re-entry the same readers count what the new attempt added', () => {
-    const { sql, ledger } = treeAndLedger();
-    expand(sql, [['c1', 'mid-level'], ['c2', 'mid-level']], 1);
+    const { sql, ledger, actor } = treeAndLedger();
+    expand(sql, actor, [['c1', 'mid-level'], ['c2', 'mid-level']], 1);
     const epoch = ledger.reclaim('mid-level');
     expect(epoch).toBe(1);
-    expand(sql, [['g1', 'c1'], ['g2', 'c1']], 2);
+    expand(sql, actor, [['g1', 'c1'], ['g2', 'c1']], 2);
 
     expect(ledger.findRunningSwarms(TASK)).toEqual([
       { rootId: 'mid-level', iteration: 4, budget: 2, epoch: 1 },
@@ -227,7 +234,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
 
   test('touch is the only row write a live swarm makes: heartbeat, fenced on epoch', () => {
     const { sql, ledger, actor } = treeAndLedger();
-    expand(sql, [['c1', 'mid-level']], 1);
+    expand(sql, actor, [['c1', 'mid-level']], 1);
 
     ledger.touch('mid-level', 0, 5_000);
     const row = sql<{ updated_at: number; status: string; iteration: number; budget: number; epoch: number }>`
@@ -253,6 +260,14 @@ describe('swarm progress reads the durable tree, not the row', () => {
 });
 
 describe('harvesting a capped swarm', () => {
+  /**
+   * The harvested search, and the actor that OPENED it.
+   *
+   * One handle for the ledger, the tree and the node records: `search_nodes` and
+   * `swarm_node_records` are both keyed `(actor_id, …)` now, so a seed written
+   * under one actor and harvested under another comes back as "no candidate to
+   * report" — the harvest's own null answer — rather than as a scoping mistake.
+   */
   function setupHarvest() {
     const db = new Database(':memory:');
     const sql = makeSql(db);
@@ -260,18 +275,21 @@ describe('harvesting a capped swarm', () => {
     initSearchTables(execRaw);
     initMctsSearchTable(execRaw);
     initSwarmNodeRecords(execRaw);
-    const ledger = new MctsSearchStore(sql, createTestActorsOver(db).main);
+    const actors = createTestActorsOver(db);
+    const actor = actors.main;
+    const ledger = new MctsSearchStore(sql, actor);
     beganSwarm(ledger, 'harvest-root', 1_000);
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
-      VALUES ('harvest-root', 'harvest-root', ${TASK}, 'root')`;
-    return { sql, ledger };
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${actor.actorId}, 'harvest-root', 'harvest-root', ${TASK}, 'root')`;
+    return { sql, ledger, actor, sibling: actors.sibling };
   }
 
   test('an all-incomplete search has no candidate to report as completed', () => {
-    const { sql, ledger } = setupHarvest();
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-      VALUES ('incomplete', 'harvest-root', 'harvest-root', ${TASK}, 'stopped before an answer', 1)`;
-    recordSwarmNode(sql, {
+    const { sql, ledger, actor } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${actor.actorId}, 'incomplete', 'harvest-root', 'harvest-root', ${TASK},
+              'stopped before an answer', 1)`;
+    recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'incomplete',
       record: {
@@ -282,24 +300,24 @@ describe('harvesting a capped swarm', () => {
       },
       now: 2_000,
     });
-    expect(harvestSwarm({ sql, ledger }, TASK)).toBeNull();
+    expect(harvestSwarm({ sql, ledger, actor }, TASK)).toBeNull();
   });
 
   test('one malformed record cannot hide another usable candidate', () => {
-    const { sql, ledger } = setupHarvest();
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+    const { sql, ledger, actor } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES
-        ('bad', 'harvest-root', 'harvest-root', ${TASK}, 'bad artifact', 1),
-        ('good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('bad', 'harvest-root', '{', 2_000)`;
-    recordSwarmNode(sql, {
+        (${actor.actorId}, 'bad', 'harvest-root', 'harvest-root', ${TASK}, 'bad artifact', 1),
+        (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{', 2_000)`;
+    recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'good',
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
       now: 2_000,
     });
-    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
     expect(harvest?.candidates[0]?.artifact).toBe('usable answer');
     expect(harvest?.unreadableNodes).toEqual(['bad']);
@@ -307,40 +325,42 @@ describe('harvesting a capped swarm', () => {
   });
 
   test('an unknown record version is unreadable during harvest', () => {
-    const { sql, ledger } = setupHarvest();
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
+    const { sql, ledger, actor } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES
-        ('future', 'harvest-root', 'harvest-root', ${TASK}, 'future answer', 1),
-        ('good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('future', 'harvest-root', ${JSON.stringify({
+        (${actor.actorId}, 'future', 'harvest-root', 'harvest-root', ${TASK}, 'future answer', 1),
+        (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK}, 'usable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${actor.actorId}, 'future', 'harvest-root', ${JSON.stringify({
         v: 99, outcome: null, conclusion: null, aggregated: [], tokens: null,
       })}, 2_000)`;
-    recordSwarmNode(sql, {
+    recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'good',
       record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
       now: 2_000,
     });
 
-    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates.map((candidate) => candidate.nodeId)).toEqual(['good']);
     expect(harvest?.unreadableNodes).toEqual(['future']);
   });
 
   test('an all-corrupt harvest fails distinctly from an empty search', () => {
-    const { sql, ledger } = setupHarvest();
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-      VALUES ('bad', 'harvest-root', 'harvest-root', ${TASK}, 'unreadable answer', 1)`;
-    void sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('bad', 'harvest-root', '{', 2_000)`;
-    expect(() => harvestSwarm({ sql, ledger }, TASK)).toThrow('none can be decoded');
+    const { sql, ledger, actor } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${actor.actorId}, 'bad', 'harvest-root', 'harvest-root', ${TASK},
+              'unreadable answer', 1)`;
+    void sql`INSERT INTO swarm_node_records (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${actor.actorId}, 'bad', 'harvest-root', '{', 2_000)`;
+    expect(() => harvestSwarm({ sql, ledger, actor }, TASK)).toThrow('none can be decoded');
   });
 
   test('a sealed candidate carries its breach and publication caveat', () => {
-    const { sql, ledger } = setupHarvest();
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-      VALUES ('sealed', 'harvest-root', 'harvest-root', ${TASK}, 'candidate answer', 1)`;
+    const { sql, ledger, actor } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${actor.actorId}, 'sealed', 'harvest-root', 'harvest-root', ${TASK},
+              'candidate answer', 1)`;
     const breach = {
       floor: {
         value: 1_200,
@@ -352,7 +372,7 @@ describe('harvesting a capped swarm', () => {
       margin: 0.599,
       hypotheses: ['floor_wrong', 'verifier_gameable'] as const,
     };
-    recordSwarmNode(sql, {
+    recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'sealed',
       record: {
@@ -367,10 +387,40 @@ describe('harvesting a capped swarm', () => {
       },
       now: 2_000,
     });
-    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates[0]?.breach).toEqual(breach);
     expect(harvest?.publication.state).toEqual({ kind: 'sealed', breach, clearedBy: null });
     expect(harvest?.publication.caveat).toContain('not publishable');
+  });
+
+  test('a harvest under another actor of the same workspace reports NOTHING', () => {
+    // The refusal that distinguishes "wrong actor" from "no rows". Every read
+    // above is scoped `(actor_id, …)`, so a sibling handle threaded into the
+    // harvest by mistake would answer `null` — the same answer a settled search
+    // gives — and every assertion above would still pass. This pins the
+    // difference: the SAME rows, harvested under a sibling of the run's actor,
+    // are not visible at all.
+    const { sql, ledger, actor, sibling: issue } = setupHarvest();
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${actor.actorId}, 'good', 'harvest-root', 'harvest-root', ${TASK},
+              'usable answer', 1)`;
+    recordSwarmNode(sql, actor, {
+      rootId: 'harvest-root',
+      nodeId: 'good',
+      record: { outcome: null, conclusion: null, aggregated: [], tokens: null },
+      now: 2_000,
+    });
+    // The run's own actor sees its candidate — the positive read that makes the
+    // negative one below mean something.
+    expect(harvestSwarm({ sql, ledger, actor }, TASK)?.candidates.map((c) => c.nodeId))
+      .toEqual(['good']);
+
+    // A sibling's ledger holds no running row for this task at all, which is the
+    // first thing a harvest asks — so the tree it would have read is unreachable.
+    const sibling = issue('other');
+    const siblingLedger = new MctsSearchStore(sql, sibling);
+    expect(siblingLedger.findRunningSwarms(TASK)).toEqual([]);
+    expect(harvestSwarm({ sql, ledger: siblingLedger, actor: sibling }, TASK)).toBeNull();
   });
 });
 
@@ -401,10 +451,10 @@ describe('the durable record envelope is versioned', () => {
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     beganSwarm(ledger, 'root', 1_000);
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
-      VALUES ('root', 'root', ${TASK}, 'root')`;
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-      VALUES ('n1', 'root', 'root', ${TASK}, 'answer one', 1)`;
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${rt.actor.actorId}, 'root', 'root', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${rt.actor.actorId}, 'n1', 'root', 'root', ${TASK}, 'answer one', 1)`;
     return { sql, ledger, journal, actor: rt.actor };
   }
 
@@ -421,11 +471,12 @@ describe('the durable record envelope is versioned', () => {
 
   test('the writer stamps v1 and the reader round-trips it', () => {
     const fixture = resumeFixture();
-    recordSwarmNode(fixture.sql, {
+    recordSwarmNode(fixture.sql, fixture.actor, {
       rootId: 'root', nodeId: 'n1', record: A_RECORD, now: 2_000,
     });
     const [stored] = fixture.sql<{ record_json: string }>`
-      SELECT record_json FROM swarm_node_records WHERE node_id = 'n1'`;
+      SELECT record_json FROM swarm_node_records
+        WHERE actor_id = ${fixture.actor.actorId} AND node_id = 'n1'`;
     expect(JSON.parse(stored.record_json).v).toBe(RECORD_SCHEMA_VERSION);
     expect(reenter(fixture)?.nodes.find((node) => node.id === 'n1')?.record).toEqual(A_RECORD);
   });
@@ -434,23 +485,27 @@ describe('the durable record envelope is versioned', () => {
     // Field-perfect but stampless: there is one schema and the stamp is in it, so
     // this fails by name rather than falling through to a second read path.
     const fixture = resumeFixture();
-    void fixture.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('n1', 'root', ${JSON.stringify(A_RECORD)}, 2_000)`;
+    void fixture.sql`INSERT INTO swarm_node_records
+        (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${fixture.actor.actorId}, 'n1', 'root', ${JSON.stringify(A_RECORD)}, 2_000)`;
     expect(() => reenter(fixture)).toThrow('corruption rather than an old shape');
   });
 
   test('an unknown envelope version refuses and names the version', () => {
     const fixture = resumeFixture();
-    void fixture.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('n1', 'root', ${JSON.stringify({ v: 99, ...A_RECORD })}, 2_000)`;
+    void fixture.sql`INSERT INTO swarm_node_records
+        (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${fixture.actor.actorId}, 'n1', 'root',
+              ${JSON.stringify({ v: 99, ...A_RECORD })}, 2_000)`;
     expect(() => reenter(fixture)).toThrow(/schema version 99/);
   });
 
   test('a stamped row this build cannot parse refuses, naming itself as the writer', () => {
     // An outcome arm no version of this engine ever wrote.
     const badArm = resumeFixture();
-    void badArm.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('n1', 'root', ${JSON.stringify({
+    void badArm.sql`INSERT INTO swarm_node_records
+        (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${badArm.actor.actorId}, 'n1', 'root', ${JSON.stringify({
         v: RECORD_SCHEMA_VERSION,
         ...A_RECORD,
         outcome: { ...A_RECORD.outcome, kind: 'teleported' },
@@ -459,8 +514,9 @@ describe('the durable record envelope is versioned', () => {
 
     // A field this build's own schema requires, missing.
     const missingField = resumeFixture();
-    void missingField.sql`INSERT INTO swarm_node_records (node_id, root_id, record_json, created_at)
-      VALUES ('n1', 'root', ${JSON.stringify({
+    void missingField.sql`INSERT INTO swarm_node_records
+        (actor_id, node_id, root_id, record_json, created_at)
+      VALUES (${missingField.actor.actorId}, 'n1', 'root', ${JSON.stringify({
         v: RECORD_SCHEMA_VERSION, outcome: null, conclusion: null, aggregated: [],
       })}, 2_000)`;
     expect(() => reenter(missingField)).toThrow('under its own schema version 1');
@@ -690,11 +746,35 @@ function nodeModel(opts: {
 
 /* ── the workspace, and the durable half that survives the kill ───────────── */
 
-async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
+/**
+ * The workspace both attempts share, and the node-hosting seam a search of
+ * `unit:{kind:'answer'}` needs.
+ *
+ * REAL seats, not a stub: every node here runs a tool-using loop, and a node's
+ * turn is admitted on its OWN actor now. `hostedSeatsOver` issues those actors
+ * as children of this workspace's main actor through the production directory,
+ * so a re-entry re-seats the SAME node ids it froze — the directory keys a
+ * creation by `(parent, creationId)`, which is durable.
+ *
+ * `activation()` IS THE EVICTION BOUNDARY, and it has to be called once per
+ * attempt. An `ActorHost` holds one live session per hosted actor, and an
+ * admitted turn lives on that session — in memory, for the life of the isolate.
+ * A single host shared across both attempts would therefore refuse the re-entry
+ * with "this actor already has an admitted turn", because the frozen turns of
+ * attempt one would still be admitted; a real eviction destroys those sessions
+ * and keeps only the rows. Each call here is one activation: fresh sessions
+ * over the same durable directory, which is precisely the state the incident
+ * left behind.
+ */
+async function workspace(): Promise<{
+  rt: AgentRuntime;
+  db: Database;
+  activation: () => SwarmRunDeps['hostNode'];
+}> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
-  return { rt, db };
+  return { rt, db, activation: () => hostedSeatsOver({ rt, db }).hostNode };
 }
 
 /** A fiber that runs its body inline and keeps the promise, so a test can await the
@@ -733,11 +813,16 @@ function treeOf(sql: SqlExecutor): SearchNode[] {
 
 describe('a swarm killed mid-flight is re-entered by the real resume path', () => {
   test('same root, settled scores kept, one ledger row, and the report says it resumed', async () => {
-    const { rt, db } = await workspace();
+    const { rt, db, activation } = await workspace();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
-    const governor = new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+    const governor = new MissionGovernor({
+      storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
+      // The MISSION's own actor: a mission ledger is per actor, and the run
+      // whose spend this governs is the caller's, not any node's.
+      actor: rt.actor,
+    });
     governor.declare(MISSION_LABEL, {});
     governor.activate([MISSION_LABEL]);
 
@@ -745,7 +830,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const log = createRecordingLogger();
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build',  logger: log },
+      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: log },
       resolved(),
     );
     // It is never awaited: `await` never returns when its activation is evicted. Held so
@@ -792,7 +877,8 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const notified: string[] = [];
     const deps: AgentsToolDeps = {
       mode: 'build',
-      fork: { rt, model: second.model },
+      // A SECOND activation's host — see `workspace`.
+      fork: { rt, hostNode: activation(), model: second.model },
       budget: governor,
     };
     const agents = createAgentsTool(deps);
@@ -971,7 +1057,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
   const FLAT_SEARCH: SearchCaps = { depth: 1, branches: 5 };
 
   test('five requested, five journalled, five re-run under their own ids', async () => {
-    const { rt, db } = await workspace();
+    const { rt, db, activation } = await workspace();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
@@ -979,7 +1065,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     // ── ATTEMPT ONE: every node freezes on its first call ──────────────────
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(FLAT_SEARCH),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1003,7 +1089,10 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
-    const agents = createAgentsTool({ mode: 'build', fork: { rt, model: second.model } });
+    // A SECOND activation's host — see `workspace`.
+    const agents = createAgentsTool({
+      mode: 'build', fork: { rt, hostNode: activation(), model: second.model },
+    });
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
@@ -1110,7 +1199,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
  */
 describe('the start-of-life sweep does not retire a swarm the re-drive can re-enter', () => {
   test('the run is re-entered, and the agent is told nothing was lost', async () => {
-    const { rt, db } = await workspace();
+    const { rt, db, activation } = await workspace();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
@@ -1118,7 +1207,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build',  logger: createRecordingLogger() },
+      { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1135,7 +1224,11 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
-    const agents = createAgentsTool({ mode: 'build', fork: { rt, model: second.model } });
+    // A SECOND activation's host: the first one's frozen turns are still admitted
+    // on its in-memory sessions, and an eviction is what destroys them.
+    const agents = createAgentsTool({
+      mode: 'build', fork: { rt, hostNode: activation(), model: second.model },
+    });
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
@@ -1193,12 +1286,13 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // re-enter this run. That is the case the retirement message describes
     // truthfully, and it must still fire — otherwise a genuinely dead fork sits in
     // the roster forever, which is the defect the sweep was built for.
-    const { rt, db } = await workspace();
+    const { rt, db, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build',  logger: createRecordingLogger() },
+      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1237,13 +1331,14 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // Reachable because a swarm's re-entry no longer writes terminal rows of its own:
     // it re-runs what it owns, so the only writer left for a genuinely dead run is
     // this sweep.
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1320,13 +1415,14 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
  */
 describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   test('a refused run\'s ledger row is failed, and the surface stops calling it running', async () => {
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1351,13 +1447,14 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
   }, 300_000);
 
   test('a claimed run keeps its ledger row for the re-entry to settle', async () => {
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
     const frozen = runSwarm(
-      { rt, model: first.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     expect(frozen).toBeInstanceOf(Promise);
@@ -1449,7 +1546,8 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
  */
 describe('a named swarm is called by its name', () => {
   test('the name reaches the root row and the run summary', async () => {
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const named = resolveSwarm({
       preset: 'custom', label: 'resume-proof', name: 'token duel', task: TASK,
@@ -1458,7 +1556,7 @@ describe('a named swarm is called by its name', () => {
     if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
     const model = nodeModel();
     await runSwarm(
-      { rt, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
       named,
     );
 
@@ -1472,11 +1570,12 @@ describe('a named swarm is called by its name', () => {
   }, 300_000);
 
   test('a composition with no name falls back to its provenance label', async () => {
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const model = nodeModel();
     await runSwarm(
-      { rt, model: model.model, mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode, model: model.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1540,7 +1639,8 @@ function jobResultReport(result: string | null) {
  */
 describe('a second search over a task already running is refused', () => {
   test('no new root, no new ledger row, and the refusal names the run to wait for', async () => {
-    const { rt } = await workspace();
+    const { rt, activation } = await workspace();
+    const hostNode = activation();
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const log = createRecordingLogger();
@@ -1548,17 +1648,17 @@ describe('a second search over a task already running is refused', () => {
     // The state the first attempt left: its own root, still running, two children
     // expanded — written where progress actually lives, the tree, not a checkpoint.
     beganSwarm(ledger, 'root-in-flight', Date.now());
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
-      VALUES ('root-in-flight', 'root-in-flight', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${rt.actor.actorId}, 'root-in-flight', 'root-in-flight', ${TASK}, 'root')`;
     for (const id of ['c1', 'c2']) {
-      void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-        VALUES (${id}, 'root-in-flight', 'root-in-flight', ${TASK}, 'node', 1)`;
+      void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+        VALUES (${rt.actor.actorId}, ${id}, 'root-in-flight', 'root-in-flight', ${TASK}, 'node', 1)`;
     }
     expect(ledger.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['root-in-flight']);
 
     const second = nodeModel();
     const result = await runSwarm(
-      { rt, model: second.model, mode: 'build',  logger: log },
+      { rt, hostNode, model: second.model, mode: 'build', logger: log },
       resolved(),
     );
 
@@ -1574,13 +1674,16 @@ describe('a second search over a task already running is refused', () => {
     // NOTHING WAS CREATED. This is the assertion the incident fails: no second root,
     // no second ledger row, and the live row untouched — not superseded, because this
     // call had no standing to take it over.
-    const seededTree = sql<{ id: string }>`SELECT id FROM search_nodes ORDER BY id`.map((r) => r.id);
+    const seededTree = sql<{ id: string }>`SELECT id FROM search_nodes
+                                             WHERE actor_id = ${rt.actor.actorId}
+                                             ORDER BY id`.map((r) => r.id);
     expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
       .toEqual(['root-in-flight']);
     expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
 
     // …and the refusal ADDED nothing to the tree it read.
-    expect(sql<{ id: string }>`SELECT id FROM search_nodes ORDER BY id`.map((r) => r.id))
+    expect(sql<{ id: string }>`SELECT id FROM search_nodes
+                                 WHERE actor_id = ${rt.actor.actorId} ORDER BY id`.map((r) => r.id))
       .toEqual(seededTree);
 
     // And no model call was made at all: the refusal lands before the first wave, so a
@@ -1612,13 +1715,14 @@ describe('harvested witness verdict', () => {
     initSearchTables(execRaw);
     initMctsSearchTable(execRaw);
     initSwarmNodeRecords(execRaw);
-    const ledger = new MctsSearchStore(sql, createTestActorsOver(db).main);
+    const actor = createTestActorsOver(db).main;
+    const ledger = new MctsSearchStore(sql, actor);
     beganSwarm(ledger, 'harvest-root', 1_000);
-    void sql`INSERT INTO search_nodes (id, root_id, task, observation)
-      VALUES ('harvest-root', 'harvest-root', ${TASK}, 'root')`;
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, observation, depth)
-      VALUES ('witness', 'harvest-root', 'harvest-root', ${TASK}, 'certificate', 1)`;
-    recordSwarmNode(sql, {
+    void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
+      VALUES (${actor.actorId}, 'harvest-root', 'harvest-root', ${TASK}, 'root')`;
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      VALUES (${actor.actorId}, 'witness', 'harvest-root', 'harvest-root', ${TASK}, 'certificate', 1)`;
+    recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'witness',
       record: {
@@ -1635,7 +1739,7 @@ describe('harvested witness verdict', () => {
       now: 2_000,
     });
 
-    const harvest = harvestSwarm({ sql, ledger }, TASK);
+    const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.witnessFound).toBe(true);
     expect(harvest?.candidates[0]?.witnessFound).toBe(true);
   });

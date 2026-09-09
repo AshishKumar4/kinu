@@ -166,7 +166,6 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
   const options: LocalAgentHostOptions = {
     roster: () => refs,
     dbPath: (name) => join(AGENT_HOME, name, 'agent.db'),
-    childDbPath: (parentDbPath, child) => join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
     open: async (ref, db, dbPath) => {
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);

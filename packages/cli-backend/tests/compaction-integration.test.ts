@@ -130,7 +130,7 @@ describe('default compaction over the real storage plane', () => {
     });
 
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const state = createCompactionStateStore(rt.storage.sql);
+    const state = createCompactionStateStore(rt.storage.sql, rt.actor);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     let summarizeCalls = 0;
@@ -300,7 +300,7 @@ describe('default compaction over the real storage plane', () => {
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const state = createCompactionStateStore(rt.storage.sql);
+    const state = createCompactionStateStore(rt.storage.sql, rt.actor);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     const extension = createCompactionExtension({

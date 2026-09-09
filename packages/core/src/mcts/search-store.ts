@@ -303,7 +303,8 @@ export class MctsSearchStore {
   private childrenOf(rootId: string): number {
     return this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
-      WHERE root_id = ${rootId} AND parent_id IS NOT NULL`[0]?.n ?? 0;
+      WHERE actor_id = ${this.actorId} AND root_id = ${rootId}
+        AND parent_id IS NOT NULL`[0]?.n ?? 0;
   }
 
   /**
@@ -386,7 +387,8 @@ export class MctsSearchStore {
     const rows = this.sql<{ root_id: string; config_json: string; epoch: number; children: number }>`
       SELECT r.root_id, r.config_json, r.epoch,
         (SELECT COUNT(*) FROM search_nodes s
-         WHERE s.root_id = r.root_id AND s.parent_id IS NOT NULL) AS children
+         WHERE s.actor_id = r.actor_id AND s.root_id = r.root_id
+           AND s.parent_id IS NOT NULL) AS children
       FROM mcts_search_runs r
       WHERE r.actor_id=${this.actorId} AND r.status='running' AND r.task=${task} AND r.engine='swarm'
       ORDER BY r.updated_at DESC, r.created_at DESC, r.root_id DESC`;

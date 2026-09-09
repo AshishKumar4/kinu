@@ -15,15 +15,17 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { NodeStatus, SearchNode } from '../types/mcts';
 
-export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
+export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchNode[] {
+  actor.assertCurrent();
   return sql<SearchNode>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
     FROM search_nodes
-    WHERE root_id = (
-      SELECT root_id FROM search_nodes
+    WHERE actor_id = ${actor.actorId} AND root_id = (
+      SELECT root_id FROM search_nodes WHERE actor_id = ${actor.actorId}
       GROUP BY root_id ORDER BY MAX(created_at) DESC, root_id DESC LIMIT 1
     )
     ORDER BY depth, created_at`;
@@ -46,11 +48,12 @@ export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
  * searches exist and the canvas drew a listed fork with no tree under it. Roots
  * are the caller's page now, so that disagreement has nowhere to live.
  */
-export function readSearchTree(sql: SqlExecutor, rootId: string): SearchNode[] {
+export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchNode[] {
+  actor.assertCurrent();
   return sql<SearchNode>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
-    FROM search_nodes WHERE root_id = ${rootId}
+    FROM search_nodes WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY depth, created_at`;
 }
 
@@ -126,11 +129,14 @@ const summarize = (node: DetailRow): SearchNodeSummary => ({
  * be one: `parent_id` is a plain column, and a walk that trusted it would hang
  * the request instead of returning a wrong answer.
  */
-export function readSearchNodeDetail(sql: SqlExecutor, nodeId: string): SearchNodeDetail | null {
+export function readSearchNodeDetail(
+  sql: SqlExecutor, actor: ActorHandle, nodeId: string,
+): SearchNodeDetail | null {
+  actor.assertCurrent();
   const readNode = (id: string): DetailRow | undefined => sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
            task, observation, code_used, branch_agent_key, msg_id, created_at
-    FROM search_nodes WHERE id = ${id} LIMIT 1`[0];
+    FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`[0];
 
   const node = readNode(nodeId);
   if (node === undefined) return null;
@@ -146,7 +152,7 @@ export function readSearchNodeDetail(sql: SqlExecutor, nodeId: string): SearchNo
   const children = sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
            task, observation, code_used, branch_agent_key, msg_id, created_at
-    FROM search_nodes WHERE parent_id = ${nodeId}
+    FROM search_nodes WHERE actor_id = ${actor.actorId} AND parent_id = ${nodeId}
     ORDER BY value DESC, visits DESC, created_at`;
 
   return {

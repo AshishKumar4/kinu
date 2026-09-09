@@ -5,8 +5,9 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestSql, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,15 +33,16 @@ import {
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
   type EventVariant,
-  createAgentSelfProvider,
+  createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
   SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
 import { discoverAgentsMd } from '../src/agents-md';
+import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';
 
 /** The resolver members these tests do not exercise — spelled out once so a
@@ -55,12 +57,20 @@ const resolverRest = {
   }),
 };
 
+/** A governor over its own scratch ledger, named to its own actor. The ledger
+ *  is actor-scoped, so a fixture that omitted the handle would debit rows it
+ *  could never read back. */
+function governorDeps() {
+  const db = new Database(':memory:');
+  return { actor: createTestActorsOver(db).main, storage: createTestSql() };
+}
+
 /** Likewise for the agent.* host behind the Node execute fallback. */
 const agentSelfRest = {
   proposeScaffold: async () => ({ ok: true }),
   listScaffoldVersions: async () => [],
   getReplayEvals: async () => [],
-  budget: new MissionGovernor({ storage: createTestSql() }),
+  budget: new MissionGovernor(governorDeps()),
   armCompactNow: () => {},
 };
 
@@ -177,12 +187,10 @@ function workspaceRuntime() {
   const db = new Database(scratchPath('local-session', 'agent.db'));
   // The agent DB carries a messages table in production (created on `kinu
   // create`); the runtime factory doesn't, so provision it for the test.
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   return { db, rt };
 }
@@ -220,11 +228,15 @@ function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<Lo
  *  reader of its own log, so this is the one observable a test has. */
 function hub(db: Database) {
   const sql = makeSqlExec(db);
-  const log = new EventLog(sql);
+  // WHOSE rails. Both are actor-scoped, and a fixture that read them without
+  // naming an actor would read an empty set and call it "nothing pending" —
+  // the exact false green this scoping exists to make impossible.
+  const actor = openWorkspaceMainActor(makeSql(db));
+  const log = new EventLog(sql, actor);
   return {
     pending: () => log.pending({ limit: 50 }),
     recent: (opts: { variant?: EventVariant; limit?: number }) => log.query(opts),
-    triggers: () => listTriggers(new TriggerRegistry(sql, { scheduleAt: async () => {} })).triggers,
+    triggers: () => listTriggers(new TriggerRegistry(sql, actor, { scheduleAt: async () => {} })).triggers,
   };
 }
 
@@ -1577,6 +1589,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // way to express it, and it is also the state a revoke has to produce.
     new InstructionApprovalStore(
       rt.storage.sql,
+      rt.actor,
       `local:${realpathSync(process.cwd())}`,
       (body) => db.transaction(body)(),
     )
@@ -1598,6 +1611,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // the policy after review without changing the digest.
     new InstructionApprovalStore(
       rt.storage.sql,
+      rt.actor,
       `local:${realpathSync(process.cwd())}`,
       (body) => db.transaction(body)(),
     )
@@ -1631,8 +1645,15 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // Simulate a previous CLI exit mid-background-job: a running job + its
     // interrupted bg:* fiber row (stashed phase 'running'). `run` has partial
     // side effects, so it declines the resume and fails as before.
+    //
+    // BOTH ROWS UNDER THE RECOVERING ACTOR. `detectOrphanedFibers` reads this
+    // actor's lanes only (fiber.ts:59) and the two orphan DELETEs in
+    // local-session.ts are scoped the same way, because every actor in a
+    // workspace mints the same `bg:*` lane names. A row planted under any other
+    // owner is not an orphan this session can see: the sweep returns an empty
+    // set, `recover` is never reached, and the test would assert nothing.
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-x', 'run', 'build', 'running', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
 
     await session.recoverBackgroundJobs();
 
@@ -1660,7 +1681,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       ],
     });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
 
     const stderrLines: string[] = [];
     const originalError = console.error;
@@ -1706,7 +1727,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session } = setup('unused', model);
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'finish the interrupted exploration' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-s', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f3', 'bg:agents', '{"phase":"running","jobId":"bgjob-s","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f3', 'bg:agents', '{"phase":"running","jobId":"bgjob-s","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     expect(jobStatus(db, 'bgjob-s')).toBe('running');
@@ -1724,7 +1745,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session, events } = setup('synthesized the background result');
     // A non-resumable orphaned job: recover fails it, then wakes the agent.
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-w', 'run', 'build', 'running', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"run"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"run"}', 1)`);
 
     await session.recoverBackgroundJobs();
     // Awaiting this must not resolve until the wake turn has run start→end — no
@@ -1751,7 +1772,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
@@ -1784,7 +1805,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'edit the target file' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, created_at)
       VALUES ('${rt.actor.actorId}', 'bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:agents', '{"phase":"running","jobId":"bgjob-quiet","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fq', 'bg:agents', '{"phase":"running","jobId":"bgjob-quiet","kind":"agents"}', 1)`);
     await session.recoverBackgroundJobs();
 
     const stderrLines: string[] = [];
@@ -1815,7 +1836,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     const started = performance.now();
@@ -1833,7 +1854,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
-    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
 
     await session.recoverBackgroundJobs();
     const started = performance.now();
@@ -2050,12 +2071,10 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     opts: { oneShot?: boolean; gate?: Promise<void>; model?: LanguageModel } = {},
   ) {
     const db = new Database(scratchPath('local-session-review', 'agent.db'));
-    db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      actor_id TEXT NOT NULL, id TEXT NOT NULL,
-      session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      PRIMARY KEY (actor_id, id))`);
+    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
@@ -2219,8 +2238,14 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
   test('a corrupt deferred row is refused at the next open — no verdict is invented', async () => {
     const { db, rt } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}');
-    db.query(`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-      .run('rev-corrupt', '{truncated', null, 0, 'queued', 1);
+    // A REAL owned row whose only defect is its payload: the owner is supplied
+    // exactly as `deferTurnReview` supplies it (session-window.ts:463), and the
+    // corruption stays where this test names it — a truncated `turn` the
+    // decoder cannot read a verdict out of. A row missing its owner would be
+    // refused by the NOT NULL constraint before any reader saw it, which is a
+    // different refusal than the one under test.
+    db.query(`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(rt.actor.actorId, 'rev-corrupt', '{truncated', null, 0, 'queued', 1);
 
     const events: SessionEvent[] = [];
     const next = new LocalAgentSession({
@@ -2417,6 +2442,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
   function approveAgentsMd(db: Database, sql: SqlExecutor, cwd: string, paths: string[]): void {
     const store = new InstructionApprovalStore(
       sql,
+      openWorkspaceMainActor(sql),
       `local:${realpathSync(cwd)}`,
       (body) => db.transaction(body)(),
     );
@@ -2466,6 +2492,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     // after being seen. A standing refusal is the direct way to say it.
     new InstructionApprovalStore(
       rt.storage.sql,
+      rt.actor,
       `local:${realpathSync(root)}`,
       (body) => db.transaction(body)(),
     )
@@ -2495,6 +2522,7 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     );
     new InstructionApprovalStore(
       rt.storage.sql,
+      rt.actor,
       `local:${realpathSync(root)}`,
       (body) => db.transaction(body)(),
     )
@@ -3094,15 +3122,19 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
   function seedTakes(rt: ReturnType<typeof createCLIRuntime>) {
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES ('win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-                        VALUES ('win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
+    // `alternate_takes` is joined back through `search_nodes`, whose one
+    // production writer names the owner first (mcts/record-node.ts:111). The
+    // capture below reads this actor's tree, so a node under any other owner is
+    // a node no take set can reach.
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+                        VALUES (${rt.actor.actorId}, 'win', 'win', 'pick a strategy', 'A', 'go with approach A', 0.9, 3, 1, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+                        VALUES (${rt.actor.actorId}, 'win', 'alt', 'pick a strategy', 'B', 'go with approach B', 0.86, 2, 1, 'open')`;
     // In production the capture happens MID-turn (inside think-mcts), so its
     // timestamp falls inside the claiming turn's window. This seed runs
     // before send() — stamp it just ahead so the scoped claim sees it as a
     // mid-turn capture rather than a stale leftover.
-    captureAlternateTakes(rt.storage.sql, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
+    captureAlternateTakes(rt.storage.sql, rt.actor, { rootId: 'win', task: 'pick a strategy', winnerId: 'win', epsilon: 0.1, now: Date.now() + 1_000 });
     // Mirror converge()'s close: winner terminal, the near-tied rival pruned.
     void rt.storage.sql`UPDATE search_nodes SET status = 'terminal' WHERE id = 'win'`;
     void rt.storage.sql`UPDATE search_nodes SET status = 'pruned' WHERE id = 'alt'`;
@@ -3994,8 +4026,15 @@ describe('agents.* codemode namespace — node sandbox', () => {
       doStream: async (options) => { record(options); return base.doStream(options); },
     });
     const db = new Database(':memory:');
+    // THE PRODUCTION INITIALIZER. A swarm node is its own actor seated through
+    // the host, and its turn claims and hydrates a working revision in the
+    // workspace's own tables — so the plane it runs on has to be a real
+    // workspace, not a bare identity row. Without this every expansion failed
+    // with `no such table: actor_working_revisions` and the search reported
+    // zero branches.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
-    return { deps: { mode: 'build', fork: { rt, model } }, calls };
+    return { deps: { mode: 'build', fork: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {
@@ -4399,7 +4438,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
-      mergeStrategy: 'synthesize', model: 'local/fork',
+      loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
     await head.run();
     // The fork's OWN spec reached the resolver. Without `resolveModel` on this

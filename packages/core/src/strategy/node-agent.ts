@@ -11,7 +11,8 @@
  * authority, its own model, its own transcript, and its own workspace. This module
  * is five of those six. The sixth is built: {@link nodeWorkspace} hands a node a
  * real home directory in the one global view, owned by the node's own uid,
- * provisioned by `agentHomeNodeProvisioner` in `strategy/node-workspace.ts`.
+ * provisioned by the backend's `provisionNodeHome` seam over
+ * `facetHomeProvisioner`, keyed on the node actor's storage key.
  *
  * WHAT IS NOT HERE, AND WHY THAT MATTERS MORE THAN WHAT IS. There is no loop in
  * this file. The loop is {@link runHeadInference}, which already ends on abort, on
@@ -50,12 +51,15 @@ import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
+import type { HostedActor } from '../state/actor-host';
+import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
+import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
 import { permitInPlan } from '../execution/work-mode';
 import { BackgroundJobRunner } from '../jobs/runner';
 import type { BackgroundJobRunnerDeps } from '../jobs/runner';
-import { BackgroundJobStore, initBackgroundJobsTable } from '../jobs/store';
+import { initBackgroundJobsTable } from '../jobs/store';
 import { CONFINED_BACKGROUNDABLE_TOOLS, wrapToolsForBackground } from '../jobs/background-wrap';
 import type { BackgroundPolicy } from '../jobs/threshold';
 import { readProposalCode } from '../execution/code-fence';
@@ -85,6 +89,7 @@ import type { WebSearchProvider } from '../web/index';
 import type { WorkMode } from '../prompting/surface';
 import type { ModelCallSink } from '../events/model-call';
 import type { BuiltinToolName } from '../tools/registry';
+import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
 /**
  * A node's builtin surface: a head's four, plus the report through which it
@@ -234,7 +239,16 @@ export interface NodeRun {
  * starts.
  */
 export interface NodeAgentDeps {
-  rt: AgentRuntime;
+  /**
+   * Acquire the hosted logical actor ONE node runs as, by that node's identity.
+   *
+   * A FACTORY, and it has to be: a search builds these deps once and shallow
+   * copies them per child, so a single `HostedActor` here would give every node
+   * of a wave one claim ledger, one loop pointer and one set of rows — the exact
+   * cross-actor collision the one-database cutover has to make impossible. One
+   * call per node, one actor per node, all of them over the same database.
+   */
+  hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
   /** Where the node's transcript lands. Under *The journal read model* a transcript
    *  is a read model over the node's journal, never a second store. */
@@ -256,11 +270,9 @@ export interface NodeAgentDeps {
    * uid and a file plane that acts as it, over the filesystem it already holds.
    * Core has the credential and no way to make either from it.
    *
-   * Absent leaves {@link rt} in place, which is the honest state for a runtime
-   * with no provisioner at all: the node reports `shared-origin-plane` and runs
-   * exactly as the origin. Consulted ONLY for a loop that runs in this isolate;
-   * a hosted node's facet rebuilds its own runtime from the same workspace on
-   * the other side of the wire.
+   * Absent leaves {@link actor}'s own runtime in place, which is the honest
+   * state for a runtime with no provisioner at all: the node reports
+   * `shared-origin-plane` and runs exactly as the origin.
    */
   runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /**
@@ -269,13 +281,14 @@ export interface NodeAgentDeps {
    * Absent runs {@link runNodeLoop} in this isolate, which is the whole of the
    * difference: the body is the same function either way, so a host is a
    * TRANSPORT and never a second runtime. Present hands the node to a host that
-   * gives it its own storage and its own shell state — on the Cloudflare backend
-   * a `SubordinateAgent` facet in node mode, the same class a fork's head already runs in.
+   * gives it its own shell state.
    *
-   * What a host does NOT buy is parallelism. `do.facet.cpu_shared` is the
-   * governing fact: facets of one object share a single execution thread, so
-   * hosting a wave of nodes serialises exactly as `Promise.allSettled` in one
-   * isolate already does. It buys a storage boundary and a teardown verb. The
+   * What a host does NOT buy is parallelism, and it no longer buys storage
+   * either. `do.facet.cpu_shared` is the governing fact: facets of one object
+   * share a single execution thread, so hosting a wave of nodes serialises
+   * exactly as `Promise.allSettled` in one isolate already does — and a node's
+   * rows now live in the workspace's ONE database, keyed by its actor id, so
+   * there is no storage boundary left to buy. The
    * FILE boundary is independent of it and needs no host at all, because a home
    * is uid/gid/mode on real inodes in the one view and a credential is an
    * argument to `exec`.
@@ -314,8 +327,46 @@ export interface NodeAgentDeps {
  * In this isolate they are plain functions. In a facet they are RPCs to the
  * parent, assembled host-side — the same shape `mission.port` already takes.
  */
+/**
+ * One node's own actor and the per-turn seams that belong to it.
+ *
+ * Returned by {@link NodeAgentDeps.hostNode} rather than assembled by the
+ * search, because every member of it is per ACTOR: the session that admits the
+ * claims, the run the claims are attributed to, the role narrowing that turn
+ * resolves under, and the live block that turn renders.
+ */
+export interface HostedNodeSeat {
+  readonly actor: HostedActor;
+  /** The activation's run id; every turn this node admits is claimed under it. */
+  readonly runId: string;
+  /** How this node's turn is profiled — the same role and tier narrowing an
+   *  actor's chat turn resolves. Role restrictions apply to every full kind. */
+  readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
+    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
+  /** This node's own live per-step block (its jobs, tasks, approvals). */
+  readonly dynamic: () => DynamicContext;
+}
+
 export interface NodeLoopDeps {
-  rt: AgentRuntime;
+  /**
+   * The HOSTED logical actor this node IS — its handle, its actor-scoped stores
+   * over the ONE workspace database, its runtime and its session.
+   *
+   * It used to be a bare `rt`, and a node's turn wrote no durable claim: the
+   * kind whose whole job is to explore under the workspace's own program was
+   * one of the two that ran under no identity, on a private database, with a
+   * fresh v0 loop. Its runtime is `actor.runtime`; its turns are claimed turns
+   * on `actor.session`.
+   */
+  actor: HostedActor;
+  /** The activation's run id; every turn this node admits is claimed under it. */
+  runId: string;
+  /** How this node's turn is profiled — the same role and tier narrowing an
+   *  actor's chat turn resolves. Role restrictions apply to every full kind. */
+  profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
+    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
+  /** This node's own live per-step block (its jobs, tasks, approvals). */
+  dynamic: () => DynamicContext;
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;
@@ -497,7 +548,7 @@ function buildNodeToolSet(input: {
   // the background wrap runs inside the capture, so the transcript records
   // the handle the model was told rather than a result it never saw.
   return buildToolSurface({
-    rt: deps.rt,
+    rt: deps.actor.runtime,
     workMode: input.mode,
     logger: deps.logger,
     report: {
@@ -507,7 +558,7 @@ function buildNodeToolSet(input: {
         // reads it with at the barrier, so the text the gate measures and the text the
         // search measures cannot be two different things.
         const errors = await deps.gradeReport?.(
-          candidateOf(content.trim(), deps.rt.executor.languages),
+          candidateOf(content.trim(), deps.actor.runtime.executor.languages),
         );
         if (errors !== undefined && errors !== null) {
           // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
@@ -629,7 +680,7 @@ export function nodeSystemPrompt(input: {
  * THE NODE LOOP. One body, wherever a node runs.
  *
  * Exported because a host calls it too: on the Cloudflare backend a
- * `SubordinateAgent` facet in node mode receives a {@link NodeRunSpec} over RPC, rebuilds the
+ * hosted node receives a {@link NodeRunSpec} as data, rebuilds the
  * live seams against its own runtime, and calls exactly this function. So a
  * hosted node and an in-process node are not two implementations that must be
  * kept in step — they are one function reached by two transports, which is the
@@ -663,12 +714,12 @@ export async function runNodeLoop(
   // knows nor can tell which kind of agent it is settling a job for.
   const wakes = new AgentWakeQueue();
   // The table is reconciled here rather than assumed: this loop runs in the
-  // search's isolate OR in a facet with storage of its own, and only one of those
-  // has already opened a workspace.
-  initBackgroundJobsTable(deps.rt.storage.execRaw);
+  // search's isolate OR in a hosted node acquired from the workspace's actor
+  // host, and only one of those has already opened the workspace.
+  initBackgroundJobsTable(deps.actor.runtime.storage.execRaw);
   const runnerDeps: BackgroundJobRunnerDeps = {
-    store: new BackgroundJobStore(deps.rt.storage.sql, deps.rt.actor),
-    fiber: deps.rt.schedule.fiber,
+    store: deps.actor.stores.jobs,
+    fiber: deps.actor.runtime.schedule.fiber,
     signals: wakes,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {
@@ -697,7 +748,10 @@ export async function runNodeLoop(
   });
 
   const inference: HeadInferenceDeps = {
-    runtime: deps.rt,
+    actor: deps.actor,
+    runId: deps.runId,
+    profile: deps.profile,
+    dynamic: deps.dynamic,
     model: deps.model,
     tools,
     // The layout the node is TOLD matches the boundary it actually got, and the
@@ -741,6 +795,7 @@ export async function runNodeLoop(
       reported: scratch.reported,
       granted: scratch.granted,
       produced: scratch.produced,
+      languages: deps.actor.runtime.executor.languages,
     };
   } finally {
     // A node reaches here holding work only when it REPORTED while a job was still
@@ -802,6 +857,11 @@ export async function runNodeAgent(
     // case and takes the synthesis word for the rest, because the column is a label
     // and `ResolvedSwarm.settle` is the fact.
     mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
+    // A search explores under the loop it is searching FOR: a node reasoning
+    // with the bootstrap loop while its parent runs a promoted one measures the
+    // wrong program. The local transport already shared its parent's pointer;
+    // this is that fact, stated for both transports.
+    loop: defaultLoopOrigin('node'),
   };
   // THE LEDGER A HOSTED NODE CANNOT BE HANDED. `NodeLoopDeps.mission` is a live port
   // and a {@link NodeRunSpec} is data, so a node crossing to a facet takes the LABELS
@@ -814,7 +874,7 @@ export async function runNodeAgent(
   if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
   // THE ROUTED SPEC A HOSTED NODE RESOLVES ITSELF. Same rule as the labels above:
   // a facet takes data, so the slot's assignment crosses as the caller's own spec
-  // on the field `SubordinateAgent.runAsNode` already resolves
+  // on the field the hosting side already resolves
   // (`facetModelSpec('swarm', headInput.model)`) — one vocabulary, resolved by
   // each transport through its own registry. Assigned rather than declared above
   // so an unrouted run carries no key at all.
@@ -836,6 +896,13 @@ export async function runNodeAgent(
   // rather than turned into a report: the search counts a node it could not measure
   // as one fewer candidate, and that is a different claim from a node that ran and
   // reported nothing.
+  // THE NODE'S ACTOR IS TRANSPORT, so it is acquired here and a failure to
+  // acquire it is rethrown rather than turned into a report — the same rule the
+  // header states for every transport failure. Binding runtime objects over the
+  // workspace's one database is not the node's work; it is what has to exist
+  // before the node can do any. The home-credentialed RUNTIME stays inside the
+  // try below, because that one can fail for reasons that are the node's own.
+  const seat = await deps.hostNode({ nodeId: input.nodeId, rootId: input.rootId, depth: input.depth });
   let run: NodeLoopResult;
   try {
     // THE LOOP RUNS AS THE NODE. A home is uid/gid/mode on real inodes, so it
@@ -846,8 +913,8 @@ export async function runNodeAgent(
     if (deps.host !== undefined) {
       run = await deps.host(spec, input.arbitrate, deps.signal);
     } else {
-      const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : deps.rt;
-      run = await runNodeLoop(spec, nodeLoopDeps(input, deps, rt));
+      const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : seat.actor.runtime;
+      run = await runNodeLoop(spec, nodeLoopDeps(input, deps, seat, rt));
     }
   } catch (cause) {
     if (deps.signal?.aborted) {
@@ -867,6 +934,7 @@ export async function runNodeAgent(
           errorMessage: reason,
         }),
         reported: null, granted: null, produced: [],
+        languages: seat.actor.runtime.executor.languages,
       };
     } else {
       const failure = toKinuError({
@@ -888,7 +956,7 @@ export async function runNodeAgent(
   const read = readNodeReport({
     report: run.report,
     reported: run.reported,
-    languages: deps.rt.executor.languages,
+    languages: run.languages,
   });
   return {
     report: run.report,
@@ -935,9 +1003,16 @@ function unreportedNode(
  * A host builds the same shape out of RPCs to the parent instead. Separated so
  * the two transports differ in this function alone.
  */
-function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, rt: AgentRuntime): NodeLoopDeps {
+function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNodeSeat, rt: AgentRuntime): NodeLoopDeps {
   const loop: NodeLoopDeps = {
-    rt,
+    // The SAME hosted actor — same handle, same stores over the one workspace
+    // database, same session — with the runtime the home provisioner rebuilt
+    // when it rebuilt one. A re-provisioned runtime changes which credential
+    // the shell and the file plane act as; it does not change who the actor is.
+    actor: rt === seat.actor.runtime ? seat.actor : { ...seat.actor, runtime: rt },
+    runId: seat.runId,
+    profile: seat.profile,
+    dynamic: seat.dynamic,
     model: deps.model,
     logger: deps.logger,
     arbitrate: input.arbitrate,

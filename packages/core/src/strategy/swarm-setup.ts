@@ -48,6 +48,7 @@ import type { WebSearchProvider } from '../web/index';
 import type { NodeAgentDeps, NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { HostedNodeSeat } from './node-agent';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -555,6 +556,9 @@ export interface CarryIn {
 
 export function readCarryIn(input: {
   readonly sql: SqlExecutor;
+  /** The RUN's own actor: the carry-in population is the leaderboard of the
+   *  actor that opened the search, never of a node that produced one candidate. */
+  readonly actor: ActorHandle;
   readonly identity: ObjectiveIdentity | null;
   readonly publishing: PublishingCarry | null;
   readonly floor: Floor | null;
@@ -563,9 +567,9 @@ export function readCarryIn(input: {
   readonly metric: string;
   readonly log: Logger;
 }): CarryIn {
-  const { sql, identity, publishing, floor, preset, carryKind, metric, log } = input;
+  const { sql, actor, identity, publishing, floor, preset, carryKind, metric, log } = input;
   const carriedIn = identity !== null && publishing !== null
-    ? recordsFor(sql, { identity, floor })
+    ? recordsFor(sql, actor, { identity, floor })
     : [];
   // Best FIRST, by `recordsFor`'s own ordering in the objective's direction.
   const carriedBest = carriedIn[0] ?? null;
@@ -826,6 +830,9 @@ export function refuseContendedRun(input: {
  */
 export async function createRoot(input: {
   readonly sql: SqlExecutor;
+  /** The RUN's own actor. The root node it inserts belongs to the actor that
+   *  opened the search, so the whole tree is keyed to one actor from its root. */
+  readonly actor: ActorHandle;
   readonly reentry: SwarmReentry | null;
   readonly verifier: ResolvedVerifier | null;
   readonly ctx: MeasurementContext | null;
@@ -842,7 +849,7 @@ export async function createRoot(input: {
    *  it was handed and deal with an absence that cannot happen. */
   readonly root: TreeNode;
 }> {
-  const { sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
+  const { actor, sql, reentry, verifier, ctx, resolved, measures, journal, agentNodes } = input;
   // The ROOT is the workspace as found at depth 0 — the one node no model wrote.
   // Recorded so that selection has something to select and so that every child's
   // depth is DERIVED from a row this engine wrote rather than asserted by its author.
@@ -857,7 +864,7 @@ export async function createRoot(input: {
   // an artifact at all.
   const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
   if (!reentry) {
-    insertSearchNode(sql, {
+    insertSearchNode(sql, actor, {
       nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
       task: resolved.task,
       // The root's label is the RUN'S NAME — what the exploration surface
@@ -1045,7 +1052,9 @@ export function seedResumedSearch(input: {
  * which is the one place that knows whether an instrument exists.
  */
 export function buildNodeDeps(input: {
-  readonly rt: AgentRuntime;
+  /** Acquire the hosted logical actor ONE node runs as. Per node, never per
+   *  run: see {@link NodeAgentDeps.hostNode}. */
+  readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   readonly model: LanguageModel;
   readonly journal: HeadJournal;
   readonly logger: Logger;
@@ -1062,7 +1071,7 @@ export function buildNodeDeps(input: {
 }): NodeAgentDeps {
   const deps = input;
   const nodeDeps: NodeAgentDeps = {
-    rt: deps.rt, model: deps.model, journal: deps.journal, logger: deps.logger,
+    hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
     // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
     // there is no default clock over a node's work. Its turn runs until it is
     // done, cancelled, refused by its mission governor, or fails definitively.

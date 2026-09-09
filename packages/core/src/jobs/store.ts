@@ -337,6 +337,11 @@ export class BackgroundJobStore {
    * interrupted work until something else woke the workspace.
    */
   hasLiveJobsInWorkspace(): boolean {
+    // `assertCurrent` here checks that THIS BINDING is still live; it is not a
+    // claim that the statement below is actor-scoped. It deliberately is not —
+    // see the reason above — and the `InWorkspace` in the name is the contract.
+    // Stated because the opposite inference has already been drawn once: an
+    // actor-bound store whose method asserts its handle reads as scoped.
     this.actor.assertCurrent();
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM background_jobs WHERE status = 'running' LIMIT 1`.length > 0;
@@ -394,6 +399,8 @@ export class BackgroundJobStore {
    * ceiling would be multiplied by the actor count.
    */
   countRunningInWorkspace(): number {
+    // Workspace-wide by contract, as the name says and the reason above
+    // explains; `assertCurrent` validates the binding, not the scope.
     this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
     return rows[0]?.n ?? 0;

@@ -22,8 +22,10 @@ import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver, type HostedSeats } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import {
   PROPOSE_BRANCH_TOOL, readNodeReport, runNodeAgent, runNodeLoop,
 } from '../src/strategy/node-agent';
@@ -153,11 +155,14 @@ interface Fixture {
   readonly input: NodeAgentInput;
   readonly deps: NodeAgentDeps;
   readonly journal: HeadJournal;
+  /** This fixture's hosted actors, so a test driving `runNodeLoop` directly can
+   *  take the seat the node's turn is claimed on. */
+  readonly seats: HostedSeats;
 }
 
 /** One node, and the seams a search hands it. `arbitrate` is null unless a test
  *  asks for one, because a tool that could only be refused must not be offered. */
-function fixture(opts?: {
+async function fixture(opts?: {
   readonly answer?: string;
   readonly arbitrate?: NodeAgentInput['arbitrate'];
   readonly host?: NodeAgentDeps['host'];
@@ -169,8 +174,9 @@ function fixture(opts?: {
    *  every other test here wants; varied by the label derivation's own test. */
   readonly settle?: SwarmSettle;
   readonly model?: MockLanguageModelV3;
-}): Fixture {
-  const { rt } = createTestRuntime();
+}): Promise<Fixture> {
+  const { rt, db } = createTestRuntime();
+  const seats = hostedSeatsOver({ rt, db });
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: opts?.nodeId ?? 'n1',
@@ -189,7 +195,10 @@ function fixture(opts?: {
     modelSpec: opts?.modelSpec,
   };
   const deps: NodeAgentDeps = {
-    rt,
+    // One hosted actor per node id, all of them over this fixture's ONE
+    // database: a node's turn is a claimed turn on its own session now, so the
+    // seam a search hands a node is where that actor comes from.
+    hostNode: seats.hostNode,
     model: opts?.model
       ?? scriptedReporter(opts?.answer ?? 'sort once instead of comparing every pair', opts?.offered),
     journal,
@@ -202,12 +211,12 @@ function fixture(opts?: {
   };
   if (opts?.host !== undefined) deps.host = opts.host;
   if (opts?.mission !== undefined) deps.mission = opts.mission;
-  return { input, deps, journal };
+  return { input, deps, journal, seats };
 }
 
 describe('one runtime, two transports', () => {
   test('an absent host runs the loop in this isolate and reports the node', async () => {
-    const { input, deps } = fixture();
+    const { input, deps } = await fixture();
     const run = await runNodeAgent(input, deps);
 
     expect(run.report.status).toBe('completed');
@@ -220,12 +229,12 @@ describe('one runtime, two transports', () => {
     // A TRANSPORT, not a stub: it forwards to the real loop, which is what the
     // facet does across an RPC. A host that fabricated a report would pass the
     // assertions below while proving nothing.
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       host: async (spec) => {
         seen = spec;
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -247,13 +256,13 @@ describe('one runtime, two transports', () => {
     // `SubordinateAgent.runAsNode` already resolves. An unrouted node carries
     // no key at all — the facet then keeps its route default.
     const specs: (string | undefined)[] = [];
-    const routed = fixture({
+    const routed = await fixture({
       modelSpec: 'm-beta',
       host: async (spec) => {
         specs.push(spec.headInput.model);
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -262,13 +271,13 @@ describe('one runtime, two transports', () => {
     });
     await runNodeAgent(routed.input, routed.deps);
 
-    const unrouted = fixture({
+    const unrouted = await fixture({
       host: async (spec) => {
         specs.push(spec.headInput.model);
         expect(Object.hasOwn(spec.headInput, 'model')).toBe(false);
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -282,12 +291,12 @@ describe('one runtime, two transports', () => {
 
   test('the spec a host receives is data only, so it can cross an RPC', async () => {
     let seen: NodeRunSpec | null = null;
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       host: async (spec) => {
         seen = spec;
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -307,13 +316,13 @@ describe('one runtime, two transports', () => {
   });
 
   test('both transports produce the same report for the same node', async () => {
-    const direct = fixture({ nodeId: 'same' });
-    const viaHost = fixture({
+    const direct = await fixture({ nodeId: 'same' });
+    const viaHost = await fixture({
       nodeId: 'same',
       host: async (spec) => {
-        const inner = fixture({ nodeId: 'same' });
+        const inner = await fixture({ nodeId: 'same' });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -336,11 +345,11 @@ describe('one runtime, two transports', () => {
     // when a host is in play. A loop that wrote its own copy would be the second
     // store the journal rule forbids, so the spawn and the report rows must be
     // here even though the body ran elsewhere.
-    const { input, deps, journal } = fixture({
+    const { input, deps, journal } = await fixture({
       host: async (spec) => {
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -371,7 +380,7 @@ describe('one runtime, two transports', () => {
         debit: async (tokens) => { charged.push(tokens); },
       },
     };
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       mission,
       host: async (spec) => {
         specs.push(spec);
@@ -380,9 +389,9 @@ describe('one runtime, two transports', () => {
         const rebuilt: MissionScope | null = spec.headInput.missionLabels?.length
           ? { labels: spec.headInput.missionLabels, port: mission.port }
           : null;
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         const loop: NodeLoopDeps = {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -412,12 +421,12 @@ describe('one runtime, two transports', () => {
     // The absent-key rule where it is load-bearing: an empty array would make the far
     // side ask a ledger that was never declared.
     const specs: NodeRunSpec[] = [];
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       host: async (spec) => {
         specs.push(spec);
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           arbitrate: null,
@@ -436,7 +445,7 @@ describe('one runtime, two transports', () => {
 describe('the arbiter is offered only when a branch could be granted', () => {
   test('no arbiter means the proposal tool is absent, not present-and-refusing', async () => {
     const offered = new Set<string>();
-    const { input, deps } = fixture({ offered });
+    const { input, deps } = await fixture({ offered });
     const run = await runNodeAgent(input, deps);
 
     expect(run.report.status).toBe('completed');
@@ -448,7 +457,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
 
   test('an arbiter that could grant means the tool IS offered', async () => {
     const offered = new Set<string>();
-    const { input, deps } = fixture({ offered, arbitrate: () => grant() });
+    const { input, deps } = await fixture({ offered, arbitrate: () => grant() });
     await runNodeAgent(input, deps);
 
     expect(offered.has(PROPOSE_BRANCH_TOOL)).toBe(true);
@@ -462,7 +471,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
     // would be offered a proposal the search had already ruled out — and would
     // spend a step discovering that. Only the spec can carry the answer.
     const offered = new Set<string>();
-    const inner = fixture({ offered });
+    const inner = await fixture({ offered });
     const spec: NodeRunSpec = {
       headInput: {
         id: 'n-withheld',
@@ -475,6 +484,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
         inheritedContext: [],
         budget: { maxDepth: 1, spawnedAt: Date.now() },
         mergeStrategy: 'best_of',
+        loop: defaultLoopOrigin('node'),
       },
       base: 'You are a node under test.',
       messages: [{ role: 'user', content: 'Answer.' }],
@@ -485,7 +495,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
     };
 
     await runNodeLoop(spec, {
-      rt: inner.deps.rt,
+      ...await inner.seats.seat(spec.headInput.id, 'node'),
       model: inner.deps.model,
       logger: inner.deps.logger,
       // Non-null, exactly as a parent stub is.
@@ -498,13 +508,13 @@ describe('the arbiter is offered only when a branch could be granted', () => {
   test('canPropose travels in the spec, because a host arbiter is always non-null', async () => {
     const granted = grant();
     const sawCanPropose: boolean[] = [];
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       arbitrate: () => granted,
       host: async (spec) => {
         sawCanPropose.push(spec.canPropose);
-        const inner = fixture({ nodeId: spec.headInput.id });
+        const inner = await fixture({ nodeId: spec.headInput.id });
         return await runNodeLoop(spec, {
-          rt: inner.deps.rt,
+          ...await inner.seats.seat(spec.headInput.id, 'node'),
           model: inner.deps.model,
           logger: inner.deps.logger,
           // An RPC stub is never null, which is exactly why the spec has to say
@@ -534,6 +544,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
         inheritedContext: [],
         budget: { maxDepth: 1, spawnedAt: Date.now() },
         mergeStrategy: 'best_of',
+        loop: defaultLoopOrigin('node'),
       },
       base: 'You are a node under test.',
       messages: [{ role: 'user', content: 'Propose then report.' }],
@@ -542,9 +553,9 @@ describe('the arbiter is offered only when a branch could be granted', () => {
 
       canPropose: true,
     };
-    const inner = fixture();
+    const inner = await fixture();
     const result = await runNodeLoop(spec, {
-      rt: inner.deps.rt,
+      ...await inner.seats.seat(spec.headInput.id, 'node'),
       model: inner.deps.model,
       logger: inner.deps.logger,
       // Returns a promise, as a parent-stub RPC does.
@@ -563,7 +574,7 @@ describe('the arbiter is offered only when a branch could be granted', () => {
 
   test('same-step proposals share one arbitration and one budget debit', async () => {
     let calls = 0;
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       model: doubleProposer(),
       arbitrate: async () => {
         calls += 1;
@@ -627,7 +638,7 @@ describe("what a node's run derives, and where each derivation lands", () => {
     expect(SETTLES).toHaveLength(Object.keys(EXPECTED).length);
 
     for (const settle of SETTLES) {
-      const { input, deps, journal } = fixture({ settle });
+      const { input, deps, journal } = await fixture({ settle });
       const run = await runNodeAgent(input, deps);
       // The node really ran, so the row under test is one a live search would have
       // written rather than an insert with nothing behind it.
@@ -682,7 +693,7 @@ describe('a proposal is answered at most once', () => {
     // for and never created. The refusal must happen BEFORE arbitration runs.
     let asked = 0;
     let firstDecision: BranchDecision | null = null;
-    const { input, deps } = fixture({
+    const { input, deps } = await fixture({
       arbitrate: (proposal) => {
         asked += 1;
         const decision: BranchDecision = {

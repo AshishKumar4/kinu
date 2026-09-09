@@ -1,17 +1,23 @@
 // The backend-agnostic run of an agent that reports rather than chats — the
 // divergent-reasoning-thread fork that produces a HeadReport, and the swarm node
-// that produces one too. Every backend drives this: the cf-backend's Facet head
-// (SubordinateAgent.runAsHead), the CLI's in-process head-worker, and both
-// transports of a swarm node (strategy/node-agent.ts).
+// that produces one too. Every backend drives this: the hosted head, the CLI's
+// in-process head-worker, and both transports of a swarm node
+// (strategy/node-agent.ts).
 //
-// prepareActorProgram selects and pins the runtime's program, and
-// startActorTurn runs it. Its builtin branch
-// uses the shared chat loop; a promoted program uses the same host bridges as
-// an actor chat. This module owns how many turns the reporting agent gets,
-// the record_evidence / record_decision accumulator tools, the head system
-// prompt + inherited-context messages, the per-step journal trace, the mission
-// ledger it charges, and the HeadReport assembly (via the shared head-summary
-// helpers).
+// Every turn it takes is a CLAIMED actor turn on the common `ActorSession`: the
+// session selects and pins this actor's program, admits the durable claim that
+// names the version and the source digest it runs, records the exact array each
+// step consumes, and owns the abort. A head and a node are full actor kinds, and
+// before this they were the two that ran under no durable identity at all — so
+// neither could be recovered, verified against the bytes it ran, nor told apart
+// from the activation that replaced it. The builtin arm still uses the shared
+// chat loop and a promoted program still uses the same host bridges as an actor
+// chat.
+//
+// This module owns how many turns the reporting agent gets, the record_evidence
+// / record_decision accumulator tools, the head system prompt +
+// inherited-context messages, the per-step journal trace, the mission ledger it
+// charges, and the HeadReport assembly (via the shared head-summary helpers).
 //
 // The backend provides the model + a HeadCapture + its own tool surface (the cf
 // head forks its parent workspace's; the CLI head runs in-process over an
@@ -24,12 +30,11 @@ import {
   tool, jsonSchema,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult,
 } from 'ai';
-import type { ChatOptions } from '../chat';
-import type { AgentRuntime } from '../types/agent-runtime';
-import { startActorTurn } from '../orchestrator/actor-turn';
-import { prepareActorProgram } from '../orchestrator/actor-program';
+import type { HostedActor } from '../state/actor-host';
+import type { WorkMode } from '../prompting/surface';
+import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
+import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';
-import { ExtensionHost } from '../extension';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
   type Evidence, type Decision, type ArtifactRef,
@@ -317,7 +322,7 @@ export function buildHeadSystemPrompt(
  * The head's conversation — the inherited messages, structurally, then its task.
  *
  * A head used to receive its whole inheritance flattened into ONE user message
- * of `[role/toolName] text` prose lines, while a SubordinateAgent received real
+ * of `[role/toolName] text` prose lines, while a hired subordinate received real
  * structured messages. That asymmetry is why a fork could not be watched the
  * way a subordinate can: there was no per-message structure left to render, so
  * clicking into a fork showed a wall of prose instead of a conversation. One
@@ -426,8 +431,45 @@ function exhaustedMissionReport(
 }
 
 export interface HeadInferenceDeps {
-  /** The same bound logical actor runtime that built this head's tools. */
-  runtime: AgentRuntime;
+  /**
+   * The HOSTED logical actor this run IS — its handle, its actor-scoped stores
+   * over the one workspace database, its runtime and its session.
+   *
+   * A head and a swarm node used to be handed a bare runtime and ran their
+   * inference inline: select the program, start the turn, write no claim. So
+   * two of the five full actor kinds took model and tool effects under no
+   * durable identity, and neither could be recovered, verified against the
+   * bytes it ran, or told apart from the activation that replaced it. They are
+   * actors; they run on the actor's session.
+   */
+  actor: HostedActor;
+  /**
+   * The activation's run id. Every turn this loop admits is claimed under it,
+   * so a recovered activation's re-admission of the same turn is a new epoch of
+   * the same turn rather than an untraceable second run.
+   */
+  runId: string;
+  /**
+   * How this actor's turn is profiled — the role, tier and allowed-tool
+   * narrowing that an actor's chat turn already resolves.
+   *
+   * REQUIRED, and required for the reason it was missing: a head ran with
+   * whatever toolset its spawner assembled and no role at all, so the one kind
+   * that reaches the shared workspace with full tools was the one kind no role
+   * restriction applied to. The backend resolves it, because the authority (an
+   * account catalog or the local one) is the backend's to know.
+   */
+  profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
+    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
+  /**
+   * This actor's live per-step block — its own jobs, tasks, approvals and
+   * missing capabilities, snapshotted per step by the common step pipeline.
+   *
+   * Required rather than defaulted to empty: a head that renders nothing live
+   * is a decision the backend makes and states, and an empty default is how a
+   * kind ends up unable to see the background work it is itself holding.
+   */
+  dynamic: () => DynamicContext;
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
   /** The head's FULL toolset — the accumulator tools (buildHeadAccumulatorTools)
@@ -497,6 +539,16 @@ export interface HeadInferenceDeps {
    * ONE CALL PER PROVIDER DELTA, in stream order and never buffered, so a
    * consumer that concatenates holds exactly what the model emitted. A transport
    * that crosses an isolate boundary must therefore not await it.
+   *
+   * WIRED ON THE CLOUD BACKEND ONLY, and that is a property of the consumer
+   * rather than a dropped wire. The frame's wire discriminant is `head_stream`,
+   * validated at `cf-backend/src/hooks/use-kinu.ts:339` and painted under the
+   * last durable step at `components/NodeTranscript.tsx:266`; no CLI or core
+   * reader names it, and the local head's liveness is the `head_journal` rows
+   * {@link reportStep} writes, which BOTH backends wire. Wiring a local sink
+   * would add a producer with no consumer. `AgentsForkDeps.reportNodeDelta` and
+   * `announceHeadActivity` are the same asymmetry, accepted for the same reason
+   * before this contract existed.
    *
    * Omitted where nothing is watching. Absence costs nothing: no reader ever
    * reads a frame back, so the branch is exactly as legible either way once its
@@ -635,8 +687,16 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // resumed turn's request a prefix of the previous one that a provider can
   // cache. The seed is the prefix a child inherits UP TO, so what this run
   // produced is everything past it.
-  const history: ModelMessage[] = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
-  const seeded = history.length;
+  //
+  // The array is the SESSION's, not a second copy: the session is what admits
+  // the claim whose revisions record the exact array each step consumed, so a
+  // private array here would be a working history no revision could be checked
+  // against. Seeding through `restoreHistory` with no admitted turn is its
+  // hydration arm.
+  const session = deps.actor.session;
+  const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
+  session.restoreHistory(seed);
+  const seeded = seed.length;
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
   // The resolved model as the prompt layer names it, read off the model the
@@ -700,82 +760,100 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     });
   };
 
+  // The spawner's cancellation, bridged onto the session's own abort. A head
+  // used to hand `deps.signal` straight to the SDK; the session owns the signal
+  // its steps run under, so an external cancel becomes the same interrupt an
+  // actor's own cancel is — one cancellation path for every kind.
+  const cancelled = (): void => { session.interrupt(); };
+  deps.signal?.addEventListener('abort', cancelled, { once: true });
   try {
-    for (;;) {
+    for (let index = 0; ; index++) {
       // Before the first call, between steps, AND between turns: an agent
       // spawned into an already-spent mission must not get one free inference
       // out of it, and neither must a resumed one.
       if (await outOfBudget()) break;
-      const turn: ChatOptions = {
-        model: deps.model,
-        system,
-        history,
-        tools: deps.tools,
-        modelContext,
-        cache: {
-          providerId: modelContext.provider,
-          modelId: modelContext.id,
-          sessionKey: agentAffinityKey(input.rootId),
-        },
-        stopWhen: async () => {
+      // ONE turn id per iteration, derived from the run's own id rather than
+      // minted: a recovered activation re-admits the SAME turn under the next
+      // epoch, which is what the epoch fence is for, and a fresh id would make
+      // the recovered turn a second turn nobody can reconcile.
+      const lease = session.beginTurn(
+        { runId: deps.runId, turnId: index === 0 ? input.id : `${input.id}#${index}` },
+        input.mode, Date.now(),
+      );
+      let turnFailed = false;
+      try {
+        const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
+        session.bindProfile(lease, resolved.profile, resolved.inputs);
+        const stopWhen = async (): Promise<boolean> => {
           if (deps.isAborted()) return true;
           if (budgetExhausted(input.budget).exhausted) return true;
-          return outOfBudget();
-        },
-        onStep,
-        extensions: new ExtensionHost().register({ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }),
-      };
-      if (deps.signal !== undefined) turn.signal = deps.signal;
-      // A head's inference is not a claimed actor turn: it runs the same two
-      // phases (select the program, then start it) and writes no claim, because
-      // the head's own settlement ledger owns its lifetime.
-      const selected = deps.runtime.identity.scaffold.version();
-      const selection = {
-        runtime: deps.runtime, mode: input.mode, assertActive,
-        version: await selected,
-        signal: deps.signal,
-      };
-      const program = await prepareActorProgram(selection);
-      const events = startActorTurn({
-        runtime: deps.runtime, mode: input.mode, task: input.task, chat: turn, program,
-        loopVersion: program.version,
-        assertActive,
-        scaffoldStreamOptions: { onStep, stopWhen: turn.stopWhen, prepareStep: prepareModelStep },
-      });
-      for await (const event of events) {
-        // Forwarded as the provider drew them: one frame per delta, in order,
-        // never held. Nothing survives the step boundary, so the durable row that
-        // lands next supersedes the paint without a tail to reconcile.
-        if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); continue; }
-        if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); continue; }
-        if (event.type === 'error') {
-          failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: new Error(event.message), otherwise: 'unavailable' });
-          continue;
+          return await outOfBudget();
+        };
+        const outcome = await session.execute(lease, {
+          task: input.task,
+          // Read per turn, off this actor's OWN pointer, so a promotion that
+          // landed between two turns of a long run is picked up at the next
+          // turn and never mid-turn.
+          loopVersion: await deps.actor.runtime.identity.scaffold.version(),
+          chat: {
+            model: deps.model,
+            system,
+            tools: deps.tools,
+            modelContext,
+            cache: {
+              providerId: modelContext.provider,
+              modelId: modelContext.id,
+              sessionKey: agentAffinityKey(input.rootId),
+            },
+            stopWhen,
+            onStep,
+          },
+          extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
+          dynamic: deps.dynamic,
+          assertActive,
+          scaffoldStreamOptions: { onStep, stopWhen, prepareStep: prepareModelStep },
+        }, (event) => {
+          // Forwarded as the provider drew them: one frame per delta, in order,
+          // never held. Nothing survives the step boundary, so the durable row
+          // that lands next supersedes the paint without a tail to reconcile.
+          if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); return; }
+          if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); return; }
+          if (event.type !== 'done') return;
+          settled = true;
+        });
+        if (outcome.failure !== null) {
+          turnFailed = true;
+          failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
         }
-        if (event.type !== 'done') continue;
-        settled = true;
-        if (program.kind === 'scaffold') lastText = event.text;
-        // The turn's own response messages, tool calls already paired by the
-        // turn body. Appended, never accumulated per step: every step's
-        // `response.messages` is CUMULATIVE (ai 6 builds one array and clones it
-        // onto each step), so pushing them per step handed a forking child the
-        // same assistant message once per remaining step.
-        history.push(...event.responseMessages);
+        // A promoted loop's answer is its own final text: the builtin arm
+        // accumulates prose per step, a scaffold reports one result.
+        if (outcome.program?.kind === 'scaffold' && outcome.text.trim()) lastText = outcome.text;
+        // The claim closes under the outcome THIS turn reached, in the same
+        // vocabulary the run ledger uses — never the host's silence read as
+        // success. `interrupted` covers both the spawner's cancel and the
+        // budget cut, which are aborts of the turn and not failures of it.
+        session.settleTurnClaim(lease, turnFailed ? 'error' : outcome.interrupted ? 'aborted' : 'completed');
+      } finally {
+        session.finishTurn(lease);
       }
       // A run the spawner cancelled, or one past the deadline it was granted,
       // gets no further turn however much work it is still holding.
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
       const resumed = await deps.resume?.();
       if (!resumed) break;
-      history.push(...resumed);
+      // Appended through the session's own hydration arm, between turns, so the
+      // next turn's claim is admitted against the array the wake produced.
+      session.restoreHistory([...session.history, ...resumed]);
     }
   } catch (err) {
     failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+  } finally {
+    deps.signal?.removeEventListener('abort', cancelled);
   }
 
   if (settled) {
     try {
-      deps.reportMessages?.(history.slice(seeded));
+      deps.reportMessages?.(session.history.slice(seeded));
     } catch (cause) {
       failure = toKinuError({
         doing: `report agent ${input.id} conversation`,

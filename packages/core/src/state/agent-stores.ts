@@ -30,6 +30,7 @@ import { RunEventRecorder } from '../events/recorder';
 import { BackgroundJobStore } from '../jobs/store';
 import { MctsSearchStore } from '../mcts/search-store';
 import { ActorClaimStore } from '../orchestrator/actor-claims';
+import { PlanReviewStore } from '../plans/review';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { createAppDataStore, type AppDataStore } from '../tools/db-codemode';
 
@@ -47,6 +48,18 @@ export interface AgentStores {
    *  context revisions its steps consume. */
   readonly claims: ActorClaimStore;
   readonly jobs: BackgroundJobStore;
+  /**
+   * This actor's own plan-review stream.
+   *
+   * Here because a plan is written by an actor working in plan mode and
+   * approved for THAT actor to execute, so it is no more transferable between
+   * actors than a claim is. The table has been per-workspace and actor-keyed
+   * since `initActorStateSchema`; before this store existed the only reader
+   * was built over the ROOT's handle, so a hosted actor had no plan plane at
+   * all and the announce that told the workspace one had landed lost its
+   * producer when the facet class it lived on was deleted.
+   */
+  readonly planReviews: PlanReviewStore;
   readonly mctsSearchStore: MctsSearchStore;
   /** The agent's own structured data: the tables it declares through `db.*`,
    *  in this workspace's one database, actor-scoped or shared by declaration. */
@@ -69,6 +82,7 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
   let eventRecorder: RunEventRecorder | undefined;
   let jobs: BackgroundJobStore | undefined;
   let claims: ActorClaimStore | undefined;
+  let planReviews: PlanReviewStore | undefined;
   let mctsSearchStore: MctsSearchStore | undefined;
   let appData: AppDataStore | undefined;
 
@@ -98,6 +112,9 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
     },
     get jobs(): BackgroundJobStore {
       return (jobs ??= new BackgroundJobStore(sql(), actor()));
+    },
+    get planReviews(): PlanReviewStore {
+      return (planReviews ??= new PlanReviewStore(sql(), actor()));
     },
     get mctsSearchStore(): MctsSearchStore {
       return (mctsSearchStore ??= new MctsSearchStore(sql(), actor()));

@@ -218,7 +218,11 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     initBackgroundJobsTable(makeExecRaw(db));
     const hubSql = makeSqlExec(db);
     initEventsHubTables(hubSql);
-    const store = new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
+    // ONE actor for the job store and the inbox: a runner detaches this actor's
+    // job and signals this actor's log, and two handles would signal an inbox
+    // nothing drains.
+    const actor = createTestActorsOver(db).main;
+    const store = new BackgroundJobStore(makeSql(db), actor);
 
     const bodies: Array<Promise<unknown>> = [];
     const fiber: Schedule['fiber'] = async (_name, fn) => {
@@ -234,7 +238,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
       setTimer: () => {},
     };
     const runner = new BackgroundJobRunner({
-      store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql),
+      store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql, actor),
       scheduleDrain: () => {}, logActivity: () => {},
       // A zero window so the crossing is decided by the command not having
       // finished, never by how long a test waited.

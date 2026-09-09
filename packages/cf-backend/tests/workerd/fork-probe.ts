@@ -65,12 +65,14 @@ export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SO
  *  `ForkTargetWriter.ensurePaneTable` runs, because a source workspace that has
  *  served a hosted turn has this table and its ancestry is read from it. */
 const PANE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  id TEXT NOT NULL,
   session_id TEXT NOT NULL DEFAULT '',
   parent_id TEXT,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (actor_id, id)
 )`;
 
 /** workerd's streaming digest, which is how an object hashes bytes it must not
@@ -368,8 +370,8 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
       { id: PROBE_CUT_MESSAGE_ID, parent: 'm2', role: 'assistant', text: 'Done. This is the cut point.' },
     ];
     pane.forEach((row, index) => {
-      void this.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${row.id}, ${'default'}, ${row.parent}, ${row.role},
+      void this.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${row.id}, ${'default'}, ${row.parent}, ${row.role},
                 ${JSON.stringify({ id: row.id, role: row.role, parts: [{ type: 'text', text: row.text }] })},
                 ${`2026-01-01 00:00:0${index + 1}.000`})`;
     });
@@ -410,6 +412,10 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     try {
       for await (const frame of forkTransferFrames({
         sql: this.sql,
+        // The probe's own actor: the seed issued a main and the pane rows
+        // above are keyed to it, so forking under any other handle would read
+        // an empty transcript and pass while proving nothing.
+        actor: openWorkspaceMainActor(this.sql),
         vfs: this.plane,
         untilMessageId: PROBE_CUT_MESSAGE_ID,
         transferId,

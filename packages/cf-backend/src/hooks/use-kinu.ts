@@ -1135,7 +1135,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         return;
       }
       try {
-        await rpc("getSubordinateSnapshot", []);
+        // Any ACKNOWLEDGED frame answers the liveness question; this one is the
+        // read the tab already depends on, so a corpse fails the ping and the
+        // load identically instead of two surfaces disagreeing about the socket.
+        await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
       } catch (error) {
         setSourceError("snapshot", errorMessage(error));
@@ -1629,7 +1632,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    const snapshot = await rpc<SubordinateSnapshot>("getSubordinateSnapshot", []);
+    // `getActorSnapshot`, not the facet-era `getSubordinateSnapshot`: the method
+    // this used to call went with the SubordinateAgent class, and the same
+    // capability is answered in process by the root now, keyed on the actor
+    // name this tab is looking at. The name is what the root resolves through
+    // its directory, so a tab cannot ask about an actor that is not a child of
+    // this workspace.
+    const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
     if (!isCurrent()) return;
     setAgentStatus({
       name: snapshot.name,
