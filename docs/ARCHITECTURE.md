@@ -90,22 +90,24 @@ logical row the orchestrator's host acquires, not a class.
 
 Tool gating is structural. No prompt decides it. The `agents` schema
 derives from the capabilities the profile wires (`actorAgentsActions`). Everyone
-can `swarm`. The search substrate is wired unconditionally. `hire`, `ask`,
-`send` and `list` need a roster or peer transport. `dismiss` needs the roster.
-`reply` needs peers, and only the orchestrator wires those. At the depth cap
+can `swarm`. The search substrate is wired unconditionally. `hire`, `msg` and
+`list` need a roster or peer transport. `dismiss` needs the roster. `msg`'s
+`event_id` target needs peers, and only the orchestrator wires those. At the
+depth cap
 `teamProfile()` returns nothing, so roster and hire rung vanish together.
 `report` exists only on a subordinate parent-assigned turn. Release ships as
 an orchestrator-only codemode provider omitted from Plan-mode construction.
 `submit_plan` exists only on an orchestrator Plan turn.
 
-Non-root actors are logical, not classes. A hire, an ask-by-role temporary, a
-branching head, a swarm node and an MCTS branch are rows in
+Non-root actors are logical, not classes. A durable hire, a `lifetime:'task'`
+hire, a branching head, a swarm node and an MCTS branch are rows in
 `workspace_actors`, acquired from the workspace's one `ActorHost` as
 `HostedActor`s with their own runtime objects (session, stores, queue, abort,
 roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
 turns through the common head-inference runner with the confined tool surface
-(execute_tools, run, file, web) plus the report lane that settles its hiring
-`agents.ask`. A head runs the same runner over the parent's promoted loop with
+(execute_tools, run, file, web) plus the report lane that settles the
+`agents.hire` that gave it the work. A head runs the same runner over the
+parent's promoted loop with
 the head tool surface (evidence, decisions, depth-budgeted subheads). A node
 runs a `NodeRunSpec` through the same loop. An MCTS branch makes one bare
 model call per `explore`/`generateReflection` through the seat's profile

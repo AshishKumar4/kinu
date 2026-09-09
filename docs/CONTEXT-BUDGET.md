@@ -95,7 +95,7 @@ that neither admit nor spill bulk write none.
 
 `RunEventRecorder.read(runId, { types: ['context_budget'] })` reads the event.
 `followUps` counts calls naming a spill directory, including read-back, a
-temporary agent given `context_ref`, and a swarm node given a spill path. Fewer than
+task-lifetime hire whose mission names one, and a swarm node given a spill path. Fewer than
 one trip per 50 real turns means the mechanism is not worth tuning.
 
 ## Pre-registered decision thresholds
