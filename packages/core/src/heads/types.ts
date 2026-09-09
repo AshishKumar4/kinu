@@ -16,8 +16,10 @@
  *
  * Lifecycle:
  *   1. parent calls HeadController.split({ rationale, heads: [...] })
- *   2. controller materializes each head as a Facet via runtime hook
- *   3. each head runs its task autonomously (own ephemeral storage)
+ *   2. the controller acquires each head as a logical ACTOR of the workspace
+ *      (state/actor-host.ts) — its own session, stores and queue over the one
+ *      workspace database, seeded with the loop origin its input names
+ *   3. each head runs its task autonomously, as a claimed actor turn
  *   4. heads may call splitHeads() on themselves (recursive, decremented depth)
  *   5. controller awaitAll(heads) collects HeadReport[]
  *   6. merge(reports, strategy) → LLM synthesis → MergeResult
@@ -30,6 +32,7 @@ import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
 import type { BuiltinToolName } from '../tools/registry';
+import type { LoopOrigin } from '../scaffold/loop-origin';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -107,6 +110,16 @@ export interface HeadInput {
    * no query, no RPC, no refusal.
    */
   readonly missionLabels?: readonly string[];
+  /**
+   * Where this head's agentic loop comes from — always stated, never inferred.
+   *
+   * A head opened a FRESH scaffold store, found no row and ran the shipped
+   * bootstrap loop, so a workspace whose owner had promoted three generations
+   * of loop still forked with the first one and nothing said so. `inherit` is
+   * this kind's default (`defaultLoopOrigin`): a fork explores under the loop
+   * it is forking FROM.
+   */
+  readonly loop: LoopOrigin;
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
   readonly mergeStrategy: MergeStrategy;
 }

@@ -13,7 +13,7 @@
  *               so its trace is readable mid-flight.
  *   `rollout`  — an MCTS branch. One toolless proposal call, scored against its
  *               siblings; `search_nodes.observation` IS its entire output. It has
- *               no step trace and never will — see SubordinateAgent.stepSink,
+ *               no step trace and never will — see the hosted head's step sink,
  *               which returns null for exactly this case.
  *
  * Reads only through what already owns each store: {@link HeadJournal} for the
@@ -108,7 +108,7 @@ export function readNodeTranscript(
   nodeId: string,
   request: PageRequest = {},
 ): NodeTranscriptView | null {
-  return readHeadTranscript(sql, actor, runId, nodeId, request) ?? readRolloutTranscript(sql, runId, nodeId);
+  return readHeadTranscript(sql, actor, runId, nodeId, request) ?? readRolloutTranscript(sql, actor, runId, nodeId);
 }
 
 /** A row either store can be walked by: both key their parent the same way. */
@@ -191,10 +191,11 @@ function readHeadTranscript(
 
 function readRolloutTranscript(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runId: string,
   nodeId: string,
 ): NodeTranscriptView | null {
-  const nodes = readSearchTree(sql, runId);
+  const nodes = readSearchTree(sql, actor, runId);
   const node = nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return null;
 

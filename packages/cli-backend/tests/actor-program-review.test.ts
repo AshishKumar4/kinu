@@ -5,10 +5,14 @@ import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   startActorTurn, prepareActorProgram, scaffoldChatTransform, scaffoldInferenceTransform,
   createScaffoldLLMStream, runHeadInference, HeadCapture, withHeadCaptureRecording,
+  initActorStateSchema,
 } from '@kinu.run/core';
+import { defaultLoopOrigin } from '@kinu.run/core';
+import { headLoopSeams } from './actor-fixture';
 import type { ChatEvent, HeadInput, InferenceStreamResult } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createSandboxedExecutor } from '../src/executor';
+import { makeWorkspaceSchemaSql } from '../src/runtime';
 import { initScaffoldTables } from '../../core/src/scaffold/schemas';
 
 /** The two real phases a claim owner runs, as one call: pin the selected
@@ -43,10 +47,18 @@ const usage = {
 function headInput(): HeadInput {
   return { id: 'review-head', rootId: 'review-root', parentId: null, depth: 0,
     task: 'go', rationale: 'exercise real program boundaries', mode: 'build', inheritedContext: [],
-    budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize' };
+    budget: { maxDepth: 0, spawnedAt: Date.now() }, mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head') };
 }
 async function runtime(source: string, version = 1) {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
+  // THE PRODUCTION INITIALIZER over this runtime's own database, never a
+  // hand-rolled CREATE. These heads take CLAIMED turns on a real `ActorSession`
+  // and run the default inference, so the fixture needs the whole actor state
+  // plane the turn touches — the admission ledger and its raw working
+  // revisions, the world model, the journal. `createTestRuntime` bootstraps
+  // workspace identity and the actor directory only.
+  initActorStateSchema(makeWorkspaceSchemaSql(testSql.db));
   rt.executor = createSandboxedExecutor();
   rt.identity.scaffold.version = async () => version;
   const files = rt.agentStateVfs ?? rt.storage.vfs;
@@ -99,7 +111,7 @@ test('hosted polled cancellation refuses a promoted direct effect without a sign
   let effects = 0;
   const model = unusedModel();
   const report = await runHeadInference(headInput(), {
-    runtime: rt, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt), model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
     isAborted: () => true, abortReason: () => 'already cancelled',
     tools: { mutate: tool({ inputSchema, execute: async () => ++effects }) },
   });
@@ -142,7 +154,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
   const messages: ModelMessage[] = [];
   const deltas: Array<{ kind: string; text: string }> = [];
   const report = await runHeadInference(headInput(), {
-    runtime: rt, model, tools, capture, workspaceLayout: 'private-scratch', isAborted: () => false,
+    ...headLoopSeams(rt), model, tools, capture, workspaceLayout: 'private-scratch', isAborted: () => false,
     reportMessages: produced => { messages.push(...produced); },
     reportDelta: (kind, text) => { deltas.push({ kind, text }); },
   });
@@ -213,7 +225,7 @@ test('a custom model call preserves completed tool messages when its next reques
     return pending.promise;
   } });
   const running = runHeadInference(headInput(), {
-    runtime: rt, model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
+    ...headLoopSeams(rt), model, capture: new HeadCapture(), workspaceLayout: 'private-scratch',
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema, execute: async () => value }) },
     reportMessages: produced => { messages.push(...produced); },

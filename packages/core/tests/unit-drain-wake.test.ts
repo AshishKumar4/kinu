@@ -27,14 +27,17 @@ import {
   EventLog, initEventsHubTables, type IngressDescriptor,
 } from '../src/events/hub/index';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import { makeSqlExec } from './helpers';
 
 function newEventLog(): EventLog {
-  const sql = makeSqlExec(new Database(':memory:'));
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
   initEventsHubTables(sql);
-  return new EventLog(sql);
+  // The inbox is ONE actor's: a delivery admitted for a hired subordinate is
+  // that subordinate's to drain, never the root's.
+  return new EventLog(sql, createTestActorsOver(db).main);
 }
 
 /** An external delivery — the kind that must wake a turn. */
@@ -81,7 +84,7 @@ function watchedHost(opts: { refuse?: boolean } = {}) {
 function inertEngine(): AgentOrchestratorDeps['engine'] {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
-  const store = createCompletedTurnStore(sql);
+  const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
   return {
     enabled: false,
     sessionWindow: store,

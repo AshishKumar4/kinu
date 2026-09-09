@@ -151,14 +151,14 @@ const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
   for (let i = 0; i < counts.failures; i++) {
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `bad-${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
       userMessage: failureTask(i), assistantResponse: 'the wrong summary',
       followup: 'no, summarise the conclusions', now: 1_000 + i,
     });
   }
   for (let i = 0; i < counts.guards; i++) {
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: guardTask(i), assistantResponse: 'a.txt, b.txt', now: 2_000 + i,
     });
@@ -261,11 +261,11 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     const { sql, execRaw } = createTestWorkspace();
     const actor = createTestActor(sql, execRaw, 'ws-gepa-split', 'gepa-split');
     for (let i = 0; i < 6; i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
         userMessage: `fix ${i}`, assistantResponse: 'bad', followup: 'no', now: 1000 + i,
       });
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: `good ${i}`, assistantResponse: 'ok', now: 2000 + i,
       });
@@ -286,8 +286,8 @@ test('an unavailable judge aborts scaffold optimization without a numeric candid
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge provider is unavailable') });
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
-  expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
-  expect(loadGepaCandidates(rt.storage.sql, result.runId)).toEqual([]);
+  expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
+  expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId)).toEqual([]);
   expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
 });
 
@@ -304,8 +304,8 @@ test('a judge failure during reflection evaluation aborts instead of rejecting a
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge failed on reflection evidence') });
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
-  expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
-  expect(loadGepaCandidates(rt.storage.sql, result.runId).map(candidate => ({ source: candidate.source, score: candidate.aggregateScore })))
+  expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
+  expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId).map(candidate => ({ source: candidate.source, score: candidate.aggregateScore })))
     .toEqual([{ source: SEED_SCAFFOLD, score: 0.2 }]);
   expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
   expect(reflectionPrompts).toEqual([]);
@@ -323,8 +323,8 @@ test('a mixed measured and unavailable seed reports the actual attempts without 
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('second measurement unavailable') });
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
-  expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
-  expect(loadGepaCandidates(rt.storage.sql, result.runId)).toEqual([]);
+  expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
+  expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId)).toEqual([]);
   expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
 });
 
@@ -340,9 +340,9 @@ test('section GEPA reports mixed scored and unavailable measurements as an abort
   const result = await advancePromptSectionLane(control);
   expect(result).toMatchObject({ step: 'pass', pass: { ok: false, error: expect.stringContaining('section judge unavailable') } });
   if (result.step !== 'pass' || result.pass.runId === undefined) throw new Error('the section pass has no run identity');
-  expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.pass.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
-  expect(loadGepaCandidates(rt.storage.sql, result.pass.runId)).toEqual([]);
-  expect(listPromptSectionVersions(rt.storage.sql)).toEqual([]);
+  expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.pass.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
+  expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.pass.runId)).toEqual([]);
+  expect(listPromptSectionVersions(rt.storage.sql, rt.actor)).toEqual([]);
 });
 
 test('an unavailable candidate judge cannot turn measured incumbent quality into a pending section', async () => {
@@ -359,7 +359,7 @@ test('an unavailable candidate judge cannot turn measured incumbent quality into
   } };
   await expect(proposeMeasuredPromptSection(control, { sectionId: section.id, source,
     rationale: 'Clarify the response format while retaining the existing output requirements.' })).rejects.toBe(failure);
-  expect(listPromptSectionVersions(rt.storage.sql)).toEqual([]);
+  expect(listPromptSectionVersions(rt.storage.sql, rt.actor)).toEqual([]);
 });
 
 test('an unavailable paired trial cannot supply the last win needed to promote a section', async () => {
@@ -369,11 +369,11 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
   const section = findPromptSectionTarget('state/output-format');
   if (section === undefined) throw new Error('the output format section must be registered');
   const source = section.source.slice(0, -6) + 'ASKED.';
-  const proposal = proposePromptSection(rt.storage.sql, { section, source,
+  const proposal = proposePromptSection(rt.storage.sql, rt.actor, { section, source,
     incumbentScore: scoreInterval([0.1, 0.1, 0.1, 0.1]), candidateScore: scoreInterval([0.9, 0.9, 0.9, 0.9]),
     rationale: 'Clarify the response format while retaining the existing output requirements.' });
   if (!proposal.ok) throw new Error(proposal.error);
-  for (let index = 0; index < 4; index++) recordPromptSectionTrial(rt.storage.sql, {
+  for (let index = 0; index < 4; index++) recordPromptSectionTrial(rt.storage.sql, rt.actor, {
     sectionId: section.id, pendingVersion: proposal.version, instanceId: 'measured-' + index,
     currentScore: 0.1, pendingScore: 0.9, winner: 'pending', feedback: 'measured improvement',
   });
@@ -383,8 +383,8 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
     return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
   } };
   await expect(advancePromptSectionLane(control)).rejects.toBe(failure);
-  expect(getPendingPromptSection(rt.storage.sql, section.id)).toMatchObject({ trialsSoFar: 4, pendingWins: 4 });
-  expect(activePromptSectionOverrides(rt.storage.sql)[section.id]).toBeUndefined();
+  expect(getPendingPromptSection(rt.storage.sql, rt.actor, section.id)).toMatchObject({ trialsSoFar: 4, pendingWins: 4 });
+  expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)[section.id]).toBeUndefined();
 });
 
 test('a later unavailable judge leaves valid earlier measurements but no selected or proposed winner', async () => {
@@ -402,9 +402,9 @@ test('a later unavailable judge leaves valid earlier measurements but no selecte
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 2 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge unavailable after a measured iteration') });
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
-  expect(listGepaRuns(rt.storage.sql)).toContainEqual(expect.objectContaining({ runId: result.runId,
+  expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId,
     status: 'aborted', winnerId: null, iterations: 1, metricCalls: completedCalls + 1 }));
-  const candidates = loadGepaCandidates(rt.storage.sql, result.runId);
+  const candidates = loadGepaCandidates(rt.storage.sql, rt.actor, result.runId);
   expect(candidates.map(candidate => candidate.aggregateScore)).toEqual([0.2, 0.9]);
   expect(candidates.every(candidate => candidate.scores.size === split.val.length)).toBe(true);
   expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();

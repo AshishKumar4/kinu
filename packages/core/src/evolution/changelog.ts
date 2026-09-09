@@ -259,8 +259,8 @@ function factAggregate(
   };
 }
 
-function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  return listGepaRuns(sql, limit)
+function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  return listGepaRuns(sql, actor, limit)
     .filter((r) => r.status === 'completed')
     .map((r) => ({
       id: `gepa:${r.runId}`,
@@ -277,9 +277,9 @@ function gepaEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
 /** Evolved prompt sections. The one self-change that moves what the model reads
  *  on every turn, so the evidence line leads with the byte trade — the operator
  *  auditing prompt growth should not have to open a diff to see it. */
-function promptSectionEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const trials = promptSectionTrialRecord(sql);
-  return listPromptSectionVersions(sql, limit).map((row) => {
+function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const trials = promptSectionTrialRecord(sql, actor);
+  return listPromptSectionVersions(sql, actor, limit).map((row) => {
     const bytes = Buffer.byteLength(row.source, 'utf8');
     const delta = bytes - row.incumbentBytes;
     const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} → ${String(bytes)})`;
@@ -352,8 +352,8 @@ const REFINEMENT_DISPOSITION_PROSE = {
  * failures" is not an action; taking back what the review changed is, and that
  * is one child per change.
  */
-function refinementEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  return createRefinementStore(sql).list(limit).map((request) => {
+function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  return createRefinementStore(sql, actor).list(limit).map((request) => {
     const trigger = request.trigger === 'explicit'
       ? 'you asked for it'
       : 'unresolved corrections accumulated';
@@ -407,8 +407,8 @@ function refinementEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   });
 }
 
-function replayEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
-  const rows = listReplayEvals(sql, limit + 1);
+function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
+  const rows = listReplayEvals(sql, actor, limit + 1);
   return rows.slice(0, limit).map((r, index) => {
     const previous = rows[index + 1];
     // A move is only called improved/declined when the two intervals don't
@@ -471,9 +471,9 @@ function outcomeItemEvidence(row: TurnOutcomeRow): string {
 }
 
 function outcomeEntry(
-  sql: SqlExecutor, since: number | undefined, limit: number,
+  sql: SqlExecutor, actor: ActorHandle, since: number | undefined, limit: number,
 ): ChangelogEntry | null {
-  const rows = listTurnOutcomes(sql, { limit: 200 })
+  const rows = listTurnOutcomes(sql, actor, { limit: 200 })
     .filter((r) => since === undefined || r.createdAt > since);
   if (rows.length === 0) return null;
   const count = (k: string) => rows.filter((r) => r.outcome === k).length;
@@ -518,14 +518,14 @@ export function buildChangelog(
   const entries = [
     ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
-    ...gepaEntries(sql, limit),
-    ...replayEntries(sql, limit),
-    ...promptSectionEntries(sql, limit),
-    ...refinementEntries(sql, limit),
+    ...gepaEntries(sql, actor, limit),
+    ...replayEntries(sql, actor, limit),
+    ...promptSectionEntries(sql, actor, limit),
+    ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
   const facts = factAggregate(sql, actor, limit, opts.since);
   if (facts) entries.push(facts);
-  const outcomes = outcomeEntry(sql, opts.since, limit);
+  const outcomes = outcomeEntry(sql, actor, opts.since, limit);
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
   return entries.slice(0, limit);
@@ -643,20 +643,22 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
  */
 function revertPromptSection(
   sql: SqlExecutor,
+  actor: ActorHandle,
   sectionId: string,
   version: number,
 ): ChangelogRevertResult {
   const row = sql<{ status: string }>`
     SELECT status FROM prompt_section_versions
-    WHERE section_id = ${sectionId} AND version = ${version} LIMIT 1`[0];
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
+      AND version = ${version} LIMIT 1`[0];
   if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
 
   if (row.status === 'pending') {
-    const pending = getPendingPromptSection(sql, sectionId);
+    const pending = getPendingPromptSection(sql, actor, sectionId);
     if (!pending || pending.version !== version) {
       return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
     }
-    applyPromptSectionDecision(sql, pending, 'rollback');
+    applyPromptSectionDecision(sql, actor, pending, 'rollback');
     return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
   }
   if (row.status !== 'current') {
@@ -665,13 +667,14 @@ function revertPromptSection(
 
   const prev = sql<{ version: number }>`
     SELECT version FROM prompt_section_versions
-    WHERE section_id = ${sectionId} AND version < ${version} AND status = 'historical'
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
+      AND version < ${version} AND status = 'historical'
     ORDER BY version DESC LIMIT 1`[0];
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
-    WHERE section_id = ${sectionId} AND version = ${version}`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
   if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
   void sql`UPDATE prompt_section_versions SET status = 'current'
-    WHERE section_id = ${sectionId} AND version = ${prev.version}`;
+    WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${prev.version}`;
   return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
 }
 
@@ -694,7 +697,7 @@ export async function executeChangelogRevert(
       if (!sectionId || !Number.isInteger(version) || version <= 0) {
         return { ok: false, error: `invalid prompt-section target: ${action.target}` };
       }
-      return revertPromptSection(ctx.rt.storage.sql, sectionId, version);
+      return revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version);
     }
     case 'fact_forget': {
       if (!ctx.facts.recall(action.target)) {

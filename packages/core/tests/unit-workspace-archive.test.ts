@@ -300,19 +300,20 @@ describe('workspace archive', () => {
   test('omits derived conversation revision triggers and restores a cloud pane into a mutable local transcript', async () => {
     const source = fresh();
     initAllTables(source.execRaw, source.sql);
-    // A cloud export always carries its workspace identity and actor directory;
-    // the pane store carries no actor column of its own, so the projection on
-    // restore is filed under the main actor the archive brought with it.
-    createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
+    // A cloud export always carries its workspace identity and actor directory,
+    // and a pane produced by THIS tree names the actor that wrote each row —
+    // so the projection on restore keeps that owner rather than attributing the
+    // transcript to whoever the archive's main actor turns out to be.
+    const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     source.execRaw(SDK_SESSION_DDL);
     void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'u1'}, ${''}, ${null}, ${'user'},
+      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${cloudActor.actorId}, ${'u1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud question' }] })},
               ${'2026-08-26 12:00:00'})`;
     void source.sql`
-      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'a1'}, ${''}, ${'u1'}, ${'assistant'},
+      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${cloudActor.actorId}, ${'a1'}, ${''}, ${'u1'}, ${'assistant'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud answer' }] })},
               ${'2026-08-26 12:00:01'})`;
     new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql)).search('cloud');
@@ -326,6 +327,16 @@ describe('workspace archive', () => {
     const pane = target.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'assistant_messages'}`;
     expect(pane).toEqual([]);
+    // …and every pane row landed in `messages` under the actor that WROTE it,
+    // not under whoever the restore would have attributed it to. Read UNSCOPED
+    // on purpose: a row filed under a different owner shows up here as a wrong
+    // `actor_id`, where an actor-predicated read would answer an empty set and
+    // pass for the wrong reason.
+    expect(target.sql<{ id: string; actor_id: string; content: string }>`
+      SELECT id, actor_id, content FROM messages ORDER BY id`).toEqual([
+      { id: 'a1', actor_id: cloudActor.actorId, content: 'cloud answer' },
+      { id: 'u1', actor_id: cloudActor.actorId, content: 'cloud question' },
+    ]);
     const landed = openWorkspaceMainActor(target.sql);
     void target.sql`
       INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)

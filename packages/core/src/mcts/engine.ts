@@ -135,7 +135,7 @@ export async function runMCTS(
     searchEpoch = search!.reclaim(rootId) ?? resumed.epoch;
   } else {
     rootId = nanoid();
-    rootMsgId = await recordNode(session, rt.storage.sql, {
+    rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
       nodeId: rootId,
       parentNodeId: null,
       parentMsgId: null,
@@ -188,7 +188,7 @@ export async function runMCTS(
       // aborts the search — selection skips depth-capped nodes and the budget
       // keeps flowing to the shallower frontier. Break only when nothing is
       // selectable (frontier exhausted or every open node is at the cap).
-      const selected = selectNode(rt.storage.sql, rootId, W, maxDepth);
+      const selected = selectNode(rt.storage.sql, rt.actor, rootId, W, maxDepth);
       if (!selected) break;
 
       const iteration = phase.iteration + 1;
@@ -390,7 +390,7 @@ export async function runMCTS(
           const exploration = explorations[i] ?? { text: '' };
           const code = offeredCode[i];
           childNodeIds.push(childId);
-          await recordNode(session, rt.storage.sql, {
+          await recordNode(session, rt.storage.sql, rt.actor, {
             nodeId: childId,
             parentNodeId: selected.id,
             parentMsgId: selected.msg_id,
@@ -406,7 +406,7 @@ export async function runMCTS(
           });
           void rt.storage.sql`
    UPDATE search_nodes SET branch_agent_key = ${childId}
-            WHERE id = ${childId}
+            WHERE actor_id = ${rt.actor.actorId} AND id = ${childId}
           `;
         }
 
@@ -415,7 +415,7 @@ export async function runMCTS(
           const nodeId = childNodeIds[i];
           const score = scores[i];
           if (nodeId !== undefined && score !== undefined) {
-            backpropagate(rt.storage.sql, nodeId, score);
+            backpropagate(rt.storage.sql, rt.actor, nodeId, score);
           }
         }
 
@@ -553,7 +553,7 @@ export async function runMCTS(
       // The budget is spent, so a resume would re-enter with nothing left to
       // explore and fail again. Retire the tree and settle the search as failed
       // rather than leaving a poison-pill 'running' row for this task.
-      abandonSearchTree(rt.storage.sql, rootId);
+      abandonSearchTree(rt.storage.sql, rt.actor, rootId);
       search?.fail(rootId, searchEpoch, Date.now());
       throw err;
     }

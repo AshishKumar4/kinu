@@ -108,7 +108,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
   const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });
-  recordLesson(rt.storage.sql, {
+  recordLesson(rt.storage.sql, rt.actor, {
     turnIds: ['t1'],
     text: 'The loop re-read the same file.',
     source: 'session_reflection',

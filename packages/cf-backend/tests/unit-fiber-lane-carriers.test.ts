@@ -12,23 +12,27 @@
  * ITS WORK to that seam.
  */
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { JsonValue } from '@kinu.run/core';
+import type { ActorHandle, JsonValue } from '@kinu.run/core';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   ADVISOR_LANE_FIBER, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
 import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, recoveryBackoffMs } from '@kinu.run/core';
-
 /** The carrier half of a classification verdict, read from the module's own
  *  answer rather than restated beside it. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
 
 function recordingTransports() {
   const redriven: string[] = [];
+  const writes: unknown[][] = [];
   const state = { auditRows: 0 };
-  const sql: FiberLaneTransports['sql'] = <T>(_strings: TemplateStringsArray, ..._values: unknown[]): T[] => {
+  const actor: ActorHandle = createTestActorsOver(new Database(':memory:')).main;
+  const sql: FiberLaneTransports['sql'] = <T>(_strings: TemplateStringsArray, ...values: unknown[]): T[] => {
     state.auditRows += 1;
+    writes.push(values);
     return [];
   };
   const transports: FiberLaneTransports = {
@@ -40,6 +44,7 @@ function recordingTransports() {
     hasAdvisorNoteForTurn: () => false,
     reviewAdvisorSnapshot: () => Promise.resolve(null),
     sql,
+    actor,
     appendMemory: () => Promise.resolve(),
     armOwedTerminalRecovery: () => Promise.resolve(),
     deliverSignal: () => Promise.resolve('queued' as const),
@@ -48,6 +53,7 @@ function recordingTransports() {
   return {
     transports,
     redriven,
+    writes,
     get auditRows() { return state.auditRows; },
   };
 }
@@ -99,6 +105,7 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     classifyRecoveredFiber(scene.transports, fiber(SEARCH_FIBER_NAME, { iteration: 3 }));
     expect(scene.auditRows).toBe(1);
     expect(scene.redriven).toEqual([SEARCH_FIBER_NAME]);
+    expect(scene.writes[0]?.[0]).toBe(scene.transports.actor.actorId);
   });
 
   test('the MCP warm lane drops on purpose: the next settled turn warms again', () => {

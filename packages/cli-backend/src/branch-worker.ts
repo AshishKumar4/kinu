@@ -1,9 +1,12 @@
 /**
  * Branch worker process — runs inside a forked child process.
  *
- * Each MCTS branch gets its own isolated SQLite database. The worker loads
- * crafted tools from the parent database, so a branch uses what the agent
- * learned during exploration.
+ * The branch is a LOGICAL actor on the workspace's ONE database: this process
+ * opens that file (the parent has it in WAL, which is what a running workspace
+ * is already in), validates its own `workspace_actors` row through the root's
+ * directory, and writes its rollout traces there under its own actor id. It
+ * owns no store of its own — a second file would be a second state store for
+ * one actor, and the parent could not read what its branch wrote.
  *
  * The whole wire lives in branch-protocol.ts. This file parses calls with
  * BranchCallSchema and answers with BranchReplySchema.
@@ -15,7 +18,7 @@
 
 import { Database } from 'bun:sqlite';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, FacetIdentity, WorkspaceActorDirectory,
+  DEFAULT_WORKERS_AI_MODEL_ID, WorkspaceActorDirectory,
   exploreRollout,
   formatInheritedContext,
   parseModelSpec,
@@ -36,15 +39,7 @@ import {
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
 import { LocalActorProcessBootstrapSchema } from './actor-identity';
-import { makeSql, makeSqlExec } from './runtime';
-const dbPath = process.argv[2];
-if (!dbPath) {
-  diagnostics.failure(
-    'branch.worker_missing_db_path',
-    new KinuError('bad_input', 'branch worker started without a database path'),
-  );
-  process.exit(1);
-}
+import { makeSql } from './runtime';
 
 const stringMapSchema = v.record(v.string(), v.string());
 const localProviderCredentialsSchema = v.object({
@@ -91,35 +86,41 @@ const modelResolver = createLocalModelResolver({
 const encodedBootstrap = process.env.KINU_ACTOR_BOOTSTRAP;
 if (!encodedBootstrap) throw new KinuError('missing', 'The branch has no root-issued actor bootstrap.');
 const bootstrap = v.parse(LocalActorProcessBootstrapSchema, JSON.parse(encodedBootstrap));
-const rootDb = new Database(bootstrap.rootDbPath, { readonly: true });
-const rootSql = makeSql(rootDb);
-const owner = rootSql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`[0];
+if (process.env.KINU_ROOT_DB !== bootstrap.rootDbPath) throw new KinuError('denied', 'The branch was pointed at a database its bootstrap does not name.');
+// WRITABLE, and the only handle this process opens. The rollout traces below
+// and this actor's directory row are rows in the same file the parent holds;
+// WAL is what lets both processes have it open at once, and a workspace that
+// is being driven is already in WAL (`openWorkspaceCLI`) — set here too
+// because a fixture-created database may not be.
+const db = new Database(bootstrap.rootDbPath);
+db.exec('PRAGMA journal_mode = WAL');
+const sql = makeSql(db);
+const owner = sql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`[0];
 if (!owner || owner.id !== bootstrap.reference.workspaceId) throw new KinuError('denied', 'The branch belongs to a different workspace.');
-const directory = new WorkspaceActorDirectory(rootSql, { workspaceId: owner.id, ownerUserId: owner.owner_user_id });
+const directory = new WorkspaceActorDirectory(sql, { workspaceId: owner.id, ownerUserId: owner.owner_user_id });
 const validateActor = () => {
   const entry = directory.apply(bootstrap.parent, bootstrap.parentStoragePath, { action: 'validate', name: bootstrap.name, reference: bootstrap.reference });
   if (entry.storageKey !== bootstrap.storageKey || entry.kind !== 'branch') throw new KinuError('denied', 'The branch physical identity does not match its directory record.');
 };
 validateActor();
-const db = new Database(dbPath);
-db.exec('PRAGMA journal_mode = WAL');
-new FacetIdentity(makeSqlExec(db)).seed({ actor: { ...bootstrap.reference, name: bootstrap.name, storageKey: bootstrap.storageKey },
-  ownerUserId: owner.owner_user_id, parentWorkspace: owner.name, capabilityToken: null });
-db.exec(`CREATE TABLE IF NOT EXISTS traces (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  step INTEGER NOT NULL, text TEXT NOT NULL
-)`);
+/**
+ * This branch's rollout attempt, held for the reflection that grades it.
+ *
+ * IN PROCESS, and no table. One worker process runs exactly one branch, and
+ * `explore` and `reflect` arrive on that same process over the same pipe — so
+ * the attempt never has to survive anything. The old per-branch `traces` table
+ * existed only because the worker had a database of its own and no way to read
+ * the row the engine writes for the same text (`search_nodes.observation`);
+ * with the store gone there is nothing left for it to be the second copy of.
+ */
+const attempts: string[] = [];
 
-// Crafted tools from the parent workspace DB. Both tables it reads are
-// provisioned by the parent runtime before it forks (initWorkspaceSchema /
-// initAgentConfigTable), so a failure here is a broken parent, not an old one.
-let craftedTools: ExploreToolHint[] = [];
-let parentDb: Database | null = null;
-const parentDbPath = process.env.KINU_PARENT_DB;
-if (parentDbPath) {
-  parentDb = new Database(parentDbPath, { readonly: true });
-  craftedTools = parentDb.query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
-}
+// Crafted tools from the workspace this branch belongs to — the same database,
+// so there is nothing to open. The table is provisioned by the parent runtime
+// before it forks (initWorkspaceSchema), so a failure here is a broken parent
+// rather than an old one.
+const craftedTools: ExploreToolHint[] = db
+  .query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
 
 process.on('message', async (rawMessage: JsonValue) => {
   validateActor();
@@ -159,7 +160,7 @@ process.on('message', async (rawMessage: JsonValue) => {
           languages,
           siblings,
         });
-        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, result.text]);
+        attempts.push(result.text);
         // The spend travels back with the proposal: this process resolves its
         // own model, so the parent's mission ledger cannot see the call any
         // other way (mcts/engine.ts debits it).
@@ -170,10 +171,10 @@ process.on('message', async (rawMessage: JsonValue) => {
         // The branch's own trace table holds the attempt this reflection is
         // about; `outcome` carries the environment's verdict, which lives on the
         // engine side and reaches this process no other way.
-        const traces = db.query<{ text: string }, []>('SELECT text FROM traces ORDER BY step').all();
+        const attempt = attempts.join('\n');
         const result = await reflectRollout(lowEffortRoute(), {
           task: msg.args.task,
-          attempt: traces.map((trace) => trace.text).join('\n'),
+          attempt,
           outcome: msg.args.outcome,
         });
         send({ method: msg.method, id: msg.id, result });
@@ -197,14 +198,12 @@ function send(reply: BranchReply): void {
 send({ method: BRANCH_READY });
 
 process.once('exit', () => {
-  parentDb?.close();
-  rootDb.close();
   db.close();
 });
 
 function readStoredModelSpec(): string | null {
   validateActor();
-  const row = parentDb?.query<{ value: string }, [string]>("SELECT value FROM actor_config WHERE actor_id = ? AND key = 'model' LIMIT 1").get(bootstrap.parent.actorId);
+  const row = db.query<{ value: string }, [string]>("SELECT value FROM actor_config WHERE actor_id = ? AND key = 'model' LIMIT 1").get(bootstrap.parent.actorId);
   return row?.value ?? null;
 }
 

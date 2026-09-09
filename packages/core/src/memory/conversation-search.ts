@@ -164,7 +164,7 @@ export class ConversationSearchStore {
     const paneAnchor = pane
       ? this.sql<PaneRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid
-          FROM assistant_messages WHERE id = ${aroundMessageId}`[0]
+          FROM assistant_messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]
       : undefined;
     let anchor: FetchedRow;
     if (paneAnchor !== undefined) {
@@ -199,7 +199,7 @@ export class ConversationSearchStore {
     const before = (paneSide
       ? this.sql<PaneRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
           ORDER BY rowid DESC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM messages
@@ -208,7 +208,7 @@ export class ConversationSearchStore {
     const after = paneSide
       ? this.sql<PaneRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}
           ORDER BY rowid ASC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM messages
@@ -217,14 +217,14 @@ export class ConversationSearchStore {
     const totalBefore = (paneSide
       ? this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid < ${row.rid}`
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`
       : this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
     const totalAfter = (paneSide
       ? this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM assistant_messages
-          WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`
+          WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`
       : this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
@@ -277,7 +277,7 @@ export class ConversationSearchStore {
         // retired mirror — never listed beside their rich twins.
         ...this.sql<PaneGroup>`
           SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-          FROM assistant_messages GROUP BY session_id`.map(withPaneStamps),
+          FROM assistant_messages WHERE actor_id = ${this.actorId} GROUP BY session_id`.map(withPaneStamps),
         ...this.sql<PlainGroup>`
           SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
           FROM messages
@@ -298,7 +298,8 @@ export class ConversationSearchStore {
           ? this.sql<PaneRaw>`
               SELECT id, session_id, role, content, created_at, rowid AS rid
               FROM assistant_messages
-              WHERE session_id = ${conversation.session_id} AND role = 'user'
+              WHERE actor_id = ${this.actorId} AND session_id = ${conversation.session_id}
+                AND role = 'user'
               ORDER BY rowid ASC LIMIT 1`.map(withPaneStamp)[0]
           : this.sql<PlainRaw>`
               SELECT id, session_id, role, content, created_at, rowid AS rid
@@ -396,7 +397,7 @@ export class ConversationSearchStore {
     const paneRows = pane
       ? this.sql<PaneRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid
-          FROM assistant_messages ORDER BY rowid ASC`.map(withPaneStamp)
+          FROM assistant_messages WHERE actor_id = ${this.actorId} ORDER BY rowid ASC`.map(withPaneStamp)
       : [];
     const plainRows = pane
       ? this.sql<PlainRaw>`

@@ -338,7 +338,29 @@ export class ActorSession {
             break;
           }
           case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
-          case 'error': this.orchestrator.acc.hadError = true; break;
+          case 'error': {
+            this.orchestrator.acc.hadError = true;
+            // AN `error` EVENT IS A FAILURE, not a note beside a successful turn.
+            // A thrown cause reaches the catch below and becomes `failure`, but
+            // the scaffold loop reports a dead provider by PUSHING this event
+            // instead of throwing (`scaffold/executor.ts`), so a turn whose
+            // model never answered arrived here with `failure` still null: the
+            // result read as completed, `runHeadInference` saw no break, and
+            // `settleTurnClaim(lease, 'completed')` wrote COMPLETED into the
+            // admission ledger for a turn that produced nothing. A claim that
+            // lies about how a turn ended is worse than no claim, because
+            // recovery verifies claims and would resume nothing.
+            //
+            // FIRST failure wins, and an abort is not one: an interrupted turn
+            // has its own outcome and its own message, and the arms below
+            // already distinguish them.
+            if (failure === null
+              && !active.abort.signal.aborted
+              && event.message !== INTERRUPTED_TURN) {
+              failure = new Error(event.message);
+            }
+            break;
+          }
           case 'done':
             this.messages.push(...this.userSteer.replayInto(event.responseMessages));
             if (!text.trim() && event.text.trim()) text = event.text;

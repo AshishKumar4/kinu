@@ -23,6 +23,8 @@ import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { LiveHeadJournal } from '../src/heads/live-journal';
 import { initHeadsTables } from '../src/heads/schema';
 import type { HeadInput, HeadStep } from '../src/heads/types';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { hostedSeatsOver } from './helpers-actor-host';
 
 /** One published frame, as a transport would see it. */
 interface Frame { readonly kind: HeadStreamKind; readonly delta: string }
@@ -112,12 +114,23 @@ function headInput(): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 
-function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInferenceDeps {
+/**
+ * A head's deps over a REAL hosted actor.
+ *
+ * The frames under test are produced inside a claimed turn on the actor's own
+ * `ActorSession`, so the fixture supplies the actor that turn belongs to —
+ * through the production directory, host and session `hostedSeatsOver` builds —
+ * rather than the bare runtime a head used to be handed.
+ */
+async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
+  const { rt, testSql } = createTestRuntime();
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'head');
   return {
-    runtime: createTestRuntime().rt,
+    ...seat,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
     workspaceLayout: 'shared-workspace', ...over,
   };
@@ -126,7 +139,7 @@ function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): HeadInfe
 describe('a running head publishes what it is producing', () => {
   test('both halves of a step reach the channel, each tagged with its own kind', async () => {
     const frames: Frame[] = [];
-    const report = await runHeadInference(headInput(), deps(
+    const report = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'weighing the two lexers', text: 'the lexer handles UTF-8' }),
       { reportDelta: (kind, delta) => { frames.push({ kind, delta }); } },
     ));
@@ -147,7 +160,7 @@ describe('a running head publishes what it is producing', () => {
     // is merged with its neighbour, dropped, reordered or reshaped on the way.
     const chunks = ['The ', 'lexer ', 'handles ', 'UTF', '-8 ', 'correctly.'];
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), deps(chunkedHead(chunks), {
+    await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
     }));
 
@@ -160,7 +173,7 @@ describe('a running head publishes what it is producing', () => {
     // The turn body drops empty text deltas before they are yielded, so a
     // provider that emits keep-alive chunks cannot make a reader repaint nothing.
     const frames: Frame[] = [];
-    await runHeadInference(headInput(), deps(chunkedHead(['', 'answer', '']), {
+    await runHeadInference(headInput(), await deps(chunkedHead(['', 'answer', '']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
     }));
     expect(frames).toEqual([{ kind: 'text', delta: 'answer' }]);
@@ -175,7 +188,7 @@ describe('a running head publishes what it is producing', () => {
     const frames: Frame[] = [];
     const steps: HeadStep[] = [];
 
-    const report = await runHeadInference(headInput(), deps(chunkedHead(chunks), {
+    const report = await runHeadInference(headInput(), await deps(chunkedHead(chunks), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (_seq, step) => { steps.push(step); },
     }));
@@ -204,7 +217,7 @@ describe('a running head publishes what it is producing', () => {
     const input = headInput();
     journal.insertSpawn(input);
     announced.length = 0;
-    await runHeadInference(input, deps(chunkedHead(['a ', 'settled ', 'answer']), {
+    await runHeadInference(input, await deps(chunkedHead(['a ', 'settled ', 'answer']), {
       reportDelta: (kind, delta) => { frames.push({ kind, delta }); },
       reportStep: (seq, step) => { journal.appendStep(input.id, seq, step); },
     }));
@@ -220,11 +233,11 @@ describe('a running head publishes what it is producing', () => {
     // The frames are best effort and subordinate, so their absence must be
     // unobservable in everything durable — which is what lets a backend with
     // nothing watching wire none.
-    const withSink = await runHeadInference(headInput(), deps(
+    const withSink = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
       { reportDelta: () => { /* published nowhere */ } },
     ));
-    const without = await runHeadInference(headInput(), deps(
+    const without = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
     ));
     expect(without.status).toBe(withSink.status);
@@ -252,7 +265,7 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
     secondStarted.resolve();
     return pending.promise;
   } });
-  const running = runHeadInference(headInput(), deps(model, {
+  const running = runHeadInference(headInput(), await deps(model, {
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
       execute: async () => value,

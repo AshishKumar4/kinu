@@ -45,7 +45,7 @@ import {
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
   verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
   type TurnSteering,
-  createAgentStores, type AgentStores, collectDynamicContext, subordinateDelegatesOf,
+  type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
@@ -60,7 +60,10 @@ import {
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   agentsActionsFor,
-  facetHomeProvisioner, nodeAgentName,
+  facetHomeProvisioner, facetHomeReleaser, nodeAgentName, headAgentName, explorationActorKey,
+  type HostedNodeSeat, type NodeIdentity, type ModelPricing,
+  type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
+  type HeadInput,
   type HeadJournal, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
@@ -167,16 +170,19 @@ import {
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
   stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, permitInPlan, runWorkModeInvocation, type ToolOutcome,
+  createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
+  type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
+  type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
-import { makeSqlExec, type CLIRuntime } from './runtime';
-import { registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
+import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
-import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from './head-runtime';
+import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from './fiber';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -185,6 +191,114 @@ import {
   type LocalProfileAuthority, type ProfileAuthorityRefinement, type ProfileEnvelopeSource,
 } from './profile-authority';
 
+
+/**
+ * This session's actor as the ROOT's host bound it.
+ *
+ * Absent from a session's options means this session owns its actor outright —
+ * `kinu evolve`, `kinu exec`, a fixture — and builds each of these itself over
+ * its own runtime. Present means a {@link LocalAgentHost} bound the actor over
+ * the workspace's ONE database and this session drives it: the SAME
+ * `ActorSession` the host holds, the same stores, and the same host every head,
+ * node and hire beneath it is acquired from.
+ */
+export interface LocalHostedSession {
+  readonly actor: HostedActor;
+  /** The root's host — one per workspace database, for every actor in it. */
+  readonly host: ActorHost;
+  readonly engine: EvolutionEngine;
+  readonly budget: MissionGovernor;
+  readonly eventLog: EventLog;
+}
+
+/**
+ * The orchestration one local actor's loop runs under, and the three objects
+ * that are part of it.
+ *
+ * ONE construction site for both paths. The hosted path reaches it through
+ * `ActorHostDeps.orchestrationFor`, which is called BEFORE the `ActorSession`
+ * exists — the host builds that session FROM these deps — so every port here
+ * resolves the driving session at CALL time rather than closing over it. That
+ * is not a workaround: a broadcast, a replay task, a shadow trial and a budget
+ * refusal all happen while a turn is running, which is long after this object
+ * was built. The standalone path passes `() => this` and gets the same object.
+ */
+export interface LocalOrchestration {
+  readonly deps: AgentOrchestratorDeps;
+  readonly engine: EvolutionEngine;
+  readonly budget: MissionGovernor;
+  readonly eventLog: EventLog;
+}
+
+export interface LocalOrchestrationInput {
+  readonly runtime: AgentRuntime;
+  /** This actor's durable event rail — the queue both ingresses publish into. */
+  readonly eventLog: EventLog;
+  /** The session that drives this actor, read at call time. */
+  readonly session: () => LocalAgentSession;
+  /** This host runs ONE task turn and exits; it never starts the cadence. */
+  readonly oneShot: boolean;
+  /** Whether turn and session reflection record anything at all. */
+  readonly autoEvolve: boolean;
+}
+
+export function createLocalOrchestration(input: LocalOrchestrationInput): LocalOrchestration {
+  // The cumulative spend governor — a scheduled run or a fork opts into a
+  // label, and its refusals land in that run's durable event log. No label
+  // means no cap, which is every ordinary session.
+  const budget = new MissionGovernor({
+    actor: input.runtime.actor,
+    storage: input.runtime.storage,
+    // Real USD: the catalog rates for whatever model the next turn resolves
+    // to. Null until the lookup lands — the ledger then blends, and says so.
+    pricing: () => input.session().modelPricing(),
+    onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
+  });
+  const engine = new EvolutionEngine(input.runtime, {
+    enabled: input.autoEvolve,
+    // The turn review's own model calls debit the mission the reviewed turn
+    // ran under — the same ledger, through the same seam, as the work it
+    // reviews. Unbudgeted turns never reach it.
+    governor: budget,
+    // Replay-eval rollout: the current system prompt (lessons/facts/soul) +
+    // model, tools disabled. Unlike the DO's sandboxed scaffold rollout, a
+    // local re-run with tools would re-execute shell work on the user's
+    // machine and can block on shell approvals — so CLI replay measures the
+    // prompt/model config, not tool trajectories.
+    replayTaskRunner: (task) => input.session().runReplayTask(task),
+    shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
+    // The trial itself runs on the cadence lane. A resolved gate changes the
+    // live scaffold under us, so the session's model-bound state is dropped
+    // and the decision is surfaced like any other self-change.
+    shadowTrialRunner: () => input.session().runShadowTrials(),
+  });
+  engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
+  return {
+    engine,
+    budget,
+    eventLog: input.eventLog,
+    deps: {
+      // The five loop capabilities that are platform-shaped. Resolved per call
+      // for the reason this factory's own doc gives.
+      host: {
+        broadcast: (event) => { input.session().broadcast(event); },
+        enqueueTurn: (turn) => input.session().enqueueTurn(turn),
+        turnInFlight: () => input.session().turnInFlight(),
+        setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
+        get headRuntime() { return input.session().headRuntime; },
+      },
+      engine,
+      eventLog: input.eventLog,
+      budget,
+      oneShot: input.oneShot,
+      refinementLane: () => input.session().runRefinementLane(),
+      sinks: {
+        onToolCallEvent: (ev) => { input.session().reportToolCallEnd(ev); },
+        onStepEvent: (ev) => { input.session().reportStepFinish(ev); },
+      },
+    },
+  };
+}
 
 /**
  * The head of a transcript that could not be restored whole.
@@ -466,9 +580,6 @@ export interface LocalAgentSessionOpts {
    *  its shell work in. Only a runtime with no bound plane falls back to the
    *  process's own directory. */
   cwd?: string;
-  /** Root workspace authority shared with local child sessions that share this
-   * VFS. A child never gets an independent migration marker or approval table. */
-  instructionApprovals?: InstructionApprovalStore;
   /** The title of the workspace this session works in, read live, when this
    *  session is a SUBAGENT of that workspace rather than the workspace's own
    *  chat. Present makes the prompt name both; absent makes it name the
@@ -479,6 +590,17 @@ export interface LocalAgentSessionOpts {
    *  long teardown waits on work that has not settled. Fixed by the surface that
    *  opened the session (BACKGROUND_POLICY). Default: the interactive policy. */
   backgroundPolicy?: BackgroundPolicy;
+  /**
+   * This session's actor as the root's {@link LocalAgentHost} bound it, when
+   * one did.
+   *
+   * Absent means this session owns its actor outright and builds every runtime
+   * object for it — which is what `kinu evolve`, `kinu exec` and every fixture
+   * are, and why they still work with no host in sight. Present means the ONE
+   * workspace database already holds this actor's row and the root's host
+   * already built its session, stores, engine, governor and event rail.
+   */
+  hosted?: LocalHostedSession;
 }
 
 const TurnTierMetadataSchema = v.object({
@@ -528,6 +650,59 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
+  /**
+   * The host every LOGICAL ACTOR this session creates is acquired from —
+   * heads, swarm nodes, and (through the team transport) hires.
+   *
+   * One per workspace database. Handed in when a {@link LocalAgentHost} owns
+   * the tree; built here over this session's own runtime otherwise, because a
+   * session with no host above it IS the root of its tree and its forks are
+   * still logical actors of the one database rather than files of their own.
+   */
+  private readonly actorHost: ActorHost;
+  /**
+   * The loop origin each actor this session creates was CREATED with, until the
+   * host has seeded it.
+   *
+   * A fork may name a version (`agents fork` carries one per head), and the
+   * pointer is seeded while the host builds the actor — before its first claim.
+   * So the creation site records its choice here and `loopFor` reads it; an
+   * actor nobody named an origin for gets the default for its kind, which is
+   * what every ordinary hire, head and node is.
+   */
+  private readonly loopOrigins = new Map<string, LoopOrigin>();
+
+  /**
+   * The origin this session recorded for an actor it is about to seat, if any.
+   *
+   * Public for the same reason the write-observer slot is: the DAEMON's host
+   * builds the runtime and resolves the loop, but only the SEATING SESSION
+   * knows what the creation site NAMED. Without this reader the daemon's
+   * `loopFor` fell to `defaultLoopOrigin(kind)`, so a head that asked for one
+   * SPECIFIC version of its parent's lineage got the parent's CURRENT source
+   * under the daemon and the named version under a bare session — the same
+   * host/session split, one map away from the same answer.
+   */
+  pendingLoopOrigin(actorId: string): LoopOrigin | undefined {
+    return this.loopOrigins.get(actorId);
+  }
+  /**
+   * The write observer each actor this session seats must be built OVER, until
+   * the host has built it.
+   *
+   * THE SAME SHAPE AS {@link loopOrigins}, and for the same structural reason:
+   * the HOST builds the runtime, but only the CALLER knows something the
+   * runtime needs, and `ActorHostDeps.runtimeFor(bound)` is deliberately narrow
+   * — it takes the binding and nothing the caller invented. So the answer is a
+   * slot the caller fills before `acquire` and `runtimeFor` reads, never a
+   * widened seam. Do not add a parameter to `runtimeFor` for this.
+   *
+   * What fills it is a head run's own `HeadCapture.files`: file attribution is
+   * per RUN, so it cannot be a property of the actor or of this session.
+   * Cleared on release beside the origin, so the slot's lifetime is the seat's
+   * and the next head seated under the same reference cannot inherit it.
+   */
+  private readonly actorWrites = new Map<string, WriteObserver>();
 
   /** The per-turn mechanical-steering ledger — what fired at which step and
    *  what came of it. A read-only named view; the orchestrator owns writes. */
@@ -713,54 +888,31 @@ export class LocalAgentSession implements BackendHost {
       );
     }
 
-    // The cumulative spend governor — a scheduled run or a fork opts into a
-    // label, and its refusals land in this run's durable event log. No label
-    // means no cap, which is every ordinary session.
-    this.budget = new MissionGovernor({
-      storage: this.rt.storage,
-      // Real USD: the catalog rates for whatever model the next turn resolves
-      // to. Null until the lookup lands — the ledger then blends, and says so.
-      pricing: () => this.modelCatalog.pricing(),
-      onExhausted: ({ error: _error, ...refusal }) =>
-        this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
-    });
-    this.engine = new EvolutionEngine(this.rt, {
-      enabled: this.autoEvolve,
-      // The turn review's own model calls debit the mission the reviewed turn
-      // ran under — the same ledger, through the same seam, as the work it
-      // reviews. Unbudgeted turns never reach it.
-      governor: this.budget,
-      // Replay-eval rollout: the current system prompt (lessons/facts/soul) +
-      // model, tools disabled. Unlike the DO's sandboxed scaffold rollout, a
-      // local re-run with tools would re-execute shell work on the user's
-      // machine and can block on shell approvals — so CLI replay measures the
-      // prompt/model config, not tool trajectories.
-      replayTaskRunner: (task) => this.runReplayTask(task),
-      shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(this.scaffoldControl, turn, opts),
-      // The trial itself runs on the cadence lane. A resolved gate changes the
-      // live scaffold under us, so the session's model-bound state is dropped
-      // and the decision is surfaced like any other self-change.
-      shadowTrialRunner: async () => {
-        const drain = await runQueuedShadowTrials(this.scaffoldControl);
-        if (drain.applied) {
-          this.emit({
-            type: 'evolution',
-            event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-            message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
-          });
-          this.invalidateModelState();
-        }
-        return drain;
-      },
-    });
-    this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
-
     // Every table a workspace has, on any backend — one list, in core. A
     // session can be constructed against a database that no open path touched
-    // (a benchmark harness, `kinu exec` on a fresh clone), so it runs here
-    // too rather than trusting an earlier caller.
+    // (a benchmark harness, `kinu exec` on a fresh clone), so it runs before
+    // any store is built rather than trusting an earlier caller.
     const hubSql = makeSqlExec(opts.db);
     initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+    // THE ORCHESTRATION THIS ACTOR'S LOOP RUNS UNDER — hosted or not, built by
+    // one factory. Hosted, the root's `ActorHost` already built it (it needed
+    // it to construct the `ActorSession` below) and hands the three objects
+    // back; standalone, this session is its own actor's whole host and builds
+    // them now. Either way there is exactly ONE engine, ONE governor and ONE
+    // event rail per logical actor.
+    const own = opts.hosted ? null : createLocalOrchestration({
+      runtime: this.rt,
+      eventLog: new EventLog(hubSql, this.rt.actor),
+      session: () => this,
+      oneShot: this.oneShot,
+      autoEvolve: this.autoEvolve,
+    });
+    const orchestration = opts.hosted ?? own;
+    if (!orchestration) throw new KinuError('missing', 'This session has no orchestration to run its loop under.');
+    this.budget = orchestration.budget;
+    this.engine = orchestration.engine;
+    this.eventLog = orchestration.eventLog;
+
     initWorkspaceBaselineTable(this.rt.storage.execRaw);
     // The per-effect ledger a settled turn's suffix is claimed in, and the
     // intent row that carries a roster whose claim never landed. Idempotent
@@ -776,8 +928,15 @@ export class LocalAgentSession implements BackendHost {
     // under the process still gets an honest absolute scope, so a session that
     // outlives its directory cannot silently share another tree's approvals.
     const approvalScope = tolerate(() => realpathSync(this.cwd), 'enoent') ?? resolve(this.cwd);
-    this.instructionApprovals = opts.instructionApprovals ?? new InstructionApprovalStore(
+    // ONE SCOPE, ONE STORE PER ACTOR. The approval key is
+    // `(actor_id, scope, path)`, so a root and every actor beneath it read the
+    // same DIRECTORY's decisions through their own row set. The store is no
+    // longer shared as an object — it is actor-bound — and the sharing that
+    // matters is the scope string, which every actor in one bound directory
+    // derives identically.
+    this.instructionApprovals = new InstructionApprovalStore(
       this.rt.storage.sql,
+      this.rt.actor,
       `local:${approvalScope}`,
       (body) => opts.db.transaction(body)(),
     );
@@ -785,7 +944,11 @@ export class LocalAgentSession implements BackendHost {
     // The stores every agent has, from core — one list both backends inherit.
     // Background-job lifecycle rides the durable local fiber (createLinuxFiber)
     // with this session as the BackendHost (enqueueTurn wakes the agent).
-    this.stores = createAgentStores(() => this.rt.storage.sql, () => this.rt.actor, this.rt.storage.transactionSync);
+    //
+    // HOSTED, they are the ones the root's host bound over the ONE workspace
+    // database and the ones its `/context` plane reads; a second set over one
+    // actor would be a second memo of one truth.
+    this.stores = opts.hosted?.actor.stores ?? this.rt.stores;
     const stores = this.stores;
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
@@ -826,7 +989,7 @@ export class LocalAgentSession implements BackendHost {
         if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) throw new Error('invalid agent name');
       },
     });
-    this.eventLog = new EventLog(hubSql);
+    this.actorHost = opts.hosted?.host ?? this.buildOwnActorHost(hubSql);
     const alarmScheduler: AlarmScheduler = {
       // Synchronous here: the local host's wake-up is a process timer, not a
       // storage write, so there is nothing to await. The seam returns a promise
@@ -834,7 +997,7 @@ export class LocalAgentSession implements BackendHost {
       // inside its invocation (`do.wait_until.no_op`).
       scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
     };
-    this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
+    this.triggerRegistry = new TriggerRegistry(hubSql, this.rt.actor, alarmScheduler);
 
     // The durable per-run event log (run_events) — the same recorder, table and
     // RunEvent union the cloud backend records, over local SQLite — is written…
@@ -843,7 +1006,11 @@ export class LocalAgentSession implements BackendHost {
     // benchmark container or a one-shot `kinu exec` does not.
     this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
-    this.actorSession = new ActorSession({
+    // THE ONE ActorSession for this logical actor. Hosted, the root's host
+    // built it from the orchestration above — the same object `HostedActor`
+    // carries, so a head or a node this session spawns claims its turns on the
+    // very session the host holds. Standalone, this session is that host.
+    this.actorSession = opts.hosted?.actor.session ?? new ActorSession({
       runtime: this.rt,
       claims: this.stores.claims,
       // The local host publishes NO installed build identity for its builtin
@@ -851,20 +1018,15 @@ export class LocalAgentSession implements BackendHost {
       // version in this repo is a placeholder, so a claim for a builtin turn
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
-      orchestration: {
-        host: this,
-        engine: this.engine,
+      orchestration: (own ?? createLocalOrchestration({
+        runtime: this.rt,
         eventLog: this.eventLog,
-        budget: this.budget,
-        oneShot: opts.oneShot === true,
-        refinementLane: () => this.runRefinementLane(),
-        sinks: {
-          onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
-          onStepEvent: (ev) => this.recordRunEvent({ type: 'step_finish', ...ev }),
-        },
-      },
+        session: () => this,
+        oneShot: this.oneShot,
+        autoEvolve: this.autoEvolve,
+      })).deps,
     });
-    this.compactionState = createCompactionStateStore(this.rt.storage.sql);
+    this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
     this.compactionExtension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
@@ -910,7 +1072,7 @@ export class LocalAgentSession implements BackendHost {
       // side-effecting kind has nothing partial to read and a SEARCH does — the case
       // that used to settle empty over candidates it had really measured.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
-        { sql: this.rt.storage.sql, ledger: this.mctsSearchStore }, kind, input,
+        { sql: this.rt.storage.sql, ledger: this.mctsSearchStore, actor: this.rt.actor }, kind, input,
       )),
       // The wake for an attempt this process deliberately did not start. It arms
       // the session's ONE terminal-retry timer (soonest-wins, unref'd), whose
@@ -1271,7 +1433,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** The persisted replay-eval loss curve, newest first (read-only). */
   async getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]> {
-    return listReplayEvals(this.rt.storage.sql, limit);
+    return listReplayEvals(this.rt.storage.sql, this.rt.actor, limit);
   }
 
   // ── Evolution Changelog (parity with the DO's RPCs) ───────────────
@@ -1299,7 +1461,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** The newest take set, picked or not — the surfaces' comparison source. */
   latestAlternateTakes(): AlternateTakeSet | null {
-    return latestAlternateTakeSet(this.rt.storage.sql);
+    return latestAlternateTakeSet(this.rt.storage.sql, this.rt.actor);
   }
 
   /** Record the user's pick (the explicit preference signal) and, when the
@@ -1382,6 +1544,30 @@ export class LocalAgentSession implements BackendHost {
    *  (nothing was lost, do not compensate) without a second turn spent saying
    *  it again. The check reads the same durable table the write lands in — the
    *  ledger IS the store here — so a later process reaches the same answer. */
+  /**
+   * Terminal transitions running right now, on the PUMP's own stack.
+   *
+   * A terminal effect settles a turn from inside the pump that ran it, and one
+   * of them (`event_drain`) delivers signals — which for a settling turn take
+   * the QUEUE arm, because the turn has no steps left to splice into. Awaiting
+   * that queued turn's EXECUTION from here cannot resolve: the executor is the
+   * caller. Settle -> inline drain -> enqueue -> wait for the pump -> pump
+   * waits for settle, with nothing timing out.
+   *
+   * So while this is non-zero, {@link enqueueTurn} answers at ADMISSION rather
+   * than at execution. That is the answer the drain actually wants — the signal
+   * seam compensates on anything but `queued`, and `queued` means accepted, not
+   * started. A caller outside the pump keeps the execution-awaiting contract,
+   * which the fiber wake path depends on.
+   *
+   * This was latent until this cutover: turn finalization used to THROW on an
+   * `ON CONFLICT` mismatch before the roster ran at all, so the inline drain
+   * never executed inside the pump and the debounced `scheduleDrain()` timer —
+   * which fires outside it — picked the work up instead. Fixing the schema made
+   * the roster genuinely run, and the deadlock behind it reachable.
+   */
+  private settlingDepth = 0;
+
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
     if (workModeForTurnMetadata(input.metadata) === 'plan') {
       return Promise.reject(new Error(
@@ -1407,6 +1593,13 @@ export class LocalAgentSession implements BackendHost {
     };
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
     this.queue.push(item);
+    if (this.settlingDepth > 0) {
+      // Accepted, not started. `item.settle` still runs when the pump reaches
+      // it; resolving twice is harmless, and the caller gets an answer it can
+      // act on instead of a promise only it could complete.
+      void this.pump();
+      return Promise.resolve({ status: 'queued' });
+    }
     void this.pump();
     return promise;
   }
@@ -1890,13 +2083,14 @@ export class LocalAgentSession implements BackendHost {
    */
   async recoverBackgroundJobs(): Promise<void> {
     const advisorOrphans: OrphanedFiber[] = [];
-    for (const orphan of detectOrphanedFibers(this.rt.storage.sql)) {
+    for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
       if (orphan.name === ADVISOR_LANE_FIBER) {
         advisorOrphans.push(orphan);
         continue;
       }
       if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
-      void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${orphan.id}`;
+      void this.rt.storage.sql`DELETE FROM fibers
+        WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
     await reconcileInterruptedForks({
       journal: this.headJournal,
@@ -2009,7 +2203,8 @@ export class LocalAgentSession implements BackendHost {
     }
     for (const orphan of advisorOrphans) {
       await this.recoverAdvisorLane(orphan.snapshot);
-      void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${orphan.id}`;
+      void this.rt.storage.sql`DELETE FROM fibers
+        WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
     await this.settleRecordedIntents();
     await this.terminal.resumeAll();
@@ -2059,11 +2254,15 @@ export class LocalAgentSession implements BackendHost {
       }
       const owed = parsed.output;
       try {
-        await this.terminal.settle({
-          transition,
-          declare: () => owed,
-          hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
-        });
+        this.settlingDepth += 1;
+        try {
+          await this.terminal.settle({
+            transition,
+            declare: () => owed,
+            hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
+          });
+        }
+        finally { this.settlingDepth -= 1; }
       } catch (err) {
         diagnostics.failure('turn.terminal_intent_replay_failed', toKinuError({
           doing: 'claiming the roster a settled turn recorded beside its answer',
@@ -2577,7 +2776,7 @@ export class LocalAgentSession implements BackendHost {
       // Prompt sections the evolution loop promoted. Read here, not inside the
       // builder: the builder is the byte-stable cacheable prefix and does no
       // I/O, exactly as with the soul.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
+      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
       identity: this.promptIdentity(),
     };
     systemPromptOptions.agentsMd = agentsMd;
@@ -2794,11 +2993,15 @@ export class LocalAgentSession implements BackendHost {
       // above and is the same array the intent row carries, so the rows core
       // claims are the rows a recovery would have replayed — a second
       // declaration would read live state that has moved on.
-      await this.terminal.settle({
-        transition,
-        declare: () => owed,
-        hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
-      });
+      this.settlingDepth += 1;
+      try {
+        await this.terminal.settle({
+          transition,
+          declare: () => owed,
+          hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
+        });
+      }
+      finally { this.settlingDepth -= 1; }
       // The claim is behind the roster now, so the intent has nothing left to
       // carry: from here the ledger's own rows are what a recovery reads.
       this.clearTerminalIntent(messageId);
@@ -3078,7 +3281,7 @@ export class LocalAgentSession implements BackendHost {
       // The takes this turn competed against, read HERE. A retry that
       // re-selected "whatever is unclaimed now" would claim — or purge — a
       // later turn's captures.
-      takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql),
+      takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql, this.rt.actor),
     };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
     if (input.overflowRetry) parts.overflowRetry = true;
@@ -3164,9 +3367,9 @@ export class LocalAgentSession implements BackendHost {
           if (credited === null) {
             // A turn the captures cannot be attributed to: they competed for an
             // answer that is not there, so the next turn must not claim them.
-            purgeUnclaimedAlternateTakes(this.rt.storage.sql, takeIds);
+            purgeUnclaimedAlternateTakes(this.rt.storage.sql, this.rt.actor, takeIds);
           } else {
-            claimAlternateTakesForTurn(this.rt.storage.sql, {
+            claimAlternateTakesForTurn(this.rt.storage.sql, this.rt.actor, {
               turnId: credited, sessionId: this.sessionId, startedAt, takeIds,
             });
           }
@@ -3198,7 +3401,7 @@ export class LocalAgentSession implements BackendHost {
               await settlePendingBranch(
                 {
                   sql: this.rt.storage.sql,
-                  sessionId: this.sessionId,
+                  actor: this.rt.actor, sessionId: this.sessionId,
                   broadcast: (event: BranchStatusEvent) => this.broadcast(event),
                 },
                 // The branch id, on the LIVE path too. Keyed only on replay, the
@@ -3216,7 +3419,7 @@ export class LocalAgentSession implements BackendHost {
           if (report === null) {
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
-          const outcome = settleBranchIntoTakes(this.rt.storage.sql, {
+          const outcome = settleBranchIntoTakes(this.rt.storage.sql, this.rt.actor, {
             task,
             report,
             turnId, sessionId: this.sessionId, liveText,
@@ -3488,6 +3691,7 @@ export class LocalAgentSession implements BackendHost {
     if (!this.terminalTransitions) {
       this.terminalTransitions = new TerminalTransitions({
         sql: this.rt.storage.sql,
+        actor: this.rt.actor,
         effects: this.terminalEffectTable(),
         now: () => Date.now() + this.terminalClockSkewMs,
         fault: () => this.terminalEffectFault,
@@ -3757,7 +3961,7 @@ export class LocalAgentSession implements BackendHost {
     const laneKey = recorded.turn.turnId === undefined || recorded.turn.turnId === ''
       ? null
       : recorded.turn.turnId;
-    if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey)) return;
+    if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey)) return;
     const checkpointed = Promise.withResolvers<void>();
     const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
       // The checkpoint IS what the caller owes, so a lane that cannot write one
@@ -3777,7 +3981,7 @@ export class LocalAgentSession implements BackendHost {
         checkpointed.reject(failure);
         throw failure;
       }
-      if (laneKey !== null) recordEffectDone(this.rt.storage.sql, ADVISOR_LANE_SCOPE, laneKey);
+      if (laneKey !== null) recordEffectDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
     });
@@ -3985,7 +4189,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** One step of the refinement lane plus the automatic trigger — driven by the
    *  off-turn cadence pass, exactly as on the cloud backend. */
-  private async runRefinementLane(): Promise<void> {
+  async runRefinementLane(): Promise<void> {
     const deps = this.refinementDeps;
     await refinementDebtRequest(deps);
     const step = await advanceRefinementLane(deps);
@@ -4041,7 +4245,7 @@ export class LocalAgentSession implements BackendHost {
   /** Refinements newest first, plus the debt that would open the next one. */
   listRefinements(limit = 20) {
     return {
-      requests: createRefinementStore(this.rt.storage.sql).list(limit).map(refinementRequestView),
+      requests: createRefinementStore(this.rt.storage.sql, this.rt.actor).list(limit).map(refinementRequestView),
       debt: refinementDebt(this.refinementDeps),
     };
   }
@@ -4157,7 +4361,7 @@ export class LocalAgentSession implements BackendHost {
    *  (knowledge tail + soul) and model, the facts world model as the same
    *  dynamic-context block live turns get, isolated history, no tools
    *  (see the engine-construction note). */
-  private async runReplayTask(task: string): Promise<string> {
+  async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
     const memoryTail = await readMemoryTail(this.rt.memory);
     const systemPrompt = buildSystemPromptSync(this.rt, {
@@ -4213,6 +4417,114 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
+  // ── the ports an ActorHost's orchestration resolves at call time ──────
+  //
+  // Public because `createLocalOrchestration` builds this actor's engine,
+  // governor and turn sinks BEFORE the session that answers them exists (the
+  // `ActorSession` is constructed FROM those deps), so it holds a thunk to the
+  // session rather than the objects. Each of these fires while a turn or a
+  // cadence pass is running, which is long after construction.
+
+  /** What the next turn's model costs, off the same catalog session that
+   *  answers the context window — so a pre-run estimate and the ledger that
+   *  debits it read one rate. */
+  modelPricing(): ModelPricing | null {
+    return this.modelCatalog.pricing();
+  }
+
+  /** A cap this actor's run hit, into that run's durable event log. */
+  reportBudgetRefusal(refusal: Omit<Extract<RunEventInput, { type: 'budget_exhausted' }>, 'type'>): void {
+    this.recordRunEvent({ type: 'budget_exhausted', ...refusal });
+  }
+
+  /** One settled tool call, into the run's durable event log. */
+  reportToolCallEnd(event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'>): void {
+    this.recordRunEvent({ type: 'tool_call_end', ...event });
+  }
+
+  /** One finished model step, into the run's durable event log. */
+  reportStepFinish(event: Omit<Extract<RunEventInput, { type: 'step_finish' }>, 'type'>): void {
+    this.recordRunEvent({ type: 'step_finish', ...event });
+  }
+
+  /** One evolution event onto this session's client stream. */
+  reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {
+    this.emit({ type: 'evolution', event: event.type, message: event.message });
+  }
+
+  /** Queue a shadow trial of the pending scaffold against one settled turn. */
+  queueShadowTrial(turn: ShadowTrialTurn, plan: ShadowTrialPlan): ShadowTrialQueueOutcome {
+    return queueTurnShadowTrial(this.scaffoldControl, turn, plan);
+  }
+
+  /**
+   * Drain the queued shadow trials on the cadence lane.
+   *
+   * A resolved gate changes the live scaffold under us, so the session's
+   * model-bound state is dropped and the decision is surfaced like any other
+   * self-change.
+   */
+  async runShadowTrials(): Promise<ShadowTrialDrain> {
+    const drain = await runQueuedShadowTrials(this.scaffoldControl);
+    if (drain.applied) {
+      this.emit({
+        type: 'evolution',
+        event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+        message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
+      });
+      this.invalidateModelState();
+    }
+    return drain;
+  }
+
+  /**
+   * The workspace's own ActorHost, for a session that has no host above it.
+   *
+   * A session reached without a {@link LocalAgentHost} — `kinu evolve`, `kinu
+   * exec`, a fixture — is the ROOT of its tree, and its forks are still logical
+   * actors of the one database. So it builds the same host the daemon builds,
+   * over the same directory and the same storage; only the kinds differ, because
+   * a hire needs the provider wiring the opening surface holds and this session
+   * was handed none.
+   */
+  private buildOwnActorHost(hubSql: SqlExec): ActorHost {
+    const { directory } = localActorDirectory(this.rt.actor);
+    return createActorHost({
+      storage: {
+        sql: this.rt.storage.sql,
+        transactionSync: this.rt.storage.transactionSync,
+        exec: hubSql.exec,
+      },
+      directory,
+      // Same reason the ActorSession above records none: nothing stamps a
+      // build on a `bun`-run checkout.
+      installedBuild: null,
+      // The observer the seater filled in, when it filled one in: an actor
+      // seated with no watcher is built unobserved, which is every kind but a
+      // head run reporting the files it changed.
+      runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId)),
+      orchestrationFor: (bound) => createLocalOrchestration({
+        runtime: bound.runtime,
+        eventLog: new EventLog(hubSql, bound.handle),
+        // A head and a node run in THIS process, so this session is their
+        // client fan-out and their turn queue — which is what a local fork is.
+        session: () => this,
+        oneShot: this.oneShot,
+        autoEvolve: this.autoEvolve,
+      }).deps,
+      // The origin the creation site NAMED, or the default for its kind. A
+      // head and a node inherit the parent's promoted program, which is what
+      // makes a fork a fork of THIS agent rather than of the builtin loop.
+      loopFor: (bound) => ({
+        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.kind),
+        parent: this.rt,
+      }),
+      // The actor whose context moved is the actor the evidence is about, so
+      // this is asked per actor rather than defaulted.
+      contextEvents: (bound) => bound.stores.eventRecorder,
+    });
+  }
+
   /** The recent-facts world-model block for the volatile turn context (core
    *  turn-surface — the single seam with the DO backend). */
   private renderFactsForTurn(): string | undefined {
@@ -4233,12 +4545,17 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** The `agents` tool's swarm substrate. A swarm's nodes run their loops in
-   *  this process and get private homes from this workspace's uid-0 view. */
+   *  this process, as hosted logical actors of this workspace, and get private
+   *  homes from this workspace's uid-0 view. */
   private buildAgentsForkDeps(): AgentsForkDeps {
     const nodeHome = this.rt.nodeHome;
     const nodeRuntime = this.rt.nodeRuntime;
     return {
       rt: this.rt,
+      // ONE SEAT PER NODE. A wave's deps are built once and shallow-copied per
+      // child, so this has to be a factory: a shared actor would give every
+      // node of that wave one claim ledger, one loop pointer and one row set.
+      hostNode: (node) => this.hostNode(node),
       model: this.cachedModel ?? this.defaultModel("an agents fork"),
       originContext: () => Object.freeze(structuredClone([...this.actorSession.history])),
       // Same catalog session that answers the context window and prices the
@@ -4257,8 +4574,8 @@ export class LocalAgentSession implements BackendHost {
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
       // *Isolation*: this backend's filesystem is in this isolate, so it holds the
       // three host-owned members a private home needs (`CLIRuntime.nodeHome`), and
-      // `agentHomeNodeProvisioner` is the ONE implementation that turns them into
-      // one. So this site adapts the host to the seam rather than owning a second
+      // `facetHomeProvisioner` is the ONE implementation that turns them into one,
+      // keyed on the node ACTOR's storage key rather than a raw node id. So this site adapts the host to the seam rather than owning a second
       // provisioner. Built per swarm call and awaited per node, so a turn that never
       // searches never boots the workspace. A runtime built elsewhere
       // (`buildCLIHeadRuntime`, a bare AgentRuntime in a harness) holds no host, and
@@ -4640,6 +4957,12 @@ export class LocalAgentSession implements BackendHost {
       // Absent, a CLI program calling `state.set` answered a bare ReferenceError;
       // the hosted backend already binds this same provider over the same SQL.
       createStateCodemodeProvider(this.rt.actor.programState),
+      // `db.*` — this ACTOR's own application tables, over the workspace's one
+      // database. Scoped by the store rather than by a mode argument here: the
+      // Plan decision follows the resolved table scope (actor-scope writes are
+      // private research state, workspace-scope writes are not), which the
+      // provider reads from the live invocation.
+      createDbCodemodeProvider(this.stores.appData),
       createWebCodemodeProvider(this.getWebSearchProvider()),
       // `memory.*` / `tasks.*` — unconditional codemode projections of
       // the same-named native tools (tools/memory-tool.ts, tools/tasks-
@@ -4707,6 +5030,7 @@ export class LocalAgentSession implements BackendHost {
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
+      hostHead: (input, writes) => this.hostHead(input, writes),
     };
     // Per-fork models only mean something where a resolver exists; a static
     // model session has one model and every fork inherits it.
@@ -4715,6 +5039,138 @@ export class LocalAgentSession implements BackendHost {
       options.resolveModel = (spec) => modelResolver.resolveModel(spec);
     }
     return options;
+  }
+
+  /**
+   * Seat one head as a logical actor of this workspace.
+   *
+   * The whole of what makes a local fork a real actor: its own row in the
+   * directory, its own runtime objects from the one host, its own claimed loop
+   * under the origin the `HeadInput` named, and — on release — its own
+   * retirement. The physical bytes discarded here are only the ones OUTSIDE
+   * the database: the head's scratch home. Its rows go with its directory row.
+   */
+  /**
+   * PUBLIC for the same reason as {@link hostNode}: seating a head is
+   * session-bound, so a caller that runs heads without one — a bench panel, an
+   * eval arm — has no way to build a seat and would otherwise run every head
+   * on its own actor. One host per caller, not one per seat.
+   */
+  async hostHead(input: HeadInput, writes: WriteObserver): Promise<HostedHeadSeat> {
+    const binding = registerLocalActor(this.rt.actor, {
+      name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
+    });
+    const agentName = headAgentName(binding.storageKey);
+    // BOTH NAMED BEFORE ACQUIRE, because the host seeds the loop pointer and
+    // builds the runtime while it builds the actor — a fork that named a
+    // version must not be seeded with the default first and corrected after its
+    // first claim, and a runtime built before its watcher was named would
+    // report that this head changed nothing.
+    this.loopOrigins.set(binding.reference.actorId, input.loop);
+    this.actorWrites.set(binding.reference.actorId, writes);
+    const actor = await this.actorHost.acquire(binding.reference);
+    return {
+      actor,
+      runId: this.currentRunId ?? WORKSPACE_RUN_ID,
+      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
+      dynamic: () => this.actorDynamicContext(actor),
+      release: async () => {
+        this.actorHost.release(binding.reference);
+        this.loopOrigins.delete(binding.reference.actorId);
+        this.actorWrites.delete(binding.reference.actorId);
+        await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
+          if (this.rt.cwd) cleanupFacetCwdScratch(this.rt.cwd, agentName);
+          else if (this.rt.nodeHome) await facetHomeReleaser(this.rt.nodeHome())(agentName);
+        });
+      },
+    };
+  }
+
+  /**
+   * The write observer the seat for `actorId` named, or undefined when it named
+   * none.
+   *
+   * PUBLIC for the HOST ABOVE this session. A daemon-hosted session seats its
+   * heads on the tree's `ActorHost`, so the runtime is built by
+   * `LocalAgentHost.runtimeFor` — which reaches the parent entry's session for
+   * this exactly as it already reaches the parent entry's runtime for the loop
+   * seed. A session hosting its own actors reads the same slot through the same
+   * method, so there is ONE reader of {@link actorWrites} and the two hosts
+   * cannot answer differently.
+   */
+  pendingWriteObserver(actorId: string): WriteObserver | undefined {
+    return this.actorWrites.get(actorId);
+  }
+
+  /**
+   * Seat one swarm node as a logical actor of this workspace.
+   *
+   * A FACTORY per node, for the reason core's `HostedNodeSeat` is one: a wave's
+   * node deps are built once and shallow-copied per child, so one shared actor
+   * would give every node of that wave one claim ledger and one row set.
+   *
+   * No release: a node's row is `task`-lifetime and its retirement belongs to
+   * the search that owns the node, not to one seat handed to one loop.
+   */
+  /**
+   * PUBLIC because a caller outside this class can legitimately need a node
+   * seated and cannot build one: local node hosting is session-bound by
+   * design. The session is the node's client fan-out and its turn queue
+   * (`buildOwnActorHost`'s `session: () => this`), so a bare `AgentRuntime`
+   * has nowhere for a node's events to land. An eval driving the swarm rung
+   * directly therefore routes its seats through here rather than growing a
+   * second host that would hand every node the caller's own claim ledger.
+   */
+  async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
+    const binding = registerLocalActor(this.rt.actor, {
+      name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'node', lifetime: 'task',
+    });
+    const actor = await this.actorHost.acquire(binding.reference);
+    return {
+      actor,
+      runId: this.currentRunId ?? WORKSPACE_RUN_ID,
+      profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
+      dynamic: () => this.actorDynamicContext(actor),
+    };
+  }
+
+  /**
+   * The profile ONE claimed turn of a hosted actor runs under.
+   *
+   * The SAME authority a chat turn resolves through — this session's refined
+   * profile inputs and core's `resolveAgentTurnProfile` — because a head's or a
+   * node's pinned program version and claim digest have to name a real tier.
+   * The actor supplies only its own role selection, which is where a hired
+   * role or an assigned tier is recorded.
+   */
+  private async resolveActorTurnProfile(
+    actor: HostedActor,
+    input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode },
+  ): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
+    const inputs = await this.profiles().inputs();
+    const profile = resolveAgentTurnProfile({
+      ...inputs,
+      activeRoleId: actor.handle.config.getRoleSelection() ?? this.getActiveRoleId(),
+      workMode: input.workMode,
+      availableTools: [...input.availableTools],
+      // A fork carries no pinned skill set of its own: it explores under the
+      // program its parent promoted, and the skills that program names.
+      activeSkills: [],
+    });
+    return { profile, inputs };
+  }
+
+  /** The live per-step context block for ONE hosted actor — its own stores,
+   *  never this session's, so a fork reads the work it is itself holding. */
+  private actorDynamicContext(actor: HostedActor): DynamicContext {
+    return collectDynamicContext({
+      rt: actor.runtime,
+      stores: actor.stores,
+      memoryTail: undefined,
+      missingCapabilities: this.mcpUnavailable,
+      subordinateDelegates: () => [],
+      approvals: () => ({ items: [], total: 0 }),
+    });
   }
 
   private rebuildModelBoundState(model: LanguageModel): void {
@@ -4746,7 +5202,7 @@ export class LocalAgentSession implements BackendHost {
       rt: this.rt,
       workMode: mode,
       // The once-only boundary for tools whose effects leave this process.
-      effectClaims: { sql: this.rt.storage.sql, turnId },
+      effectClaims: { sql: this.rt.storage.sql, actor: this.rt.actor, turnId },
       // No shellApprovalMode/requestShellApproval here — the gate lives at the
       // execution seam now (rt.shell / rt.executionRouter, wired once in
       // runtime.ts off actor_config live and the channel

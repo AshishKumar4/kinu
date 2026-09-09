@@ -50,11 +50,21 @@ export function createTestActors(
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
   initCodemodeStateTable(execRaw);
-  const existing = sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0];
+  const existing = sql<{ id: string; owner_user_id: string }>`
+    SELECT id, owner_user_id FROM workspace_identity LIMIT 1
+  `[0];
   const workspaceId = existing?.id ?? crypto.randomUUID();
   const name = opts.name ?? 'test';
   if (!existing) void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
-  const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });
+  // The owner is READ, never assumed. A directory whose authority disagrees with
+  // the database's stated owner is refused outright — that check is the point of
+  // the directory — so a fixture composing over a harness that already
+  // bootstrapped its workspace (with a real owner) cannot hardcode `''` here
+  // without failing every test in the file with an ownership mismatch.
+  const directory = new WorkspaceActorDirectory(sql, {
+    workspaceId,
+    ownerUserId: existing?.owner_user_id ?? '',
+  });
   const main = directory.createMain({ name });
   return {
     main,

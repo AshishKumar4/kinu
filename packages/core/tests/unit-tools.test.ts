@@ -123,7 +123,7 @@ function tools(
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     executeTools: nodeExecBuilder,
-    effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
   });
 }
 
@@ -212,7 +212,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       // The claim table is created by `initWorkspaceSchema`, which this runtime
       // already ran, so the once-only boundary is wired over the SAME SQL the
       // backends give it rather than a stand-in that records nothing.
-      effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
@@ -639,7 +639,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
           injected = Object.keys(surface.craftedTools());
           return nodeExecBuilder(surface);
         },
-        effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+        effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
       });
     } finally {
       restore();

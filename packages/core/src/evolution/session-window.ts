@@ -25,6 +25,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CompletedTurn } from './types';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';
@@ -72,13 +73,21 @@ const REVIEW_SCOPE = 'turn_review';
 
 export function initCompletedTurnTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS completed_turns (
-    id         TEXT PRIMARY KEY,
+    actor_id   TEXT NOT NULL,
+    id         TEXT NOT NULL,
     turn       TEXT NOT NULL,
     followup   TEXT,
     in_window  INTEGER NOT NULL,
     review     TEXT NOT NULL CHECK (review IN ('none','awaiting_followup','queued','claimed','done')),
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
+  // Both lifetimes are read as "this owner's rows in this state, oldest first",
+  // so the owner leads and the state follows it.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_review
+             ON completed_turns(actor_id, review, created_at)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_completed_turns_window
+             ON completed_turns(actor_id, in_window, created_at)`);
   // Both of this row's lifetimes end in a DELETE, and both of them are keyed
   // durable work a backend can replay — so the tombstones are as much a part of
   // this table's contract as its own columns, and the store must never be
@@ -274,12 +283,23 @@ export interface CompletedTurnStore {
 
 interface TurnRow { id: string; turn: string; followup: string | null; created_at: number }
 
-export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
+/**
+ * Bind the completed-turn ledger to ONE actor.
+ *
+ * Every id here is minted by this store or handed to it by the caller that
+ * recorded the turn, so two actors of one workspace present colliding row ids
+ * — and the window size, the queue depth and the stale-claim sweep are all
+ * counts, which a shared table would silently take over every sibling's turns.
+ */
+export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {
+  const actorId = actor.actorId;
+  const authorize = actor.assertCurrent;
   // A row whose two lifetimes are both over carries no information — dropping
   // it keeps the table bounded by the open window, the pending review, and the
   // owed queue.
   const sweepSettled = (): void => {
-    void sql`DELETE FROM completed_turns WHERE in_window = 0 AND review IN ('none','done')`;
+    void sql`DELETE FROM completed_turns
+      WHERE actor_id = ${actorId} AND in_window = 0 AND review IN ('none','done')`;
   };
   const decode = (row: TurnRow): CompletedTurn | null => {
     // A row written by another version of this code is skipped, not fatal —
@@ -292,7 +312,8 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     return parsed.success ? parsed.output : null;
   };
   const retireUnreadable = (row: TurnRow, cause: Error): void => {
-    void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${row.id}`;
+    void sql`UPDATE completed_turns SET review = 'done'
+      WHERE actor_id = ${actorId} AND id = ${row.id}`;
     diagnostics.failure(
       'evolution.stored_turn_unreadable',
       toKinuError({
@@ -308,7 +329,8 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     append(turn, opts) {
       // Refused before the encode: a keyed replay has nothing to add and the
       // row it would have written may already be gone.
-      if (opts.id !== undefined && effectAlreadyDone(sql, APPEND_SCOPE, opts.id)) return opts.id;
+      authorize();
+      if (opts.id !== undefined && effectAlreadyDone(sql, actor, APPEND_SCOPE, opts.id)) return opts.id;
       // A turn that cannot be serialized cannot be replayed to the engine
       // later, and losing the whole window to one bad tool result would be
       // worse than losing that turn — so a failed encode drops just this turn.
@@ -334,24 +356,27 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
       // DO NOTHING, not a replace: the row the first append wrote is the
       // recording, and a replay must leave the window membership and the
       // review state that row has since reached exactly as they are.
-      void sql`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at)
-          VALUES (${id}, ${encoded}, ${null}, 1, ${review}, ${now})
-          ON CONFLICT(id) DO NOTHING`;
+      void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
+          VALUES (${actorId}, ${id}, ${encoded}, ${null}, 1, ${review}, ${now})
+          ON CONFLICT(actor_id, id) DO NOTHING`;
       // Same synchronous pass as the insert, so nothing can observe the row
       // without the tombstone that outlives it.
-      if (opts.id !== undefined) recordEffectDone(sql, APPEND_SCOPE, opts.id, now);
+      if (opts.id !== undefined) recordEffectDone(sql, actor, APPEND_SCOPE, opts.id, now);
       sweepSettled();
       return id;
     },
 
     size() {
-      return sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns WHERE in_window = 1`[0]?.n ?? 0;
+      authorize();
+      return sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
+        WHERE actor_id = ${actorId} AND in_window = 1`[0]?.n ?? 0;
     },
 
     claim() {
+      authorize();
       const rows = sql<TurnRow>`
         SELECT id, turn, followup, created_at FROM completed_turns
-        WHERE in_window = 1 ORDER BY created_at ASC, rowid ASC`;
+        WHERE actor_id = ${actorId} AND in_window = 1 ORDER BY created_at ASC, rowid ASC`;
       const oldest = rows[0];
       if (oldest === undefined) return null;
       return {
@@ -361,8 +386,10 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
           // Retire by claimed id, not by `in_window = 1`: a turn appended while
           // the pass ran belongs to the NEXT window, and an undecodable row
           // must still retire or it would wedge the window forever.
+          authorize();
           for (const row of rows) {
-            void sql`UPDATE completed_turns SET in_window = 0 WHERE id = ${row.id}`;
+            void sql`UPDATE completed_turns SET in_window = 0
+              WHERE actor_id = ${actorId} AND id = ${row.id}`;
           }
           sweepSettled();
         },
@@ -370,11 +397,14 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     },
 
     claimPendingReview() {
+      authorize();
       const row = sql<TurnRow>`
         SELECT id, turn, followup, created_at FROM completed_turns
-        WHERE review = 'awaiting_followup' ORDER BY created_at DESC, rowid DESC LIMIT 1`[0];
+        WHERE actor_id = ${actorId} AND review = 'awaiting_followup'
+        ORDER BY created_at DESC, rowid DESC LIMIT 1`[0];
       if (!row) return null;
-      void sql`UPDATE completed_turns SET review = 'claimed' WHERE id = ${row.id}`;
+      void sql`UPDATE completed_turns SET review = 'claimed'
+        WHERE actor_id = ${actorId} AND id = ${row.id}`;
       const turn = decode(row);
       if (!turn) {
         retireUnreadable(row, new Error('the stored turn is not a CompletedTurn'));
@@ -386,34 +416,37 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     settleReview(rowId) {
       // The tombstone first: settling makes the row sweepable, and after the
       // sweep the row can no longer say that its review ran.
-      recordEffectDone(sql, REVIEW_SCOPE, rowId);
-      void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${rowId}`;
+      recordEffectDone(sql, actor, REVIEW_SCOPE, rowId);
+      void sql`UPDATE completed_turns SET review = 'done'
+        WHERE actor_id = ${actorId} AND id = ${rowId}`;
       sweepSettled();
     },
 
     recordReviewRan(rowId) {
-      recordEffectDone(sql, REVIEW_SCOPE, rowId);
+      recordEffectDone(sql, actor, REVIEW_SCOPE, rowId);
     },
 
     expireAwaitingReviews(opts) {
+      authorize();
       // MAX_SAFE_INTEGER, not a second query: `created_at` is epoch ms, so an
       // absent cutoff is the same predicate with a bound nothing can exceed.
       const before = opts?.before ?? Number.MAX_SAFE_INTEGER;
       const stale = sql<{ id: string }>`
         SELECT id FROM completed_turns
-        WHERE review = 'awaiting_followup' AND created_at <= ${before}`;
+        WHERE actor_id = ${actorId} AND review = 'awaiting_followup' AND created_at <= ${before}`;
       if (stale.length === 0) return 0;
       void sql`UPDATE completed_turns SET review = 'queued'
-          WHERE review = 'awaiting_followup' AND created_at <= ${before}`;
+          WHERE actor_id = ${actorId} AND review = 'awaiting_followup' AND created_at <= ${before}`;
       return stale.length;
     },
 
     enqueueReview(turn, followup, opts) {
+      authorize();
       if (opts?.storedRowId) {
         // The turn already lives here as a claimed row — convert THAT row into
         // the owed review instead of writing a second copy of it.
         void sql`UPDATE completed_turns SET review = 'queued', followup = ${followup}
-            WHERE id = ${opts.storedRowId}`;
+            WHERE actor_id = ${actorId} AND id = ${opts.storedRowId}`;
         return 'queued';
       }
       if (this.countQueuedReviews() >= MAX_QUEUED_TURN_REVIEWS) return 'queue_full';
@@ -427,23 +460,26 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
         );
         return 'unserializable';
       }
-      void sql`INSERT INTO completed_turns (id, turn, followup, in_window, review, created_at)
-          VALUES (${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${nowMs()})`;
+      void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
+          VALUES (${actorId}, ${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${nowMs()})`;
       return 'queued';
     },
 
     takeQueuedReviews(limit) {
+      authorize();
       const rows = sql<TurnRow>`
         SELECT id, turn, followup, created_at FROM completed_turns
-        WHERE review = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT ${limit}`;
+        WHERE actor_id = ${actorId} AND review = 'queued'
+        ORDER BY created_at ASC, rowid ASC LIMIT ${limit}`;
       const reviews: DeferredTurnReview[] = [];
       const refused: RefusedTurnReview[] = [];
       for (const row of rows) {
         // Its work already landed and something re-queued the lease. Not a
         // refusal — there is nothing wrong with the row and nothing owed by it
         // — so it is settled here and never offered again.
-        if (effectAlreadyDone(sql, REVIEW_SCOPE, row.id)) {
-          void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${row.id}`;
+        if (effectAlreadyDone(sql, actor, REVIEW_SCOPE, row.id)) {
+          void sql`UPDATE completed_turns SET review = 'done'
+            WHERE actor_id = ${actorId} AND id = ${row.id}`;
           continue;
         }
         const turn = decode(row);
@@ -452,7 +488,8 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
           refused.push({ id: row.id, reason: 'unreadable' });
           continue;
         }
-        void sql`UPDATE completed_turns SET review = 'claimed' WHERE id = ${row.id}`;
+        void sql`UPDATE completed_turns SET review = 'claimed'
+          WHERE actor_id = ${actorId} AND id = ${row.id}`;
         reviews.push({ id: row.id, turn, followup: row.followup, queuedAt: row.created_at });
       }
       sweepSettled();
@@ -460,16 +497,21 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
     },
 
     releaseQueuedReview(rowId) {
-      void sql`UPDATE completed_turns SET review = 'queued' WHERE id = ${rowId} AND review = 'claimed'`;
+      authorize();
+      void sql`UPDATE completed_turns SET review = 'queued'
+        WHERE actor_id = ${actorId} AND id = ${rowId} AND review = 'claimed'`;
     },
 
     countQueuedReviews() {
-      return sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns WHERE review = 'queued'`[0]?.n ?? 0;
+      authorize();
+      return sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
+        WHERE actor_id = ${actorId} AND review = 'queued'`[0]?.n ?? 0;
     },
 
     resetStaleClaims() {
+      authorize();
       const stale = sql<{ id: string }>`
-        SELECT id FROM completed_turns WHERE review = 'claimed'`;
+        SELECT id FROM completed_turns WHERE actor_id = ${actorId} AND review = 'claimed'`;
       if (stale.length === 0) return 0;
       // THE defect this split exists for. A claim is a lease, not the work: an
       // eviction after `reviewTurn` appended its `turn_outcomes` row and moved
@@ -479,11 +521,13 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
       // A row whose work is tombstoned is settled; only the rest is owed again.
       let requeued = 0;
       for (const row of stale) {
-        if (effectAlreadyDone(sql, REVIEW_SCOPE, row.id)) {
-          void sql`UPDATE completed_turns SET review = 'done' WHERE id = ${row.id}`;
+        if (effectAlreadyDone(sql, actor, REVIEW_SCOPE, row.id)) {
+          void sql`UPDATE completed_turns SET review = 'done'
+            WHERE actor_id = ${actorId} AND id = ${row.id}`;
           continue;
         }
-        void sql`UPDATE completed_turns SET review = 'queued' WHERE id = ${row.id}`;
+        void sql`UPDATE completed_turns SET review = 'queued'
+          WHERE actor_id = ${actorId} AND id = ${row.id}`;
         requeued++;
       }
       sweepSettled();

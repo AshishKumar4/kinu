@@ -1002,11 +1002,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   test('an effect this build does not implement is blocked by name, never skipped', async () => {
     const harness = orchestratorHarness();
     expect(harness.agent.harnessBeginTerminalTransition('u-alien', 'a-alien')).toBe('first');
+    // Filed under the workspace's OWN actor: `terminal_effects` is keyed by
+    // `actor_id` and the resume reads its suffix as this agent, so a row seeded
+    // under any other id is simply not in the set the refusal is asked about.
     harness.db.prepare(
       `INSERT INTO terminal_effects
-         (sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
-       VALUES ('u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
-    ).run();
+         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
+       VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
+    ).run(harness.agent.observeRuntime().actor.actorId);
 
     await harness.agent.harnessResumeTerminalTransitions();
 

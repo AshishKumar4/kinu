@@ -22,6 +22,7 @@
 import { describe, expect, test, spyOn } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { runNodeAgent } from '../src/strategy/node-agent';
@@ -52,8 +53,12 @@ test('a node with no caller clock can finish after a long elapsed step', async (
 async function nodeUnderDeadline(
   maxWallClockMs?: number,
 ): Promise<{ readonly run: NodeRun; readonly steps: number }> {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
+  // One hosted actor per node id, over the caller's own database: a node's turn
+  // is a claimed turn on its OWN session, and the deadline under test is
+  // observed between the steps of that turn.
+  const seats = hostedSeatsOver({ rt, db });
   let steps = 0;
   let now = Date.now();
   const clock = spyOn(Date, 'now').mockImplementation(() => now);
@@ -65,7 +70,7 @@ async function nodeUnderDeadline(
       messages: [{ role: 'user', content: 'Answer the task.' }],
       inherited: [], context: 'fresh', mode: 'build', settle: 'best', arbitrate: null,
     }, {
-      rt,
+      hostNode: seats.hostNode,
       model: scriptedTurnModel({
         provider: 'fake', modelId: 'fake-never-stops',
         doGenerate: async () => {

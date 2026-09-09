@@ -92,14 +92,14 @@ function seedSearchRun(
   },
 ): void {
   const node = db.prepare(
-    `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
-     VALUES (?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?)`,
+    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?)`,
   );
-  node.run(run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at);
+  node.run(actorId, run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at);
   for (let i = 0; i < run.branches; i++) {
     const isWinner = run.winner !== undefined && i === 0;
     node.run(
-      `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '',
+      actorId, `${run.rootId}-n${i}`, run.rootId, run.rootId, run.task, '',
       isWinner ? run.winner! : 0.2, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1,
     );
   }
@@ -339,12 +339,12 @@ describe('a stale running lease', () => {
     run: { rootId: string; root: string; branches: readonly string[]; ledger?: string },
   ): void {
     const node = db.prepare(
-      `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
-       VALUES (?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?)`,
+      `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
+       VALUES (?, ?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?)`,
     );
-    node.run(run.rootId, null, run.rootId, 0, 0, run.root, 1000);
+    node.run(actorId, run.rootId, null, run.rootId, 0, 0, run.root, 1000);
     run.branches.forEach((status, index) => {
-      node.run(`${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
+      node.run(actorId, `${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
     });
     if (run.ledger) {
       db.prepare(

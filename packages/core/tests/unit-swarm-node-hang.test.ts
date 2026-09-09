@@ -17,6 +17,7 @@ import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import type { Refusal } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
@@ -257,7 +258,7 @@ interface NodeFixture {
 }
 
 function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixture {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1',
@@ -275,7 +276,10 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     arbitrate: null,
   };
   const deps: NodeAgentDeps = {
-    rt,
+    // The node's OWN actor, acquired per node id. `rt` is gone from these deps
+    // for the reason the factory exists: one shared handle would give a whole
+    // wave of nodes one claim ledger and one loop pointer.
+    hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: RAISING_MODEL,
     journal,
 
@@ -356,12 +360,12 @@ async function runWith(
   model: MockLanguageModelV3,
   call: ResolvedSwarm = resolved(),
 ): Promise<SwarmRunResult> {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
   const result = await runSwarm(
-    { rt, model, mode: 'build', logger },
+    { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger },
     call,
   );
   const rows = rt.storage.sql<HeadJournalRow>`
@@ -370,8 +374,12 @@ async function runWith(
            token_cache_write_1h, token_reasoning, neurons, wall_clock_ms, summary,
            error_message, merge_strategy
     FROM head_journal WHERE actor_id = ${rt.actor.actorId} ORDER BY spawned_at`;
+  // Scoped like the journal read above: the run's search ledger is the CALLER's
+  // (`initRunLedgers` binds `rt.actor`), and an unscoped `SELECT *` would fold
+  // in every node actor's rows the moment one starts writing its own tree.
   const tree = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
   return { result, rows, tree };
 }
 

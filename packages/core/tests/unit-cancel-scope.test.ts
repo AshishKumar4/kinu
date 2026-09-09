@@ -56,12 +56,16 @@ function scene() {
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
   const { fiber, settled } = inlineFiber();
-  const store = new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
+  // ONE actor across the job store and the inbox: the job and the notice it
+  // publishes belong to the same actor, and two handles here would file the
+  // notice where nothing drains it.
+  const actor = createTestActorsOver(db).main;
+  const store = new BackgroundJobStore(makeSql(db), actor);
   const runner = new BackgroundJobRunner({
     store,
     fiber,
     signals: new SignalDelivery(idleHost()),
-    eventLog: new EventLog(hubSql),
+    eventLog: new EventLog(hubSql, actor),
     scheduleDrain: () => {},
     logActivity: () => {},
   });

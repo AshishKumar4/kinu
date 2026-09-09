@@ -16,18 +16,27 @@ import {
   InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
 } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 const PATH = '/repo/AGENTS.md';
 const OWNER = 'user-abc/workspace-main';
 
+/** The approvals table, the actor that holds the decisions, and the database
+ *  under both. The actor leads the key now, so `reopen` re-binds the SAME
+ *  handle under a different SCOPE — re-issuing an actor would move both halves
+ *  of the key at once and make a scope test prove nothing. */
 function store(scope = OWNER) {
   const db = new Database(':memory:');
-  initInstructionApprovalsTable(makeExecRaw(db));
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initInstructionApprovalsTable(execRaw);
+  const actor = createTestActors(sql, execRaw).main;
   return {
     db,
-    store: new InstructionApprovalStore(makeSql(db), scope, (body) => db.transaction(body)()),
+    actor,
+    store: new InstructionApprovalStore(sql, actor, scope, (body) => db.transaction(body)()),
     reopen: (asScope: string) =>
-      new InstructionApprovalStore(makeSql(db), asScope, (body) => db.transaction(body)()),
+      new InstructionApprovalStore(sql, actor, asScope, (body) => db.transaction(body)()),
   };
 }
 
@@ -148,26 +157,27 @@ describe('InstructionApprovalStore — scope', () => {
 
 describe('InstructionApprovalStore — durability', () => {
   test('decisions survive re-opening the table', () => {
-    const db = new Database(':memory:');
-    initInstructionApprovalsTable(makeExecRaw(db));
+    const { db, actor } = store();
+    const sql = makeSql(db);
     const content = 'durable doctrine';
-    new InstructionApprovalStore(makeSql(db), OWNER, (body) => db.transaction(body)()).approve(PATH, instructionDigest(content));
+    new InstructionApprovalStore(sql, actor, OWNER, (body) => db.transaction(body)())
+      .approve(PATH, instructionDigest(content));
 
     // Re-running init must not disturb rows — it is called on every boot.
     initInstructionApprovalsTable(makeExecRaw(db));
-    expect(new InstructionApprovalStore(makeSql(db), OWNER, (body) => db.transaction(body)()).trustOf(PATH, content))
-      .toBe('approved');
+    expect(new InstructionApprovalStore(sql, actor, OWNER, (body) => db.transaction(body)())
+      .trustOf(PATH, content)).toBe('approved');
   });
 
   test('the schema itself refuses a decision outside the three it defines', () => {
-    const db = new Database(':memory:');
-    initInstructionApprovalsTable(makeExecRaw(db));
+    const { db, actor } = store();
     // Trust is a closed set. A fourth value would be a state every reader would
     // have to guess about, so the CHECK constraint — not a reader convention —
-    // is what keeps it closed.
+    // is what keeps it closed. `actor_id` is supplied so the row is rejected for
+    // its DECISION and not for a missing key column.
     expect(() => db.exec(
-      `INSERT INTO instruction_approvals (scope, path, digest, decision)
-       VALUES ('${OWNER}', '${PATH}', 'd', 'trusted_forever')`,
+      `INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+       VALUES ('${actor.actorId}', '${OWNER}', '${PATH}', 'd', 'trusted_forever')`,
     )).toThrow(/CHECK constraint failed/);
   });
 });
@@ -207,10 +217,10 @@ describe('grandfatherExisting — one migration snapshot, never first sight', ()
   });
 
   test('the marker survives re-opening and prevents a later baseline', () => {
-    const { db, store: s } = store();
+    const { db, actor, store: s } = store();
     s.grandfatherExisting([{ path: PATH, digest: instructionDigest('original') }]);
 
-    const reopened = new InstructionApprovalStore(makeSql(db), OWNER, (body) => db.transaction(body)());
+    const reopened = new InstructionApprovalStore(makeSql(db), actor, OWNER, (body) => db.transaction(body)());
     reopened.grandfatherExisting([{ path: '/repo/later.md', digest: instructionDigest('later') }]);
     expect(reopened.get('/repo/later.md')).toBeNull();
   });
@@ -239,8 +249,7 @@ describe('grandfatherExisting — one migration snapshot, never first sight', ()
 
 describe('grandfatherExisting — atomic migration', () => {
   test('a failed baseline leaves neither partial rows nor its marker', () => {
-    const db = new Database(':memory:');
-    initInstructionApprovalsTable(makeExecRaw(db));
+    const { db, actor } = store();
     db.exec(`
       CREATE TRIGGER abort_second_baseline
       BEFORE INSERT ON instruction_approvals
@@ -249,6 +258,7 @@ describe('grandfatherExisting — atomic migration', () => {
     `);
     const approvals = new InstructionApprovalStore(
       makeSql(db),
+      actor,
       OWNER,
       (body) => db.transaction(body)(),
     );

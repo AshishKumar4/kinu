@@ -20,6 +20,24 @@ import {
 } from '../src/heads/types';
 import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src/heads/head-inference';
 import { usageTotal } from '../src/usage';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { hostedSeatsOver } from './helpers-actor-host';
+import type { HostedNodeSeat } from '../src/strategy/node-agent';
+
+/**
+ * The hosted actor one head's turn runs on, over ONE workspace database.
+ *
+ * A head's turn is a claimed turn on the actor's own `ActorSession` now, so the
+ * envelope cases supply the actor the turn belongs to rather than a bare
+ * runtime. `hostedSeatsOver` is the production path — the real directory issues
+ * the actor, the real host binds its handle, stores, runtime and session — so
+ * what these tests measure is still the envelope, on the loop that actually
+ * runs.
+ */
+async function hostedHead(): Promise<HostedNodeSeat> {
+  const { rt, testSql } = createTestRuntime();
+  return hostedSeatsOver({ rt, db: testSql.db }).seat('head-envelope', 'head');
+}
 
 describe('budgetExhausted — a deadline only if one was requested', () => {
   test('a head without a deadline is not exhausted by time or spend', () => {
@@ -136,13 +154,14 @@ function loopInput(budget: Partial<HeadBudget> = {}): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
     budget: { maxDepth: 0, spawnedAt: Date.now(), ...budget },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 
 describe('runHeadInference — a fork works until the work is done', () => {
   test('a leaf head finishes its tool work when no split depth remains', async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput({ maxDepth: 0 }), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 }),
+    const report = await runHeadInference(loopInput({ maxDepth: 0 }), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 100, outputTokens: 10, text: 'Leaf work complete.', stopAfterSteps: 3 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });
     expect(report.status).toBe('completed');
@@ -154,7 +173,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const capture = new HeadCapture();
     // The old envelope for a 6-wide fork: 19,200 tokens and a 32-step guard.
     // This head spends 15x the pool over 60 steps and finishes on its own terms.
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({
       promptTokens: 40_000, outputTokens: 5_000,
       text: 'Here is what I found.', stopAfterSteps: 60,
     }),
@@ -171,7 +190,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const capture = new HeadCapture();
     // 8 steps x 3,200 output = 25,600 — over the pool a 6-wide split used to
     // divide out. Nothing meters it now.
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });
     expect(report.status).toBe('completed');
@@ -180,7 +199,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
 
   test('a head spawned an hour into a long parent turn is not already out of time', async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput({ spawnedAt: Date.now() - 60 * 60_000 }), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 }),
+    const report = await runHeadInference(loopInput({ spawnedAt: Date.now() - 60 * 60_000 }), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });
     expect(report.status).toBe('completed');
@@ -188,7 +207,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
 
   test('gross provider spend is reported in full', async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 }),
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });
     expect(report.usage.input).toBe(20_000 * 10);
@@ -201,7 +220,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     // No default step bound exists. This caller cancels after the head banked
     // forty real evidence rows, which exercises the surviving backstop without
     // teaching an infinite fixture to wait for a guard production removed.
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace',
     isAborted: () => capture.evidence.length >= 40,
@@ -220,7 +239,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
 
   test("an aborted head's mid-flight prose is not returned as its finding", async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION }),
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace',
     isAborted: () => capture.evidence.length >= 4,
@@ -234,7 +253,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
 
   test('an aborted head that banked nothing says exactly that', async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION }),
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION }),
     tools: {}, capture, workspaceLayout: 'shared-workspace', isAborted: () => true, abortReason: () => 'the parent turn was cancelled', });
     expect(report.status).toBe('aborted');
     expect(report.evidence).toHaveLength(0);
@@ -245,7 +264,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
 
   test('a completed head still reports its own final text', async () => {
     const capture = new HeadCapture();
-    const report = await runHeadInference(loopInput(), { runtime: createTestRuntime().rt, model: loopingHeadModel({
+    const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({
       promptTokens: 500, outputTokens: 10, text: 'Here is what I found.', stopAfterSteps: 3,
     }),
     tools: buildHeadAccumulatorTools(capture), capture,

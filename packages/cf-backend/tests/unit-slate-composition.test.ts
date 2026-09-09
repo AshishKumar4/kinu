@@ -1,15 +1,46 @@
 import { expect, test } from 'bun:test';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  DEFAULT_WORKERS_AI_MODEL_SPEC, agentHome, subordinateAgentName, nativeToolFunctions,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, subordinateAgentName, nativeToolFunctions,
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
-import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, type SqlDatabase, type SqlRow, type SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
+/** A hosted child's slate caller: the hop path names the registered actor, and
+ *  the credential is the child's own provisioned identity — looked up, never
+ *  allocated here. Hiring provisioned the home and its uid row, so this is a
+ *  read of the same row the child's file plane acts as, and `agentCred` is the
+ *  production constructor for the per-call credential rather than a test
+ *  re-declaration of it. The old facet caller carried an SDK class hop; a class
+ *  name was never an identity, so the new shape is just the directory name. */
+async function childCaller(db: Database, agentName: string, actorName: string): Promise<SlateCaller> {
+  // The identity lookup reads through the VENDOR's `SqlDatabase`, whose row and
+  // binding vocabulary is narrower than this repo's `SqlValue` — it carries no
+  // boolean, because SQLite has none. So the adapter is built the way
+  // `unit-facet-tmp-confinement.test.ts` builds its owner's sql: parse each
+  // binding into the vendor's union rather than assert across the seam, and
+  // answer rows straight from the statement the way a host does.
+  const sql: SqlDatabase = {
+    exec(query: string, ...bindings: VendorSqlValue[]) {
+      const statement = db.prepare<SqlRow, SQLQueryBindings[]>(query);
+      const bound = bindings.map((value) => {
+        if (value instanceof ArrayBuffer) return new Uint8Array(value);
+        if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
+      });
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
+      statement.run(...bound);
+      return [];
+    },
+  };
+  const identity = agentIdentity(sql, agentName);
+  return { path: [{ name: actorName }], cred: agentCred(identity), workMode: 'build' };
+}
 
 test('native MCP protocol failures reject while namespace responses retain their envelope', async () => {
   resetRecordedMcp();
@@ -106,26 +137,20 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
     expect(await call('read_issue')).toMatchObject({ ok: false, reason: 'missing' });
 
-    // The owner's allowlist is not the caller's role. A facet whose role names
-    // only `memory` cannot use a declared MCP binding it could not call natively,
-    // even while the owner permits the tool.
+    // The owner's allowlist is not the caller's surface. A hosted actor
+    // connects no MCP servers of its own — those are workspace-level surfaces
+    // reached through the main actor — so the same binding it could watch the
+    // owner call refuses for the child with the surface reason, not the role
+    // one. Role narrowing of what a child CAN reach is pinned by the namespace
+    // test below, where the route exists for both.
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
-    const child = await hiredSubordinateHarness(actor, {
-      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', role: 'general', mission: 'Read issues',
-    }, { userDO: user.userDO, workspace, ownerUserId });
-    // The push a hire makes: the child reaches the owner's MCP plane with the workspace's capability.
-    await child.agent.installWorkspaceCapability(capability);
-    const asChild = child.agent.observeSlateCaller();
-    const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
-    expect(await childCall('read_issue')).toEqual({ ok: true, value: { content: [] } });
-    child.agent.harnessInstallCatalog({
-      roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
-      tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+    const child = await hostedSubordinateHarness(actor, {
+      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'general', mission: 'Read issues',
     });
-    child.agent.observeRuntime().actor.config.setRoleSelection('scribe');
+    const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'issue-reader');
+    const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
     expect(await childCall('read_issue')).toMatchObject({ ok: false, reason: 'denied' });
   } finally {
-    await user.joinFibers();
     user.close();
   }
 });
@@ -188,7 +213,7 @@ test('the agent slate operation commits, forks and restores its authored source'
   expect(await actor.agent.slate({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
-test('a facet cannot restore source that its own filesystem authority cannot write', async () => {
+test('a hosted actor cannot restore source that its own filesystem authority cannot write', async () => {
   const parent = orchestratorHarness();
   const files = parent.agent.observeRuntime().storage.vfs;
   const path = '/home/user/slates/root-app/server.ts';
@@ -200,18 +225,21 @@ test('a facet cannot restore source that its own filesystem authority cannot wri
   const version = v.parse(v.object({ id: v.string() }), committed.value);
   const current = 'export default { fetch() { return new Response("second"); } };';
   await files.writeFile(path, current);
-  const child = await hiredSubordinateHarness(parent, {
+  const child = await hostedSubordinateHarness(parent, {
     name: 'slate-author', displayName: 'Slate author', nameOrigin: 'user',
-    role: 'general', mission: 'Work inside the assigned private home',
+    roleId: 'general', mission: 'Work inside the assigned private home',
   });
-  await expect(child.agent.observeRuntime().storage.vfs.writeFile(path, 'blocked'))
+  // The authority itself, on the child's own file plane: the same uid the
+  // binding below acts as, so an EACCES here and a denial there are one fact.
+  await expect(child.actor.runtime.storage.vfs.writeFile(path, 'blocked'))
     .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-  const restored = await child.agent.slate({ op: 'restore', id: 'root-app', version: version.id });
+  const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'slate-author');
+  const restored = await parent.agent.slateAs(asChild, { op: 'restore', id: 'root-app', version: version.id });
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe(current);
   expect(restored).toMatchObject({ ok: false, reason: 'denied' });
 });
 
-test('a binding held by a facet reaches the facet\'s own files and role, never the root\'s', async () => {
+test('a binding held by a hosted actor reaches its own files and role, never the root\'s', async () => {
   const parent = orchestratorHarness();
   const rootFiles = parent.agent.observeRuntime().storage.vfs;
   await rootFiles.mkdir('/home/user/slates/reader', { recursive: true });
@@ -219,19 +247,18 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
     main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' } } },
   }));
   await rootFiles.writeFile('/home/user/private.md', 'root only');
-  const child = await hiredSubordinateHarness(parent, {
+  const child = await hostedSubordinateHarness(parent, {
     name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
-    role: 'general', mission: 'Read what you may',
+    roleId: 'general', mission: 'Read what you may',
   });
-  const childHome = agentHome(subordinateAgentName('reader-1'));
-  const asChild = child.agent.observeSlateCaller();
+  const agentName = subordinateAgentName(child.actor.handle.storageKey);
+  const childHome = agentHome(agentName);
+  const asChild = await childCaller(parent.db, agentName, 'reader-1');
   const call = (caller: SlateCaller, member: string, args: JsonValue[]) =>
     parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, invocation: null });
-
-  // The facet's own home: readable and writable through its binding.
   expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
   expect(await rootFiles.readFile(`${childHome}/note.md`, { encoding: 'utf8' })).toBe('mine');
-  // The origin's tree: readable (homes are 0o755) but a write is the facet's own EACCES.
+  // The origin's tree: readable (homes are 0o755) but a write is the child's own EACCES.
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(asChild, 'writeFile', ['/home/user/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
   expect(await rootFiles.readFile('/home/user/private.md', { encoding: 'utf8' })).toBe('root only');
@@ -247,52 +274,34 @@ test('a binding held by a facet reaches the facet\'s own files and role, never t
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
   } as const;
-  const changeRole = async (role: string) => { child.agent.observeRuntime().actor.config.setRoleSelection(role); };
-  child.agent.harnessInstallCatalog(scribe);
-  await changeRole('scribe');
+  const changeRole = (role: string) => { child.actor.stores.config.setRoleSelection(role); };
+  parent.agent.harnessInstallCatalog(scribe);
+  changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
 
-  // A COMPLETED turn leaves its resolved profile cached until the next one
-  // opens. A role revoked in that window must not keep the old reach alive.
-  // The turn is the real one: `beforeTurn` resolves and holds the profile,
-  // `onChatResponse` settles it.
-  await changeRole('general');
-  const openTurn = async (content: string) => {
-    const message = { id: `u-${content}`, role: 'user' as const, parts: [{ type: 'text' as const, text: content }] };
-    Object.defineProperty(child.agent, 'messages', { value: [message], configurable: true });
-    await child.agent.beforeTurn({
-      system: 'base', messages: [{ role: 'user', content }], tools: child.agent.observeRawTools(),
-      model: 'harness-model', continuation: false, body: {},
-    });
-  };
-  const settleTurn = (id: string) => child.agent.onChatResponse({
-    message: { id, role: 'assistant', parts: [{ type: 'text', text: 'done' }] },
-    requestId: `req-${id}`, continuation: false, status: 'completed',
-  });
-  await openTurn('read the file');
+  // No turn choreography: a hosted actor holds no chat session, so there is no
+  // resolved profile cached across turns to test. The binding resolves the
+  // actor's CURRENT role on every call — which is why the revocation above
+  // bites immediately, and why restoring the role restores the reach.
+  changeRole('general');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
-  await settleTurn('a-1');
-  await changeRole('scribe');
+  changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
-  // While a turn IS live, its own resolved profile governs, as it does natively.
-  await openTurn('read it again');
-  expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
-  await settleTurn('a-2');
 });
 
-test('workspace read models are the root\'s own reads; a facet holds none of them', async () => {
+test('workspace read models are the root\'s own reads; a hosted actor holds none of them', async () => {
   const parent = orchestratorHarness();
   const rootFiles = parent.agent.observeRuntime().storage.vfs;
   await rootFiles.mkdir('/home/user/slates/status', { recursive: true });
   await rootFiles.writeFile('/home/user/slates/status/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } },
   }));
-  const child = await hiredSubordinateHarness(parent, {
-    name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', role: 'general', mission: 'Peek',
+  const child = await hostedSubordinateHarness(parent, {
+    name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', roleId: 'general', mission: 'Peek',
   });
   const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], invocation: null });
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
-  expect(await call(child.agent.observeSlateCaller())).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call(await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 test('source capture does not retain a previous caller supplementary group', async () => {
@@ -301,10 +310,14 @@ test('source capture does not retain a previous caller supplementary group', asy
   await files.mkdir('/home/user/slates/group-source', { recursive: true });
   await files.writeFile('/home/user/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.writeFile('/home/user/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
-  const protectedFile = await parent.agent.workspaceBoxOp('group-source-fixture', {
-    op: 'exec', command: 'chown 0:3000 /home/user/slates/group-source/server.ts && chmod 640 /home/user/slates/group-source/server.ts',
-    options: { cred: CRED_KERNEL },
-  });
+  // Arranged as kernel, without the box: the permission bits are VFS state,
+  // and the removed `workspaceBoxOp` monomorphic RPC was only ever a shell
+  // around chown/chmod. Host-stamped through the harness, never agent-chosen.
+  const protectedFile = await parent.agent.harnessBoxExec(
+    'group-source-fixture',
+    'chown 0:3000 /home/user/slates/group-source/server.ts && chmod 640 /home/user/slates/group-source/server.ts',
+    CRED_KERNEL,
+  );
   expect(protectedFile).toMatchObject({ exitCode: 0 });
   const grouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
   const ungrouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };

@@ -5,7 +5,8 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
 import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -57,12 +58,10 @@ function sessionWithModel(model: LanguageModel) {
   // reading the database's own filename back, and refuses a runtime whose path
   // does not match it (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, {
     dbPath: db.filename,
     llm: DUMMY_LLM,

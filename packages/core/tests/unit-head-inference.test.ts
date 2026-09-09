@@ -5,6 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
+import { hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
@@ -14,6 +15,7 @@ import {
   inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
 } from '../src/orchestrator/heads-support';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 /** A generateText-driving stub. Returns `answer` as one text step + usage;
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
@@ -48,22 +50,36 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
     ...overrides,
   };
 }
 
-const deps = (
+/**
+ * A head's deps, over a REAL hosted seat.
+ *
+ * A head IS a logical actor of the workspace now, so its handle, its run id,
+ * its profile resolution and its own live block all come from the seat the host
+ * issues. The bare `runtime` this took before is exactly the state the cutover
+ * removed: a full kind taking model and tool effects under no identity, with no
+ * claim to record them against.
+ */
+const deps = async (
   model: LanguageModel,
   over?: Partial<HeadInferenceDeps>,
-): HeadInferenceDeps => ({
-  runtime: createTestRuntime().rt,
-  model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
-  workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
-});
+): Promise<HeadInferenceDeps> => {
+  const { rt, testSql } = createTestRuntime();
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'head');
+  return {
+    actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+    model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
+    workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
+  };
+};
 
 describe('runHeadInference — report assembly', () => {
   test('a completed head: final text → summary, usage summed, steps captured', async () => {
-    const report = await runHeadInference(headInput(), deps(fakeHeadModel('The lexer handles UTF-8 correctly.')));
+    const report = await runHeadInference(headInput(), await deps(fakeHeadModel('The lexer handles UTF-8 correctly.')));
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('The lexer handles UTF-8 correctly.');
     expect(report.usage).toEqual({ input: 10, output: 20 });
@@ -73,21 +89,21 @@ describe('runHeadInference — report assembly', () => {
 
   test('budget already exhausted → status budget_exceeded', async () => {
     const input = headInput({ budget: { maxDepth: 2, maxWallClockMs: 1, spawnedAt: 1 } });
-    const report = await runHeadInference(input, deps(fakeHeadModel('partial')));
+    const report = await runHeadInference(input, await deps(fakeHeadModel('partial')));
     expect(report.status).toBe('budget_exceeded');
   });
 
   test('aborted → status aborted + errorMessage from abortReason', async () => {
     const report = await runHeadInference(
       headInput(),
-      deps(fakeHeadModel('text'), { isAborted: () => true, abortReason: () => 'operator cancelled' }),
+      await deps(fakeHeadModel('text'), { isAborted: () => true, abortReason: () => 'operator cancelled' }),
     );
     expect(report.status).toBe('aborted');
     expect(report.errorMessage).toBe('operator cancelled');
   });
 
   test('model throw → status errored, no steps, message preserved', async () => {
-    const report = await runHeadInference(headInput(), deps(fakeHeadModel('', { throwError: 'model exploded' })));
+    const report = await runHeadInference(headInput(), await deps(fakeHeadModel('', { throwError: 'model exploded' })));
     expect(report.status).toBe('errored');
     expect(report.errorMessage).toContain('model exploded');
     expect(report.stepCount).toBe(0);
@@ -97,7 +113,7 @@ describe('runHeadInference — report assembly', () => {
     const capture = new HeadCapture();
     capture.recordEvidence({ id: 'e1', kind: 'fact', body: 'Postgres has mature JSONB' });
     capture.recordDecision({ question: 'Which DB?', choice: 'Postgres', rationale: 'JSONB' });
-    const report = await runHeadInference(headInput(), deps(fakeHeadModel(''), { capture }));
+    const report = await runHeadInference(headInput(), await deps(fakeHeadModel(''), { capture }));
     expect(report.status).toBe('completed');
     expect(report.summary).toContain('Postgres');     // synthesizeHeadSummary fallback
     expect(report.evidence).toHaveLength(1);
@@ -196,7 +212,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
       },
     });
 
-    const report = await runHeadInference(headInput({ inheritedContext: [...multiTurn] }), deps(model));
+    const report = await runHeadInference(headInput({ inheritedContext: [...multiTurn] }), await deps(model));
 
     expect(report.status).toBe('completed');
     expect(prompts).toHaveLength(1);

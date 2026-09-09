@@ -63,10 +63,10 @@ function transcriptOf(n: number): SeedRow[] {
   }));
 }
 
-function seedTranscript(sql: SqlExecutor, rows: readonly SeedRow[]): void {
+function seedTranscript(sql: SqlExecutor, actor: ActorHandle, rows: readonly SeedRow[]): void {
   for (const row of rows) {
-    void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
-      VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-01-01 00:00:00'})`;
+    void sql`INSERT INTO assistant_messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-01-01 00:00:00'})`;
   }
 }
 
@@ -210,13 +210,13 @@ describe('run timeline', () => {
     // carry their own, so they are placed after it to pin the ordering.
     events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
     const base = Date.now() + 1000;
-    void sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-      VALUES ('e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
-    void sql`INSERT INTO search_nodes (id, parent_id, root_id, depth, visits, value, status, action, task, created_at)
-      VALUES ('n1', NULL, 'n1', 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
+    void sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+      VALUES (${actor.actorId}, 'e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
+    void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, visits, value, status, action, task, created_at)
+      VALUES (${actor.actorId}, 'n1', NULL, 'n1', 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
     jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: base + 2000 });
 
-    const spans = getRunTimeline({ sql, events, jobs, currentRunId: 'r1' });
+    const spans = getRunTimeline({ sql, actor, events, jobs, currentRunId: 'r1' });
 
     expect(spans.map((s) => s.source)).toEqual(['run', 'evolution', 'mcts', 'background']);
     expect(spans.map((s) => s.ts)).toEqual([...spans].sort((a, b) => a.ts - b.ts).map((s) => s.ts));
@@ -233,17 +233,20 @@ describe('run timeline', () => {
     initRunEventTables(execRaw);
     const events = new RunEventRecorder(sql, actor);
     for (let i = 0; i < 5; i++) {
-      void sql`INSERT INTO evolution_events (id, type, message, created_at)
-        VALUES (${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
+      void sql`INSERT INTO evolution_events (actor_id, id, type, message, created_at)
+        VALUES (${actor.actorId}, ${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
     }
-    const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql, actor), currentRunId: null }, { limit: 2 });
+    const spans = getRunTimeline(
+      { sql, actor, events, jobs: new BackgroundJobStore(sql, actor), currentRunId: null },
+      { limit: 2 },
+    );
     expect(spans.map((s) => s.label)).toEqual(['m3', 'm4']);
   });
 
   test('an idle workspace answers empty; one missing the tables fails the read', () => {
     const { db, sql, actor } = workspace();
     expect(getRunTimeline({
-      sql, events: new RunEventRecorder(sql, actor),
+      sql, actor, events: new RunEventRecorder(sql, actor),
       jobs: new BackgroundJobStore(sql, actor), currentRunId: 'r1',
     })).toEqual([]);
     db.close();
@@ -254,7 +257,7 @@ describe('run timeline', () => {
     const bareSql = makeSql(bare);
     const bareActor = createTestActors(bareSql, makeExecRaw(bare)).main;
     expect(() => getRunTimeline({
-      sql: bareSql, events: new RunEventRecorder(bareSql, bareActor),
+      sql: bareSql, actor: bareActor, events: new RunEventRecorder(bareSql, bareActor),
       jobs: new BackgroundJobStore(bareSql, bareActor), currentRunId: 'r1',
     })).toThrow(/no such table/);
     bare.close();
@@ -293,7 +296,7 @@ describe('agent status', () => {
   test('chat history flattens UI-message parts and drops non-chat roles', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, [
+    seedTranscript(sql, actor, [
       { id: 'a', role: 'user', content: JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] }) },
       { id: 'b', role: 'tool', content: 'not a chat role' },
     ]);
@@ -324,7 +327,7 @@ describe('agent status', () => {
     // nothing about.
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, [{
+    seedTranscript(sql, actor, [{
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user',
       content: JSON.stringify({
         parts: [{ type: 'text', text: '9 head(s) across 1 fork run(s)…' }],
@@ -353,7 +356,7 @@ describe('agent status', () => {
   test('a short page is exhaustion, a full page is not, and an exactly-full page is', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(4));
+    seedTranscript(sql, actor, transcriptOf(4));
 
     expect(getChatHistoryPage(sql, actor, { limit: 9 }).status).toBe('end');
     expect(getChatHistoryPage(sql, actor, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
@@ -375,7 +378,7 @@ describe('agent status', () => {
   test('a message arriving mid-pagination causes neither a duplicate nor a gap', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(10));
+    seedTranscript(sql, actor, transcriptOf(10));
 
     const first = getChatHistoryPage(sql, actor, { limit: 4 });
     expect(first).toMatchObject({ status: 'more' });
@@ -383,7 +386,7 @@ describe('agent status', () => {
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
 
     // The live turn lands while the reader is scrolling up.
-    seedTranscript(sql, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
+    seedTranscript(sql, actor, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
 
     const second = getChatHistoryPage(sql, actor, { limit: 4, cursor: first.next });
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
@@ -409,8 +412,8 @@ describe('agent status', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
     for (const row of transcriptOf(6)) {
-      void sql`INSERT INTO assistant_messages (id, session_id, role, content, created_at)
-        VALUES (${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
+      void sql`INSERT INTO assistant_messages (actor_id, id, session_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
     }
     expect(walkTranscript(sql, actor, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
     db.close();
@@ -424,7 +427,7 @@ describe('agent status', () => {
   test('a cursor whose anchor has vanished is refused, not reported as exhausted', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
-    seedTranscript(sql, transcriptOf(3));
+    seedTranscript(sql, actor, transcriptOf(3));
 
     expect(() => getChatHistoryPage(sql, actor, { cursor: { after: 'never-existed' } }))
       .toThrow(StaleCursorError);

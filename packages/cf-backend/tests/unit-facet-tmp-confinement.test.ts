@@ -21,7 +21,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
-  agentHomeNodeProvisioner, facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, restoreAgentTmpConfinements,
+  facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, nodeAgentName, restoreAgentTmpConfinements,
 } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
@@ -173,7 +173,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the shell resolves /tmp per credential once the owner confines it', async () => {
     const f = await openOwner();
     try {
-      const provision = agentHomeNodeProvisioner(f.homeHost);
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
 
@@ -191,7 +191,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the credentialed file plane resolves /tmp per credential too', async () => {
     const f = await openOwner();
     try {
-      const provision = agentHomeNodeProvisioner(f.homeHost);
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
       const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
@@ -214,7 +214,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('cleanup drops the confinement with the bytes', async () => {
     const f = await openOwner();
     try {
-      const provision = agentHomeNodeProvisioner(f.homeHost);
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       expect(await rpcExec(f.host, 'echo a > /tmp/gone', { cred: a })).toMatchObject({ exitCode: 0 });
       await facetHomeReleaser(f.homeHost)('node-aX9');

@@ -22,6 +22,7 @@
 
 import { wilsonInterval } from '../utils/stats';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { tableExists } from '../identity/schema';
 
 /** A rate is worth reading when its 95% interval spans no more than 20 points
@@ -194,7 +195,8 @@ function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: numbe
  * result rather than throwing when the ledger does not exist — the same
  * contract every other reader over this table offers.
  */
-export function alignmentConvergence(sql: SqlExecutor): AlignmentConvergence {
+export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): AlignmentConvergence {
+  actor.assertCurrent();
   // Asked rather than caught: a missing table is the one expected condition, and a catch
   // cannot tell it from a locked database — the doctrine's own named example.
   const rows: RawSegmentRow[] = tableExists(sql, 'turn_outcomes')
@@ -207,6 +209,7 @@ export function alignmentConvergence(sql: SqlExecutor): AlignmentConvergence {
                MIN(created_at) AS first_at,
                MAX(created_at) AS last_at
         FROM turn_outcomes
+        WHERE actor_id = ${actor.actorId}
         GROUP BY scaffold_version`
     : [];
   const segments = rows.map(toSegment).sort((a, b) => a.firstAt - b.firstAt);

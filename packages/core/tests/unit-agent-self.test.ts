@@ -6,6 +6,7 @@ import { MissionGovernor } from "../src/mission-budget";
 import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self";
 import type { BackgroundJob } from "../src/jobs/store";
 import { makeExecRaw, makeSql } from "./helpers";
+import { createTestActors } from "@kinu.run/test-utils";
 
 const RunningJobReadSchema = v.object({
   id: v.string(),
@@ -26,11 +27,14 @@ const ScheduledBudgetSchema = v.object({
  *  stubbing it would test nothing. */
 function realGovernor(): MissionGovernor {
   const db = new Database(":memory:");
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
   return new MissionGovernor({
-    storage: {
-      sql: makeSql(db),
-      execRaw: makeExecRaw(db),
-    },
+    storage: { sql, execRaw },
+    // The cap is per actor: a mission label is caller-authored prose, so two
+    // actors of one workspace declare the same one and a shared row would have
+    // one actor's spend exhaust the other's.
+    actor: createTestActors(sql, execRaw).main,
   });
 }
 

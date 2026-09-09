@@ -28,6 +28,7 @@ import { BackgroundJobStore } from '../src/jobs/store';
 import { MctsSearchStore } from '../src/mcts/search-store';
 import { StaleCursorError } from '../src/read-models/page';
 import type { HeadInput } from '../src/heads/types';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 interface World {
   readonly db: Database;
@@ -65,6 +66,7 @@ function headInput(id: string, rootId: string, task: string, spawnedAt: number):
     id, parentId: null, rootId, depth: 1, task, rationale: task,
     mode: 'build', inheritedContext: [], mergeStrategy: 'synthesize',
     budget: { spawnedAt, maxDepth: 2 },
+    loop: defaultLoopOrigin('head'),
   };
 }
 

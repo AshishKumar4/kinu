@@ -19,6 +19,7 @@ import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { initReplayTables, runReplayEval } from '../src/evolution/replay';
 import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 /** A seed candidate carrying `source` — the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
@@ -182,7 +183,11 @@ describe('the readers can see the end of a long turn', () => {
     const sql = makeSql(db);
     initTurnOutcomeTables(makeExecRaw(db));
     initReplayTables(makeExecRaw(db));
-    recordTurnOutcome(sql, {
+    // One actor for the seed and the pass: `turn_outcomes` is that actor's, so
+    // a replay under a second handle would sample an empty ledger and score
+    // nothing while reporting success.
+    const actor = createTestActors(sql, makeExecRaw(db)).main;
+    recordTurnOutcome(sql, actor, {
       turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: trajectory(20_000, `ASK-${ending}`),
       assistantResponse: trajectory(40_000, `REFERENCE-${ending}`),
@@ -192,6 +197,7 @@ describe('the readers can see the end of a long turn', () => {
     const prompts: string[] = [];
     await runReplayEval({
       sql,
+      actor,
       judge: {
         async *stream() { yield '{"score": 1.0, "note": "ok"}'; },
         complete: async (prompt: string) => { prompts.push(prompt); return '{"score": 1.0, "note": "ok"}'; },

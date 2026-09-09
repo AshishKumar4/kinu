@@ -58,7 +58,7 @@ export async function modifyScaffold(
   // applyPromotionDecision against the on-disk pending file.
   const misevolution = checkMisevolution(code);
   if (!misevolution.ok) {
-    recordMisevolutionVeto(rt.storage.sql, {
+    recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'scaffold', violation: misevolution, detail: rationale,
     });
     return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };

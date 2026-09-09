@@ -32,6 +32,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { selectNode } from './uct';
 
@@ -70,15 +71,17 @@ export interface FrontierInput {
  * Null is a SETTLED search rather than an error, which is what lets the caller
  * report "settled" against "budget" honestly.
  */
-export function selectFrontierNode(sql: SqlExecutor, input: FrontierInput): SearchNode | null {
+export function selectFrontierNode(
+  sql: SqlExecutor, actor: ActorHandle, input: FrontierInput,
+): SearchNode | null {
   const { rootId, maxDepth } = input;
   switch (input.policy) {
     case 'uct':
-      return selectNode(sql, rootId, input.explorationWeight, maxDepth);
+      return selectNode(sql, actor, rootId, input.explorationWeight, maxDepth);
     case 'best-first':
-      return bestUnexpanded(sql, rootId, maxDepth);
+      return bestUnexpanded(sql, actor, rootId, maxDepth);
     case 'none':
-      return unexpandedRoot(sql, rootId, maxDepth);
+      return unexpandedRoot(sql, actor, rootId, maxDepth);
   }
 }
 
@@ -92,11 +95,15 @@ export function selectFrontierNode(sql: SqlExecutor, input: FrontierInput): Sear
  * greedy search that can re-pick the parent it just expanded whenever the
  * parent's backpropagated mean ties its best child — a stall, not a search.
  */
-function bestUnexpanded(sql: SqlExecutor, rootId: string, maxDepth: number): SearchNode | null {
+function bestUnexpanded(
+  sql: SqlExecutor, actor: ActorHandle, rootId: string, maxDepth: number,
+): SearchNode | null {
   return sql<SearchNode>`
     SELECT s.* FROM search_nodes s
-    WHERE s.root_id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
-      AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = s.id)
+    WHERE s.actor_id = ${actor.actorId} AND s.root_id = ${rootId}
+      AND s.status = 'open' AND s.depth < ${maxDepth}
+      AND NOT EXISTS (
+        SELECT 1 FROM search_nodes c WHERE c.actor_id = s.actor_id AND c.parent_id = s.id)
     ORDER BY s.value DESC, s.created_at ASC, s.id ASC
     LIMIT 1
   `[0] ?? null;
@@ -111,11 +118,15 @@ function bestUnexpanded(sql: SqlExecutor, rootId: string, maxDepth: number): Sea
  * executable form: with no selection step there is no second level to reach,
  * because after the first expansion this returns null.
  */
-function unexpandedRoot(sql: SqlExecutor, rootId: string, maxDepth: number): SearchNode | null {
+function unexpandedRoot(
+  sql: SqlExecutor, actor: ActorHandle, rootId: string, maxDepth: number,
+): SearchNode | null {
   return sql<SearchNode>`
     SELECT s.* FROM search_nodes s
-    WHERE s.id = ${rootId} AND s.status = 'open' AND s.depth < ${maxDepth}
-      AND NOT EXISTS (SELECT 1 FROM search_nodes c WHERE c.parent_id = s.id)
+    WHERE s.actor_id = ${actor.actorId} AND s.id = ${rootId}
+      AND s.status = 'open' AND s.depth < ${maxDepth}
+      AND NOT EXISTS (
+        SELECT 1 FROM search_nodes c WHERE c.actor_id = s.actor_id AND c.parent_id = s.id)
     LIMIT 1
   `[0] ?? null;
 }

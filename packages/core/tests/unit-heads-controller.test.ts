@@ -29,6 +29,7 @@ import {
 } from '../src/heads/index';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 
@@ -658,6 +659,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
     mode: 'build',
     inheritedContext: [], mergeStrategy: 'consensus',
     budget: { maxDepth: 2, maxWallClockMs: 10, spawnedAt: Date.now() },
+    loop: defaultLoopOrigin('head'),
   });
 
   test('a run with heads still running is reported with its progress and its split rationale', () => {

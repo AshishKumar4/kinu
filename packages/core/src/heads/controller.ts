@@ -39,6 +39,7 @@ import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { addUsage, usageTotal, type Usage } from '../usage';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -293,6 +294,10 @@ export class HeadController {
         model: h.model ?? opts.model,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
+        // A fork explores under the loop it is forking FROM. Named through the
+        // per-kind default rather than written out, so the one decision about
+        // which kind inherits lives in one place.
+        loop: defaultLoopOrigin('head'),
       };
       if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       // Same as recordSplit above: a local journal writes the row before this

@@ -14,18 +14,22 @@
  * here (env.LOADER throws). The SDK base and DO storage remain platform doubles.
  */
 import { Database } from 'bun:sqlite';
-import { makeSql, makeSqlExec } from '../../../core/tests/helpers';
+import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { LanguageModel, ToolSet, UIMessage } from 'ai';
 import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
 import type { UserCaller } from '../../src/user/workspace-capability';
 import type { UserDO } from '../../src/user/user-do';
-import { shadowTrialPlan, claimToolEffect, WorkspaceActorDirectory, FacetIdentity, bindActorHandle } from '@kinu.run/core';
+import {
+  shadowTrialPlan, claimToolEffect, actorReferenceOf,
+  type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
+} from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RunEndReason, type SqlValue, type SubordinateRosterStore,
+  type RoleCatalog, type RunEndReason, type SqlValue, type SubordinateRosterStore,
+  type TierAssignments,
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
   type DeviceConsentDecision, type DeviceConsentRequest, type DeviceStatus,
@@ -33,6 +37,7 @@ import {
   startBranchHead, branchHeadId,
   type HeadInput, type HeadReport, type HeadRuntime,
   type ShellApprovalRequest,
+  type NimbusExecResult,
   type FactsStore, type SleepTimeUpdate,
   type AgentSignal, type SignalOutcome, type ReleaseBoard,
 } from '@kinu.run/core';
@@ -42,11 +47,15 @@ import {
   TerminalEffectInterrupt,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
+import type { ExplorationHostSeams } from '../../src/exploration-hosting';
+import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
+import type { CFRuntime } from '../../src/runtime';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 mockAgentsSdk();
 
 const { OrchestratorAgent } = await import('../../src/orchestrator');
-const { SubordinateAgent } = await import('../../src/subordinate-agent');
+const { delegatedHeadInput, runHostedTask } = await import('../../src/subordinate-hosting');
 
 /** The scaffold precondition a turn checks, declared satisfied — the harness
  *  workspace is empty, so nothing has written one. The soul is not declared:
@@ -75,6 +84,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  /** The head-stream broadcaster, which is `protected` because only this
+   *  actor's own reporters call it — `reportNodeDelta` and the exploration
+   *  seams' `publishDelta`. It replaced the facet-era inbound RPC, so a suite
+   *  asserting what a client receives reaches the method that really carries
+   *  the frames rather than a shape no caller has any more. */
+  observePublishHeadStreamFrame(frame: HeadStreamFrame): void { this.publishHeadStreamFrame(frame); }
   /** The child substrate — how a subordinate is born and retired here — for
    *  suites that drive a lifecycle verb without a roster row in front of it. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
@@ -97,8 +112,69 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   declareWebhookRouteSecret(secret: string): void {
     Object.assign(this.env, { WEBHOOK_ROUTE_SECRET: secret });
   }
+  /**
+   * The CONTAINER this workspace's actors run commands in — absent from the
+   * harness env for the same reason the webhook secret is: most actors never
+   * build one, and `createCFRuntime` gates the whole handle on `if (env.Sandbox)`,
+   * so every hosted actor's `sandboxHandle` is null without this.
+   *
+   * Declared rather than defaulted, because an env that always carried it would
+   * make every suite in this directory reach the Sandbox SDK. A suite that wants
+   * the container asks for it, pairs it with the shared stand-in in
+   * `helpers/sandbox-sdk.ts`, and asks BEFORE the actor whose runtime it cares
+   * about is acquired: `ActorHostDeps.runtimeFor` memoizes one runtime per
+   * handle, so a binding declared afterwards arrives too late to be read.
+   *
+   * The namespace itself is inert on purpose. `getSandbox(env.Sandbox, id, …)`
+   * only forwards it, and the SDK stand-in is what answers, so the binding's
+   * job here is to exist and to carry the id the runtime derived.
+   */
+  declareContainerBinding(): void {
+    Object.assign(this.env, { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } });
+  }
   protected override async profileInputs() {
-    return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+    const overlay = this._catalogOverlay;
+    if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+    // An owner-authored catalog carries the builtins plus its own roles: merged,
+    // not replaced, so a test names the role under test rather than restating
+    // the workspace. The digest is recomputed over the merged catalog, which is
+    // what the authority checks the envelope against. Models the overlay's
+    // tiers name join the provider snapshot for the same reason: a tier naming
+    // a model the listing does not offer is refused before routing, which is
+    // real behavior but not the routing this overlay exists to set up.
+    const catalog: ProfileCatalog = {
+      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
+      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+    };
+    return {
+      envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
+      provider: overlay.availableModels === undefined ? HARNESS_PROVIDER_SNAPSHOT : {
+        ...HARNESS_PROVIDER_SNAPSHOT,
+        availableModels: [...new Set([...HARNESS_PROVIDER_SNAPSHOT.availableModels, ...overlay.availableModels])],
+      },
+    };
+  }
+  /** Install roles/tiers over the builtin catalog. The host resolves hosted
+   *  actors' profiles through this agent's authority, so an installed role
+   *  narrows a hosted child's surface exactly as production's does. */
+  harnessInstallCatalog(overlay: {
+    readonly roles?: RoleCatalog;
+    readonly tiers?: TierAssignments;
+    readonly availableModels?: readonly string[];
+  }): void {
+    this._catalogOverlay = overlay;
+  }
+  private _catalogOverlay: {
+    readonly roles?: RoleCatalog;
+    readonly tiers?: TierAssignments;
+    readonly availableModels?: readonly string[];
+  } | null = null;
+  /** Run a shell command on the workspace box as an explicitly stamped
+   *  credential — the test replacement for the removed `workspaceBoxOp` RPC in
+   *  suites that arrange file ownership. Host-stamped, never agent-chosen, the
+   *  same way production reaches `exec`. */
+  harnessBoxExec(shellId: string, command: string, cred: VfsCred): Promise<NimbusExecResult> {
+    return this.workspaceBox(shellId).exec(command, { cred });
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do
    *  not — the state every claimOwner RPC meets on a freshly-activated DO. */
@@ -116,7 +192,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * `agent.onStart()` is the vendor chat base's wrapper around this one. It
    * boots Think's session and transcript first and reaches the actor's
    * `onStart` after that, the activation the SDK runs before a facet's first
-   * `@callable` (`facetHarness` drives it). This bridge is the actor half
+   * `@callable`. This bridge is the actor half
    * alone, for the suites that assert a sweep or a reconcile and nothing of
    * Think's, the same reach `ensureActorSchema` takes below.
    */
@@ -264,6 +340,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       runId: `harness-${turnId}`, turnId, workMode: 'build',
       program: { kind: 'builtin', version: 0, digest: null, build: null },
       context: [],
+      // Zero, and honest: this harness drives no context plane, so the actor
+      // has no recorded working revision for the claim to name.
       workingRevision: 0,
     });
   }
@@ -400,10 +478,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * the state an eviction mid-flight really leaves. Otherwise the head reports it
    * at once, whatever status it carries.
    *
-   * The facet is registered too, because `spawnHeadFacet` registers one before it
-   * runs anything and the reclamation sweep reads exactly that registry. The
-   * facet's RPCs are workerd-only, so what stands in for the run is the report;
-   * the registration is real.
+   * The head ACTOR is registered too, because `hostHead` registers one before it
+   * runs anything and the reclamation sweep reads exactly that roster. What
+   * stands in for the run is the report; the registration is real.
    */
   async harnessSpawnBranchHead(
     id: string, task: string,
@@ -411,10 +488,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   ): Promise<void> {
     const runtime: HeadRuntime = {
       spawnHead: async (input: HeadInput) => {
-        // The `exp:`-marked key `spawnHeadFacet` registers, pinned as the
-        // literal the spawner's own suite asserts (unit-facet-spawn.test.ts).
-        const actor = await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
-        await this.subAgent(this.facetClass(), actor.storageKey);
+        // The `exp:`-marked name `hostHead` registers. No second object is
+        // created: registering the row IS the whole of what a head's existence
+        // was, now that it has no database of its own to bring up.
+        await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
         return {
           id: input.id,
           run: async () => {
@@ -469,23 +546,79 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.headJournal.markInterrupted({ spawnedBefore: Date.now() + 1 });
   }
 
-  /** The facet reclamation pass `onStart` detaches, AWAITED — the sweep that
-   *  decides which exploration facet keeps its storage. */
-  harnessReclaimSettledExplorationFacets(): Promise<void> {
-    return this.reclaimSettledExplorationFacets();
+  /** The exploration reclamation pass `onStart` detaches, AWAITED — the sweep
+   *  that decides which exploration ACTOR is finished with. It retires roster
+   *  rows now rather than deleting databases, so a late sweep costs nothing. */
+  harnessReclaimSettledExplorationActors(): Promise<void> {
+    return this.reclaimSettledExplorationActors();
   }
 
-  /** The exploration facets this workspace still holds storage for, by name.
-   *  Read through the SDK's own registry, which is what the sweep deletes from. */
-  harnessExplorationFacets(): string[] {
-    const actor = this.actorHandle();
-    const directory = new WorkspaceActorDirectory(this.boundSql, { workspaceId: actor.workspaceId, ownerUserId: this.getOwnerUserId() ?? '' });
-    const parent = directory.open(actor.actorId);
-    return this.listSubAgents(this.facetClass()).map((facet) => {
-      const entry = directory.storageEntry(parent, facet.name);
-      if (!entry) throw new Error('The registered facet has no actor directory row.');
-      return entry.name;
+  /** The exploration actors this workspace still holds, by registered name.
+   *  Read through the DIRECTORY, which is what the sweep retires from — there
+   *  is no SDK sub-agent registry in play any more, and the directory is the
+   *  one authority on which actors exist. */
+  harnessExplorationActors(): string[] {
+    return this.actorDirectoryStore().list()
+      .filter((record) => record.kind === 'head' || record.kind === 'node' || record.kind === 'branch')
+      .map((record) => record.name);
+  }
+
+  /** The workspace's ONE actor host, for suites that acquire a hosted actor
+   *  directly instead of driving a hire. */
+  observeActorHost(): ActorHost { return this.actorHost(); }
+  /** What an exploration runner needs of this workspace — the same seams the
+   *  production head runtime and node seat factory are built from, so a suite
+   *  that drives `hostHead`/`hostNodeSeat` runs the workspace's own wiring
+   *  rather than a re-declaration of it. */
+  observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
+
+  /** A hired child's DELEGATED-turn ToolSet, built by the production builder.
+   *
+   * The same surface a delegated turn runs: confined builtins over the child's
+   * own runtime plus the report lane. Suites that assert the subordinate's
+   * model-facing profile (conformance, tool confinement) read this rather than
+   * re-declaring the wiring — a re-declaration would agree with itself while
+   * the product drifted. The runtime narrowing is stated once here instead of
+   * at each call site, for the reason src states where it narrows the same
+   * seam: `ActorHostDeps.runtimeFor` IS `createCFRuntime`, so the core type
+   * narrows only the return type, never the value. The input comes from the
+   * one builder production claims under, never a second literal. */
+  observeHostedTaskTools(child: HostedActor, task: string): ToolSet {
+    /* SAFETY: this backend CONSTRUCTS every hosted runtime with `createCFRuntime`
+     * — `ActorHostDeps.runtimeFor` here IS that function, so the value is a
+     * CFRuntime at the construction site. Core's `AgentRuntime` narrows the
+     * declared return type and never the value, which is why the concrete type
+     * has to be recovered rather than inferred. `unit-head-fork.test.ts` and
+     * `exploration-hosting.ts`'s `hostHead` state the same. */
+    const runtime = child.runtime as CFRuntime;
+    return this.subordinateSeams().taskTools(
+      child, runtime, { spoke: false, settled: false },
+      delegatedHeadInput(child.record, { body: task, mode: 'build' }),
+    );
+  }
+
+  /** Drive one delegated task turn for a hired child through the production
+   *  runner — admission, confined tools, report relay. For suites that need a
+   *  full turn with an injected model rather than the built surface alone.
+   *
+   *  No `input` member: the runner builds its HeadInput from the one builder
+   *  beside the budget, so a second literal here would reintroduce the
+   *  two-shapes-for-one-turn the builder exists to end. */
+  async runHostedTaskTurn(child: HostedActor, task: string) {
+    return runHostedTask(this.subordinateSeams(), child.reference, {
+      body: task,
+      mode: 'build',
+      sequenceId: crypto.randomUUID(),
     });
+  }
+
+  /** Instance-level seam override: production resolves models through the
+   *  owned model services, which under bun have no provider to resolve.
+   *  Everything downstream of resolution — the LLM construction, both sinks —
+   *  is the real production path. Stated once here because the services object
+   *  is protected: a test cannot reach past it without this. */
+  overrideProviderRegistry(registry: AgentProviderRegistry): void {
+    Object.assign(this.ownedModelServices, { providerRegistry: (): AgentProviderRegistry => registry });
   }
 
   /** Forget the live handles, leaving only the durable journal — the state a
@@ -693,7 +826,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * not walk over.
    */
   harnessClaimTool(turnId: string, callId: string): void {
-    claimToolEffect(this.boundSql, { turnId, callId, digest: 'harness-tool-digest' });
+    claimToolEffect(this.boundSql, this.actorHandle(), { turnId, callId, digest: 'harness-tool-digest' });
   }
   /** One turn's TOOL claims, by call id — the terminal-transition rows beside
    *  them are `harnessTerminalClaims`, and mixing the two would make every
@@ -727,79 +860,33 @@ export interface ObservedNaming {
   nameOrigin: 'user' | 'auto' | null;
 }
 
-export class HarnessSubordinateAgent extends SubordinateAgent {
-  modelFactory?: () => LanguageModel;
-  override getModel(): LanguageModel {
-    return this.modelFactory?.() ?? super.getModel();
-  }
-  override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    const config = await super.beforeTurn(ctx);
-    return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
-  }
-  /** The base join seam, surfaced for suites that assert the SETTLED
-   *  post-activation world — same bridge the orchestrator harness carries. */
-  harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
-
-  /** The production activation, same bridge the orchestrator harness carries. */
-  activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
-  /** The background-job registry, the same seam the orchestrator harness
-   *  carries: the production store, so a seeded deferred job carries the
-   *  instant a real claim would have written. */
-  harnessJobs(): BackgroundJobStore { return this.jobs; }
-
-  observeRawTools(): ToolSet { return this.getRawTools(); }
-  /** Which family this facet was seeded into, for suites asserting the seed-built surface. */
-  observeFacetKind() {
-    return this.facetKind();
-  }
-
-  observeRuntime(): AgentRuntime { return this.rt; }
-  /** The identity this facet stamps on its slate operations — the production
-   *  method, so a suite acts AS the facet on the owner rather than forging one. */
-  observeSlateCaller() { return this.slateCaller(); }
-  declareScaffoldPresent(): void { this._scaffoldReady = true; }
-  /** The catalog this facet resolves roles from: builtin unless a suite installs one. */
-  private harnessCatalog: ProfileCatalogEnvelope = HARNESS_PROFILE_ENVELOPE;
-  /** Install a role catalog, the way the owner's authority would publish one. */
-  harnessInstallCatalog(catalog: ProfileCatalog): void {
-    this.harnessCatalog = {
-      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
-    };
-  }
-  protected override async profileInputs() {
-    return { envelope: this.harnessCatalog, provider: HARNESS_PROVIDER_SNAPSHOT };
-  }
-  /** One first-interaction titling pass — the call `onChatResponse` makes on an
-   *  owner-driven turn. */
-  titleFromFirstMessage(userText: string): Promise<void> { return this.maybeAutoTitle(userText); }
-  /** Whose title this child believes it carries. The authority that decides
-   *  whether a later auto-title may run at all. */
-  observeNaming(): ObservedNaming {
-    return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
-  }
-  /** The identity row its parent seeded, which is what its prompt reads. */
-  observeIdentitySoul(): Promise<string> { return this.loadSoulText(); }
-
-  /**
-   * What the SDK records at facet creation, in the place it records it.
-   *
-   * `_cf_initAsFacet` puts `cf_agents_parent_path` AND `cf_agents_facet_name`
-   * into the facet's OWN key-value storage (`agents/dist/index.js`, beside
-   * `cf_agents_is_facet`), and the owner's existing-only inspection reads
-   * exactly those two rows back: the lineage says which hop it is about to
-   * traverse, and the facet name is the physical key that hop has to answer to.
-   * Facets are workerd-only, so the harness stands in for both writes — the
-   * name from `this.name`, which is the value `subAgent` was called with, and
-   * the lineage from the SAME array it declares as `parentPath`, because
-   * production records one thing and a fixture that recorded a second would be
-   * checking itself against its own second copy.
-   */
-  async harnessRecordSdkLineage(
-    path: ReadonlyArray<{ readonly className: string; readonly name: string }>,
-  ): Promise<void> {
-    await this.ctx.storage.put('cf_agents_facet_name', this.name);
-    await this.ctx.storage.put('cf_agents_parent_path', path.map(hop => ({ ...hop })));
-  }
+/**
+ * A HOSTED ACTOR as a suite drives it.
+ *
+ * There is no `HarnessSubordinateAgent` any more, and its absence is the
+ * fixture's whole claim. That class extended the production facet class and the
+ * fixtures around it had to simulate a Durable Object: a second
+ * `Database(':memory:')` per child, a `parentPath` array declared by hand
+ * because facets are workerd-only, a `FacetIdentity` seed so the child could
+ * read its own name back, an SDK-lineage write into `cf_agents_parent_path` and
+ * `cf_agents_facet_name`, and two `Object.defineProperty` overrides on the
+ * PARENT so `subAgent` and `getExistingSubAgent` resolved one name to the real
+ * child. Every one of those simulated per-actor storage, which is the thing the
+ * cutover removes — so a fixture built that way could only ever agree with
+ * whichever side it was written for.
+ *
+ * What a suite gets instead is the production object: a `HostedActor` acquired
+ * from the workspace's ONE `ActorHost`, over the ONE database its parent already
+ * owns. Its handle, stores, runtime and session are the same ones a real hire
+ * runs on, so nothing here needs overriding and there is nothing to keep in
+ * step with the SDK.
+ */
+export interface HostedActorHarness {
+  /** The hosted actor itself — handle, stores, runtime, session. */
+  readonly actor: HostedActor;
+  /** The workspace that hosts it. Named because almost every assertion about a
+   *  child is really an assertion about ONE database, and this is where it is. */
+  readonly workspace: ActorHarness<HarnessOrchestratorAgent>;
 }
 
 export interface ActorHarness<T> {
@@ -810,7 +897,17 @@ export interface ActorHarness<T> {
 }
 
 
-function makeCtx(db: Database): AgentContext {
+/**
+ * THE Durable Object state this directory constructs, for every fixture in it.
+ *
+ * Exported because `helpers/hosted-workspace.ts` needs the same object and a
+ * second hand-rolled one is a second answer to "which platform members does a
+ * constructed actor actually reach" — the two would drift the moment one grew
+ * a member the other lacked, and the drift would surface as a fixture passing
+ * over a surface production does not have. `id` names the object, which is what
+ * `ctx.id.toString()` answers to everything that files a row under an agent id.
+ */
+export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
   const canonicalSql = makeSqlExec(db);
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
     const rows = canonicalSql.exec(query, ...bindings).toArray();
@@ -843,7 +940,7 @@ function makeCtx(db: Database): AgentContext {
       getAlarm: async () => null,
       deleteAlarm: async () => {},
     },
-    id: { toString: () => 'harness-actor', name: 'harness-actor' },
+    id: { toString: () => id, name: id },
     waitUntil: () => {},
     blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     getWebSockets: () => [],
@@ -920,7 +1017,7 @@ interface HarnessParentNamespace {
   get(id: string): HarnessOrchestratorAgent | HarnessInstructionAuthority;
 }
 
-function makeEnv(
+export function makeEnv(
   parent?: HarnessOrchestratorAgent,
   userPlane?: RecordedUserPlaneCalls,
   world?: HarnessActorWorld,
@@ -1014,7 +1111,18 @@ function instantiate<T extends object>(
    *  namespace a facet reaches over RPC, the sandbox binding its runtime reads. */
   env?: Env,
 ): ActorHarness<T> {
-  const agent = new Actor(makeCtx(db), env ?? makeEnv(parent, userPlane, world, parentNamespace));
+  const builtEnv = env ?? makeEnv(parent, userPlane, world, parentNamespace);
+  const agent = new Actor(makeCtx(db), builtEnv);
+  if (env === undefined && parent === undefined && parentNamespace === undefined) {
+    // This workspace answers its own standing-policy reads: a hosted actor's
+    // runtime shares this env, and its approval gate fetches the ROOT's policy
+    // through the OrchestratorAgent namespace — which, with no parent hop to
+    // reach across, is this object. Without it every shell exec dies in the
+    // gate on `env.OrchestratorAgent.get`, a harness gap rather than a refusal.
+    Object.assign(builtEnv, {
+      OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+    });
+  }
   Object.defineProperty(agent, 'name', { value: world?.workspace ?? 'harness-parent', configurable: true });
   return {
     agent,
@@ -1024,22 +1132,25 @@ function instantiate<T extends object>(
     ).all().map((row) => row.name),
   };
 }
-
-function ensureActorSchema(
-  agent: InstanceType<typeof OrchestratorAgent> | InstanceType<typeof SubordinateAgent>,
-): void {
-  // The production override can simply be called: the SCHEMA half is in place
-  // synchronously when it returns (DDL is the gate's synchronous prefix). The
-  // orchestrator gate is async — the admitted workspace boot — and its
-  // promise is deliberately dropped: a failed boot classifies inside onStart
-  // and never throws, and suites that need the BOOTED workspace await the
-  // memoized session through ordinary operations.
-  if (agent instanceof OrchestratorAgent) {
-    const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
-    void gate;
-  } else {
-    SubordinateAgent.prototype.onStart.call(agent);
-  }
+/**
+ * The actor's own schema half of an activation.
+ *
+ * ONE arm now, where there used to be two: the workspace root's async boot and
+ * a facet's synchronous one. A hosted actor has no activation of its own to
+ * run — its schema IS the workspace's, ensured here once — so the class
+ * discrimination this function existed to perform has nothing left to
+ * discriminate.
+ *
+ * The production override can simply be called: the SCHEMA half is in place
+ * synchronously when it returns (DDL is the gate's synchronous prefix). The
+ * boot itself is async — the admitted workspace boot — and its promise is
+ * deliberately dropped: a failed boot classifies inside `onStart` and never
+ * throws, and suites that need the BOOTED workspace await the memoized session
+ * through ordinary operations.
+ */
+function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void {
+  const gate: unknown = OrchestratorAgent.prototype.onStart.call(agent);
+  void gate;
 }
 
 /** A real OrchestratorAgent with a claimed owner, schema ensured.
@@ -1090,11 +1201,25 @@ export async function reactivateOrchestratorHarness(
      *  Armed here for the same reason as the skew: the reconcile below IS the
      *  replay, so a lane re-enabled after it arrives too late. */
     readonly sleepTimeAnswer?: readonly [key: string, update: SleepTimeUpdate];
+    /**
+     * WHICH OBJECT this activation is, in the same shape
+     * {@link orchestratorHarness} takes it.
+     *
+     * A restart does not rename a Durable Object, so a suite whose first
+     * activation named its workspace has to name the second one too — and the
+     * name is not decoration. It IS `workspaceName()`, which the exec planes,
+     * device consent and the fork publication's own fence are keyed by, so an
+     * eviction that came back as `harness-parent` is a different object than
+     * the one that died. Passed to the constructor rather than assigned
+     * afterwards for the reason {@link HarnessActorWorld} states: the runtime
+     * reads it once.
+     */
+    readonly world?: HarnessActorWorld;
     /** Configure a fresh activation before its real onStart recovery runs. */
     readonly beforeStart?: (agent: HarnessOrchestratorAgent) => void;
   },
 ): Promise<ActorHarness<HarnessOrchestratorAgent>> {
-  const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane);
+  const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane, opts?.world);
   // BEFORE `onStart`, because `onStart` is what starts the recovery under test:
   // a skew or fault armed after it would arrive too late to affect the pass it
   // is meant to steer.
@@ -1124,209 +1249,80 @@ export async function reactivateOrchestratorHarness(
   return harness;
 }
 
-/** A real SubordinateAgent with a claimed owner and a seeded identity (what
- *  the parent's setSubordinateIdentity RPC installs), schema ensured. */
-export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
-  // The parent namespace is part of the env the agent is BORN with: a stub that
-  // answers the one instruction-trust authority read (no recorded approvals —
-  // the default-deny truth) and the ONE shared-workspace hop, and refuses
-  // everything else loudly. `workspaceBoxOp` is served by a REAL parent
-  // orchestrator built lazily on first use, so a subordinate's file plane runs
-  // the production dispatcher over real bytes instead of a fake — and a suite
-  // that never touches the workspace never pays for the parent.
-  let boxParent: ActorHarness<HarnessOrchestratorAgent> | undefined;
-  const authority: HarnessInstructionAuthority = {
-    getWorkspaceInstructionApprovals: async () => [],
-  };
-  const denyStubParent: HarnessParentNamespace = {
-    idFromName: (name: string) => name,
-    get: () => new Proxy(authority, {
-      get: (target, prop) => {
-        if (prop === 'then') return undefined;
-        if (prop === 'getWorkspaceInstructionApprovals') return target.getWorkspaceInstructionApprovals;
-        if (prop === 'applyActorDirectory' || prop === 'getSubordinateBootstrapIdentity') {
-          boxParent ??= orchestratorHarness();
-          return prop === 'applyActorDirectory' ? boxParent.agent.applyActorDirectory.bind(boxParent.agent) : boxParent.agent.getSubordinateBootstrapIdentity.bind(boxParent.agent);
-        }
-        if (prop === 'workspaceBoxOp') {
-          return async (shellId: string, op: Parameters<HarnessOrchestratorAgent['workspaceBoxOp']>[1]) => {
-            boxParent ??= orchestratorHarness();
-            return await boxParent.agent.workspaceBoxOp(shellId, op);
-          };
-        }
-        return async () => {
-          throw new Error(`harness parent: ${String(prop)} is not reachable under bun`);
-        };
-      },
-    }),
-  };
-  const harness = instantiate(
-    HarnessSubordinateAgent, new Database(':memory:'), undefined, undefined, undefined, denyStubParent,
-  );
-  // A subordinate is a FACET: the SDK records who hired it, and the
-  // instruction-trust authority reads that lineage before every turn. The bare
-  // fixture hangs off a workspace root with NO recorded approvals — the
-  // default-deny truth — served by a stub that answers exactly that one
-  // authority read and refuses everything else loudly.
-  Object.defineProperty(harness.agent, 'parentPath', {
-    value: [{ className: 'OrchestratorAgent', name: 'harness-parent' }],
-    configurable: true,
-  });
-  Object.defineProperty(harness.agent, 'messages', {
-    value: [{ id: 'subordinate-task', role: 'user', parts: [], metadata: { kinuEvent: 'subordinate_task' } }],
-    configurable: true,
-  });
-  ensureActorSchema(harness.agent);
-  boxParent ??= orchestratorHarness();
-  const directory = new WorkspaceActorDirectory(makeSql(boxParent.db), { workspaceId: 'harness-actor', ownerUserId: 'harness-owner' });
-  const actor = directory.create({ parent: directory.main(), name: 'harness-sub', creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
-  Object.defineProperty(harness.agent, 'name', { value: actor.storageKey, configurable: true });
-  new FacetIdentity(makeSqlExec(harness.db)).seed({ actor: { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId, name: actor.name, storageKey: actor.storageKey }, ownerUserId: 'harness-owner', parentWorkspace: 'harness-parent', capabilityToken: null });
-  harness.db.prepare(`INSERT OR REPLACE INTO subordinate_identity
-    (id, name, mission, parent_workspace, owner_user_id, depth) VALUES (1, 'harness-sub', 'observe conformance', 'harness-parent', 'harness-owner', 1)`).run();
-  const stores = bindActorHandle(makeSql(harness.db), { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId, name: actor.name, storageKey: actor.storageKey }, () => { directory.open(actor.actorId); });
-  stores.config.setDisplayNameOrigin('Harness Sub', 'user');
-  stores.config.setRoleSelection('general');
-  harness.agent.declareScaffoldPresent();
-  return harness;
-}
-
-/** What a suite hands `facetHarness`. */
-export interface FacetHarnessOptions {
-  /** The facet key its spawner handed `subAgent`, which is the SDK `name` the
-   *  facet reads. Defaults to the harness actor's. */
-  readonly name?: string;
-  /** The suite's own env, whole, in place of the harness one: the parent
-   *  namespace a facet reaches over RPC above all. */
-  readonly env?: Env;
-  /** Rows an earlier activation wrote. A second facet over the same database
-   *  is a COLD activation: no instance fields, the same durable rows, which is
-   *  what the platform hands back after an eviction between two RPCs. */
-  readonly db?: Database;
-}
 
 /**
- * A facet as `subAgent()` hands it to its spawner: the production class, no
- * seed rows, brought up through the SDK's own `onStart` — Think's boot and
- * then the actor's, the activation the SDK completes before it dispatches the
- * facet's first `@callable`. The mode seeds (`initHead`, `initNode`,
- * `setSubordinateIdentity`) are the production RPCs, so the surface a suite
- * narrows or builds from here is the production one rather than a double's.
- */
-export async function facetHarness(options: FacetHarnessOptions = {}): Promise<ActorHarness<HarnessSubordinateAgent>> {
-  const harness = instantiate(
-    HarnessSubordinateAgent, options.db ?? new Database(':memory:'),
-    undefined, undefined, undefined, undefined, options.env,
-  );
-  if (options.name !== undefined) {
-    Object.defineProperty(harness.agent, 'name', { value: options.name, configurable: true });
-  }
-  await harness.agent.onStart();
-  return harness;
-}
-
-/**
- * A real SubordinateAgent hanging off a real OrchestratorAgent, in one process.
+ * A real hired subordinate, hosted by a real workspace, in one process and one
+ * database.
  *
- * Nothing about the identity is pre-inserted: the child is seeded through the
- * production `setSubordinateIdentity`, which reaches back to the parent's
- * `getSubordinateBootstrapIdentity` for the owner, workspace and depth it is
- * not allowed to state itself. So the seeded row is the one production writes,
- * and the parent's roster is a real roster the child can reach.
+ * Seeded through the PRODUCTION path — the parent's own `SubordinateRuntime` —
+ * so the row that exists is the row a hire writes. The child is then acquired
+ * from the workspace's one `ActorHost`, which is what binds its stores, builds
+ * its runtime over its own `.kinu/agents/<storage-key>/` subtree and its own
+ * home credential, and seeds its loop pointer.
  *
- * `parentPath` is what the SDK records at facet creation and the only thing
- * that says which agent hired this one; it is declared here because facets are
- * workerd-only, and it names the parent's CLASS so the production class check
- * runs rather than being bypassed.
+ * Nothing about the identity is stated by the fixture. There is no owner,
+ * workspace or depth for a child to claim and be checked against: those are
+ * columns on its `workspace_actors` row, written by the directory under the
+ * parent's authority, so the whole `getSubordinateBootstrapIdentity`
+ * round-trip — and the class-name lineage check it existed to defend — has
+ * nothing left to verify.
  */
-export async function hiredSubordinateHarness(
-  parent: ActorHarness<HarnessOrchestratorAgent>,
+export async function hostedSubordinateHarness(
+  workspace: ActorHarness<HarnessOrchestratorAgent>,
   identity: {
-    name: string;
-    displayName: string;
-    nameOrigin: 'user' | 'auto';
-    role: string;
-    roleId?: string;
-    mission: string;
+    readonly name: string;
+    readonly displayName: string;
+    readonly nameOrigin: 'user' | 'auto';
+    readonly mission: string;
+    readonly roleId?: string;
   },
-  /** The owner's world the child is hired INTO — the same UserDO its parent
-   *  was placed in, when a suite drives the owner plane for real. */
-  world?: HarnessActorWorld,
-): Promise<ActorHarness<HarnessSubordinateAgent>> {
-  const directory = new WorkspaceActorDirectory(makeSql(parent.db), { workspaceId: 'harness-actor', ownerUserId: world?.ownerUserId ?? 'harness-owner' });
-  const creationId = crypto.randomUUID();
-  const actor = directory.create({ parent: directory.main(), name: identity.name, creationId, kind: 'subordinate', lifetime: 'durable' });
-  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'), parent.agent, undefined, world);
-  Object.defineProperty(harness.agent, 'name', { value: actor.storageKey, configurable: true });
-  // The lineage the SDK would have recorded, naming the parent's ACTUAL DO name.
-  // That name is what the parent's `workspaceName()` answers and therefore what
-  // its `getSubordinateBootstrapIdentity` seeds into this child's identity row,
-  // so a hardcoded one here disagreed with the seed the fixture itself had just
-  // written — and every production check that compares the recorded root against
-  // the seeded workspace (the plan-lineage guard, the owner's existing-only
-  // inspection) refused a child its parent really had hired. The CLASS is still
-  // declared, so the production class check runs rather than being bypassed.
-  const lineage = [{ className: 'OrchestratorAgent', name: parent.agent.name }];
-  Object.defineProperty(harness.agent, 'parentPath', { value: lineage, configurable: true });
-  Object.defineProperty(harness.agent, 'messages', { value: [], configurable: true });
-  ensureActorSchema(harness.agent);
-  // The same value, in the second place the SDK also records it. One value, so
-  // the two can never disagree the way two literals can.
-  await harness.agent.harnessRecordSdkLineage(lineage);
-  harness.agent.declareScaffoldPresent();
-  const { roleId, ...seed } = identity;
-  await harness.agent.setSubordinateIdentity({
-    ...seed, creationId, actor: { actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId },
-    // Durable unless a scenario says otherwise: the harness stands in for a
-    // HIRE, and the temporary rung has its own tests.
+): Promise<HostedActorHarness> {
+  const seed: SubordinateSeed & { creationId: string } = {
+    name: identity.name,
+    displayName: identity.displayName,
+    nameOrigin: identity.nameOrigin,
+    // Durable unless a scenario says otherwise: this stands in for a HIRE, and
+    // the temporary rung has its own tests.
     lifetime: 'durable',
-    role: roleId ?? 'general',
+    mission: identity.mission,
+    role: identity.roleId ?? 'general',
+    // Absent, not null: the parent pinned no tier, so the child's role derives
+    // one. A literal null would be a pin on "no tier", which is a different
+    // instruction and one the catalog cannot honour.
+    creationId: crypto.randomUUID(),
+  };
+  const reference = await workspace.agent.observeSubordinateRuntime().spawn(seed);
+  const actor = await workspace.agent.observeActorHost().acquire(reference);
+  return { actor, workspace };
+}
+
+/**
+ * One exploration actor of the given kind, hosted and acquired.
+ *
+ * The three exploration kinds differ here in exactly one argument, which is the
+ * point: a head, a node and a rollout branch used to be three bootstrap
+ * sequences over one facet class, each pushing a different seed RPC and each
+ * with its own discard path for a bootstrap that failed. They are now one
+ * directory registration and one `acquire`.
+ */
+export async function hostedExplorationHarness(
+  workspace: ActorHarness<HarnessOrchestratorAgent>,
+  kind: 'head' | 'node' | 'branch',
+  id: string,
+): Promise<HostedActorHarness> {
+  const entry = await workspace.agent.actorDirectory({
+    action: 'register', creationId: id, name: `exp:${id}`, kind, lifetime: 'task',
   });
-  // A hire REGISTERS the facet with the SDK, and that registry is the only
-  // thing `getExistingSubAgent` answers from. So the fixture registers the one
-  // hired name exactly once, through the SDK's own registering path and under
-  // the parent's production facet class, rather than writing the row by hand —
-  // a hand-written row is free to drift from the key the registry reads. It is
-  // seeded HERE, before the overrides below are installed, so the row comes
-  // from the un-overridden binding and is the SDK's own.
-  await parent.agent.subAgent(parent.agent.facetClass(), actor.storageKey);
-  // The parent addresses its children through `subAgent`, which needs a facet.
-  // Resolve that ONE name to the real child instead, so both directions of the
-  // handshake — the parent renaming a child, the child recording its title —
-  // run as production code against production state. Every other name keeps
-  // the SDK stub's honest refusal.
-  const resolveFacet = harness.agent;
-  type SubAgentArgs = Parameters<HarnessOrchestratorAgent['subAgent']>;
-  const parentSubAgent = parent.agent.subAgent.bind(parent.agent);
-  Object.defineProperty(parent.agent, 'subAgent', {
-    value: async (cls: SubAgentArgs[0], name: SubAgentArgs[1]): Promise<object> => {
-      const stub = await parentSubAgent(cls, name);
-      return name === actor.storageKey ? resolveFacet : stub;
-    },
-    configurable: true,
-  });
-  // The owner's authoritative READS go through `getExistingSubAgent`, which by
-  // contract never creates: it answers out of the SDK's sub-agent registry and
-  // returns null the moment that registry holds no row. So the registry is
-  // consulted FIRST here and its null is FINAL, including after a
-  // `deleteSubAgent` — a fixture that answered for a name the SDK has no
-  // identity for would make a revoked facet indistinguishable from a live one,
-  // which is precisely the thing the surrounding proofs claim to check. Only a
-  // name the registry has admitted, under the parent's own facet class,
-  // resolves to the real child, for the same reason `subAgent` does; every
-  // other name keeps the registry's own answer, which is what keeps an
-  // inspection of a rostered but never-hired child a `missing` instead of a
-  // freshly minted empty facet.
-  type ExistingArgs = Parameters<HarnessOrchestratorAgent['getExistingSubAgent']>;
-  const parentExisting = parent.agent.getExistingSubAgent.bind(parent.agent);
-  const hiredClassName = parent.agent.facetClass().name;
-  Object.defineProperty(parent.agent, 'getExistingSubAgent', {
-    value: async (cls: ExistingArgs[0], name: ExistingArgs[1]): Promise<object | null> => {
-      const registered = await parentExisting(cls, name);
-      if (!registered) return null;
-      return cls.name === hiredClassName && name === actor.storageKey ? resolveFacet : registered;
-    },
-    configurable: true,
-  });
-  return harness;
+  const actor = await workspace.agent.observeActorHost().acquire(entry.reference);
+  return { actor, workspace };
+}
+
+/** The workspace's own main actor, as a hosted actor — so a suite can assert
+ *  the five kinds through one shape instead of special-casing the root. */
+export async function hostedMainActor(
+  workspace: ActorHarness<HarnessOrchestratorAgent>,
+): Promise<HostedActorHarness> {
+  const host = workspace.agent.observeActorHost();
+  const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor));
+  return { actor, workspace };
 }

@@ -13,9 +13,22 @@ import {
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
 import { makeSqlExec } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 
-function makeSql(): SqlExec {
-  return makeSqlExec(new Database(':memory:'));
+/** One hub database and the ONE actor whose rows it holds.
+ *
+ *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
+ *  than of the reader: a log bound to a fabricated id publishes rows no
+ *  production reader resolves. Bound through the production directory. */
+interface Hub {
+  readonly sql: SqlExec;
+  readonly actor: ActorHandle;
+}
+
+function makeSql(): Hub {
+  const db = new Database(':memory:');
+  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
 const taskPayload: SubordinateTaskPayload = {
@@ -90,9 +103,9 @@ describe('subordinate event derivation', () => {
 
 describe('one report per sequence on the parent rail', () => {
   test('a replayed report lands on the row the first delivery wrote', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     const first = log.publish({ descriptor: reportDescriptor, now: 1000 });
     const replay = log.publish({ descriptor: reportDescriptor, now: 5000 });
@@ -104,9 +117,9 @@ describe('one report per sequence on the parent rail', () => {
   });
 
   test('two sequences are two reports', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     log.publish({ descriptor: reportDescriptor, now: 1000 });
     log.publish({
@@ -123,9 +136,9 @@ describe('one report per sequence on the parent rail', () => {
 
 describe('subordinate event admission (EventLog round-trip)', () => {
   test('a published task admits, pends, and drains with the workspace source line', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     const { id, admitted } = log.publish({ descriptor: taskDescriptor, now: 1000 });
     expect(admitted).toBe(true);
@@ -147,9 +160,9 @@ describe('subordinate event admission (EventLog round-trip)', () => {
   });
 
   test('a published report admits and drains with the subordinate source line', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     const { admitted } = log.publish({ descriptor: reportDescriptor, now: 1000 });
     expect(admitted).toBe(true);
@@ -164,9 +177,9 @@ describe('subordinate event admission (EventLog round-trip)', () => {
   });
 
   test('binding a task to a turn removes it from pending (drain contract)', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: taskDescriptor, now: 1000 });
     log.markConsumed(id, 'evt-turn-1', 0);
     expect(log.pending()).toHaveLength(0);

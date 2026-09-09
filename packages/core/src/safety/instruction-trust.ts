@@ -34,6 +34,7 @@
 
 import { argumentDigest } from './argument-digest';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import * as v from 'valibot';
 
 export type {
@@ -77,14 +78,17 @@ export function instructionDigest(content: string): string {
 
 export function initInstructionApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS instruction_approvals (
+    actor_id TEXT NOT NULL,
     scope    TEXT NOT NULL,
     path     TEXT NOT NULL,
     digest   TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('approved', 'grandfathered', 'revoked')),
-    PRIMARY KEY (scope, path)
+    PRIMARY KEY (actor_id, scope, path)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS instruction_approval_migrations (
-    scope TEXT PRIMARY KEY
+    actor_id TEXT NOT NULL,
+    scope    TEXT NOT NULL,
+    PRIMARY KEY (actor_id, scope)
   )`);
 }
 
@@ -138,19 +142,32 @@ export function trustOfInstructionApprovals(
  * the cloud, the discovery root on a local CLI. It is part of the key so a
  * database that ever serves two workspaces cannot lend one's approvals to the
  * other, and so a copied or forked workspace starts unapproved.
+ *
+ * The ACTOR leads that key. One physical database now holds every logical actor
+ * of a workspace, and they share a scope while emphatically not sharing trust:
+ * a hired subordinate reads its own instruction files, and the owner approving
+ * a skill for the root is not the owner approving it for a temporary the root
+ * spawned. So the migration marker is per actor too — a fresh actor has no
+ * legacy baseline to grandfather, whatever the root already carried over.
  */
 export class InstructionApprovalStore {
+  private readonly actorId: string;
+
   constructor(
     private readonly sql: SqlExecutor,
+    private readonly actor: ActorHandle,
     private readonly scope: string,
     private readonly transaction: <T>(body: () => T) => T,
-  ) {}
+  ) {
+    this.actorId = actor.actorId;
+  }
 
   /** The standing decision for this path, whatever bytes it was made about. */
   get(path: string): InstructionApproval | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
-      WHERE scope = ${this.scope} AND path = ${path} LIMIT 1`;
+      WHERE actor_id = ${this.actorId} AND scope = ${this.scope} AND path = ${path} LIMIT 1`;
     return rows[0] ? toApproval(rows[0]) : null;
   }
 
@@ -165,10 +182,11 @@ export class InstructionApprovalStore {
    *  changed file moves the digest, which is what makes an edit re-approvable
    *  without first clearing the old answer. */
   approve(path: string, digest: string): void {
+    this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (scope, path, digest, decision)
-      VALUES (${this.scope}, ${path}, ${digest}, 'approved')
-      ON CONFLICT (scope, path)
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, ${digest}, 'approved')
+      ON CONFLICT (actor_id, scope, path)
         DO UPDATE SET digest = ${digest}, decision = 'approved'`;
   }
 
@@ -187,9 +205,11 @@ export class InstructionApprovalStore {
    * every baseline row has landed.
    */
   grandfatherExisting(entries: ReadonlyArray<InstructionMigrationEntry>): void {
+    this.actor.assertCurrent();
     this.transaction(() => {
       const migrated = this.sql<{ scope: string }>`
-        SELECT scope FROM instruction_approval_migrations WHERE scope = ${this.scope} LIMIT 1`;
+        SELECT scope FROM instruction_approval_migrations
+        WHERE actor_id = ${this.actorId} AND scope = ${this.scope} LIMIT 1`;
       if (migrated.length > 0) return;
 
       const seen = new Set<string>();
@@ -197,14 +217,14 @@ export class InstructionApprovalStore {
         if (seen.has(entry.path)) continue;
         seen.add(entry.path);
         void this.sql`
-          INSERT INTO instruction_approvals (scope, path, digest, decision)
-          VALUES (${this.scope}, ${entry.path}, ${entry.digest}, 'grandfathered')
-          ON CONFLICT (scope, path) DO NOTHING`;
+          INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+          VALUES (${this.actorId}, ${this.scope}, ${entry.path}, ${entry.digest}, 'grandfathered')
+          ON CONFLICT (actor_id, scope, path) DO NOTHING`;
       }
       void this.sql`
-        INSERT INTO instruction_approval_migrations (scope)
-        VALUES (${this.scope})
-        ON CONFLICT (scope) DO NOTHING`;
+        INSERT INTO instruction_approval_migrations (actor_id, scope)
+        VALUES (${this.actorId}, ${this.scope})
+        ON CONFLICT (actor_id, scope) DO NOTHING`;
     });
   }
 
@@ -212,11 +232,12 @@ export class InstructionApprovalStore {
    * the target migrated with no rows before it is published, so copied paths
    * start unverified instead of being mistaken for a legacy baseline. */
   markMigratedEmpty(): void {
+    this.actor.assertCurrent();
     this.transaction(() => {
       void this.sql`
-        INSERT INTO instruction_approval_migrations (scope)
-        VALUES (${this.scope})
-        ON CONFLICT (scope) DO NOTHING`;
+        INSERT INTO instruction_approval_migrations (actor_id, scope)
+        VALUES (${this.actorId}, ${this.scope})
+        ON CONFLICT (actor_id, scope) DO NOTHING`;
     });
   }
 
@@ -225,18 +246,20 @@ export class InstructionApprovalStore {
    *  so the file drops to `unverified` and no later carry-over can re-grant it
    *  without the owner saying so again. */
   revoke(path: string): void {
+    this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (scope, path, digest, decision)
-      VALUES (${this.scope}, ${path}, '', 'revoked')
-      ON CONFLICT (scope, path) DO UPDATE SET decision = 'revoked'`;
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, '', 'revoked')
+      ON CONFLICT (actor_id, scope, path) DO UPDATE SET decision = 'revoked'`;
   }
 
   /** Every standing decision in this scope — what the owner's approval surface
    *  lists beside the files discovery actually found. */
   list(): InstructionApproval[] {
+    this.actor.assertCurrent();
     return this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
-      WHERE scope = ${this.scope} ORDER BY path`.map(toApproval);
+      WHERE actor_id = ${this.actorId} AND scope = ${this.scope} ORDER BY path`.map(toApproval);
   }
 }
 

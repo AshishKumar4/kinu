@@ -402,6 +402,20 @@ class Statement {
 }
 
 /** Run a compiled statement, classifying what SQLite says about it. */
+/**
+ * A statement whose ROWS are never read — a DDL, an insert, a delete.
+ *
+ * Named, rather than the previous spelling at three sites, which voided the
+ * call. That was misleading twice over: the `void` operator is this tree's
+ * marker for a promise deliberately not awaited, and {@link execute} is
+ * synchronous and throws, so there was never a rejection to discard — only a
+ * result set. Errors propagate exactly as they do for a read, because this is
+ * the same call with the array dropped.
+ */
+function runStatement(sql: SqlExecutor, statement: Statement, doing: string): void {
+  execute<unknown>(sql, statement, doing);
+}
+
 function execute<Row>(sql: SqlExecutor, statement: Statement, doing: string): Row[] {
   try {
     return statement.run<Row>(sql);
@@ -637,7 +651,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   };
 
   const runDdl = (statement: string, doing: string): void => {
-    void execute<unknown>(sql, new Statement().text(statement), doing);
+    runStatement(sql, new Statement().text(statement), doing);
   };
 
   const catalogRow = (name: string): CatalogRow | undefined => execute<CatalogRow>(
@@ -942,7 +956,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         runDdl(createTableDdl(record, physical), doing);
         const index = ownerIndexDdl(record, physical);
         if (index !== null) runDdl(index, doing);
-        void execute<unknown>(
+        runStatement(
           sql,
           new Statement()
             .text(`INSERT INTO ${catalog} (name, scope, columns, created_by, created_at) VALUES (`)
@@ -982,7 +996,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       }
       commit((record) => {
         runDdl(`DROP TABLE IF EXISTS ${quoted(resolved.physical)}`, doing);
-        void execute<unknown>(
+        runStatement(
           sql,
           new Statement().text(`DELETE FROM ${catalog} WHERE name = `).value(resolved.record.name),
           doing,

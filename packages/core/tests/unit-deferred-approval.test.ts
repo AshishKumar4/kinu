@@ -24,6 +24,28 @@ import { KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
+import type { SqlExecutor } from '../src/types/primitives';
+
+/**
+ * A fresh approvals database and the actor whose parked actions it holds.
+ *
+ * `deferred_approvals` is keyed `(actor_id, id)` — the owner answers a
+ * SPECIFIC agent's ask, and a standing grant given to the root is not one a
+ * hired subordinate may spend — so a store and the re-opened store beside it
+ * have to name the same handle or the parked night's work is invisible to the
+ * re-open, which is the very thing those cases exist to catch.
+ */
+function approvalsDb() {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initDeferredApprovalsTable(execRaw);
+  return { db, sql, actor: createTestActors(sql, execRaw).main } satisfies {
+    db: Database; sql: SqlExecutor; actor: ActorHandle;
+  };
+}
 
 /** Gated on EVERY executor, including the agent's own workspace, because a
  *  force-push rewrites history on a remote nobody here owns — the harm leaves
@@ -39,9 +61,8 @@ function setup(opts: {
   /** Omit the queue entirely — the pre-deferral world, which must be unchanged. */
   noQueue?: boolean;
 } = {}) {
-  const db = new Database(':memory:');
-  initDeferredApprovalsTable(makeExecRaw(db));
-  const store = new DeferredApprovalStore(makeSql(db));
+  const { sql, actor } = approvalsDb();
+  const store = new DeferredApprovalStore(sql, actor);
 
   const delivered: AgentSignal[] = [];
   /** Everything the owner's 'always' answers have bought, as the config store
@@ -429,9 +450,8 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     // The row outlives the spend only so the gate can close it. While it is
     // out it answers for nobody: `standing()` cannot see it and a second
     // spend gets nothing.
-    const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
-    const store = new DeferredApprovalStore(makeSql(db));
+    const { sql, actor } = approvalsDb();
+    const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-s', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
     expect(store.decide('defer-s', 'approved', 2)?.status).toBe('approved');
 
@@ -451,15 +471,14 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
   test('re-opening the workspace keeps parked and approved rows intact', () => {
     // Table init is idempotent and touches no data: a night's parked actions
     // survive every eviction and re-open between the ask and the answer.
-    const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
-    const store = new DeferredApprovalStore(makeSql(db));
+    const { db, sql, actor } = approvalsDb();
+    const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-parked', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 1 });
     store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', reason: 'gate', requestedAt: 2 });
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
     initDeferredApprovalsTable(makeExecRaw(db));
-    const reopened = new DeferredApprovalStore(makeSql(db));
+    const reopened = new DeferredApprovalStore(sql, actor);
     expect(reopened.get('defer-parked')?.status).toBe('queued');
     expect(reopened.get('defer-blessed')?.status).toBe('approved');
     expect(reopened.standing(GATED, 'workspace', 6)?.id).toBe('defer-parked');
@@ -508,12 +527,11 @@ describe('durability — the wait is a night, not a prompt window', () => {
   test('the queue survives the process that parked the action', async () => {
     // A Durable Object is evicted many times between the ask and the answer;
     // a parked action that lived in a promise map would be lost with it.
-    const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
-    const first = new DeferredApprovalStore(makeSql(db));
+    const { sql, actor } = approvalsDb();
+    const first = new DeferredApprovalStore(sql, actor);
     first.create({ id: 'defer-9', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
 
-    const reopened = new DeferredApprovalStore(makeSql(db));
+    const reopened = new DeferredApprovalStore(sql, actor);
     const parked = reopened.listQueued();
 
     expect(parked.map((a: DeferredApproval) => a.id)).toEqual(['defer-9']);
@@ -523,9 +541,8 @@ describe('durability — the wait is a night, not a prompt window', () => {
   test('the decision is durable before the wake is attempted', async () => {
     // An undeliverable wake must not lose the owner's answer: the row is the
     // record, the signal is only the notification.
-    const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
-    const store = new DeferredApprovalStore(makeSql(db));
+    const { sql, actor } = approvalsDb();
+    const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
     const queue = new DeferredApprovalQueue({
       store,
@@ -559,9 +576,8 @@ describe('an approval outlives an attempt that never reached the machine', () =>
    *  answers whatever this run of the test needs, gated by `gateProviderExec`
    *  with the real deferral queue behind it. */
   function deviceSetup() {
-    const db = new Database(':memory:');
-    initDeferredApprovalsTable(makeExecRaw(db));
-    const store = new DeferredApprovalStore(makeSql(db));
+    const { sql, actor } = approvalsDb();
+    const store = new DeferredApprovalStore(sql, actor);
     let seq = 0;
     const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
     const queue = new DeferredApprovalQueue({

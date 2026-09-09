@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEPS_GATED_TOOLS, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', 'src', path), 'utf8');
 
@@ -67,9 +67,9 @@ describe('subordinate wiring', () => {
     expect(actor).toContain('runtime: this.subordinateRuntime(),');
 
     // ONE ROSTER. The port is built over `subordinateRoster` — there is no
-    // second store, and no table of its own to construct.
+    // second store, and no table of its own to construct: the handle scopes
+    // the roster's rows inside the workspace's one database.
     expect(actor).toContain('roster: this.subordinateRoster,');
-    expect(actor).not.toContain('TemporaryAgentStore');
     expect(actor).not.toContain('workspace_temporary_agents');
 
     // The port is built ONCE PER ACTOR, and that is load-bearing rather than a
@@ -89,7 +89,7 @@ describe('subordinate wiring', () => {
     expect(actor).toContain('statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,');
     expect(actor).not.toContain('vfs.readFile(path, { encoding: \'utf8\' })');
 
-    expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql)');
+    expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle())');
   });
 
   /** The standalone recursive-LM namespace is gone from this backend's sandbox
@@ -97,19 +97,26 @@ describe('subordinate wiring', () => {
   test('no rlm provider, model spec or prompt flag survives in the cf composition', () => {
     const actor = source('actor-agent.ts');
     const execTools = source('execute-tools.ts');
-    const exploration = source('subordinate-agent.ts');
+    const hosting = source('subordinate-hosting.ts');
     for (const [name, text] of [
       ['actor-agent.ts', actor],
       ['execute-tools.ts', execTools],
-      ['subordinate-agent.ts', exploration],
+      ['subordinate-hosting.ts', hosting],
     ] as const) {
       expect({ name, hit: /createRLMProvider|rlmAvailable|rlm\.query/u.test(text) })
         .toEqual({ name, hit: false });
     }
-    // The sandbox tool no longer needs a model registry at all, because nothing
-    // in it calls a model directly any more.
-    expect(execTools).not.toContain('registry:');
-    expect(execTools).not.toContain('modelSpec');
+    // The sandbox factory takes no model registry: nothing in it calls a model
+    // directly any more. Pinned on the options interface's member list, not on
+    // a syllable's absence from the file — `modelSpecForSource` (spend
+    // attribution) and core's `registry.renderExecuteToolsDescription` (a
+    // docstring renderer) legitimately use those syllables elsewhere.
+    const options = execTools.slice(
+      execTools.indexOf('export interface ExecuteToolsFactoryOptions {'),
+      execTools.indexOf('export function createExecuteToolsFactory'),
+    );
+    expect(options.length).toBeGreaterThan(0);
+    expect(options).not.toMatch(/^\s*(?:model|registry|rlm)\??:/mu);
   });
 
   test('a child bootstrap retains root ownership and refuses a foreign parent reference', async () => {
@@ -130,46 +137,52 @@ describe('subordinate wiring', () => {
     expect(bootstrap).not.toHaveProperty('capabilityToken');
   });
 
-  test('a subordinate shares workspace bytes without overwriting workspace identity or duplicating the executor', () => {
-    const actor = source('actor-agent.ts');
-    const subordinate = source('subordinate-agent.ts');
-
-    expect(actor).toContain('scaffoldPath: this.scaffoldPath()');
-    expect(actor).toContain('shellId: this.shellId()');
-    expect(subordinate).toContain('`.kinu/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`');
-    expect(subordinate).toContain('protected shellId(): string { return `subordinate:${this.name}`; }');
-    expect(subordinate).toContain('renderSoulMarkdown({');
-    expect(subordinate).not.toContain('seedSoul(');
-    expect(subordinate).not.toContain('createParentExecutor');
-    expect(subordinate).not.toContain("registerParentWorkspace");
+  test('a hosted child shares the workspace file plane under its own state root', async () => {
+    // The PATH a bound actor's scaffold resolves to, which survives the move
+    // of the helpers that compute it: a child that read its parent's row
+    // would run bytes its own claim could not verify after the parent
+    // promoted again, so the per-actor subtree is the load-bearing half.
+    const workspace = orchestratorHarness();
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', mission: 'Read what you may',
+    });
+    const key = child.actor.handle.storageKey;
+    expect(child.actor.runtime.identity.scaffold.path)
+      .toBe(`.kinu/agents/${encodeURIComponent(key)}/scaffold/agent.js`);
+    expect(child.actor.runtime.identity.scaffold.path).not.toBe('scaffold/agent.js');
+    // And no parent executor: a child never runs as its hirer.
+    const hosting = source('actor-hosting.ts');
+    expect(hosting).not.toContain('createParentExecutor');
+    expect(hosting).not.toContain('registerParentWorkspace');
+    expect(hosting).not.toContain('seedSoul(');
   });
 
-  test('subordinate tools are structurally confined to report, without team, peers, or release changes', () => {
-    const subordinate = source('subordinate-agent.ts');
-    const profile = subordinate.slice(
-      subordinate.indexOf('protected actorToolDeps()'),
-      subordinate.indexOf('protected notifyOwner'),
-    );
-    expect(profile).toContain('report:');
-    expect(profile).not.toContain('team:');
-    expect(profile).not.toContain('peers:');
-    expect(profile).not.toContain('releases:');
-    // Cross-workspace experience transfer is no longer a tool at all — it is
-    // the owner's RPC on the orchestrator, and reaches no actor's profile.
-    expect(profile).not.toContain('experience:');
-    // …and absence is structural: a deps-gated name is dropped from the
-    // built ToolSet too, not just from the prompt. `release` is not a
-    // native tool at all (release.* is codemode-only), so it needs no
-    // gate here. Asserted on the built ToolSet rather than on the gate
-    // function: what ships is the surface each actor class builds — the
-    // orchestrator wires no `report` deps while a subordinate does.
-    const orchTools = Object.keys(orchestratorHarness().agent.observeRawTools());
-    const subTools = Object.keys(subordinateHarness().agent.observeRawTools());
-    expect(orchTools).not.toContain(REPORT_TOOL);
-    expect(subTools).toContain(REPORT_TOOL);
-    // Gating one name costs no other name.
-    expect(orchTools.filter((name) => name !== REPORT_TOOL).sort())
-      .toEqual(subTools.filter((name) => name !== REPORT_TOOL).sort());
+  test('delegated tools are confined to the head-shaped set with the report lane, without team, memory, or tasks', async () => {
+    // Absence is structural: asserted on the BUILT ToolSet, not on a gate
+    // function — what ships is the surface the production builder builds over
+    // the child's own runtime. `release` is not a native tool at all
+    // (release.* is codemode-only), so it needs no gate here.
+    const workspace = orchestratorHarness();
+    const orchTools = workspace.agent.observeRawTools();
+    expect(Object.keys(orchTools)).not.toContain(REPORT_TOOL);
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'confinement-child',
+      displayName: 'Confinement Child',
+      nameOrigin: 'user',
+      mission: 'prove confinement',
+    });
+    const subTools = workspace.agent.observeHostedTaskTools(child.actor, 'prove confinement');
+    const subKeys = Object.keys(subTools);
+    // No team to hire through, no memory or task stores of its own: a
+    // delegated task reports; it does not branch the workspace.
+    expect(subKeys).not.toContain('agents');
+    expect(subKeys).not.toContain('memory');
+    expect(subKeys).not.toContain('tasks');
+    expect(subKeys).toContain('execute_tools');
+    // …and the report lane it DOES get lives in the sandbox: the delegated
+    // execute_tools declares the report namespace the root's never does.
+    expect(subTools.execute_tools?.description).toContain('declare const report:');
+    expect(orchTools.execute_tools?.description).not.toContain('declare const report:');
   });
 
   test('every deps-gated tool core declares is answered by this backend', () => {
@@ -186,16 +199,18 @@ describe('subordinate wiring', () => {
     expect(DEPS_GATED_TOOLS.length).toBeGreaterThan(0);
   });
 
-  test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
+  test('browser subordinate callables reuse the team policy and are not inherited by the shared substrate', () => {
     const orchestrator = source('orchestrator.ts');
-    const subordinate = source('subordinate-agent.ts');
     expect(orchestrator).toContain('return this.subordinateViews();');
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().create({});');
     expect(orchestrator).toContain('const result = await this.getTeamToolDeps().rename({ name, displayName });');
     expect(orchestrator).toContain("return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });");
-    expect(subordinate).not.toContain('spawnSubordinate(');
-    expect(subordinate).not.toContain('dismissSubordinate(');
-    expect(subordinate).not.toContain('listSubordinates(');
+    // …and the shared substrate declares none of them: team callables are the
+    // orchestrator's own, so a hosted child never inherits a path around the
+    // roster the host owns.
+    const base = source('actor-agent.ts');
+    expect(base).not.toContain('listSubordinates(');
+    expect(base).not.toContain('dismissSubordinate(');
   });
 
 
@@ -241,66 +256,45 @@ describe('subordinate wiring', () => {
     expect(ingress).toContain('return receiveSubordinateEvent({');
     expect(ingress).toContain('transaction: (body) => this.ctx.storage.transactionSync(body),');
   });
-
   // The policy itself is core's, and its behaviour is proven there
   // (core/tests/unit-subordinates.test.ts). What is backend-specific is that
-  // BOTH hops actually consult it, and that neither hop can be reached around.
+  // BOTH hops actually tag the origin the relay reads, and that neither hop
+  // can be reached around.
   test('every upward channel is tagged with the origin the relay policy reads', () => {
-    const subordinate = source('subordinate-agent.ts');
-    // The fourth parameter is what makes a replayed report recognisable: the
-    // sequence that owes it, and the mode it ran in, both TRAVEL rather than
-    // being re-derived at either end.
-    expect(subordinate).toContain(
-      'private async sendReport(\n    status: SubordinateReportStatus,\n'
-      + '    content: string,\n    origin: SubordinateReportOrigin,');
-    expect(subordinate).toContain(
-      'owedBy?: { readonly sequenceId: string; readonly mode: WorkMode },');
-    // The three senders, and what each of them is: a deliberate choice, and two
-    // automatic relays.
-    expect(subordinate).toContain("await this.sendReport(input.status, input.content, 'report_tool')");
-    // The turn-end relay is a CLAIMED terminal effect, so its send sits in that
-    // effect's body and is awaited: the disposition is what the send reports. The
-    // STATUS is recorded too — a task child's terminal answer and a durable
-    // child's progress note are different words, and a cold replay must not
-    // re-derive which one this turn owed.
-    expect(subordinate).toContain(
-      "await this.sendReport(\n            status, text, 'turn_end', { sequenceId, mode },\n          )");
-    expect(subordinate).toContain("void this.sendReport('progress', `${subject}\\n\\n${body}`, 'turn_end')");
-    // …and those are ALL of them: one declaration plus exactly three call sites,
-    // so no upward channel can skip the origin. The temporary rung's two extra
-    // sends are gone — a task child's terminal answer is the SAME claimed
-    // `parent_report` effect a hire's progress note goes through, which is what
-    // stopped one failing turn reaching the parent down two paths at once.
-    expect(subordinate.match(/sendReport\(/g)).toHaveLength(4);
+    const hosting = source('subordinate-hosting.ts');
+    const orchestrator = source('orchestrator.ts');
+    // Two senders, and what each of them is: a deliberate choice, and the
+    // automatic turn-end relay. Each file owns exactly one, so no upward
+    // channel can skip the origin.
+    expect(orchestrator).toContain("status: input.status, content: input.content, origin: 'report_tool',");
+    expect(hosting).toContain("status: relayed.status, content: relayed.content, origin: 'turn_end',");
+    expect(orchestrator.match(/origin: 'report_tool'/g)).toHaveLength(1);
+    expect(orchestrator).not.toContain("origin: 'turn_end'");
+    expect(hosting.match(/origin: '/g)).toHaveLength(1);
+    // The sequence that owes it, and the mode it ran in, both TRAVEL rather
+    // than being re-derived at either end — which is what makes a replayed
+    // report recognisable.
+    expect(hosting).toContain('mode: task.mode, sequenceId: task.sequenceId,');
   });
 
-  test('the subordinate withholds an owner-driven turn, and the parent drops what it is not waiting on', () => {
-    const subordinate = source('subordinate-agent.ts');
-
-    expect(subordinate).toContain(
-      'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
-    // Split across the claim: WHICH report is owed is decided when the sequence
-    // is declared, and the send is the effect that owes it.
-    //
-    // A task child reports FIRST and on every ending, because an `agents.ask` is
-    // blocked on it; a hire falls through to the SAME selective policy it always
-    // had, which is what keeps durable behaviour exactly as it was. Both are
-    // suppressed by a report that already settled the run.
-    expect(subordinate).toContain(
-      'const taskReport = this.settledRunThisTurn ? null : this.taskTerminalReport(ending, assistantText);');
-    expect(subordinate).toContain('const parentReport = taskReport ?? (\n'
-      + '      completed && subordinateRelaysTurnEnd({\n'
-      + '        reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText,\n'
-      + '      })');
-    // A root has NO parentReport part — `undefined`, never a body that succeeds
-    // over a parent nobody has. The spelling moved off the conditional spread
-    // when anti-slop banned it; the invariant is the absent part itself.
-    expect(subordinate).toContain('const parentReportPart = parentReport === null ? undefined : {');
-    expect(subordinate).toContain('      parentReport: parentReportPart,');
-    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) {');
-    expect(subordinate).toContain('submitPlan: { submit: (edits) => this.submitPlanEdits(edits) }');
-    expect(subordinate).toContain('return report ? [createReportCodemodeProvider(() => report)] : [];');
-
+  test('a delegated turn is never owner-driven, and settles by core’s closed report map', () => {
+    const hosting = source('subordinate-hosting.ts');
+    // The common runner only ever runs programmatic tasks, so there is no
+    // owner-driven check left to get wrong: the delegation is `false` by
+    // construction, not by inspection of the last user turn.
+    expect(hosting).toContain('reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,');
+    // Which report is owed is decided from the ENDING by core's closed map: a
+    // task child answers on every ending because an `agents.ask` is blocked on
+    // it, while a hire relays only a completed turn worth relaying — and both
+    // are suppressed by a report that already SETTLED the run, so one question
+    // never reaches the caller as two results.
+    expect(hosting).toContain('const owed = reports.settled');
+    expect(hosting).toContain('terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });');
+    expect(hosting).toContain('subordinateRelaysTurnEnd({');
+    // A delegated turn is not cancelled by the parent hanging up, by a socket
+    // closing, or by an eviction: an interrupted turn leaves its claim
+    // unsettled, which is the record that work is owed.
+    expect(hosting).toContain('isAborted: () => false,');
     // The parent half — the drop, and that it happens before any file is
     // written — is core's (core/tests/unit-subordinates.test.ts).
     expect(source('actor-agent.ts')).toContain('origin: SubordinateReportOrigin;');

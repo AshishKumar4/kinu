@@ -75,7 +75,8 @@ export async function evolveCommand(name: string, opts: {
     });
     spinner.stop('Exploration complete');
 
-    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
+    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY depth, created_at`;
     printSearchTree(nodes);
 
     if (result.converged) {

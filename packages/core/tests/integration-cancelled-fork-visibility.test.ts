@@ -29,6 +29,7 @@ import type { ModelMessage } from 'ai';
 import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const HEADS = 4;
 const ROOT = 'root-research';
@@ -73,6 +74,7 @@ function workspace() {
       task: `angle ${i}`, rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
+      loop: defaultLoopOrigin('head'),
     });
   }
   // The operator cancel, as `kinu stop` / the repair path writes it: the job
@@ -356,6 +358,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       task: 'the continuation', rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: activationStart + 5 },
+      loop: defaultLoopOrigin('node'),
     });
 
     const agent = idleAgent();

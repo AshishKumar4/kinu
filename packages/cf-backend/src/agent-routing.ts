@@ -1,16 +1,32 @@
-import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@kinu.run/core";
+import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 
 /**
  * The `/agents/*` transport boundary — the single policy for which requests may
  * be routed to a Durable Object over the public agents transport.
  *
  * `routeAgentRequest` (partyserver) maps EVERY DO namespace binding by kebab-case
- * slug. Only the orchestrator namespace and its direct SubordinateAgent facet
- * are client-facing; UserDO, KinuSandbox and the Nimbus namespaces are
- * worker-side-only (reached via `env.<NS>.get(id).method()` stubs, no HTTP
- * route). Without pinning, `/agents/user-d-o/<victimUserId>`
- * would map straight onto a victim's UserDO — the F1 account-takeover hole.
- * This module is the one place that decides what the transport will route.
+ * slug. Only the orchestrator namespace is client-facing; UserDO, KinuSandbox and
+ * the Nimbus namespaces are worker-side-only (reached via
+ * `env.<NS>.get(id).method()` stubs, no HTTP route). Without pinning,
+ * `/agents/user-d-o/<victimUserId>` would map straight onto a victim's UserDO —
+ * the F1 account-takeover hole. This module is the one place that decides what
+ * the transport will route.
+ *
+ * ── `/sub/` IS NOW FOREIGN, AND THAT IS THE POINT ────────────────────────
+ *
+ * The grammar used to ADMIT one `/sub/<class-slug>/<key>` hop, because a
+ * subordinate really was a separate Durable Object and the SDK's own facet
+ * router resolved that segment. There is no facet class any more: every actor
+ * in a workspace — a hired subordinate, an ask-by-role temporary, a head, a
+ * node, a rollout branch — is a LOGICAL actor hosted by the one root object. So
+ * the `sub` marker no longer names anything reachable, and admitting it would
+ * leave the SDK's recursive facet resolution addressable from the public
+ * transport with nothing legitimate behind it. It is refused here, with every
+ * other namespace, BEFORE ownership lookup and before `routeAgentRequest`.
+ *
+ * A hosted actor's chat is addressed instead by its LOGICAL NAME under the
+ * workspace that owns it — `/actor/<name>` — and the root serves it. No path is
+ * rewritten on the way in: there is no second object to rewrite it towards.
  */
 
 const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
@@ -22,7 +38,7 @@ const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
  * it by appending this segment to the agent URL
  * (`agents/chat/react.js` → `defaultGetInitialMessagesFetch`), and the DO answers
  * it in `onRequest` (`@cloudflare/ai-chat` → `pathname.split('/').pop() === 'get-messages'`).
- * The grammar below was closed against it, so the socket at
+ * The grammar was once closed against it, so the socket at
  * `/agents/orchestrator-agent/<name>` connected while every mount of it also
  * logged `GET /agents/orchestrator-agent/<name>/get-messages 404`:
  * `isForeignAgentNamespacePath` called the SDK's own history fetch foreign, and
@@ -39,20 +55,25 @@ const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
  */
 const TRANSPORT_ENDPOINTS = ['get-messages'] as const;
 
-// The public agent transport has exactly two shapes: the workspace
-// orchestrator, and a SubordinateAgent facet beneath it. Every other facet or
-// namespace remains worker-only. A non-facet path may follow the subordinate
-// name, but another literal `sub` segment may not: the agents SDK treats that
-// marker as recursive facet routing. The orchestrator's own name may ALSO be
-// followed by one of the transport endpoints enumerated above.
+/** The marker segment that identifies a hosted actor's own chat beneath its
+ *  workspace. A literal rather than a class slug: what follows it is a logical
+ *  actor NAME the root resolves through its directory, not a Durable Object key
+ *  the SDK resolves through a binding. */
+const HOSTED_ACTOR_SEGMENT = 'actor';
+
+const TRANSPORT_TAIL = `(?:/(?:${TRANSPORT_ENDPOINTS.join('|')}))?/?`;
+
+// The public agent transport has exactly two shapes: the workspace itself, and
+// one hosted actor beneath it addressed by its logical name. Every other
+// namespace — and every `/sub/` facet hop, which now names nothing — stays
+// unroutable.
 const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
-  `^${ROOT_AGENT_PATH}/([^/]+)(?:$`
-  + `|/(?:${TRANSPORT_ENDPOINTS.join('|')})/?$`
-  + `|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+(?:/(?!sub(?:/|$))[^/]+)*/?$)`,
+  `^${ROOT_AGENT_PATH}/([^/]+)(?:${TRANSPORT_TAIL}`
+  + `|/${HOSTED_ACTOR_SEGMENT}/[^/]+${TRANSPORT_TAIL})$`,
 );
 
 const CLI_TICKET_AGENT_PATH_RE = new RegExp(
-  `^${ROOT_AGENT_PATH}/([^/]+)(?:$|/sub/${SUBORDINATE_AGENT_SLUG}/[^/]+/?$)`,
+  `^${ROOT_AGENT_PATH}/([^/]+)(?:/?$|/${HOSTED_ACTOR_SEGMENT}/[^/]+/?$)`,
 );
 
 export function extractOrchestratorAgentName(pathname: string): string | null {
@@ -61,8 +82,8 @@ export function extractOrchestratorAgentName(pathname: string): string | null {
 }
 
 /** Connect tickets stay scoped to the root workspace identity. The same ticket
- * can enter one direct additional-agent facet beneath that root; the closed
- * grammar still refuses every other namespace and every nested facet. */
+ * can enter one hosted actor beneath that root; the closed grammar still
+ * refuses every other namespace. */
 export function extractTicketOrchestratorAgentName(pathname: string): string | null {
   const match = pathname.match(CLI_TICKET_AGENT_PATH_RE);
   return match ? decodeURIComponent(match[1]) : null;
@@ -70,17 +91,29 @@ export function extractTicketOrchestratorAgentName(pathname: string): string | n
 
 /** True for any `/agents/*` path outside the closed public actor grammar.
  *  These must be rejected before `routeAgentRequest` can map a namespace or
- *  recursively resolve a worker-only facet. */
+ *  recursively resolve a worker-only facet class. */
 export function isForeignAgentNamespacePath(pathname: string): boolean {
   return pathname.startsWith('/agents/') && !ORCHESTRATOR_AGENT_PATH_RE.test(pathname);
 }
 
-const DIRECT_SUBORDINATE_PATH = new RegExp(`^(${ROOT_AGENT_PATH}/[^/]+/sub/${SUBORDINATE_AGENT_SLUG}/)([^/]+)(.*)$`);
+const HOSTED_ACTOR_PATH = new RegExp(
+  `^${ROOT_AGENT_PATH}/[^/]+/${HOSTED_ACTOR_SEGMENT}/([^/]+)(.*)$`,
+);
 
-/** The public address stays logical. Only the worker rewrites its SDK hop. */
-export function directSubordinateRoute(pathname: string): { name: string; prefix: string; suffix: string } | null {
+/**
+ * The hosted actor a public path addresses, or null for the workspace itself.
+ *
+ * Returns the LOGICAL name and the tail, and deliberately no prefix to rewrite:
+ * the old shape handed `server.ts` a `prefix` so it could substitute a facet's
+ * physical storage key into the SDK's `/sub/<class>/<key>` hop. There is no
+ * second object and no physical key in the URL any more — the root receives
+ * this path as-is and resolves the name through its own directory — so the
+ * rewrite, and the storage key's appearance in a client-visible address, both
+ * go.
+ */
+export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;
-  const match = pathname.match(DIRECT_SUBORDINATE_PATH);
-  if (!match || match[1] === undefined || match[2] === undefined || match[3] === undefined) return null;
-  return { name: decodeURIComponent(match[2]), prefix: match[1], suffix: match[3] };
+  const match = pathname.match(HOSTED_ACTOR_PATH);
+  if (!match || match[1] === undefined || match[2] === undefined) return null;
+  return { name: decodeURIComponent(match[1]), suffix: match[2] };
 }

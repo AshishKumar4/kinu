@@ -104,6 +104,31 @@ export function invokedNames(file: string, text: string): Set<string> {
   return names;
 }
 
+/**
+ * Methods this file calls on `this` from inside an OBJECT-LITERAL PROPERTY.
+ *
+ * A seam installation, not self-reference: the object is handed to another
+ * module, which calls the member under the PROPERTY's name. Kept separate from
+ * {@link invokedNames} so the same-file skip stays in force for every other
+ * shape — a bare `this.foo()` in a method body is still self-reference and
+ * still proves nothing about whether anything outside reaches it.
+ */
+export function seamInstalledNames(file: string, text: string): Set<string> {
+  const names = new Set<string>();
+  walk(parse(file, text).root, (node) => {
+    if (node.type !== 'CallExpression') return;
+    if (node.raw.type !== 'CallExpression' || node.raw.callee.type !== 'MemberExpression') return;
+    if (node.raw.callee.object.type !== 'ThisExpression') return;
+    const name = memberCalleeName(node);
+    if (name === undefined) return;
+    for (let cursor = node.parent; cursor !== undefined; cursor = cursor.parent) {
+      if (cursor.type === 'Property' || cursor.type === 'ObjectProperty') { names.add(name); return; }
+      if (cursor.type === 'ClassBody') return;
+    }
+  });
+  return names;
+}
+
 /** The gate's verdict AND its denominator. `unreachable: []` means nothing is
  *  dead only if `declared` is non-empty — otherwise the decorator matcher has
  *  stopped matching and the gate is passing because it looked at nothing. That
@@ -127,6 +152,19 @@ export function findUnreachable(
   // A method's own declaring file is not a caller of it: `this.foo()` inside
   // the class, and the recursive shape where the RPC forwards to a core
   // function of the same name, are both self-reference.
+  //
+  // ONE SAME-FILE SHAPE IS NOT SELF-REFERENCE, and skipping it reported a live
+  // method as dead: `this.foo()` inside an OBJECT-LITERAL PROPERTY is the
+  // method being installed into a seam the object hands out, and the consumer
+  // reaches it under the PROPERTY's name in another file. `recordHeadStep` was
+  // reported "no caller anywhere" while being installed at
+  // `orchestrator.ts:716` as `ExplorationHostSeams.recordStep`, declared at
+  // `exploration-hosting.ts:155` and consumed at `:282` as `reportStep` — two
+  // renames, which a name-keyed gate cannot follow. A recursive method that
+  // happens to sit in an object literal now counts as reached, which is a far
+  // narrower miss than calling a wired seam dead: this gate's whole purpose is
+  // the "correct, wired, dead" class, and a false positive there is what gets
+  // a gate switched off.
   const declaredIn = new Map<string, Set<string>>();
   for (const rpc of rpcs) {
     const seen = declaredIn.get(rpc.method) ?? new Set<string>();
@@ -136,9 +174,11 @@ export function findUnreachable(
 
   const callersOf = new Map<string, string[]>();
   const record = (file: string, text: string): void => {
+    const installed = seamInstalledNames(file, text);
     for (const name of invokedNames(file, text)) {
       const declarers = declaredIn.get(name);
-      if (declarers === undefined || declarers.has(file)) continue;
+      if (declarers === undefined) continue;
+      if (declarers.has(file) && !installed.has(name)) continue;
       const list = callersOf.get(name) ?? [];
       list.push(file);
       callersOf.set(name, list);

@@ -11,6 +11,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
@@ -56,7 +57,11 @@ function setup() {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const alarm = new RecordingAlarm();
-  return { registry: new TriggerRegistry(sql, alarm), alarm };
+  // A trigger produces events into ITS actor's inbox, so the registry is bound
+  // to a real owner over this same database — `pauseAll` means "everything this
+  // actor registered", which is unaskable without one.
+  const actor = createTestActorsOver(db).main;
+  return { registry: new TriggerRegistry(sql, actor, alarm), alarm, actor };
 }
 
 function spec(patch: Partial<RegisterSpec> = {}): RegisterSpec {
@@ -437,8 +442,11 @@ describe('timer ingress', () => {
     const sql = makeSqlExec(db);
     initEventsHubTables(sql);
     const alarm = new RecordingAlarm();
-    const registry = new TriggerRegistry(sql, alarm);
-    const log = new EventLog(sql);
+    // One actor for both: a timer fires into the inbox its own registry writes,
+    // and two handles here would fire into an inbox nothing drains.
+    const actor = createTestActorsOver(db).main;
+    const registry = new TriggerRegistry(sql, actor, alarm);
+    const log = new EventLog(sql, actor);
     return {
       registry, alarm, log,
       fire: (now: number) => fireDueTriggers({ registry, log }, now),

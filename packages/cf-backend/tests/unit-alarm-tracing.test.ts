@@ -87,8 +87,10 @@ describe('alarm tick tracing', () => {
       // `[...parentPath, { className, name }]`, so self is always present and the
       // empty-path branch of `renderSelfPath` is unreachable on a live agent. The
       // class half is what a Durable Object id cannot tell you, and the name half
-      // is what the deployed tail stream has no field for at all.
-      expect(span.attributes.get(SPAN_ATTR_SELF_PATH)).toBe('HarnessOrchestratorAgent:harness-actor');
+      // is what the deployed tail stream has no field for at all. Derived from
+      // the harness agent rather than hardcoded: the name is the harness's to
+      // choose, and the invariant is the shape, not the value.
+      expect(span.attributes.get(SPAN_ATTR_SELF_PATH)).toBe(`HarnessOrchestratorAgent:${agent.name}`);
       expect(span.attributes.get(SPAN_ATTR_INVOCATION)).toBe(1);
     }
   });

@@ -127,14 +127,14 @@ const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
   for (let i = 0; i < counts.failures; i++) {
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `bad-${String(i)}`, outcome: 'corrected', confidence: 1, source: 'classifier',
       userMessage: failureTask(i), assistantResponse: '{"files":["a.txt"]}',
       followup: 'just tell me in prose', now: 1_000 + i,
     });
   }
   for (let i = 0; i < counts.guards; i++) {
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `ok-${String(i)}`, outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: guardTask(i), assistantResponse: 'a.txt and b.txt', now: 2_000 + i,
     });
@@ -193,10 +193,10 @@ async function laneTrials(control: ScaffoldControl) {
  * derived rotation — least-recently-passed, ties to registry order — selects
  * `uptoId` next.
  */
-function seedRotationPast(sql: ScaffoldControl['sql'], uptoId: string): void {
+function seedRotationPast(rt: AgentRuntime, uptoId: string): void {
   for (const section of PROMPT_SECTION_TARGETS) {
     if (section.id === uptoId) break;
-    startGepaRun(sql, { target: 'prompt_section', targetRef: section.id });
+    startGepaRun(rt.storage.sql, rt.actor, { target: 'prompt_section', targetRef: section.id });
   }
 }
 
@@ -229,7 +229,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
    */
   test('an advisor note is a failure to optimise toward, where the ledger has none', async () => {
     const rt = evolvableRuntime();
-    seedRotationPast(rt.storage.sql, TARGET_ID);
+    seedRotationPast(rt, TARGET_ID);
     seedAdvisorNotes(rt, 3);
     const { control, judgePrompts, reflectionPrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
@@ -264,7 +264,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     seedAdvisorNotes(rt, 3);
     // The user came back and corrected `adv-1` after all. The ledger is the
     // verdict where it spoke, so that turn must appear once — as a ledger row.
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 'adv-1', outcome: 'corrected', confidence: 1, source: 'classifier',
       userMessage: failureTask(1), assistantResponse: '{"files":["a.txt"]}',
       followup: 'just tell me in prose', now: 4_000,
@@ -281,7 +281,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
 
   test('reflection sees the train half and the winner lands PENDING, not live', async () => {
     const rt = evolvableRuntime();
-    seedRotationPast(rt.storage.sql, TARGET_ID);
+    seedRotationPast(rt, TARGET_ID);
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control, reflectionPrompts, judgePrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
@@ -312,9 +312,9 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     expect(run).toEqual({ target: 'prompt_section', target_ref: TARGET_ID });
 
     // And the live prompt has not moved.
-    expect(activePromptSectionOverrides(rt.storage.sql)).toEqual({});
+    expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
     expect(buildSystemPromptSync(rt, {
-      sectionOverrides: activePromptSectionOverrides(rt.storage.sql),
+      sectionOverrides: activePromptSectionOverrides(rt.storage.sql, rt.actor),
     })).toContain(INCUMBENT);
   }, 30_000);
 });
@@ -346,7 +346,7 @@ describe('the rotation an eviction cannot reset', () => {
   test('a pass moves the rotation on, and holds no state that could be lost', async () => {
     const rt = evolvableRuntime();
     seedLedger(rt, { failures: 6, guards: 4 });
-    startGepaRun(rt.storage.sql, { target: 'prompt_section', targetRef: firstTwo[0] });
+    startGepaRun(rt.storage.sql, rt.actor, { target: 'prompt_section', targetRef: firstTwo[0] });
     const { control } = scriptedControl(rt, () => 0.5);
 
     const first = await lanePass(control);
@@ -379,7 +379,7 @@ describe('the rotation an eviction cannot reset', () => {
 
   test('a scaffold run is not a section pass, and never moves the rotation', async () => {
     const rt = evolvableRuntime();
-    startGepaRun(rt.storage.sql, { target: 'scaffold' });
+    startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
     const { control } = scriptedControl(rt, () => 0.9);
     const step = await lanePass(control);
     expect(step.sectionId).toBe(firstTwo[0]);
@@ -389,7 +389,7 @@ describe('the rotation an eviction cannot reset', () => {
 describe('advancePromptSectionLane — trials before a new proposal', () => {
   test('a candidate under trial is finished before any section is proposed', async () => {
     const rt = evolvableRuntime();
-    seedRotationPast(rt.storage.sql, TARGET_ID);
+    seedRotationPast(rt, TARGET_ID);
     seedLedger(rt, { failures: 6, guards: 4 });
     const { control } = scriptedControl(rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2));
 
@@ -419,7 +419,7 @@ describe('the lane\'s trials — held-out trials decide it', () => {
   /** A proposal under trial, reached the way production reaches it: the lane
    *  ran the pass, and the pass left a candidate PENDING. */
   async function propose(control: ScaffoldControl): Promise<void> {
-    seedRotationPast(control.sql, TARGET_ID);
+    seedRotationPast(control.rt, TARGET_ID);
     const pass = await lanePass(control);
     expect(pass.proposed).toBe(true);
   }
@@ -437,18 +437,18 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     const first = await laneTrials(control);
     expect(first.trialsRun).toBe(3);
     expect(first.decision).toBe('continue');
-    expect(activePromptSectionOverrides(rt.storage.sql)).toEqual({});
+    expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
 
     const second = await laneTrials(control);
     expect(second.decision).toBe('promote');
     expect(second.action).toBe('promote');
 
-    const overrides = activePromptSectionOverrides(rt.storage.sql);
+    const overrides = activePromptSectionOverrides(rt.storage.sql, rt.actor);
     expect(overrides).toEqual({ [TARGET_ID]: CANDIDATE });
     const prompt = buildSystemPromptSync(rt, { sectionOverrides: overrides });
     expect(prompt).toContain(CANDIDATE);
     expect(prompt).not.toContain(INCUMBENT);
-    expect(getPendingPromptSection(rt.storage.sql, TARGET_ID)).toBeNull();
+    expect(getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID)).toBeNull();
   }, 30_000);
 
   test('a candidate that loses on held-out turns is rolled back, and the prompt never moved', async () => {
@@ -474,10 +474,10 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     expect(verdict.action).toBe('rollback');
 
     // The candidate is gone from the store, and the live prompt never moved.
-    expect(getPendingPromptSection(rt.storage.sql, TARGET_ID)).toBeNull();
-    expect(activePromptSectionOverrides(rt.storage.sql)).toEqual({});
+    expect(getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID)).toBeNull();
+    expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
     expect(buildSystemPromptSync(rt, {
-      sectionOverrides: activePromptSectionOverrides(rt.storage.sql),
+      sectionOverrides: activePromptSectionOverrides(rt.storage.sql, rt.actor),
     })).toContain(INCUMBENT);
   }, 30_000);
 });

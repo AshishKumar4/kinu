@@ -385,7 +385,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
 
     // A search begun at budget 10, evicted with 6 iterations done and 4 left.
     const rootId = 'resume-budget-root';
-    const rootMsgId = await recordNode(session, rt.storage.sql, {
+    const rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
       nodeId: rootId,
       parentNodeId: null,
       parentMsgId: null,

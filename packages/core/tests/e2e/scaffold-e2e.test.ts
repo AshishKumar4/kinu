@@ -32,7 +32,7 @@ function createScaffoldTestRuntime(llm: LLM) {
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
-    llm, schedule: createMemorySchedule(db),
+    llm, schedule: createMemorySchedule(db, actor),
     identity: {
       id: 'scaffold-test', name: 'scaffold-test',
       scaffold: {

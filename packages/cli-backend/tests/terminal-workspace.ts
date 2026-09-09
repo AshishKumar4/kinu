@@ -14,8 +14,9 @@ import {
   INITIAL_SCAFFOLD_SOURCE,
   type LLMProviderConfig,
 } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
-import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -32,12 +33,10 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
  */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
@@ -60,11 +59,11 @@ export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
 /** One competing take set, captured mid-turn the way a real search converge
  *  captures it, waiting to be claimed by whatever turn is credited. */
 export function captureTakes(rt: CLIRuntime, rootId: string, at: number): void {
-  void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
-  void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rootId}, ${`${rootId}-alt`}, ${'pick a strategy'}, ${'B'}, ${'go with B'}, 0.85, 3, 1, 'open')`;
-  captureAlternateTakes(rt.storage.sql, {
+  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+    VALUES (${rt.actor.actorId}, ${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
+  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+    VALUES (${rt.actor.actorId}, ${rootId}, ${`${rootId}-alt`}, ${'pick a strategy'}, ${'B'}, ${'go with B'}, 0.85, 3, 1, 'open')`;
+  captureAlternateTakes(rt.storage.sql, rt.actor, {
     rootId, task: 'pick a strategy', winnerId: rootId, epsilon: 0.1, now: at,
   });
 }
