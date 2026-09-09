@@ -55,7 +55,7 @@ import {
   type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace,
   type ProfileAuthorityInputs, type ReasoningEffort, type ReportHeadDelta,
   type ResolvedTurnProfile,
-  type SpawnedHead, type WebSearchProvider, type WorkMode,
+  type SpawnedHead, type WebSearchProvider, type WorkMode, type WriteObserver,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { CFRuntime } from './runtime';
@@ -121,6 +121,25 @@ export interface ExplorationHostSeams {
   /** Register (or re-find) the exploration actor for this creation id. The root
    *  owns the directory; a runner never writes it. */
   register(input: ExplorationActorRequest): Promise<ActorReference>;
+  /**
+   * Watch every write and delete the actor for `reference` makes through its
+   * OWN workspace file view, until the returned disposer runs.
+   *
+   * A RUN names this, not a creation, and that is why it is not one more field
+   * on {@link ExplorationActorRequest} beside `loop`: registration happens once
+   * when the head is spawned, while the capture whose observer this is belongs
+   * to the run that produces the report. The host builds the actor's runtime at
+   * first acquire, so the watcher has to be named BEFORE it and forgotten after
+   * — a later run under the same reference must not inherit the previous one's
+   * capture, and `HeadFileChanges` accumulates for exactly as long as it is
+   * reachable.
+   *
+   * The register itself is the root's, for the reason `loop` is
+   * (`WorkspaceHostSeams.chosenWriteObserver`): `ActorHostDeps.runtimeFor`
+   * takes the binding and nothing a caller invented, so a caller-known fact the
+   * runtime needs travels as a slot the host reads and never as a wider seam.
+   */
+  watchWrites(reference: ActorReference, writes: WriteObserver): () => void;
   /** THE profile authority — the same one an actor chat resolves through, so a
    *  role restriction narrows a head exactly as it narrows a conversation. */
   profile(input: {
@@ -253,9 +272,19 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
   return {
     id: input.id,
     run: async (): Promise<HeadReport> => {
+      // THE RUN'S OWN CAPTURE, and it is created OUT HERE rather than inside
+      // the work below because of the order the host works in: `host.run`
+      // acquires the actor, and acquiring it is what BUILDS its runtime over
+      // the file view this head's writes land on. `HeadReport.fileChanges` is
+      // `capture.files.snapshot()` and nothing else fills it, so a capture
+      // created after the acquire watches a plane that was already composed and
+      // the report says the head changed nothing however much it wrote. The
+      // watcher is dropped when the run ends, so the next run under this
+      // reference cannot inherit this run's changes.
+      const capture = new HeadCapture();
+      const unwatch = seams.watchWrites(reference, capture.files);
       try {
         return await seams.host.run(reference, async (actor) => {
-          const capture = new HeadCapture();
           // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built,
           // which on this backend IS `createCFRuntime`. The core seam declares
           // its RETURN type as `AgentRuntime` and does not narrow the value, so
@@ -287,6 +316,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
           return await runHeadInference(input, deps);
         });
       } finally {
+        unwatch();
         await retireExploration(seams, reference, name);
       }
     },
