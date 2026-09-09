@@ -55,6 +55,7 @@ import { routeSkill, settleSkillApproval } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { renderThrownChain, tolerate } from '../obs/index';
+import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../state/actor-handle';
 
@@ -397,7 +398,12 @@ async function askRefiner(
   const refiner = deps.refiner;
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
   const contextRefs = await presentContextRefs(deps);
-  const outcome = await refiner.run({
+  // Annotated rather than inlined into the call, because this is the ONE
+  // production site that supplies `contextRefs`: the model-facing field it used
+  // to mirror is gone, and a literal handed to an interface METHOD is a
+  // construction site `gate:wired` cannot see. Named here, the wire is
+  // connected at both ends in a form the gate reads.
+  const brief: TemporaryRunRequest = {
     role: 'general',
     roleLabel: 'refiner',
     task: renderRefinerBrief(deps, request, contextRefs),
@@ -405,7 +411,8 @@ async function askRefiner(
     // PLAN mode, and structurally: a refiner that could write would be a second
     // authority for every artifact it reviewed.
     mode: 'plan',
-  });
+  };
+  const outcome = await refiner.run(brief);
   if (!('status' in outcome)) {
     return { ok: false, error: `the refiner could not start — ${outcome.error}` };
   }

@@ -342,10 +342,10 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
  * flash runs came to blame a corpus for `craft_reuse eligible 0`.
  */
 
-/** The six actions whose manifest row is observed from the hosted path. A
+/** The four actions whose manifest row is observed from the hosted path. A
  *  capability leaves this list only by being wired here for real. */
 const HOST_INSTALLED_ACTIONS: readonly AgentsToolAction[] =
-  ['hire', 'ask', 'send', 'reply', 'list', 'dismiss'];
+  ['hire', 'msg', 'list', 'dismiss'];
 
 describe('the eval agent surface is set-equal to the production cli root', () => {
   test('its tools are exactly what the manifest declares, and its actions match the deps it carries', async () => {

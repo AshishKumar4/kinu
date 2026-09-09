@@ -946,7 +946,7 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
-    expect(config?.system ?? '').toContain('`ask` with `role` runs one temporary agent for one question');
+    expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"` runs one agent for one question');
   });
 
   test('the role the agent set is in the next prompt the DO builds', async () => {
