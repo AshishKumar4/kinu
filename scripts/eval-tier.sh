@@ -101,14 +101,16 @@
 #      goes through `createDirectWorkersAIFetch`, which turns ONE
 #      chat-completions request into ONE `binding.run()` call; there is no
 #      `requests[]` / `queueRequest` shape anywhere in it.
-#   2. Our model is not batch-capable. Workers AI does have an asynchronous
-#      batch API, and its catalog tags the models that support it. The eval
-#      default is `@cf/zai-org/glm-5.3` (core/src/providers/workers-ai.ts),
-#      whose capabilities are Function calling and Reasoning and not Batch. The
-#      only batch-tagged text models are llama-3.3-70b-instruct-fp8-fast,
-#      llama-4-scout-17b-16e-instruct and qwen3-30b-a3b-fp8 — none an agentic
-#      coding model, so switching to one would change what this tier MEASURES
-#      rather than what it costs.
+#   2. Our models are not batch-capable. Workers AI does have an asynchronous
+#      batch API, and its catalog tags the models that support it. Every arm
+#      here runs `EVAL_MODELS[TIER]` — deepseek-v4-flash-0731 or, under
+#      KINU_EVAL_TIER=pro, deepseek-v4-pro-0813 (test-utils/src/eval-run.ts);
+#      each arm overrides the resolved target's model with it, so the fallback
+#      in `resolveLiveModel` is never what runs. Both carry Function calling
+#      and Reasoning and neither carries Batch. The only batch-tagged text
+#      models are llama-3.3-70b-instruct-fp8-fast, llama-4-scout-17b-16e-instruct
+#      and qwen3-30b-a3b-fp8 — none an agentic coding model, so switching to one
+#      would change what this tier MEASURES rather than what it costs.
 #   3. There is no discount to capture. The 50%-off figure is Anthropic's Batch
 #      API on their own Messages endpoint. Workers AI prices one per-model rate
 #      with no batch tier, and its batch API is documented as a CAPACITY
@@ -129,7 +131,10 @@
 # holds every production source to it — so each provider applies its own
 # ceiling: the Anthropic adapter fills the resolved model's maximum (128,000 on
 # the current Opus and frontier models, above the recommendation), and this
-# tier's openai-compat path omits the field entirely, measured on the wire.
+# tier's openai-compat path omits the field entirely, measured on the wire. Both
+# arm models publish an output limit of 1,048,576 tokens, so the ceiling in
+# force here is sixteen times the recommended 64,000 and eight times the
+# 128,000 maximum the guidance offers for costly cut-offs.
 # What the tier now DOES carry is the other half of that rule: a step the
 # provider cut is a failure with its own name, reported per episode as the
 # `output_cap` row (test-utils/src/eval-outcome.ts) so the share of attempts an
