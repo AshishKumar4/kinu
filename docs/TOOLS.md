@@ -134,7 +134,7 @@ reads, a snapshot store, and 3-way merge. Its gains concentrate on weak models.
 
 ## agents: delegation
 
-`agents` combines `think`, `team`, and `peers`. `hire` is persistent.
+`agents` combines `think`, `team`, and `peers`. `hire`'s `lifetime` decides whether the helper persists.
 `swarm` measures candidates and settles this turn. `BUILTIN_TOOL_SPECS` holds
 rung triggers. The prompt `## Delegation` section holds the doctrine.
 
@@ -149,13 +149,15 @@ no longer steers a turn toward delegating, and the doctrine above is the whole
 of the ask. `turn-steering.ts` keeps the three loop-detection steers only:
 `repeated_call`, `repeated_failure`, `no_progress`.
 
-1. One bounded question uses `agents({action:'ask', role, message})`. That call creates a full
-   agent for the question and releases it when it answers. Oversize material goes by
-   `context_ref`, so the bytes reach that agent and never the caller.
+1. One bounded question uses `agents({action:'hire', lifetime:'task', role, mission})`.
+   That call creates a full agent for the question, returns its answer as the tool
+   result, and archives the row when it answers. Oversize material is named by
+   workspace path in the mission, so the bytes reach that agent and never the caller.
 2. `swarm` fixes search through `preset`, `objective`, and `depth`. Registered
    verifiers score verify-scored candidates. Nodes are full agents. See
    [EXPLORATION.md](./EXPLORATION.md).
-3. `hire` starts a persistent subordinate with a blank context.
+3. `hire` without `lifetime` (or with `lifetime:'durable'`) starts a persistent
+   subordinate with a blank context.
 
 A swarm derives its answer shape from `score` and `advance`, never `settle`.
 `score:"verify"` uses a registered verifier. `score:"judge"` uses `samples`
@@ -163,18 +165,20 @@ under `JUDGE_MARGINALISATION_MIN`. `score:"none"` returns unranked candidates.
 Only measured search needs `objective`.
 
 `fork` is gone. Its 2-6 caller-written briefs became measured search candidates.
-The seven-action picklist rejects it. MCTS stays registered in
+The five-action picklist rejects it. MCTS stays registered in
 `strategy/mcts.ts` but has no model-facing route. The durable search store and
 eval suites call it. See [MCTS.md](./MCTS.md).
 
-`ask`, `send`, `reply`, and `list` use a target name:
+`hire`, `msg`, and `list` use a target name:
 
 - `SubordinateAgent` is a same-workspace Durable Object facet with a full turn
-  loop and shared Nimbus session. `hire` takes role and mission. `ask` adds
-  work. `send` adds a note. `dismiss` archives unless `keep_history: false`.
-- A peer is another owner workspace over EventsHub. `ask` waits until abort or
-  a peer event. `send` does not wait. `reply` uses `event_id`. Workspace-scope
-  `hire` creates or reuses a specialist workspace.
+  loop and shared Nimbus session. `hire` with `role` takes role and mission;
+  `hire` naming an `agent` that exists adds work, with `deliverable` optional.
+  `msg` adds a note. `dismiss` archives unless `keep_history: false`.
+- A peer is another owner workspace over EventsHub. `hire` naming a peer waits
+  until abort or a peer event. `msg` does not wait. `msg` with `event_id`
+  answers an inbound agent message event, and is exclusive with `agent`.
+  Workspace-scope `hire` creates or reuses a specialist workspace.
 - `report` is subordinate-only, native and `report.*`, using
   `ReportToolDeps.report`. Turn answers relay automatically, so it carries
   milestones.
@@ -202,9 +206,8 @@ field another action reads fails and names the action that reads it.
 | Action | Fields its handler reads |
 |---|---|
 | `swarm` | `task`, `preset`, `objective`, `key`, `config`, `from`, `label`, `name`, `branches`, `depth`, `nodes`, `models`, `role`, `tier`, `budget_usd`, `budget_tokens`, `budget_label` |
-| `ask` | `agent`, `message`, `topic`, `deliverable`, `deadline_hint` |
-| `send` | `agent`, `message`, `topic` |
-| `reply` | `event_id`, `message` |
+| `hire` | `role`, `mission`, `agent`, `tier`, `lifetime`, `scope`, `message`, `deliverable`, `topic` |
+| `msg` | `agent`, `event_id`, `message`, `topic` |
 | `list` | `agent` |
 | `dismiss` | `agent`, `keep_history` |
 

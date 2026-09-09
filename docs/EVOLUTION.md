@@ -248,7 +248,7 @@ Reverts dispatch to the real code paths rather than a separate undo log (`execut
 
 ## Continual refinement
 
-A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only temporary rung (`agents.ask`) reads the trajectory and answers with one strict object.
+A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only task lifetime (`agents.hire` with `lifetime:'task'`, reached programmatically through `TemporaryAgentPort`) reads the trajectory and answers with one strict object.
 
 `/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns sit unresolved that no earlier request has taken. Three is a pattern rather than a coincidence. It is also the point where `buildOutcomeEvalSplit` can both give reflection something to fix and keep a failure back to score against: at three it holds one out and leaves two to train on.
 
