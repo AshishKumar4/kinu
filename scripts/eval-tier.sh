@@ -83,6 +83,66 @@
 # nobody can reproduce, and the ratchet is the part that must never be optional.
 # The liveness assertion is conditional on a target for exactly that reason: it
 # fires on "you had a model and did not call it", never on "you had no model".
+#
+# ── WHAT THIS TIER DOES ABOUT COST, AND WHAT IT CANNOT ────────────────────────
+#
+# Every arm below is unattended by construction, which is the profile Anthropic's
+# cost guidance names as the one batch processing is for. It is written down here
+# because the answer is "not on this path", and an unrecorded refusal is a
+# question the next reader re-opens.
+#
+# NO BATCH ARM, AND NO BATCH ARM IS POSSIBLE HERE. Three independent reasons,
+# each checked rather than assumed:
+#
+#   1. The route does not exist. Our inference path is the deployment's own
+#      proxy, and `handleUserAIProxyRequest` serves exactly two routes —
+#      `GET /models` and `POST /chat/completions` — answering 404 to everything
+#      else (cf-backend/src/user/ai-proxy.ts). Staging, where this tier points,
+#      goes through `createDirectWorkersAIFetch`, which turns ONE
+#      chat-completions request into ONE `binding.run()` call; there is no
+#      `requests[]` / `queueRequest` shape anywhere in it.
+#   2. Our model is not batch-capable. Workers AI does have an asynchronous
+#      batch API, and its catalog tags the models that support it. The eval
+#      default is `@cf/zai-org/glm-5.3` (core/src/providers/workers-ai.ts),
+#      whose capabilities are Function calling and Reasoning and not Batch. The
+#      only batch-tagged text models are llama-3.3-70b-instruct-fp8-fast,
+#      llama-4-scout-17b-16e-instruct and qwen3-30b-a3b-fp8 — none an agentic
+#      coding model, so switching to one would change what this tier MEASURES
+#      rather than what it costs.
+#   3. There is no discount to capture. The 50%-off figure is Anthropic's Batch
+#      API on their own Messages endpoint. Workers AI prices one per-model rate
+#      with no batch tier, and its batch API is documented as a CAPACITY
+#      guarantee ("fulfilled eventually, rather than erroring out"). This tier
+#      cannot reach an Anthropic model at all: `resolveLiveModel` names
+#      `workers-ai` and `liveChatModel` builds `openai-compat`
+#      (test-utils/src/live-model.ts).
+#
+# And even with all three, an eval EPISODE is a dependent chain: request n+1 is
+# not knowable until response n lands, so only the first request of an episode
+# could ever be submitted as part of a batch. So there is no fake batch path
+# here, on purpose.
+#
+# NO OUTPUT CAP, ALSO ON PURPOSE, and it is the higher cap rather than a missing
+# one. The guidance says to set `max_tokens` to 64,000 for agentic work because
+# on the Messages API the field is required and a small value truncates. Here no
+# caller sets one — `createVercelAILLM` says why (core/src/llm.ts) and a gate
+# holds every production source to it — so each provider applies its own
+# ceiling: the Anthropic adapter fills the resolved model's maximum (128,000 on
+# the current Opus and frontier models, above the recommendation), and this
+# tier's openai-compat path omits the field entirely, measured on the wire.
+# What the tier now DOES carry is the other half of that rule: a step the
+# provider cut is a failure with its own name, reported per episode as the
+# `output_cap` row (test-utils/src/eval-outcome.ts) so the share of attempts an
+# output limit ended is a number this tier can report rather than a behavioural
+# miss it misattributes.
+#
+# NO TASK BUDGET, because nothing on this path can carry one. Task budgets are
+# Anthropic-only (`output_config.task_budget`, beta `task-budgets-2026-03-13`)
+# and the pinned @ai-sdk/anthropic does support them, but every arm here
+# resolves openai-compat Workers AI, which has no such field. Setting one also
+# has to happen ONCE on a run's first request — a mid-task change invalidates
+# the cached prefix — and that is session state, which lives in the backends'
+# session assembly and not at a per-call factory.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
