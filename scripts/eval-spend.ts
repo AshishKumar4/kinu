@@ -120,13 +120,14 @@ export function renderSpend(lines: readonly SpendLine[]): string {
  * carry.
  *
  * WHY. `renderSpend` above already prints the difference between a tier that
- * spent nothing and a tier that measured nothing. Printing it is not enough:
- * `TOTAL: 0 model call(s)` for a run of six live suites, over a credential that
- * was present, still exits 0, and `run_required_gate "Behavioural evals"` in
- * scripts/deploy.sh then passes a deploy over a tier that called no model at
- * all. A gate that renders the defect and returns success is the "green over
- * the empty set" shape AGENTS.md § Build & Check records; the render is not the
- * missing half, the exit code is.
+ * spent nothing and a tier that measured nothing. Printing `TOTAL: 0 model
+ * call(s)` is not a liveness verdict: a report-only gate can pass six live
+ * suites without any model call, and `run_required_gate "Behavioural evals"` in
+ * scripts/deploy.sh would then pass a deploy over a tier that called no model at
+ * all. A gate that renders the defect and returns success is the "green over the
+ * empty set" shape AGENTS.md § Build & Check records. When a live target is
+ * resolved, this gate requires observed, accounted model calls and exits
+ * unsuccessfully when that evidence is absent.
  *
  * `expected` is whether the tier RESOLVED a target, decided by
  * scripts/eval-tier.sh which is the one place that knows. It is not the same

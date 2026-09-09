@@ -169,10 +169,10 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(report.summary).toBe('Leaf work complete.');
   });
 
-  test('runs 60 steps and 15x a fan-out-divided token pool', async () => {
+  test('a head completes 61 steps and reports 305,000 output tokens without a private spend cap', async () => {
     const capture = new HeadCapture();
-    // A private envelope for a 6-wide fork is 19,200 tokens and a 32-step guard.
-    // This head spends 15x that pool over 60 steps and finishes on its own terms.
+    // This workload exceeds a 19,200-token envelope and a 32-step guard;
+    // neither is an admission bound on a head's turn.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({
       promptTokens: 40_000, outputTokens: 5_000,
       text: 'Here is what I found.', stopAfterSteps: 60,
@@ -186,10 +186,10 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(report.summary).toBe('Here is what I found.');
   });
 
-  test('a head spending 25,600 output tokens is not stopped by spend', async () => {
+  test('a head spending 28,800 output tokens is not stopped by spend', async () => {
     const capture = new HeadCapture();
-    // 8 steps x 3,200 output = 25,600 — over the pool a 6-wide split would
-    // divide out. Nothing meters it.
+    // Eight working steps and the final response consume 9 × 3,200 = 28,800
+    // output tokens; no fan-out-divided token pool stops the head.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });

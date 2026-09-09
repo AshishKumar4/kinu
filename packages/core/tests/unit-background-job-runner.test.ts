@@ -1106,13 +1106,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
  * it did stop it would have settled with an eviction string, discarding candidates it
  * had really measured.
  *
- * THE DESIGN DECISION, since the ticket asked for one either way: ONE JOB CONTINUES
- * across re-entries rather than each generation settling and a new job starting. The
- * search itself is durable and re-enterable, and the job is the caller's handle on
- * that search — a job per generation would split one search across N rows each
- * holding a fragment, which is the same shape the search layer already rejected when
- * it stopped minting a second root. So identity stays: the lifetime is bounded, the
- * generation count is disclosed, and the terminal state carries what the work has.
+ * THE DESIGN DECISION, since the ticket asked for one either way: ONE DURABLE JOB
+ * CONTINUES across re-entries so its caller has one handle on the whole search,
+ * rather than fragments spread across job rows. Re-entry has unbounded attempts
+ * with bounded backoff pace, the generation count is disclosed, and terminal
+ * settlement carries the available work.
  *
  * Neither bound is exercised at its real value here, for the reason the stall
  * watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes cannot

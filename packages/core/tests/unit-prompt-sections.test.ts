@@ -1,13 +1,14 @@
 /**
  * The section registry is the prompt's REPLACEMENT surface.
  *
- * Every line of the prompt's prose lives in `prompting/section-templates.ts` as
- * one addressable template per section, so that a section becomes a value GEPA
- * can score and swap
- * (`evolution/gepa/section-bridge.ts`). What has to hold is therefore not a
- * historical byte string — the prompt's content is changed deliberately and
- * often — but the ADDRESSING: every registered section reaches a rendered
- * prompt, an override on one section replaces exactly that section's bytes and
+ * The registered prompt sections have one addressable template each in
+ * `prompting/section-templates.ts`, so GEPA can score and swap a section
+ * (`evolution/gepa/section-bridge.ts`). This contract governs section
+ * addressing, not every string contributed to the final prompt. What has to
+ * hold is therefore not a historical byte string — the prompt's content is
+ * changed deliberately and often — but the ADDRESSING: every registered
+ * section reaches a rendered prompt, an override on one section replaces
+ * exactly that section's bytes and
  * nothing else, and an id nobody registered replaces nothing.
  *
  * That is asserted over `fixtures/prompt-surface-matrix.ts`, which takes every

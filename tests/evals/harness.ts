@@ -580,12 +580,10 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
 /**
  * What one episode's ledger says it did, off a LOCAL store.
  *
- * ONE REDUCER AND ONE WALK, both the seam's. A local `LedgerTotals` interface
- * and a local field-for-field copy of `walkRunEvents` +
- * `ledgerTotalsFromEvents` would be two reducers feeding every denominator in
- * the corpus, which is exactly the drift the seam exists to remove — and copies
- * diverge in their commentary first. The store-to-events step is the only local
- * thing, so it is the only thing here.
+ * ONE REDUCER AND ONE WALK, both the seam's: `LedgerTotals`, `walkRunEvents` and
+ * `ledgerTotalsFromEvents` come from the seam, and only the store-to-events step
+ * is local. Duplicate reducers create denominator drift risk across the corpus,
+ * and the recorded example is disagreement between their comments.
  *
  * `LedgerTotals` is re-exported rather than redeclared because the research and
  * optimization families import it from this module.

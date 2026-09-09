@@ -180,16 +180,13 @@ describe('a re-driven fork job stays one run', () => {
   });
 
   test('N heads requested stays exactly N journal rows through repeated resets', async () => {
-    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. The head id is
-    // derived from the branch point and the slot, so a re-drive re-spawns the
-    // SAME ids and `insertSpawn` re-opens the rows they already have.
+    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. A head id is
+    // derived from its branch point and slot, so a re-drive reopens the same
+    // journal row.
     //
-    // A re-drive that reclaims the run id, stamps every unreported row `aborted`
-    // with "Interrupted before it reported. This fork was restarted, and the
-    // branches below it are the retry.", and then mints a FRESH nanoid id per
-    // head accumulates five more aborted rows on every re-drive of one
-    // five-branch request, up to the runner's attempt cap — and the surface
-    // draws every one of them as a failed branch.
+    // Minting fresh ids while aborting unreported rows would add five apparent
+    // failed branches on every re-drive of a five-branch request, even though
+    // the logical work is unchanged.
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];

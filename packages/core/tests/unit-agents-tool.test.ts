@@ -390,8 +390,9 @@ describe('agents tool — the field contract', () => {
   test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {
     // `budget_usd` is real, and only `swarm` reads it: the host meters a search it
     // owns, while a subordinate runs on its own storage and is gated at the spawn
-    // seam instead. Sent to `hire` it parses cleanly and is then read by nothing
-    // at all, which is the same silence one layer in.
+    // seam instead. `budget_usd` on `hire` is refused before spawning:
+    // accepting it would promise a cap the subordinate's spawn seam does not
+    // hold.
     const team = makeTeam();
     const t = agentsTool({ team: team.deps });
     const pending = t.execute({ action: 'hire', role: 'researcher', mission: 'survey the landscape', budget_usd: 5 });

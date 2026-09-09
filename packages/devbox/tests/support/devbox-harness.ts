@@ -659,10 +659,10 @@ export class FakeSandbox {
    * and is invisible to an fd match. None of the last three is signalled, so
    * all three are still holding when the scan ends and all three are named.
    *
-   * MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
-   * word moves whenever the command's shape changes, and a fake keyed on it
-   * answers the empty string to a command it does not recognise — a silent,
-   * wrong answer to a real command. Null for any other command.
+   * MATCHED ON THE SCAN ITSELF, not on the command's first word: adding an
+   * ancestor walk can change the prefix without changing the holder-release
+   * operation, and a prefix-keyed fake can then silently answer the wrong
+   * command. Null for any command that does not contain the scan.
    */
   #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     if (!command.includes('/proc/$pid/fd')) return null;

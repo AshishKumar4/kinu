@@ -503,16 +503,15 @@ describe('the implementation, asserted against the shipped strategy modules', ()
     // `swarmValidity` alone, so that `runSwarm` — which the tool surface does not
     // route through — enforces the same bound rather than a second copy of it.
     //
-    // `archiveRegionRefusal` is `advance:'archive'`'s own region — what keys a cell,
-    // what the novelty floor's unit is, and where a second level is selected from —
-    // shared by `swarmValidity` and by `runSwarm`'s in-process check for
-    // `judgeMarginalisationRefusal`'s exact reason: the two cannot drift apart in the
-    // direction that lets an unrunnable shape through.
+    // `archiveRegionRefusal` is shared by validity and the in-process runner: it
+    // checks the cell key and the novelty unit, and refuses a second level because
+    // cells are written only at settle. Sharing one predicate is what keeps
+    // `swarmValidity` and `runSwarm` from drifting apart in the direction that lets
+    // an unrunnable shape through.
     //
-    // There is no preset-point narrowing predicate here, because every row IS a point
-    // and there is nothing to narrow. `judgeCallPool` is the per-evaluation call pool
-    // a judged run funds, derived from the ensemble validity admitted rather than
-    // borrowed from the MCTS engine's dial.
+    // Every preset row declares a point, so there is nothing to narrow.
+    // `judgeCallPool` derives the per-evaluation pool from the admitted ensemble
+    // rather than borrowing the MCTS engine's dial.
     //
     // `unmeasuredPoint`, `UNMEASURED_JUDGE_SAMPLES` and `SWARM_PRESET_DOCTRINE` are
     // one idea: a named preset must be callable as `{preset, task}`. `unmeasuredPoint`
