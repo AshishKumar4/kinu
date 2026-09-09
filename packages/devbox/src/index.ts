@@ -45,7 +45,6 @@ export {
   PORT_TOKEN_ALPHABET,
   quiesceStep,
   restartPlan,
-  withContainerStartDeadline,
 } from './lifecycle';
 export type {
   DevboxIncident,
@@ -70,10 +69,8 @@ export {
   metadataObjectKey,
   normalizeArchiveExclude,
   normalizeChainState,
-  isOverlayMounted,
   REBASE_DELTA_RATIO,
   shouldRebase,
-  shouldCheckpoint,
   snapshotChainStorage,
   supersedeGeneration,
 } from './snapshot-chain';
