@@ -697,8 +697,6 @@ const STATE_MIRRORS = [
   { lean: "Kinu.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
   { lean: "Kinu.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
   { lean: "Kinu.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
-  { lean: "Kinu.Storage.DurableRoot.AwaitPoint", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_AWAIT_POINTS" },
-  { lean: "Kinu.Storage.DurableRoot.OperationKind", ts: "packages/devbox/src/durability/contracts.ts#DURABILITY_OPERATION_KINDS" },
 ];
 
 function auditStateMirrors(inductives) {

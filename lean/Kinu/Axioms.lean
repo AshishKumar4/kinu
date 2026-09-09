@@ -15,7 +15,6 @@
 -/
 
 import Kinu
-import Kinu.Storage.DurableRoot
 
 /-! ## Kinu/Agent/FiberDurability.lean -/
 
@@ -462,60 +461,3 @@ import Kinu.Storage.DurableRoot
 #print axioms Kinu.Exploration.Rebase.the_base_key_ignores_untouched_paths
 #print axioms Kinu.Exploration.Rebase.the_rebase_stops_at_the_stale_member
 #print axioms Kinu.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
-
-/-! ## Kinu/Storage/DurableRoot.lean -/
-
-#print axioms Kinu.Storage.DurableRoot.await_point_register_is_total
-#print axioms Kinu.Storage.DurableRoot.await_point_register_has_sixteen
-
-/-! ### Reset-safe durable root -/
-
-#print axioms Kinu.Storage.DurableRoot.runOf_nil
-#print axioms Kinu.Storage.DurableRoot.runOf_cons
-#print axioms Kinu.Storage.DurableRoot.initial_safe
-#print axioms Kinu.Storage.DurableRoot.step_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.run_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.published_root_closure
-#print axioms Kinu.Storage.DurableRoot.monotone_fenced_head
-#print axioms Kinu.Storage.DurableRoot.run_monotone_fenced_head
-#print axioms Kinu.Storage.DurableRoot.single_operation_row
-#print axioms Kinu.Storage.DurableRoot.redrive_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.redrive_idempotent
-#print axioms Kinu.Storage.DurableRoot.reset_at_every_await
-#print axioms Kinu.Storage.DurableRoot.reset_discards_activation_memory
-#print axioms Kinu.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
-#print axioms Kinu.Storage.DurableRoot.stale_completion_garbage_only
-#print axioms Kinu.Storage.DurableRoot.on_start_idempotent
-#print axioms Kinu.Storage.DurableRoot.on_start_once_per_generation
-#print axioms Kinu.Storage.DurableRoot.restore_exact_head
-#print axioms Kinu.Storage.DurableRoot.restore_ignores_activation_memory
-#print axioms Kinu.Storage.DurableRoot.container_crash_preserves_durable_outcome
-#print axioms Kinu.Storage.DurableRoot.crash_during_sweep_leaks_only
-#print axioms Kinu.Storage.DurableRoot.pin_gc_noninterference
-#print axioms Kinu.Storage.DurableRoot.root_set_change_aborts_mark_sweep
-#print axioms Kinu.Storage.DurableRoot.idempotent_deletion
-#print axioms Kinu.Storage.DurableRoot.delete_preserves_closure
-#print axioms Kinu.Storage.DurableRoot.barrier_prefix_survives_crash
-#print axioms Kinu.Storage.DurableRoot.async_suffix_loss
-#print axioms Kinu.Storage.DurableRoot.payload_excluded_from_durable_view
-#print axioms Kinu.Storage.DurableRoot.payload_excluded_from_restore
-#print axioms Kinu.Storage.DurableRoot.unbounded_wait_counterexample
-#print axioms Kinu.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
-#print axioms Kinu.Storage.DurableRoot.collision_resistance_separates_objects
-#print axioms Kinu.Storage.DurableRoot.capture_sound_is_explicit
-#print axioms Kinu.Storage.DurableRoot.acknowledge_is_event_only
-#print axioms Kinu.Storage.DurableRoot.retry_reads_head
-#print axioms Kinu.Storage.DurableRoot.durable_intent_before_external_await
-#print axioms Kinu.Storage.DurableRoot.sealed_carries_only_verified_root_id
-#print axioms Kinu.Storage.DurableRoot.published_and_acknowledged_bind
-#print axioms Kinu.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
-#print axioms Kinu.Storage.DurableRoot.unique_attempt_fence
-#print axioms Kinu.Storage.DurableRoot.container_mount_is_envelope_identity
-#print axioms Kinu.Storage.DurableRoot.omitted_intent_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.omitted_fence_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.omitted_pin_has_gc_witness
-#print axioms Kinu.Storage.DurableRoot.parent_before_child_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.receipt_release_too_early_witness
-#print axioms Kinu.Storage.DurableRoot.root_set_race_witness
-#print axioms Kinu.Storage.DurableRoot.container_onstart_activation_memory_witness

@@ -1,9 +1,8 @@
 /-
   Kinu — Formal specification of the self-evolving agent architecture.
 
-  28 modules across 8 categories, plus `Kinu.Axioms` and the one module it
-  reaches on its own (Storage/DurableRoot.lean). 0 sorry. No Float axioms —
-  the backprop model is exact scaled-integer arithmetic (see
+  28 modules across 8 categories, plus `Kinu.Axioms`. 0 sorry. No Float
+  axioms — the backprop model is exact scaled-integer arithmetic (see
   MCTS/Backpropagation.lean); the only remaining axiom is the FTS5 trusted
   assumption (Storage/FTS5Search.lean).
 
