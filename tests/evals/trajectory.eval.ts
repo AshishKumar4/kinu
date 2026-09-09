@@ -87,7 +87,7 @@ import {
 } from '../../packages/core/src/index';
 import {
   budgetRow, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents, measuredToolErrorRate,
-  outcomeRow, projectRunEventProvenance,
+  outcomeRow, outputCapRow, projectRunEventProvenance, stepBoundEvidence,
   publishRunRecord, reportLiveModelSpend, retainEpisodeTranscript, withEpisodeEvidence,
   subgoalOutcome, subgoalsOutcome, TASK_OUTCOME,
   compareRunEventOrder, INFRA_FAILURE_MARKER,
@@ -859,7 +859,12 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           toolErrorRate: measuredToolErrorRate(mechanisms),
           wallMs: Date.now() - startedAt,
         });
-        const scores: EvalScoreRow[] = [outcomeRow(outcome), ...mechanisms, budget];
+        // The same cap verdict the local arm carries, over the deployment's own
+        // events: an episode the provider cut is scored on a truncated answer,
+        // and the public plane is where a cut is easiest to misread as the web
+        // client dropping a frame.
+        const cap = outputCapRow(stepBoundEvidence(events).lastStepReason);
+        const scores: EvalScoreRow[] = [outcomeRow(outcome), ...mechanisms, cap, budget];
 
         // The observation FIRST, so a missed subgoal still reaches the record
         // with what the trajectory did — a record that only accumulates

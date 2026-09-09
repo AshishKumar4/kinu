@@ -53,11 +53,13 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
 import {
-  readLedgerTotals, requireExecutorSurface, requireSandboxedExecutors, requireVerifierShell,
+  readLedgerTotals, readRunEvents,
+  requireExecutorSurface, requireSandboxedExecutors, requireVerifierShell,
 } from './harness';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE, hardTaskCases, hardTaskFor,
-  liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend, seedHardTask,
+  liveModelTarget, outputCapRow, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
+  seedHardTask, stepBoundEvidence,
   TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
 } from '@kinu.run/test-utils';
@@ -254,6 +256,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     const sql = makeSql(db);
     recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
     const totals = readLedgerTotals(db);
+    const cap = outputCapRow(stepBoundEvidence(readRunEvents(db)).lastStepReason);
     const agentsCalls = totals.toolNames.filter((name) => name === 'agents').length;
     const swarmRow = swarmTelemetry(db, agentsCalls);
 
@@ -285,7 +288,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // must keep, or the accumulated data only ever shows successes.
     observations.push({
       taskId: TASK_ID, repetition: 0, outcome: 'scored',
-      scores: [outcome, swarmRow, thresholdRow],
+      scores: [outcome, swarmRow, thresholdRow, cap],
       turns: totals.turns, toolCalls: totals.toolCalls, toolNames: totals.toolNames,
       tokensIn: totals.tokensIn, tokensOut: totals.tokensOut, ms,
     });
@@ -315,6 +318,11 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
       .toBeGreaterThan(0);
     expect(outcome.eligible, `${TASK_ID}: ${TASK_OUTCOME} has a zero denominator — "0 of 0" is not a verdict`)
       .toBeGreaterThan(0);
+    // WHETHER THE PROVIDER CUT THE ANSWER. Read off the last `step_finish`
+    // reason, beside the child's exit status and for the same reason: an attempt
+    // the output limit ended is graded over the part the request allowed, so
+    // holding it to the pre-registered bar would report an agent failure for a request one.
+    expect(cap.passed, `${TASK_ID}: ${cap.detail}`).toBe(cap.eligible);
 
     // ── The bar ────────────────────────────────────────────────────────────
     expect(outcome.rate ?? 0,

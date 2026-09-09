@@ -79,8 +79,8 @@ import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/exe
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
   budgetRow, hardTaskFor, ledgerTotalsFromEvents, measuredToolErrorRate,
-  projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
-  scoreTrajectory, seedHardTask, verifyHardTask, walkRunEvents,
+  outputCapRow, projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
+  scoreTrajectory, seedHardTask, stepBoundEvidence, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
 import { probeFor, seedProbe, verifyProbe, type BehaviourProbe } from './behaviour-probes';
@@ -970,7 +970,13 @@ export async function runBehaviourTask(
   // episode that spent hundreds of thousands of neurons.
   recordLiveModelEpisode(makeSql(db), rt.actor);
 
-  const totals = readLedgerTotals(db);
+  // ONE walk of the log, reduced three ways. The totals, the step-bound
+  // evidence and the probe verifiers all read the same rows, and this file
+  // already says why `readRunEvents` is split out at all: a second reader of
+  // one log is two readers that drift.
+  const events = readRunEvents(db);
+  const totals = ledgerTotalsFromEvents(events);
+  const bound = stepBoundEvidence(events);
 
   // DESIGN C — upstream of both `task.meta.eval` writers, because it throws
   // before `run(...)` returns. A degenerate trajectory is `inert`, never a zero.
@@ -1008,7 +1014,7 @@ export async function runBehaviourTask(
             return text.success ? text.output : null;
           },
         },
-        events: readRunEvents(db),
+        events,
       })]
     : [await verifyHardTask(hard, {
       vfs: rt.storage.vfs,
@@ -1021,6 +1027,11 @@ export async function runBehaviourTask(
   // `tool_outcomes` scorer in the array below already measured, read off its
   // row rather than recomputed, so the two can never disagree.
   const mechanisms = scoreTrajectory(makeSql(db), rt.actor);
+  // WHETHER THE PROVIDER CUT THE ANSWER, beside the cost. An attempt the output
+  // limit ended is graded over the part the request allowed rather than the part
+  // the model had, so it fails — and it says so under its own name, because a
+  // truncated reply and a wrong reply send a reader to different places.
+  const cap = outputCapRow(bound.lastStepReason);
   const budget = budgetRow(task.budget ?? {}, {
     steps: totals.steps,
     tokens: totals.tokensIn + totals.tokensOut,
@@ -1033,7 +1044,7 @@ export async function runBehaviourTask(
     turns: totals.turns,
     toolCalls: totals.toolCalls,
     toolNames: totals.toolNames,
-    scores: toScoreJson([...outcome, ...mechanisms, budget]),
+    scores: toScoreJson([...outcome, ...mechanisms, cap, budget]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
     reasoningOut: totals.reasoningOut,
