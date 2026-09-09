@@ -433,13 +433,12 @@ const ORCHESTRATOR_METHODS = [
   'startExecutorFileDownload',
   'transitionReleaseChange',
   'writeExecutorFileChunk',
-  // The workspace's byte plane, for the facets that share it.
-  // `routeWorkspacePreview` is reached only by the preview edge, which has
-  // already verified the hostname's signature, and re-checks the capability
-  // handle inside the object. Nothing forwards a file operation — hosted actors
-  // share the root's box directly — so no monomorphic file-forwarding RPC sits
-  // on this transport, and one would be the single widest thing on it, since
-  // `NimbusExecOptions.cred` names a uid.
+  // The workspace's byte plane. `routeWorkspacePreview` is the preview edge's
+  // entry point: the edge verifies the hostname signature and the object
+  // rechecks the capability handle. Hosted actors use the root's workspace
+  // box directly, so no file operation acquires a separate uid-bearing
+  // forwarding RPC — one would be the single widest thing on this transport,
+  // since `NimbusExecOptions.cred` names a uid.
   'routeWorkspacePreview',
   // A hosted actor's chat address, resolved through the directory: the edge
   // refuses a name this workspace does not host before the request reaches the

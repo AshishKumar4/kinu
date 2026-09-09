@@ -2159,9 +2159,10 @@ function liveRun(stage: number): ForkRunSummary {
 }
 
 /** The canvas row for `stage`: the run, its parameters, and the prefix of its
- *  tree that has landed so far. Stage 0 has NO ROW AT ALL — a search the ledger
- *  has not written yet is the state the surface sits in for fifteen seconds
- *  while its nodes are already working. */
+ *  tree that has landed so far. Stage 0 has no ledger row and exercises
+ *  liveness before the first canvas row arrives. It covers the fifteen-second
+ *  missing-row failure case; working nodes must not be presented as absent
+ *  work during that interval. */
 function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
   if (stage <= 0) return [];
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
@@ -3141,8 +3142,7 @@ UPDATE coupons SET kind = CASE WHEN value <= 100 AND code LIKE '%PCT%' THEN 'per
 bun test packages/checkout --reporter=verbose && bunx wrangler deploy --env staging --var COUPON_STRICT:1
 \`\`\`
 
-\`\`\`
-plain fence, no language — this is the one with nothing to highlight
+plain fence, no language: code-block styling still applies even when there are no language-specific tokens to highlight
 \`\`\`
 
 | Coupon | Kind | Value | Status |

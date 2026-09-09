@@ -170,21 +170,15 @@ async function execWithoutDeadline(
 /**
  * WHERE THE CONFLICT QUEUE IS, AND WHY IT IS NOT HERE.
  *
- * A queue here — a keyed FIFO ordering two writes to a path, an exposure against
- * its own un-exposure, a token against the removal of its row — would order the
- * wrong population. Each facet of a workspace — a head, a subordinate, an
- * exploration branch — is a separate Durable Object with its own isolate and
- * therefore its own copy of this adapter, and every one of them addresses the
- * SAME container, because `sandboxId` is `kinu-<workspaceName>` for a facet and
- * for its root alike. A queue built here orders one facet's calls and lets two
- * facets interleave on the same path, which is the very defect a conflict queue
- * exists to fix.
- *
- * So the claim lives in the object all of them reach: `Devbox` (see
- * `createResourceLane` and the "one caller at a time, per resource" section in
- * @kinu.run/devbox). Everything below calls ordinary methods and keeps no queue,
- * no scope table and no copy of the method list — one authority, and it is the
- * owner.
+ * Resource conflicts are serialized by `Devbox`, the object that owns the
+ * container: writes to a path, exposure changes and token-row changes all
+ * claim their resource there (`createResourceLane`, and the "one caller at a
+ * time, per resource" section in @kinu.run/devbox). A queue here would order
+ * only this adapter's callers, and every caller of that container does not
+ * pass through one adapter — an adapter-local queue cannot establish ordering
+ * across all of them, which is the very defect a conflict queue exists to
+ * fix. Everything below calls ordinary methods and keeps no queue, no scope
+ * table and no copy of the method list — one authority, and it is the owner.
  */
 
 /**

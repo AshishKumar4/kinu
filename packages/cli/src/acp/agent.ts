@@ -85,9 +85,11 @@ function toolTitle(name: string, args: JsonObject): string {
  *  display them.
  *
  *  "Don't ask again" names the rules and the machine it covers, because that
- *  is exactly what it buys: a standing grant for those rules on that executor,
- *  and nothing else. A blanket "Allow and don't ask again" would switch the
- *  whole agent to allow_all — one click that turns the gate off everywhere.
+ *  is exactly what it buys: a standing grant for those rules on that executor
+ *  (cli-backend's `wrapShellApprovalHandler` grants exactly the asked rules on
+ *  the asked executor), and nothing else. Granting whole-agent `allow_all`
+ *  instead would disable the gate everywhere, beyond the command the user
+ *  approved — one click that turns the gate off everywhere.
  *  There is deliberately no persistent REJECT: a standing refusal
  *  is a different store nobody has asked for, and `deny_all` in settings
  *  already spells "stop running these" without pretending to be per-command. */

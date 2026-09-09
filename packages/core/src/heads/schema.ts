@@ -61,9 +61,9 @@ export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null }
  * call spent an unknown number of tokens, and `DEFAULT 0` would record it as
  * having spent none.
  *
- * The invariant "absent means not reported, never zero" cannot be held by
- * application code alone while the DDL manufactures zeros underneath it — the
- * default IS the fabricator here, because `insertSpawn` names no usage column.
+ * `insertSpawn` names no usage column, so a `DEFAULT 0` here would fabricate
+ * measured zero usage before application code could preserve absence — which
+ * is why these columns carry no default.
  */
 const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   actor_id TEXT NOT NULL,

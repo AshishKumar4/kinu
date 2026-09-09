@@ -1,8 +1,9 @@
 /**
  * The failure classification, and the one error that carries it.
  *
- * An executor tool that cannot do what it was asked raises a `KinuError`, which
- * carries a cause chain and a CLASS. A descriptive STRING carries neither, and
+ * `KinuError` carries a failure classification and cause chain, and executor
+ * boundaries render it as a structured refusal (`refusalOf`/`refusalText`) that
+ * the tool RETURNS. A descriptive STRING carries neither, and
  * that is accurate and unusable: a caller cannot tell a timeout from a denial
  * from an OOM, so every reader that needs the distinction re-derives it by
  * matching prose. There are already two such matchers in this codebase

@@ -3126,24 +3126,22 @@ export class OrchestratorAgent extends ActorAgent {
     // keeps feeding "N of M heads running" into every model step's
     // dynamic-context block for the life of the workspace.
     //
-    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK, and doing both in one
-    // unconditional write as the first thing an activation does gets the order
-    // wrong. The only thing that can re-enter an interrupted search —
-    // `recoverOrphans()` — is reachable ONLY from `onFiberRecovered` for a
-    // surviving `bg:*` fiber, and a fiber row can die with the activation that
-    // owned it (that is the case `jobs/runner.ts` documents its registry sweep
-    // for). A guaranteed retirement against a conditional re-entry wins every
-    // eviction: five heads of a live search recorded `aborted` with "nothing
-    // left that could run it" while the durable job that could run it was still
-    // re-drivable, and the agent, told its work was gone, re-forked by hand.
+    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK. Fork recovery runs
+    // under the terminal wake (`maintenanceWork` below): it first marks stale
+    // heads interrupted, then offers their roots to the orphan-job recovery
+    // gate, and retires only roots that gate refuses. A fiber row can
+    // disappear with the activation that owned it (that is the case
+    // `jobs/runner.ts` documents its registry sweep for), so recovery cannot
+    // depend solely on a surviving `bg:*` fiber callback or retire work
+    // before offering it for re-entry.
     //
     // So the reconciliation owns the order. It marks the stale rows
     // `interrupted` — non-terminal, so the roster stops lying without discarding
     // the run — then offers their roots to the job sweep, and retires only what
-    // the sweep refused. The sweep runs HERE rather than only on a fiber
-    // callback, which is what the CLI has always done (`local-session.ts`); it
-    // is idempotent, because every recovery reclaims under a fresh lease and a
-    // job this isolate is already driving is skipped.
+    // the sweep refused. The CLI runs the same sweep at startup
+    // (`local-session.ts`); the sweep is idempotent, because every recovery
+    // reclaims under a fresh lease and a job this isolate is already driving
+    // is skipped.
     //
     // Detached, not awaited: the journal writes are synchronous and land in this
     // method's own frame, but TELLING the agent goes through the signal seam,
@@ -3342,20 +3340,15 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * The lifecycle ledgers are the ONLY status authority — no per-facet copy.
+   * The lifecycle ledgers are the ONLY status authority — no per-actor copy.
    *
-   * A head that REPORTED is finished whatever it reported: `errored` and
-   * `budget_exceeded` are terminal exactly as `completed` and `aborted` are, and
-   * nothing will ever read that facet again. Name two of the four by hand and
-   * treat the rest as resumable, and a head that threw or blew its budget keeps
-   * its facet — and because the id is never reused, that storage is abandoned
-   * inside the root DO for the life of the workspace, which is the one leak
-   * facet-spawn.ts exists to prevent.
-   *
-   * `resumable` is exactly the two statuses under which work can still
-   * continue, and a status this journal does not write reads `unknown` rather
-   * than either: the sweep already refuses to guess about an unledgered facet
-   * while exploration is live, and a value nobody wrote is the same question.
+   * `completed`, `aborted`, `errored` and `budget_exceeded` are terminal
+   * report outcomes; `running` and `interrupted` remain resumable. Name two
+   * of the four by hand and treat the rest as resumable, and a head that
+   * threw or blew its budget keeps its actor rows live past the point their
+   * journal says they settled. Unknown or absent journal statuses remain
+   * unknown, so reclamation does not guess about unledgered actors while
+   * exploration is live.
    */
   /** Kept as the one place the head journal's four statuses are read as a
    *  lifecycle verdict; `reclaimSettledExplorationActors` asks the journal the
