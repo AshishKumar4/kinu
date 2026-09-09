@@ -281,6 +281,15 @@ describe('against the real tree', () => {
     // and byte-identical output is what proves the derivation REPLACED the
     // literal rather than sitting beside it.
     //
+    // The SENTENCE is not the contract and has already been rewritten once —
+    // `82bba3869` replaced "~{{memoryMb}} MB shared by everything in it" with
+    // "The shell shares ~{{memoryMb}} MB with the Worker" when the slate
+    // guidance was matched to the Worker preview contract. What survives every
+    // such rewrite is the placeholder: the number reaching the model is the
+    // catalog's, computed here from the same fact, so a hardcoded literal that
+    // drifts from `worker.isolate.memory` fails whatever the prose around it
+    // says.
+    //
     // Dynamic because `createTestRuntime` reaches package internals that must
     // resolve after this file's own module graph, exactly as the core suites do.
     // That also means this test loads all of `packages/core`, so it fails while
@@ -294,6 +303,6 @@ describe('against the real tree', () => {
     });
     const mb = platformFact('worker.isolate.memory').limit?.value ?? 0;
     expect(mb).toBeGreaterThan(0);
-    expect(rendered).toContain(`~${String(mb / (1000 * 1000))} MB shared by everything in it`);
+    expect(rendered).toContain(`The shell shares ~${String(mb / (1000 * 1000))} MB with the Worker`);
   });
 });
