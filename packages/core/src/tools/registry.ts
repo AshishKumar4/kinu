@@ -369,20 +369,12 @@ export interface BuiltinToolSpec {
 //     dismiss), and pairs with `dismiss` — hire/dismiss is a matched pair on the
 //     enum, staff/dismiss was not.
 //
-// LIFETIME IS A FIELD, NOT A VERB, settled 2026-08-28 on the owner's own
-// question: "Do we really need a '.query'? What would happen if 'hire' were
-// itself made to be served for that? we could just have an 'ephemeral' flag or
-// something?". The temporary rung was its own action (`ask` with a `role`); it
-// is now `hire` with `lifetime:'task'`, over the SAME roster and the same
-// `SUBORDINATE_LIFETIMES` the row has always carried. One primitive, and the
-// lifetime says how long the helper lives — which is the only thing the two
-// spellings ever differed on.
+// LIFETIME IS A FIELD: `hire` with `lifetime:'task'` answers one question over
+// the same roster a durable hire stays in; the lifetime says how long the
+// helper lives.
 //
-// ADDRESSING IS ONE VERB. `send` named an `agent` and `reply` named an
-// `event_id` of an inbound question; nothing else separated them. That is one
-// action with two ways to say WHO — `msg`, which takes one or the other and
-// refuses both.
-// The cutover is total: no alias, no accepted-legacy action.
+// ADDRESSING IS ONE VERB: `msg` takes `agent` or `event_id` and refuses both.
+// No alias, no accepted-legacy action.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see

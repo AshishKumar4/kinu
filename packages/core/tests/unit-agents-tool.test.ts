@@ -630,6 +630,30 @@ describe('agents tool — subordinate actions', () => {
     });
   });
 
+  // The variant boundary the schema cannot state: `mission`, `tier` and
+  // `lifetime` belong to a hire that CREATES, and an agent that exists was
+  // briefed at its birth. Accepting them here would be knobs that cannot
+  // move, so each is refused naming the field that does the job.
+  test('a hire to an existing agent refuses create-only fields by name', async () => {
+    const { deps, calls } = makeTeam();
+    const t = agentsTool({ team: deps, profile: () => testProfile() });
+    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', mission: 'Map it' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "mission" is not available on a hire that names an existing agent — its brief is `message`' });
+    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', tier: 'deep' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a hire that names an existing agent — it already runs at its own tier' });
+    await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'Survey auth', lifetime: 'task' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`' });
+    expect(calls).toEqual([]);
+  });
+
+  test('a lifetime:"task" hire refuses tier and runs at its role tier', async () => {
+    const { deps, calls } = makeTeam();
+    const t = agentsTool({ team: deps, profile: () => testProfile() });
+    await expect(t.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Survey auth', tier: 'deep' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override' });
+    expect(calls).toEqual([]);
+  });
+
   // The sender used to be told a fixed sentence and nothing else: no id to
   // correlate the eventual report with, and no way to know whether the
   // subordinate was mid-work. Both are things admission already knew.

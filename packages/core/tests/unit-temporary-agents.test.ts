@@ -862,6 +862,19 @@ describe('the rung is structural, and so is its absence', () => {
       .rejects.toMatchObject({ code: 'bad_input' });
   });
 
+  test('the depth refusal suggests only calls the surface accepts', () => {
+    // A refusal that names an unparseable remedy teaches a retry loop that
+    // can never succeed. Both remedies below must survive the model-facing
+    // parse with their fields intact: the handoff to an agent that exists,
+    // and the fork-context search with `context` inside `config`, where the
+    // schema holds it — while a top-level `context` is refused.
+    expect(parseAgentsToolInput({ action: 'hire', agent: 'a', message: 'm' }))
+      .toMatchObject({ action: 'hire', agent: 'a', message: 'm' });
+    expect(parseAgentsToolInput({ action: 'swarm', task: 't', config: { context: 'fork' } }))
+      .toMatchObject({ action: 'swarm', task: 't', config: { context: 'fork' } });
+    expect(() => parseAgentsToolInput({ action: 'swarm', task: 't', context: 'fork' })).toThrow();
+  });
+
   test('a task child is a real agent: it can hire a role of its own until the cap', () => {
     // Depth 1 through 3: the child's own team deps carry the port, so the rung
     // recurses. This is the same derivation a hire follows, because it IS the
