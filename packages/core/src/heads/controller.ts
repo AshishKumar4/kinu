@@ -154,21 +154,13 @@ export type SplitPhaseEvent =
       blindSpots: MergeResult['blindSpots'] };
 
 /**
- * NOTHING IS WRITTEN ON A BRANCH A RE-DRIVE TAKES OVER, and the absence is the fix.
- *
- * There is no `RECLAIMED_RUN_REASON` — nothing stamps "Interrupted before it
- * reported. This fork was restarted, and the branches below it are the retry." onto
- * the unreported rows of a reclaimed run in {@link HeadController.resolveTopLevelRun}
- * for the Exploration surface to render verbatim. Such a stamp is the fork twin of the
- * swarm's own defect and it multiplies the same way: the run id is reclaimed, its rows
- * are retired, and then the split mints a FRESH id per head, so one request
- * accumulates `heads.length` aborted rows per re-drive. The owner reads that as
- * `Systemfork interrupted` over a pile of failed branches.
- *
- * A head that was spawned and never reported is UNFINISHED WORK. A re-drive re-runs
- * it under its OWN id, so the row is RE-OPENED rather than retired — the shared
- * transition is `HeadJournal.insertSpawn`, which both this controller and the swarm's
- * re-entry reach, and it is the only place either of them resets a head row.
+ * Re-entry reopens unfinished heads under their existing IDs through
+ * `HeadJournal.insertSpawn`; it does not terminalize them. Retiring and
+ * recreating those rows would add `heads.length` aborted rows per re-drive
+ * and make the Exploration surface portray retried work as additional failed
+ * branches. The shared transition is `HeadJournal.insertSpawn`, which both
+ * this controller and the swarm's re-entry reach, and it is the only place
+ * either of them resets a head row.
  *
  * The one caller that may still retire a head is the start-of-life reconciliation, for
  * a root whose durable job the resume gate could not re-drive (`heads/reconcile.ts`) —

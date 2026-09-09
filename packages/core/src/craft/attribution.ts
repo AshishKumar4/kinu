@@ -15,10 +15,9 @@
  * applies, because the ONE thing that must not vary between backends is the
  * format.
  *
- * One form: {@link attributeCraftedFailure} wraps a compiled function. Every
- * backend holds a callable — a module per tool, not source text spliced into a
- * preamble the workerd loader compiles — so one wrapper is the whole story and
- * there is no second, text-level format to keep in step.
+ * One form: {@link attributeCraftedFailure} wraps the callable for each
+ * crafted tool and applies the shared failure marker. Keeping the wrapper
+ * beside the marker gives every backend the same attribution format.
  */
 
 import { craftInvocationError } from './in-episode';

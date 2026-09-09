@@ -814,9 +814,9 @@ export async function runSwarm(
     const prefix = agentNodes
       ? await sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
       : [];
-    // What a child starts from: the proposal's per-branch answer where one was
-    // granted, otherwise the run's `context`. There is no `expand:'mutate'` axis asking
-    // the same thing: it would be a second spelling of `context`.
+    // What a child starts from: the proposal's per-branch context where one was
+    // granted, otherwise the run's `context`. The expansion axis does not
+    // independently control inheritance.
     const inheritedArtifact = (grant
       ? grant.proposal.branches.some((branch) => branch.context === 'fork')
       : resolved.config.context === 'fork')

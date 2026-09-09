@@ -92,12 +92,10 @@ export function delegationExhausted(budget: DelegationBudget): boolean {
  * and adds a level exactly as a hire does. A refusal that named only one of them
  * would describe a cap the other walked past.
  *
- * ONE REMEDY, not two. Two imperatives split the actionable half, and the worse
- * half is an imperative naming an action the tool does not have — there is no
- * `action=fork`. A search is what runs work without a subordinate:
- * `DELEGATION_MAX_DEPTH` bounds the subordinate tree and a search tree carries
- * its own `depth` cap (`strategy/swarm.ts`), so a swarm at the delegation cap is
- * not a tree deeper — it is a different tree.
+ * The refusal names one actionable remedy: a search, which performs work
+ * without adding a subordinate level. `DELEGATION_MAX_DEPTH` bounds the
+ * subordinate tree, while a search has its own `depth` cap, so a swarm at the
+ * delegation cap is a different tree rather than a deeper subordinate tree.
  */
 export interface DelegationDepthRefusal {
   readonly reason: Extract<ErrorCode, 'denied'>;

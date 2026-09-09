@@ -106,23 +106,14 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
   }
-  // NO `unit` ARM REFUSES HERE, and the absence is the ticket. The blocker a
-  // `trajectory` refusal would encode is real: a tool-using node shares one
-  // workspace with its siblings and so cannot be graded on what it changed — the
-  // measured `agent-trajectory-search` region scored 18% because the design blocked
-  // the composition and nothing on the surface said so. It is also MIS-SITED: it
-  // bounds the GRADING SIGNAL, not the tool surface. A node holds tools and is
-  // graded on what it REPORTS (`node-agent.ts`), so `answer` IS that shape and no
-  // separate value names it, and `thought` is the degenerate point *The six axes*
-  // names, kept as the cheap tier. Both execute below.
-  // NO `score` ARM REFUSES `judge`, and this is the second time the absence is the
-  // ticket. The objection a refusal would encode — "judge needs the marginalised
-  // ensemble the shipped tree owns" — is answered by the tree itself:
-  // `mcts/evaluation.ts` marginalises a judge over samples, clamps the ensemble
-  // against the per-evaluation call budget and reports the size it actually ran.
-  // Nothing about it is tree-shaped; it takes a task, a candidate's text, an
-  // executor and two LLMs. So the ensemble is REACHED below rather than
-  // reimplemented, which is what that objection is really about.
+  // Tool-using nodes are graded on their reports, not shared-workspace diffs;
+  // the recorded `agent-trajectory-search` result of 18% demonstrates the cost
+  // of blocking the composition on the wrong boundary. Judged scoring uses the
+  // existing `mcts/evaluation.ts` ensemble with its call-budget clamp and
+  // realized-size report, since that evaluator depends on a task, candidate
+  // text, executor and two LLMs rather than tree structure.
+  // So the ensemble is REACHED below (`judgeMarginalisationRefusal`) rather
+  // than reimplemented here.
   //
   // What survives is the one refusal that is about the measurement rather than about
   // the wiring: a judged TREE below the marginalisation floor runs a scorer the
@@ -585,21 +576,12 @@ export function readCarryIn(input: {
 }
 
 /**
- * NOTHING IS WRITTEN ON A NODE THIS RUN TAKES OVER, and the absence is deliberate.
- *
- * There is no `RESUMED_SWARM_NODE_REASON` for {@link resolveReentry} to pass into
- * `HeadJournal.abandonRunning` — no "Interrupted before it reported. This search was
- * re-entered from its durable rows, and the nodes after it are the continuation."
- * rendered verbatim on the exploration surface. Every clause of that would be false
- * about the row it sits on: the node is not finished with, the nodes "after it" would be
- * fresh ids the same re-entry then paid for a second time, and a five-node search would
- * accumulate five such failures per eviction.
- *
- * A node that was spawned and never reported is UNFINISHED WORK, so the re-entry
- * re-runs it under its own id (`swarm-resume.ts`, `PendingSwarmNode`) and the
- * row is re-opened rather than retired. The only caller that may retire one is
- * the start-of-life reconciliation, for a root nothing can re-drive — which is the
- * one place where "no report will arrive" is a true statement.
+ * Re-entry resumes an unreported node under its existing ID and leaves it
+ * unfinished until its work settles (`swarm-resume.ts`, `PendingSwarmNode`);
+ * retiring it and allocating a replacement would fabricate one failure and
+ * repay one node per interruption. Only start-of-life reconciliation may
+ * retire a node when its root has no re-drive path — the one place where "no
+ * report will arrive" is a true statement.
  */
 
 /**

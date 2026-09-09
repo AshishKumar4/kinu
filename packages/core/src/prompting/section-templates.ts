@@ -219,9 +219,11 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * It is stated ONCE, under ONE gate — `hasDevices`. Two paragraphs saying the
  * same three facts (separate machines, commands through their own namespace,
  * mounts showing native paths) in different words are free to disagree with
- * each other, and cost tokens twice. `hasDevices` is deliberately the WEAKER
- * condition: `executors.length > 1` implies it — with two or more executors at
- * most one is `workspace`, so a device is always among them — and not the
+ * each other, and cost tokens twice: the recorded comparison is 724 characters
+ * for 600 of content when the three facts are worded in separate paragraphs.
+ * `hasDevices` is deliberately the WEAKER condition: `executors.length > 1`
+ * implies it — with two or more executors at most one is `workspace`, so a
+ * device is always among them — and not the
  * reverse, so gating on it loses no surface and a lone non-workspace executor
  * (a sandbox with no workspace beside it) reads the doctrine too.
  *
@@ -264,30 +266,16 @@ Scaffold versions and recorded self-changes can be inspected through the availab
  * The scaffold self-provider ships on both backends, so `agent.*` needs no
  * gate here.
  *
- * This section does NOT enumerate the `agent.*` API, and that is the
- * SWARM_PRESET_DOCTRINE lesson applied a second time: prose describing a
- * declaration it cannot read is free to disagree with it. Every one of those
- * symbols — proposeCurriculum, listCurriculum, acceptCurriculumTask,
- * proposeScaffold, scaffoldVersions, schedule, budget, jobResult,
- * backgroundJobs, compactNow — is declared WITH ITS DOC COMMENT in the
- * `agent.*` codemode type block (tools/agent-self.ts TYPES), and that block
- * ships to the model in the same request, inside the execute_tools description
- * (registry.ts renderExecuteToolsDescription). A bullet list here would be a
- * second, hand-maintained copy, 1,250 chars of it.
- *
- * It would also be the WEAKER copy, which is what makes the absence a fix
- * rather than a saving: a bullet for `proposeScaffold` saying it "must pass the
- * validation gates and win shadow evaluation" shadows a declaration that also
- * names the misevolution gate, the required `async function* run(rt, task)`
- * export, the host-bridge restriction and the 50-char rationale floor — the
- * parts a model actually gets wrong.
- *
- * And it would be UNGATED where the declaration is not: bullets here would
- * advertise `agent.*` on any surface holding execute_tools, while the type
- * block is assembled from the providers a backend really wired. Both backends
- * do wire agent-self unconditionally today (cf orchestrator.ts, cli
- * local-session.ts), and a backend that stops wiring it cannot leave the prompt
- * lying.
+ * This section does NOT enumerate the `agent.*` API: prose describing a
+ * declaration it cannot read is free to disagree with it. The codemode
+ * declarations own that documentation — every symbol with its doc comment in
+ * the `agent.*` type block (tools/agent-self.ts TYPES), shipped to the model
+ * in the same request inside the execute_tools description
+ * (registry.ts renderExecuteToolsDescription), including scaffold gates,
+ * export shape, host-bridge restriction and rationale floor — and are emitted
+ * only for wired providers. Both backends wire agent-self today (cf
+ * orchestrator.ts, cli local-session.ts). A duplicate bullet list here would
+ * add 1,250 hand-maintained characters outside that declaration gate.
  *
  * What this section states is the half no declaration carries: the two HABITS
  * (look before building, save what you built), and one pointer at the namespace
