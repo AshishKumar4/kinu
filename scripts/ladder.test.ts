@@ -205,13 +205,12 @@ describe('the ladder measures something', () => {
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
     expect(durabilityProbeGate?.tier).toBe('ci');
-    // Spelled out, like the glob above and for the same reason: the nine rig
-    // suites after the probe are named files, so a tenth is a deliberate edit here
-    // rather than a suite that silently joined a measured row.
+    // Spelled out, like the glob above and for the same reason: the seven rig
+    // suites after the probe are named files, so an eighth is a deliberate edit
+    // here rather than a suite that silently joined a measured row.
     expect(durabilityProbeGate?.run).toBe(
       'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts'
       + ' scripts/sandbox-durability-probe.test.ts'
-      + ' scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts'
       + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
       + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
       + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts'

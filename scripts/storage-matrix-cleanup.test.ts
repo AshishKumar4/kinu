@@ -109,10 +109,10 @@ describe('durable teardown manifest', () => {
 /** A run killed after its deploy: every resource real, nothing deleted. */
 function killedAfterDeploy(runId: string): TeardownManifest {
   return createManifest(runId, [
-    { kind: 'worker', name: `kinu-devbox-bench-${runId}-r2fs`, detail: 'r2fs fixture Worker' },
-    { kind: 'container-app', name: `kinu-devbox-bench-${runId}-r2fs-boxr2fs` },
-    { kind: 'r2-bucket', name: `kinu-devbox-bench-${runId}-r2fs` },
-    { kind: 'do-state', name: `ab-r2fs-${runId}` },
+    { kind: 'worker', name: `kinu-devbox-bench-${runId}-snapshot-chain`, detail: 'snapshot-chain fixture Worker' },
+    { kind: 'container-app', name: `kinu-devbox-bench-${runId}-snapshot-chain-boxchain` },
+    { kind: 'r2-bucket', name: `kinu-devbox-bench-${runId}-snapshot-chain` },
+    { kind: 'do-state', name: `ab-snapshot-chain-${runId}` },
     { kind: 'local-path', name: `bench-artifacts/config/${runId}` },
   ]);
 }
@@ -141,17 +141,17 @@ describe('a fresh driver finishes what a killed one started', () => {
       expect(recovered).toHaveLength(1);
       expect(recovered[0]).toMatchObject({ runId: '20260901010101', unfinished: 5, replayed: true, failures: [] });
       expect(deleted).toEqual([
-        'worker:kinu-devbox-bench-20260901010101-r2fs',
-        'container-app:kinu-devbox-bench-20260901010101-r2fs-boxr2fs',
-        'r2-bucket:kinu-devbox-bench-20260901010101-r2fs',
-        'do-state:ab-r2fs-20260901010101',
+        'worker:kinu-devbox-bench-20260901010101-snapshot-chain',
+        'container-app:kinu-devbox-bench-20260901010101-snapshot-chain-boxchain',
+        'r2-bucket:kinu-devbox-bench-20260901010101-snapshot-chain',
+        'do-state:ab-snapshot-chain-20260901010101',
         'local-path:bench-artifacts/config/20260901010101',
       ]);
       // REPORTED, not only swept: an operator reading the log learns which run
       // leaked and what it held.
       expect(reported.join('\n')).toContain('run 20260901010101');
       expect(reported.join('\n')).toContain('left 5 resource(s) undeleted');
-      expect(reported.join('\n')).toContain('worker:kinu-devbox-bench-20260901010101-r2fs');
+      expect(reported.join('\n')).toContain('worker:kinu-devbox-bench-20260901010101-snapshot-chain');
       expect(loadManifest(root, '20260901010101')?.entries.every((entry) => entry.done)).toBe(true);
       // The scanning run's own manifest is untouched.
       expect(loadManifest(root, '20260901020202')?.entries.some((entry) => entry.done)).toBe(false);

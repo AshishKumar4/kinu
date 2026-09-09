@@ -6,8 +6,8 @@ import * as v from 'valibot';
 import { fixtureConfigForArms, resourceNames } from './bench-devbox-strategies';
 
 const ROOT = dirname(import.meta.dir);
-const ARM = 'bounded-layers';
-const CLASSES = ['BoundedLayersBox', 'BenchOpCounter'];
+const ARM = 'snapshot-chain';
+const CLASSES = ['SnapshotChainBox', 'BenchOpCounter'];
 
 const GeneratedConfig = v.looseObject({
   containers: v.array(v.looseObject({ class_name: v.string() })),
@@ -30,7 +30,6 @@ describe('bench fixture Durable Object bindings', () => {
         readFileSync(join(ROOT, 'packages/devbox/bench/wrangler.jsonc'), 'utf8'),
         resourceNames('workerd-binding-probe', ARM),
         [ARM],
-        join(directory, 'candidate-runner.Dockerfile'),
       );
       writeFileSync(configPath, captured);
       expect(readFileSync(configPath, 'utf8')).toBe(captured);
