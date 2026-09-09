@@ -10,15 +10,13 @@ import { describe, expect, it } from 'vitest';
 //
 // Only guards are asserted here: this environment wires neither the
 // container-backed objects nor R2 (a box method answers 502 without them), so
-// the positive path runs on the deployed probe, where a failure is loud. The
-// /candidate control extension rides the same limit for its container half;
-// its method half is proved in `candidate-control-dump.test.ts`.
+// the positive path runs on the deployed probe, where a failure is loud.
 
 const auth = { authorization: 'Bearer test-token' };
 
 describe('incidents route', () => {
   it('refuses an unauthenticated incidents request', async () => {
-    const response = await SELF.fetch('https://bench.test/incidents?box=probe-1&strategy=bounded-layers');
+    const response = await SELF.fetch('https://bench.test/incidents?box=probe-1&strategy=snapshot-chain');
 
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
@@ -32,7 +30,7 @@ describe('incidents route', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       ok: false,
-      error: 'strategy is required: snapshot-chain, r2fs, overlay-cas, bounded-layers, or merkle-pack',
+      error: 'strategy is required: snapshot-chain',
     });
   });
 
