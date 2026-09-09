@@ -368,10 +368,9 @@ describe('MCTS integration', () => {
   });
 
   test('sequential tasks on one DB do not contaminate each other (fresh root per task)', async () => {
-    // converge must close its winner: selection is a global-argmax UCT over one
-    // DB, so a winner left status='open' is what the SECOND runMCTS picks — the
-    // FIRST task's high-value node instead of the new task's root, expanded
-    // under it.
+    // Selection is scoped to the current search's `root_id`, and convergence
+    // closes its winner. A global argmax could otherwise expand a previous
+    // task's high-value open node and spend the new task's budget on it.
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({ explore: async () => ({ text: 'explored' }), generateReflection: async () => ({ text: 'n/a' }), release: async () => {} });
 

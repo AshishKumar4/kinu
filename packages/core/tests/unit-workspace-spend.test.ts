@@ -188,16 +188,14 @@ describe('workspaceSpend', () => {
 
   test('a total is not bounded by any window, however long the log gets', () => {
     const { ws, events, actor } = rig();
-    // WHAT THIS DEFENDS, measured rather than reasoned about. On a synthetic log
-    // of 8,000 turn steps and 2,000 judge calls, a fold at the CLI's own
-    // SPEND_WINDOW of 2000 returns 2,001 of the 8,000 agent steps and prints the
-    // result as the workspace total: a 4x under-count on the row the owner reads
-    // first. Driven end to end against a real local workspace, a 2,600-step log
-    // reported 4,080,000 tokens and $4.20 where the truth was 5,304,000 and
-    // $5.46 — 20.8% of the tokens and 23% of the dollars behind a one-line
-    // caveat. The unbounded aggregate costs 62 ms against 55 ms for those two
-    // windowed reads, so completeness was never the expensive option; it was
-    // only the un-asked-for one.
+    // WHAT THIS DEFENDS, measured rather than reasoned about. The bounded-fold
+    // measurements are 2,001 of 8,000 agent steps with a 2,000-row window and
+    // 2,000 judge calls, roughly a 4× under-count on the row the owner reads
+    // first; the end-to-end 2,600-step case reports 4,080,000 tokens and $4.20
+    // against 5,304,000 and $5.46, omitting 20.8% of the tokens and 23% of the
+    // dollars. The measured unbounded aggregate costs 62 ms against 55 ms for the
+    // two windowed reads, so the regression checks complete totals rather than
+    // sampled floors.
     //
     // 450 steps here: past `readRecentByType`'s 200-row default, past the cloud
     // eval arm's 400 and the deployed panel's ACTIVITY_STEP_WINDOW. Every one of

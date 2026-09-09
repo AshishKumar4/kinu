@@ -280,9 +280,9 @@ export function renderCauseChain(error: Error): string {
  * `head-inference.ts` uses the third for the loop's own failure and the second for
  * a tool call's, which is the distinction doing work.
  *
- * For an `Error` with no `cause` the answer is byte-identical to `error.message`,
- * so calling this where a bare `message` read would do costs nothing until
- * there IS a chain — which is exactly when a bare `message` is wrong.
+ * For an `Error` with no `cause`, the result is byte-identical to
+ * `error.message`. When a cause exists, this renderer preserves the chain that
+ * a bare `message` read would discard.
  */
 export function renderThrownChain(input: { cause: unknown }): string {
   return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);

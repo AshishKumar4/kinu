@@ -2,11 +2,10 @@
  * The head merge's model/effort/spend policy, proven in the one place that
  * decides it.
  *
- * Deciding it per backend gets it decided differently: Cloudflare resolving the
- * `judge` route off the turn profile and running at the deep tier's own effort,
- * while the CLI passes the SESSION'S CHAT MODEL at a hardcoded `'low'` and files
- * the result as `judge` spend anyway. One split, one account, two models, both
- * reported as deep-tier grading.
+ * Both backends bind the resolved `judge` route at the deep tier's own effort
+ * and report the call as `judge` spend. Resolving these independently could run
+ * the session chat model at a hardcoded `'low'` while labelling it deep-tier
+ * grading, making unlike work indistinguishable in the ledger.
  *
  * So the assertions here are the policy, and each backend's suite proves only
  * that it calls this and supplies nothing else. The fixture is shared

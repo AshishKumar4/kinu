@@ -10,8 +10,10 @@
 //
 // each reading "23 head(s) across 6 fork run(s) were still marked running from
 // an activation that has ended…" and each drawn in the owner's own bubble,
-// because `fork_interrupted` is not one of the four names such a list holds.
-// `completion_gate`, `take_pick` and `overflow_retry` are the same hole.
+// because the measured four-name chat-pane classifier holds none of
+// `fork_interrupted`, `completion_gate`, `take_pick` or `overflow_retry`. These
+// unstamped production rows establish why authorship must be read from their
+// event metadata rather than inferred from a UI allowlist.
 //
 // So the default is inverted: a turn written through the programmatic seam is
 // the harness speaking unless its producer says otherwise. These tests hold the
