@@ -65,13 +65,13 @@ export interface CheckpointOutcome {
   /**
    * Durable bytes this box holds after the commit, for `committed` only.
    *
-   * ONE QUANTITY, EVERY STRATEGY. It used to be "bytes this commit wrote",
-   * which the snapshot chain answered with its new layer's size and r2fs
-   * answered with the size of everything the prefix holds — the same field
-   * naming two different measurements, so a caller comparing two strategies
-   * compared nothing. r2fs cannot answer the first question at all: s3fs
-   * uploads a file when its last handle closes, so there is no commit boundary
-   * to attribute bytes to. The chain can answer the second, and does.
+   * ONE QUANTITY, EVERY STRATEGY, and it is bytes HELD rather than "bytes this
+   * commit wrote". That second question has a different answer per strategy —
+   * the snapshot chain's new layer size, r2fs's whole prefix — so one field
+   * naming both leaves a caller comparing two strategies comparing nothing.
+   * And r2fs cannot answer it at all: s3fs uploads a file when its last handle
+   * closes, so there is no commit boundary to attribute bytes to. Bytes held is
+   * a question every strategy can answer, and does.
    *
    * Required rather than decorative. A commit that reports success without a
    * byte count is indistinguishable from a commit that archived nothing, and
@@ -167,9 +167,9 @@ export async function stampFailure<S extends StampableRow>(
  * matters has to be something the caller can turn into an incident. One
  * implementation for every strategy: two copies of this body drifted once.
  *
- * THE DIAGNOSTIC GOES FIRST, because it is the only part that cannot fail. It
- * used to follow the stamp, so the one storage failure that could suppress it
- * was a storage failure — the case where a reader most needs the line.
+ * THE DIAGNOSTIC GOES FIRST, because it is the only part that cannot fail.
+ * Following the stamp, the one storage failure that could suppress it would be
+ * a storage failure — the case where a reader most needs the line.
  *
  * `bytes`/`movedBytes` are `undefined`, not 0: a checkpoint that threw
  * mid-flight may have landed objects before it failed, so "how much moved" is

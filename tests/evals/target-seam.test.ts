@@ -12,7 +12,7 @@
  * tier that reproduces anywhere.
  *
  * That is what this does. It asserts the local target is really wired, using
- * exactly the members a live suite reads, so a live arm's zero can no longer be
+ * exactly the members a live suite reads, so a live arm's zero cannot be
  * explained by the harness. The live arms then measure the agent, which is the
  * only thing they should have to be about.
  *

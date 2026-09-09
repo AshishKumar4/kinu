@@ -455,9 +455,9 @@ function rendersItsText(row: SeedRow): boolean {
  * The first place the rendered thread stops being the seeded one, or null.
  *
  * Every term on the "got" side comes from the DOM. Nothing is filled in from
- * the expectation — an earlier version substituted the expected row number
- * whenever a child carried no marker, which reported an empty affordance div as
- * a seeded row rendering under the wrong card.
+ * the expectation: substituting the expected row number whenever a child
+ * carries no marker reports an empty affordance div as a seeded row rendering
+ * under the wrong card.
  */
 function firstDivergence(actual: readonly DomRow[], expected: readonly SeedRow[]): string | null {
   for (let k = 0; k < Math.max(actual.length, expected.length); k++) {

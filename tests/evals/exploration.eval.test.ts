@@ -10,7 +10,7 @@
  *             model cannot decline. A pass means the mechanism produces a
  *             branched, ranked, reader-visible search. Deterministic in shape;
  *             the model only supplies the content. Driven at the strategy and
- *             not through `agents.execute`, because the tool no longer routes
+ *             not through `agents.execute`, because the tool does not route
  *             anything here — see the WORKS test for why that is the supported
  *             path rather than a bypass.
  *   VISIBLE — the written store and the reader the pane calls agree. The
@@ -94,11 +94,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   let target: LocalAgentEvalTarget;
   let model: LanguageModel;
 
-  /** The eval agent's surface from the PRODUCTION actor root. This used to
-   *  assemble `buildActorTools` with a hand-rolled `agents.fork` — the same
-   *  shape, minus every dep production passes — which made the surface a
-   *  near-miss of the product's and kept this file one drift away from scoring
-   *  its own construction. */
+  /** The eval agent's surface from the PRODUCTION actor root. Assembling
+   *  `buildActorTools` here with a hand-rolled `agents.fork` — the same shape,
+   *  minus every dep production passes — makes the surface a near-miss of the
+   *  product's and leaves this file one drift away from scoring its own
+   *  construction. */
   let surface: EvalAgentSurface;
 
   beforeAll(async () => {
@@ -135,10 +135,10 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // fork-deps.ts keeps the search store wired "for the durable search store
     // and the eval harness", so a fork that routed here would be a silent
     // misdispatch. Driving the engine is therefore the SUPPORTED programmatic
-    // path, not a way around the tool. It used to go through
-    // `createMCTSStrategy` + a `StrategyRegistry`; both were adapters no
-    // production path read, and calling the engine is the same search with one
-    // less shape in front of it.
+    // path, not a way around the tool. `createMCTSStrategy` and a
+    // `StrategyRegistry` in front of it would be adapters no production path
+    // reads: calling the engine is the same search with one less shape in the
+    // way.
   });
 
   afterAll(async () => {
@@ -161,21 +161,21 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
   });
 
   liveTest('DRIVEN (instructed): a direct mcts search branches and ranks, durably', async () => {
-    // Driven through the ENGINE, not through `agents.execute`. The tool used to
-    // reach this with `{ action:'fork', settle:'mcts' }`; `settle` is gone from
-    // the model-facing surface (it survives only as a stored-row translation in
+    // Driven through the ENGINE, not through `agents.execute`. `settle` is not on
+    // the model-facing surface (it exists only as a stored-row translation in
     // `resumableForkInput`, which reports that it cannot carry the RANKING), and
-    // `fork` now dispatches to the heads engine alone. So that call refused
-    // before writing anything, and every assertion below failed on its own
-    // denominator guard in milliseconds — the guards working exactly as intended.
+    // `fork` dispatches to the heads engine alone. So `{ action:'fork',
+    // settle:'mcts' }` refuses before writing anything, and every assertion below
+    // fails on its own denominator guard in milliseconds — the guards working
+    // exactly as intended.
     //
-    // `action:'swarm'` is the tool's tree search now, and it is NOT what belongs
+    // `action:'swarm'` is the tool's tree search, and it is NOT what belongs
     // here: it writes the same `search_nodes` rows, but it marks `terminal` per
     // node that seals past its floor and never converges to one winner
     // (`swarm-run.ts:980`). The durability assertion below — exactly one terminal
     // node, so a later reader sees the winner this run picked — is an MCTS
     // convergence property (`mcts/convergence.ts:146-153`). Re-pointing at swarm
-    // would have meant deleting that assertion, which is the opposite of the job.
+    // would mean deleting that assertion, which is the opposite of the job.
     //
     // The search's shape is STATED rather than inherited from `DEFAULT_CONFIG.mcts`
     // — see EVAL_SEARCH_BUDGET for the measurements that set it. Nothing below is
@@ -234,9 +234,9 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // Printed unconditionally rather than in a failure branch, because the
     // passing run's margin over the 0.3 floor is the number that says how close
     // this suite is to going red for a reason nobody changed. The engine NAMES
-    // which refusal it took (`reason`), where the strategy adapter this used to
-    // run through flattened both into one candidate score and left the reader
-    // inferring the difference from a duplicate.
+    // which refusal it took (`reason`); a strategy adapter in front of it
+    // flattens both into one candidate score and leaves the reader inferring the
+    // difference from a duplicate.
     console.log(`    winner score: ${result.winnerValue.toFixed(3)} (floor `
       + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), converged: `
       + `${String(result.converged)}${result.converged ? '' : ` (${result.reason})`}`);
@@ -285,12 +285,11 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
 
   liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
     const calls: string[] = [];
-    // THE §9.5 FIX. This used to pass `system: soul` — the workspace SOUL file
-    // alone, which never mentions delegation — over a ToolSet that could not
-    // hold `agents`. Whatever that measured, it was not the product's
-    // conversion behaviour: the model was scored on reaching for a capability it
-    // was neither offered nor told about. Now the turn runs the PRODUCTION
-    // projection and the PRODUCTION tool surface.
+    // PRD §9.5: the turn runs the PRODUCTION projection and the PRODUCTION tool
+    // surface. `system: soul` — the workspace SOUL file alone, which never
+    // mentions delegation — over a ToolSet that cannot hold `agents` measures
+    // something, but not the product's conversion behaviour: it scores the model
+    // on reaching for a capability it was neither offered nor told about.
     const recorder = recordRequestSurface(model);
 
     const result = await generateText({

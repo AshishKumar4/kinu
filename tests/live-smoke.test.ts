@@ -65,7 +65,7 @@ import {
 /** One row of `GET /api/cli/devices`, exactly as `UserDO.listDevices` declares
  *  it. `strictObject` because both directions matter: a field the route stopped
  *  answering with is the schema defect this arm exists for, and a field nobody
- *  declared is a route the contract no longer describes. */
+ *  declared is a route the contract does not describe. */
 const DeployedDeviceSchema = v.strictObject({
   id: v.string(),
   label: v.string(),

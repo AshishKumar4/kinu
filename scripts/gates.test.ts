@@ -645,10 +645,10 @@ describe('agents action/field gate', () => {
 });
 
 /**
- * The egress gate's denominator, over the shapes that broke its regex
- * predecessors: both readers used to measure rendered text, so a nested array
- * truncated the container block and a generic parameter hid a class — silent
- * shrinks in a security gate's corpus (2026-08-19 census).
+ * The egress gate's denominator, over the shapes a regex reader gets wrong:
+ * measuring rendered text lets a nested array truncate the container block and
+ * a generic parameter hide a class — silent shrinks in a security gate's corpus
+ * (2026-08-19 census).
  */
 describe('egress interception denominator', () => {
   test('a container entry after an array-valued field is still counted', () => {

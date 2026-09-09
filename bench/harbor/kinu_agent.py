@@ -168,10 +168,10 @@ class KinuAgent(BaseInstalledAgent):
         env = dict(self._resolved_env_vars)
 
         # WHERE, before the credential. A scored run against production writes
-        # into the live account: this adapter's own default USED to be the
-        # production origin, so a trial that named no endpoint measured the real
-        # system by default. Refused here, before the trial starts, rather than
-        # discovered in a workspace list afterwards.
+        # into the live account, and an adapter whose default IS the production
+        # origin means a trial that names no endpoint measures the real system.
+        # Refused here, before the trial starts, rather than discovered in a
+        # workspace list afterwards.
         # The override is read from the LAUNCHING shell (os.environ, the default)
         # rather than from the trial's rendered vars: consenting to production is
         # an operator's act, not a per-trial parameter.

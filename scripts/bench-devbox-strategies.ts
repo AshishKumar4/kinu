@@ -108,10 +108,9 @@ interface AttachOutcome { kind: string; detail: string }
 
 interface StartupState {
   /** The box's own name for where its restoration stands. FIVE values, because
-   *  two used to be conflated: `restoring` is an attempt IN FLIGHT (which
-   *  `unstarted` used to be reported as, for its whole duration), and `repair`
-   *  is attached-but-degraded (which `attached` used to be reported as). A
-   *  driver that cannot tell those apart cannot attribute a ceiling. */
+   *  a driver that reads `restoring` as `unstarted` — or `repair` as
+   *  `attached` — cannot attribute a ceiling: `restoring` is an attempt IN
+   *  FLIGHT, for its whole duration, and `repair` is attached-but-degraded. */
   restoration?: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
   /** Is the container up? A stopped container has NOTHING in flight for a
    * later poll to observe: `/state` re-arms a startup row and deliberately
@@ -660,12 +659,12 @@ export async function createFixtureResources(
   // THE MANIFEST IS THE FIRST THING THAT EXISTS, before the config directory
   // and long before a deploy.
   //
-  // WHAT THIS FIXES. The manifest used to be built by `main` from the fixtures
-  // this function returns, so the window between "resources are named" and
-  // "the list of them is durable" spanned two bundle builds, a Dockerfile
-  // render and every per-arm config write. A driver killed inside that window
-  // — or one that threw out of a failed bundle — left a temp directory and a
-  // run id with no record anywhere that either had ever been planned.
+  // WHY NOT `main`, FROM THE FIXTURES THIS FUNCTION RETURNS. That stretches the
+  // window between "resources are named" and "the list of them is durable"
+  // across two bundle builds, a Dockerfile render and every per-arm config
+  // write. A driver killed inside that window — or one that throws out of a
+  // failed bundle — leaves a temp directory and a run id with no record
+  // anywhere that either was ever planned.
   //
   // The build directory is DERIVED from the run id rather than `mkdtemp`'s
   // random suffix, because a name nobody can predict cannot be written down
@@ -904,17 +903,17 @@ const FrozenControlArtifactSchema: v.GenericSchema<FrozenControlArtifact> = v.lo
  * What a supplied control artifact PROVES, which is not what its
  * `verifyPassed` boolean says.
  *
- * MEASURED DEFECT THIS REPAIRS. The status column read
- * `control.verifyPassed ? 'VERIFIED' : '**REFUSED**'`, so any artifact
- * carrying `verifyPassed: true` for the named arm printed as VERIFIED —
- * including the 2026-08-26 artifacts, whose runs had no per-check lifecycle
- * rows, no per-arm operation tally and no G0–G9 admission decision at all.
- * That boolean was set by an instrument that did not test what this one tests,
- * and printing VERIFIED beside it launders a legacy pass into current
- * evidence.
+ * MEASURED DEFECT THIS SHUTS OUT. A status column reading
+ * `control.verifyPassed ? 'VERIFIED' : '**REFUSED**'` prints VERIFIED for any
+ * artifact carrying `verifyPassed: true` for the named arm — including the
+ * 2026-08-26 artifacts, whose runs have no per-check lifecycle rows, no
+ * per-arm operation tally and no G0–G9 admission decision at all. That boolean
+ * was set by an instrument that did not test what this one tests, so printing
+ * VERIFIED beside it launders a pass earned under another contract into
+ * current evidence.
  *
  * `legacy-contract` is therefore its own status and NEVER a pass: a missing
- * contract cannot be satisfied retroactively, and no shim maps it onto
+ * contract cannot be satisfied retroactively, and nothing maps it onto
  * VERIFIED.
  */
 export type FrozenControlStatus = 'verified' | 'refused' | 'legacy-contract';
@@ -1723,17 +1722,18 @@ export async function headObject(fixture: Fixture, box: string, key: string): Pr
 
 // ── the candidate lifecycle contract ───────────────────────────────────────
 //
-// MEASURED DEFECT THIS REPAIRS. The mount branch below used to read
+// WHY THE MOUNT BRANCH BELOW KEYS ON THE ARM AND NOT THE REPORTED MODE. A
+// predicate like
 //
 //     if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain')
 //
-// so a candidate arm took the CHAIN's checks whenever the box happened to
-// report `mode: 'chain'`, and otherwise fell through to the extraction branch —
-// which asks only that `/workspace` is a plain directory and that
-// `ALLOW_EXTRACTION` is set. A container that never attached a candidate store
-// at all satisfies the second one completely. Both candidate arms could
-// therefore pass a lifecycle proof having proven nothing whatsoever about their
-// own strategy, and their latency rows would then be ranked.
+// hands a candidate arm the CHAIN's checks whenever the box happens to report
+// `mode: 'chain'`, and otherwise drops it into the extraction branch — which
+// asks only that `/workspace` is a plain directory and that `ALLOW_EXTRACTION`
+// is set. A container that never attached a candidate store at all satisfies
+// the second one completely. Both candidate arms would therefore pass a
+// lifecycle proof having proven nothing whatsoever about their own strategy,
+// and their latency rows would then be ranked.
 //
 // A candidate attachment is neither a chain nor an extraction, and the three
 // things it must prove have no counterpart in either:
@@ -2799,10 +2799,10 @@ export interface OperationBounds {
  * arming reply still resolves to the one publication it armed. What
  * `retryTransient` retries is different: an operation that SETTLED with a
  * replacement — the container gone under the command it was running — and a
- * settled operation is answered from its row for ever. The `op` used to be
- * minted once outside the closure, so the retry re-posted the same `op`, the
- * fixture answered the row it had already settled, and the "retry" read the
- * same failure three times. MEASURED, run 20260905232937 (2026-09-05): the
+ * settled operation is answered from its row for ever. Minting the `op` once
+ * outside the closure makes the retry re-post the same `op`: the fixture
+ * answers the row it has already settled, and the "retry" reads the same
+ * failure three times. MEASURED, run 20260905232937 (2026-09-05): the
  * merkle-pack post-ladder stop logged "transient replacement on attempt 1",
  * "attempt 2", and then failed the arm with the identical sentence, all
  * inside the ten seconds a sibling arm spent in one readiness drive; no
@@ -3396,11 +3396,10 @@ export async function runDecisive(
 // a run on either drift: a witness nobody observed (the defect went away, or
 // the cell could not run) and an observed failure nobody predicted.
 //
-// A WITNESS PRICES AN ARM; IT DOES NOT DISQUALIFY ONE. The header here used to
-// read "MANDATORY HISTORICAL CONTROLS, never production winners", and the rest
-// of the instrument believed it: those three arms were marked rank-ineligible
-// and could not be recommended whatever they measured. They compete now, and
-// what these cells buy is a measured cost to weigh against their numbers.
+// A WITNESS PRICES AN ARM; IT DOES NOT DISQUALIFY ONE. These three arms compete
+// for the recommendation like any other — none is rank-ineligible, whatever it
+// measures — and what these cells buy is a measured cost to weigh against
+// their numbers.
 //
 // WHY THESE CELLS EXIST AT ALL. `observedRedChecks` was hardcoded `[]`, so every
 // run carrying a control was refused for eight witnesses that nothing had ever
@@ -3465,19 +3464,17 @@ export interface WitnessCheck {
  * instrument, the arm, or the prediction changed, and the run is refused until
  * somebody says which.
  *
- * WHY `delta-layer-collapse` REPLACED `cumulative-delta-seed`, and why the
- * witness was re-pointed rather than retired. The old name preregistered the
- * SEEDING COPY — "after an attach that had a delta, the delta's contents are
- * copied into the fresh upper" — and the wake fix deleted that copy: no live
- * path in `snapshot-chain.ts` writes a delta's bytes into the upper any more,
- * and the only thing that can leave a delta IN an upper is the upper the
- * publication itself archived (`held`, proven by the seed stamp), which is a
- * survival rather than a copy. Run 20260902154130 measured the consequence:
- * delta 244,723,712 B present, the marker NOT in the fresh upper, a seed stamp
- * naming the generation — the reading a SERVED delta produces, recorded as
- * witness drift and refusing the run under G2. The surviving code still holds a
- * defect worth naming, so the witness names that one: serve-not-copy, and the
- * collapse the serve forces.
+ * WHY THE WITNESS NAMES THE SERVE AND NOT A SEEDING COPY. A seeding copy —
+ * "after an attach that had a delta, the delta's contents are copied into the
+ * fresh upper" — is a reading no path in `snapshot-chain.ts` produces: nothing
+ * writes a delta's bytes into the upper, and the only thing that can leave a
+ * delta IN an upper is the upper the publication itself archived (`held`,
+ * proven by the seed stamp), which is a survival rather than a copy. Run
+ * 20260902154130 measured it: delta 244,723,712 B present, the marker NOT in
+ * the fresh upper, a seed stamp naming the generation — the reading a SERVED
+ * delta produces, and a witness preregistering the copy is refused as drift
+ * under G2. The serving code still holds a defect worth naming, so the witness
+ * names that one: serve-not-copy, and the collapse the serve forces.
  */
 const PREREGISTERED_WITNESSES = {
   'snapshot-chain': ['mutable-delta', 'delta-layer-collapse'],
@@ -3514,7 +3511,7 @@ export interface ControlWitnessFacts {
      *  merged work directory after the wake. */
     readonly markerInMergedView: boolean;
     /** The same marker looked for in the FRESH upper. A serve leaves it in the
-     *  delta layer; the copy this witness used to preregister put it here. */
+     *  delta layer; a copy puts it here. */
     readonly markerInUpper: boolean;
     /** The generation the record names after the next checkpoint. A collapse
      *  archives the merged view as a fresh base under a NEW id. */
@@ -3588,8 +3585,8 @@ export function controlWitnessChecks(
         // SERVED, NOT COPIED. The delta's bytes reach the merged view through a
         // layer of their own, so the marker committed into that delta is
         // readable at the work directory and absent from the writable layer the
-        // attach just emptied. A copy — the behaviour this witness used to
-        // preregister — puts the same marker in the upper and mounts no layer.
+        // attach just emptied. A copy puts the same marker in the upper and
+        // mounts no layer.
         const served = cell.deltaBytes > 0
           && cell.deltaLayerMounted
           && cell.markerInMergedView
@@ -3738,7 +3735,7 @@ function absentCell(name: string): WitnessCheck {
  * EVERY EXCLUSION CARRIES ITS REASON, so a step cannot be narrowed silently.
  * Three instrument defects of this family reached deployed runs in one day: a
  * verify check asking for a layer path the strategy had moved, a fence reader
- * demanding a manifest version the daemon no longer writes, and this.
+ * demanding a manifest version the daemon does not write, and this.
  */
 const PRODUCT_ATTACH_KINDS = ['empty', 'attached', 'already-attached'] as const;
 
@@ -4662,8 +4659,8 @@ async function readCandidateCutCell(
 /**
  * Cut one arm's publication mid-flight and judge what a reader sees.
  *
- * The shape: an acked barrier first (candidate arms only — legacy arms have
- * no barrier concept), then a cut marker plus a 64 MiB victim, an armed
+ * The shape: an acked barrier first (candidate arms only — non-candidate arms
+ * have no barrier concept), then a cut marker plus a 64 MiB victim, an armed
  * victim quiesce, two pending polls, the kill, the victim's own outcome, a
  * wake that admits every kind so damage reads as evidence rather than
  * throwing at admission, per-arm reader checks, a healing quiesce, and the
@@ -4710,8 +4707,8 @@ async function runFaultCutCell(
     ? (await execInBox(fixture, box, `cat ${cursorPath} 2>/dev/null || echo MISSING`)).stdout ?? ''
     : '';
   const overlayPreHead = strategy === 'overlay-cas' ? await headObject(fixture, box, `${prefix}cursor.json`) : null;
-  // THE ACKED BARRIER. Only candidate arms record barriers; legacy arms jump
-  // straight to the victim, with nothing to lose.
+  // THE ACKED BARRIER. Only candidate arms record barriers; the non-candidate
+  // arms jump straight to the victim, with nothing to lose.
   let barrierGeneration: string | null = null;
   let preRootId: string | null = null;
   if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
@@ -4926,7 +4923,7 @@ async function closeWakeOpsWindow(
  * The mounts the restore took, retained line by line so the count carries its
  * method. Candidate arms match the retained post-wake text against the
  * `/candidate` reply's own mount expectations, so nothing is restated for
- * them; the legacy three select the points their strategies declare.
+ * them; the three non-candidate arms select the points their strategies declare.
  */
 export function retainWakeMountLines(
   strategy: Strategy,
@@ -5947,13 +5944,13 @@ export function externallyAbortedArm(arm: Strategy, box: string, reason: string)
 /**
  * Measure one arm, and keep what it measured when it fails.
  *
- * TWO THINGS A MID-MEASUREMENT FAILURE USED TO COST, and this is where both are
- * paid back. The rows: the run loop replaced the arm with `unmeasuredArm`, so
- * every measured number was nulled and one note survived — the shape of every
- * arm in both 2026-08-31 artifacts. The instance: nothing released the box, so
- * the failed arm kept the class's only container instance and the NEXT arm's
- * create refused with `Maximum number of instances`, which is how one arm's
- * death took the arms behind it.
+ * TWO THINGS A MID-MEASUREMENT FAILURE COSTS ANYWHERE ELSE, and this is where
+ * both are paid. The rows: a run loop that replaces the arm with
+ * `unmeasuredArm` nulls every measured number and keeps one note — the shape
+ * of every arm in both 2026-08-31 artifacts. The instance: nothing releases the
+ * box, so the failed arm keeps the class's only container instance and the NEXT
+ * arm's create refuses with `Maximum number of instances`, which is how one
+ * arm's death takes the arms behind it.
  */
 export async function runArm(
   fixture: Fixture,
@@ -7168,8 +7165,9 @@ export function verifyRestoreBound(
 
 /**
  * The mount points one arm's wake takes. Candidate arms read theirs from the
- * `/candidate` reply at runtime and restate nothing; the legacy three restate
- * the constants their strategies declare, checked by the decision suite.
+ * `/candidate` reply at runtime and restate nothing; the three non-candidate
+ * arms restate the constants their strategies declare, checked by the decision
+ * suite.
  */
 const WAKE_MOUNT_POINTS = {
   'snapshot-chain': [DEVBOX_WORK_DIR, CHAIN_STORE_MOUNT_DIR, CHAIN_LOWER_BASE_DIR, CHAIN_DELTA_LAYER_ROOT],

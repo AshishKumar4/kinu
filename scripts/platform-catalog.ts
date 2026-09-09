@@ -478,8 +478,8 @@ if (import.meta.main) {
       .join(', ');
     // Counts on the success line; the LISTS live in `--report`.
     //
-    // They used to print here and that was the wrong shape: a warning nobody has
-    // to clear teaches the reader to skip the output, and this gate's whole value
+    // Printing them here is the wrong shape: a warning nobody has to clear
+    // teaches the reader to skip the output, and this gate's whole value
     // is that its output is read. Nor are they debt to ratchet — an uncited entry
     // is usually a behavioural fact with no numeric call site (nothing imports a
     // number from `isolate.codegen_blocked`; the code that obeys it cites it in

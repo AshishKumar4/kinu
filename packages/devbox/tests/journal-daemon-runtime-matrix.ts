@@ -691,9 +691,9 @@ async function checkSealedFiles(sealed: SealedFence, first: Fence, ctx: {
     && hardlinks[0]?.size === hardlinks[1]?.size,
     `rows=${JSON.stringify(hardlinks.map((entry) => [entry.path, entry.ino, entry.atimeNs, entry.size]))}`);
 
-  /* Modes and extended attributes used to be proven by copying them into
-   * the stage.  A delta stage holds no metadata at all, so the same two
-   * facts are proven where they now live: in the manifest row. */
+  /* Modes and extended attributes are proven in the manifest row, not by
+   * copying them into the stage: a delta stage holds no metadata at all, so the
+   * row is the only place these two facts live. */
   const moded = entryOf(sealed.manifest, 'posix/metadata.txt');
   assert(checks, 'manifest-mode-is-exact', moded.mode === 0o640, `mode=${moded.mode.toString(8)}`);
   const attributed = entryOf(sealed.manifest, 'posix/sealed-xattr.txt');
@@ -856,9 +856,9 @@ async function posixAndFence(): Promise<void> {
         base: second.base,
         sealWork: second.sealWork,
       };
-      /* Batching is still what the writer thread does — many records per pass
-       * under one lock — and it is now the whole of it: the pass no longer ends
-       * in an fdatasync, which the counter proves rather than implies. */
+      /* Batching is what the writer thread does — many records per pass under
+       * one lock — and it is the whole of it: the pass does not end in an
+       * fdatasync, which the counter proves rather than implies. */
       assert(checks, 'group-commit-shares-one-append-pass',
         snapshot.records > snapshot.batches && snapshot.walFsyncs === 0,
         `records=${snapshot.records} batches=${snapshot.batches} walFsyncs=${snapshot.walFsyncs}`);

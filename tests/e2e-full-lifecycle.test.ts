@@ -300,10 +300,9 @@ describe('E2E Full Lifecycle', () => {
     const db2 = new Database(DB_PATH);
     const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, hostRoot: null });
     // Handed over BEFORE the assertions below, not after them. `db` is already
-    // closed, so a failing assertion used to leave every later step holding a
-    // dead handle: step 7 reported `bun:sqlite` prepare errors that had nothing
-    // to do with what it asserts, and the run showed three failures for one
-    // cause.
+    // closed, so a failing assertion after the handover leaves every later step
+    // holding a dead handle: step 7 draws `bun:sqlite` prepare errors that have
+    // nothing to do with what it asserts, and one cause shows as three failures.
     db = db2;
     rt = rt2;
 

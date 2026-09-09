@@ -236,8 +236,8 @@ describe('decision honesty', () => {
   });
   test('validates embedded shared UploadIntent contracts rather than a copied shape', () => {
     // Valid in every field but the digest, so the refusal below is the shared
-    // UploadIntent rule and not an earlier plan field: the fixture used to
-    // carry an off-list tier and passed on that instead.
+    // UploadIntent rule and not an earlier plan field: an off-list tier in the
+    // fixture would make it fail on that instead.
     const invalid = {
       instrument: 'payload-transports', version: 1,
       plan: { runId: 'r', workerName: 'w', bucketName: 'b', seed: 1, sizesMiB: [...PAYLOAD_SIZES_MIB], reps: 1, concurrency: 1, startedAt: '2026-08-26T00:00:00.000Z' },

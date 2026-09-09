@@ -1,13 +1,12 @@
 /**
  * The sidecar: one long-lived process that seals, publishes and reports.
  *
- * WHAT IT REPLACES. Every checkpoint used to start a `bun` process inside the
- * container, load this package's whole module graph, fence once, publish, and
- * exit — and a restore started another. At a two-second seal cadence that
- * process start IS the cost. This is the same code as one resident object: the
- * head it opened, the parent it authenticated, the extent boundaries it handed
- * the daemon, and the counters it has measured all survive from one seal to
- * the next.
+ * WHY IT IS RESIDENT. A `bun` process started per checkpoint loads this
+ * package's whole module graph, fences once, publishes and exits — and a
+ * restore starts another. At a two-second seal cadence that process start IS
+ * the cost. One resident object instead: the head it opened, the parent it
+ * authenticated, the extent boundaries it handed the daemon, and the counters
+ * it has measured all survive from one seal to the next.
  *
  * WHAT ONE SEAL DOES, in order, and why the order is the order:
  *

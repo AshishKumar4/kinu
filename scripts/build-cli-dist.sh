@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Build the CLI once, here, and publish the result.
 #
-# The CLI used to ship as a source archive. Every fresh install ran
+# Shipping the CLI as a source archive makes every fresh install run
 # `bun install --frozen-lockfile` on the whole monorepo — measured on
 # 2026-09-01, cold, on a 12900K: 13.35 s of a 16.08 s install, 950 packages,
 # 105,648 files and 1.9 GB of the user's disk, with the workerd postinstall
@@ -73,10 +73,10 @@ mkdir -p "$OUT_DIR"
 # copies are distinguishable: "0.2.0+abc1234". package.json stays the single
 # version source and is READ, never written: the stamp is a bundle-time
 # define (src/display.ts reads process.env.KINU_BUILD_STAMP), so the source tree stays
-# byte-identical while this runs. It used to write the stamp into the manifest
-# and restore it on exit, and the deploy's parallel gate queue read the stamped
-# file from the CLI suite while this script had it — a race that failed
-# staging on 2026-09-02.
+# byte-identical while this runs. Writing the stamp into the manifest and
+# restoring it on exit instead gives that up: the deploy's parallel gate queue
+# reads the stamped file from the CLI suite while this script holds it — a race
+# that failed staging on 2026-09-02.
 sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 base_version="$("$BUN" -e '
   const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));

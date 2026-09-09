@@ -216,8 +216,8 @@ const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
 const opened: Database[] = [];
 const observationByKey = new Map<string, EvalObservation>();
 /** What this process adopted from an interrupted predecessor rather than drove.
- *  A rehydrated observation used to arrive without the spend that bought it, so
- *  the record's case list covered the run and its cost covered one process. */
+ *  Without this, a rehydrated observation arrives with no spend behind it, so
+ *  the record's case list covers the run while its cost covers one process. */
 const adoptedSpend = new AdoptedSpendMeter();
 let model: LanguageModel;
 let published = false;
@@ -380,10 +380,10 @@ for (const { task, repetition } of CASES) {
     // give: the attempt stored activity but no totals. Registering it is what
     // turns the omission into a stated one — this process will retry the case and
     // pay for it again, and the first attempt's cost stays outside the published
-    // figure. THREE causes reach here now: an operator cancellation, a process
-    // that died mid-case, and a turn the ENVIRONMENT killed. The third is the one
-    // this file used to settle terminally, which made a transient outage a
-    // permanent verdict; the accounting is identical for all three.
+    // figure. THREE causes reach here: an operator cancellation, a process that
+    // died mid-case, and a turn the ENVIRONMENT killed. Settling the third
+    // terminally would make a transient outage a permanent verdict; the
+    // accounting is identical for all three.
     adoptedSpend.adopt(observation, record.activity);
   }
 }
@@ -685,9 +685,9 @@ describeEval('Agent behaviour over the run-event ledger', {
           // ratchet.
           //
           // AN OUTAGE IS NOT A VERDICT, so `disposeFailedCase` also decides
-          // whether the case SETTLES. Both halves used to be derived here and the
-          // pair `errored` + `markSettled` was the defect: a resumed run skipped
-          // the outage-killed cases and inherited a result the environment
+          // whether the case SETTLES. Deriving both halves here invites the pair
+          // `errored` + `markSettled`, and that pair is the defect: a resumed run
+          // skips the outage-killed cases and inherits a result the environment
           // produced, permanently, for a failure that is transient by definition.
           //
           // The thrown error still fails THIS run's test with INFRA_FAILURE_MARKER
@@ -743,16 +743,16 @@ describeEval('Agent behaviour over the run-event ledger', {
     // task.
     expect(out.toolCalls, `${input.task.id}: turn was ungraded — 0 tool calls`).toBeGreaterThan(0);
 
-    // WHAT IS DELIBERATELY *NOT* ASSERTED HERE, having been tried and removed.
-    // An earlier version asserted that an `edit`-tagged task must have attempted
-    // a file edit. The first live flash run made it red: given `ws-inventory` the
-    // agent solved the task correctly using four `run` calls and shell
-    // redirection, never touching the `file` primitive, so `edit_landing` had a
-    // zero denominator. That is a genuine BEHAVIOURAL FINDING — the model prefers
-    // shell over the edit primitive, which also means those turns produce no
-    // gradable edit signal at all — and turning a finding into a gate is exactly
-    // the flaky red this file's next paragraph warns about. It is measured by
-    // `tag_expectation` below and reported as a rate instead.
+    // WHAT IS DELIBERATELY *NOT* ASSERTED HERE: that an `edit`-tagged task must
+    // have attempted a file edit. On the first live flash run, given
+    // `ws-inventory` the agent solved the task correctly using four `run` calls
+    // and shell redirection, never touching the `file` primitive, so
+    // `edit_landing` had a zero denominator. That is a genuine BEHAVIOURAL
+    // FINDING — the model prefers shell over the edit primitive, which also
+    // means those turns produce no gradable edit signal at all — and turning a
+    // finding into a gate is exactly the flaky red this file's next paragraph
+    // warns about. It is measured by `tag_expectation` below and reported as a
+    // rate instead.
 
     // Scores RECORDED, never gated on a floor. The mechanism this panel once
     // headlined converted 0% of eligible turns on a recorded baseline where a
@@ -779,12 +779,12 @@ describeEval('Agent behaviour over the run-event ledger', {
  * good and the agent bad, and that is the finding we want; what neither of these
  * tolerates is a corpus on which no finding is POSSIBLE.
  *
- * These deliberately do NOT assert mechanism coverage. An earlier version of this
- * ticket asserted that every scorer must have a non-zero eligibility count, and
- * that was wrong: it makes mechanism coverage a target, and adding tasks to move
- * a mechanism meter is how a rate that converted 4/4 wherever the work
- * was divisible came to be reported as an 85% failure. Mechanism telemetry is
- * recorded in full and explains a moved outcome after the fact. It is not a bar.
+ * These deliberately do NOT assert mechanism coverage — no scorer is required to
+ * have a non-zero eligibility count. Such a bar makes mechanism coverage a
+ * target, and adding tasks to move a mechanism meter is how a rate that
+ * converted 4/4 wherever the work was divisible came to be reported as an 85%
+ * failure. Mechanism telemetry is recorded in full and explains a moved outcome
+ * after the fact. It is not a bar.
  */
 describe('corpus quality — can this corpus rank anything at all', () => {
   test('craft reuse here is autonomous; no case instructs crafting or reuse', () => {

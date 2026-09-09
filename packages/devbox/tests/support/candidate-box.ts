@@ -235,7 +235,7 @@ export interface CandidateBoxHarness extends Harness<InstanceType<typeof Devbox<
  * a runner that answers. The policy's port probe is shortened the way every
  * candidate test shortens it: the admission probe is a real wait, and nothing
  * here is about its length. `name` gives the box a derived identity the way
- * production derives it; omitted, the box keeps the legacy fixed identity.
+ * production derives it; omitted, the box keeps the shared fixed identity.
  */
 export function candidateBox(format: CandidateContainerFormat, name?: string): CandidateBoxHarness {
   const bucket = memoryBucket();
@@ -284,7 +284,7 @@ export function candidateBox(format: CandidateContainerFormat, name?: string): C
  * the storage rows, the bucket bytes and the stopped container disk survive.
  * The container disk is transplanted so the wake takes the same-instance
  * repair, with the boot marker intact. `name` must be the first box's name so
- * both isolates derive one identity; omitted, both keep the legacy one.
+ * both isolates derive one identity; omitted, both keep the shared fixed one.
  */
 export function reactivateCandidateBox(
   format: CandidateContainerFormat,

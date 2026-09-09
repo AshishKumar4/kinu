@@ -493,17 +493,17 @@ describe('the stored record is untrusted input', () => {
     expect(normalizeOverlayCasState({ ...sound, lastFailure: { at: 'later', reason: 'x' } })).toBeNull();
   });
 
-  test('THE SIGNATURE ROWS AN OLDER ROW CARRIED ARE NOT READ BACK', () => {
-    // The scan cache moved into the store, beside the bytes it describes and
-    // beside the scan that consumes it. A row from the release that kept those
-    // rows here still parses — its clock and its failure are the two facts this
-    // object acts on — and the cache it carried is deliberately dropped rather
-    // than copied forward into state nothing reads.
-    const legacy = {
+  test('THE SIGNATURE ROWS A ROW MAY CARRY ARE NOT READ BACK', () => {
+    // The scan cache lives in the store, beside the bytes it describes and
+    // beside the scan that consumes it. A durable row that ALSO carries
+    // signature rows still parses — its clock and its failure are the two facts
+    // this object acts on — and the cache it carries is deliberately dropped
+    // rather than copied forward into state nothing reads.
+    const withSignatures = {
       lastCheckpointAt: 11,
       signatures: { 'a.txt': { kind: 'file', mode: 0o644, mtimeMs: 1, size: 4, hash: 'a'.repeat(64) } },
     };
-    const state = normalizeOverlayCasState(legacy);
+    const state = normalizeOverlayCasState(withSignatures);
     expect(state?.lastCheckpointAt).toBe(11);
     expect(Object.hasOwn(state ?? {}, 'signatures')).toBe(false);
   });
@@ -526,7 +526,7 @@ describe('digest identity', () => {
 // container-side runner, so these tests drive the ports the Durable Object
 // really has — mount, invoke, validate, write down — and assert what it does
 // with what the runner printed. Nothing here fakes a shell, because the
-// adapter no longer builds one.
+// adapter builds none.
 
 const INTERVAL_MS = 5 * 60_000;
 
@@ -712,7 +712,7 @@ describe('attach — replay first, mount last, receipt believed only when it par
   });
 
   test('A STORE THAT HAS FOLDED IS NOT EMPTY, and the cursor is how attach knows', async () => {
-    // The classification the prefix listing used to answer. A folded store has
+    // The classification a prefix listing would answer. A folded store has
     // a cursor past zero and may have nothing pending at all, so "no pending
     // entries" alone would call it fresh — and a box that reports `empty` for a
     // workspace holding a folded tree is a box a caller may re-seed over.
@@ -804,9 +804,9 @@ describe('attach — replay first, mount last, receipt believed only when it par
     expect(record.calls).not.toContain('mountOverlay');
     expect(record.calls).not.toContain('mountStore');
     // AND IT DOES NOT LIST THE PREFIX EITHER. This path holds no receipt, so
-    // describing the store would mean paying for the listing — which is what it
-    // used to do, making the cheapest attach carry the tree-size term twice over
-    // a container's life.
+    // describing the store would mean paying for the listing, which would make
+    // the cheapest attach carry the tree-size term twice over a container's
+    // life.
     expect(record.calls).not.toContain('inventory');
     expect(outcome.detail).toBe('overlay-cas overlay already mounted');
   });

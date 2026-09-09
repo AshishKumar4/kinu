@@ -141,7 +141,7 @@ describe('DO init-gate purity — container-start hook', () => {
   });
 
   test('`async` is a violation when it holds an await that is not the admitted restore', () => {
-    // `async` is no longer refused outright on this hook — the admitted restore
+    // `async` is not refused outright on this hook — the admitted restore
     // is held HERE, deliberately — so the wire that must stay live is the one
     // that refuses every OTHER await by name.
     const widened = `export class KinuSandbox extends Sandbox<Env> {

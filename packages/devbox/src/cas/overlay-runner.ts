@@ -147,12 +147,12 @@ export interface ScanCacheUpdate {
  * the path no longer exists to be detected.
  *
  * `changed` IS THE WRITE CONDITION, and it is reported from here because here
- * is the only place that knows it. The caller used to infer it — "staging took
- * fewer entries than the scan measured, so some row is stale" — and that
+ * is the only place that knows it. The caller cannot infer it — "staging took
+ * fewer entries than the scan measured, so some row is stale" — because that
  * inference is PERMANENTLY TRUE for an upper holding one deletion or one opaque
  * directory: both re-emit an entry on every pass and neither leaves a row that
- * could ever satisfy the comparison. A box holding a single deleted file
- * therefore rewrote its whole scan cache every interval, forever, to store
+ * could ever satisfy the comparison. A box holding a single deleted file would
+ * therefore rewrite its whole scan cache every interval, forever, to store
  * bytes identical to the ones already there. Measured on the deployed 1 MB arm
  * at one 25,072 B PUT of 1,975 ms per idle tick.
  *
@@ -624,15 +624,14 @@ export type OverlayRunnerRequest = {
  * whether anything changed, what it moved, what a fold consumed, what the reap
  * took back, and where the durable cursor now stands.
  *
- * `movedBytes` IS A MEASUREMENT, NOT A SUM OF ENTRY SIZES. It used to be the
- * logical size of every journalled file, which is neither what a commit writes
- * nor a quantity a caller can check against the store: a rename journals a
- * whole file and uploads no content, so the old figure billed bytes that never
- * moved, while the journal batch, the tree writes, the manifest and the cursor
- * — all real objects — were billed to nobody. This is the store's own
- * `bytesPut` delta across the operation: the bytes this run WROTE. Not net
- * growth — an overwrite replaces bytes and the reap removes them, so the prefix
- * can shrink through a run that moved plenty.
+ * `movedBytes` IS A MEASUREMENT, NOT A SUM OF ENTRY SIZES. The logical size of
+ * every journalled file is neither what a commit writes nor a quantity a caller
+ * can check against the store: a rename journals a whole file and uploads no
+ * content, so that figure bills bytes that never moved, while the journal batch,
+ * the tree writes, the manifest and the cursor — all real objects — are billed
+ * to nobody. This is the store's own `bytesPut` delta across the operation: the
+ * bytes this run WROTE. Not net growth — an overwrite replaces bytes and the
+ * reap removes them, so the prefix can shrink through a run that moved plenty.
  *
  * `foldedSeq` is the durable cursor as this run left it: unchanged by a tick,
  * advanced by a fold, and merely READ by a restore. It is what makes a fresh
@@ -705,11 +704,10 @@ export async function runOverlayRunner(request: OverlayRunnerRequest): Promise<O
   // THE CACHE IS WRITTEN ONLY WHEN A ROW CHANGED, and an idle tick therefore
   // writes NOTHING AT ALL. This object carries one row per path in the upper,
   // so an npm-shaped workspace makes it the largest thing a tick touches — and
-  // it used to be rewritten unconditionally, so a box sitting idle paid a PUT
-  // proportional to its own size every interval, forever, to store bytes
-  // identical to the ones already there. The receipt then said `entries: 0`
-  // while the prefix had grown, and the adapter turned that into a skip
-  // claiming nothing moved.
+  // rewritten unconditionally, a box sitting idle pays a PUT proportional to its
+  // own size every interval, forever, to store bytes identical to the ones
+  // already there. The receipt then says `entries: 0` while the prefix has
+  // grown, and the adapter turns that into a skip claiming nothing moved.
   //
   // The condition is the ROW SET, not a count of entries, and that is the whole
   // correction: counting said "write whenever staging took fewer entries than

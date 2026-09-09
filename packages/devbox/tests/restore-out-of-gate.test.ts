@@ -155,14 +155,14 @@ describe('the container-start hook carries no container work', () => {
   test('a schedule row naming a callback this class cannot call is dropped at activation, with no container start', async () => {
     // MEASURED IN PRODUCTION LOGS (build 6d19d50e7): `Callback
     // snapshotWorkspaceIfDue not found or is not a function`, twice a second
-    // per sandbox object, with the alarm re-arming for ever. The sweep used to
-    // run in the container-start hook, but the SDK fires that hook from
-    // `start()` (`@cloudflare/containers`, `container.js:583`) — never on a
-    // wake whose container is asleep — while the alarm loop still runs
+    // per sandbox object, with the alarm re-arming for ever. The container-start
+    // hook cannot host this sweep: the SDK fires that hook from `start()`
+    // (`@cloudflare/containers`, `container.js:583`) — never on a wake whose
+    // container is asleep — while the alarm loop still runs
     // (`container.js:1502-1535`). So the sweep runs in the constructor's
-    // activation gate instead, and this test activates the way the platform
-    // does: storage first with the rows already in it, then `new`, then no
-    // `start()` at all.
+    // activation gate, and this test activates the way the platform does:
+    // storage first with the rows already in it, then `new`, then no `start()`
+    // at all.
     const storage = fakeStorage();
     // Overdue: the shape that re-arms the physical alarm at once and spins the
     // twice-a-second loop.
@@ -238,8 +238,8 @@ describe('T3: the post-reset activation restores through either door, and only o
 
   test('a box that claims `attached` on a container it never restored restores it', async () => {
     // The other half of the door's question, and the reason the start hook does
-    // NOT turn the generation over any more: the hook cannot tell a fresh
-    // instance from a probe of the one it is already on, and the boot id can.
+    // NOT turn the generation over: the hook cannot tell a fresh instance from a
+    // probe of the one it is already on, and the boot id can.
     const { box, container } = postResetBox();
     await box.devboxStartup();
     expect((await box.devboxState()).restoration).toBe('attached');

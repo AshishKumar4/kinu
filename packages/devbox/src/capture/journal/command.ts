@@ -27,8 +27,8 @@ export function journalDaemonArgv(options: JournalDaemonPaths): readonly string[
  * How long the daemon has, inside the container, to present its control socket
  * and its mount.
  *
- * Five seconds rather than the two the host used to spend polling: the wait
- * itself got LONGER while the cost collapsed, because it is now spent in one
+ * Five seconds, where a host polling from outside could only afford two: the
+ * wait is LONGER and the cost is lower at once, because it is spent in one
  * place instead of across forty round trips.
  */
 export const JOURNAL_READY_WAIT_SECONDS = 5;
@@ -50,19 +50,19 @@ export interface JournalReadyReading {
 /**
  * ONE container command that waits for the journal daemon to start serving.
  *
- * MEASURED DEFECT THIS REPAIRS. The host used to ask this question forty times
- * — `JOURNAL_READY_ATTEMPTS` execs, one round trip out to the container each,
- * with a short sleep between them — and the loop was bounded by the ATTEMPT
- * COUNT, never by time. That is only a bound while every exec is fast, and the
- * one case this loop exists for is the case where they are not: an exec against
- * a container the platform is reclaiming retries inside the SDK for up to two
- * minutes apiece, so forty attempts is eighty minutes of waiting that reports
- * nothing and that no caller can distinguish from a hang. On the deployed
- * bounded-layers arm it presented as exactly that: probe `blp1` sat at
- * `running=true restoration=unstarted` for 300,771 ms with its attach pinned,
- * and run `e2ecal0901002202` recorded 900,001 ms on the same step.
+ * MEASURED DEFECT THIS REPAIRS. Asking this question from the host costs one
+ * exec per attempt — forty round trips out to the container, with a short sleep
+ * between them — and bounds the loop by the ATTEMPT COUNT, never by time. That
+ * is only a bound while every exec is fast, and the one case this loop exists
+ * for is the case where they are not: an exec against a container the platform
+ * is reclaiming retries inside the SDK for up to two minutes apiece, so forty
+ * attempts is eighty minutes of waiting that reports nothing and that no caller
+ * can distinguish from a hang. On the deployed bounded-layers arm it presented
+ * as exactly that: probe `blp1` sat at `running=true restoration=unstarted` for
+ * 300,771 ms with its attach pinned, and run `e2ecal0901002202` recorded
+ * 900,001 ms on the same step.
  *
- * So the wait moves INSIDE the container, where a tick costs a sleep and two
+ * So the wait happens INSIDE the container, where a tick costs a sleep and two
  * syscalls instead of a network hop, and the whole probe costs ONE exec. The
  * bound is a wall deadline rather than an iteration count, so a container that
  * ticks slowly gets the same seconds as one that ticks fast. `date` counts

@@ -5,8 +5,8 @@
  * proven RED here against the historical source and green against the fix — a
  * gate whose rules are only ever exercised by a clean tree cannot tell you
  * whether it still works. The three false positives at the bottom are equally
- * load-bearing: this gate reads source text, and the first version of it fired
- * on prose describing the defect and on `/tmp/` paths belonging to the SANDBOX's
+ * load-bearing: this gate reads source text, so it must not fire on prose
+ * describing the defect, or on `/tmp/` paths belonging to the SANDBOX's
  * filesystem rather than to this box.
  */
 

@@ -21,22 +21,22 @@ const exportBase = '/var/tmp';
 /**
  * `KINU_RUNTIME_SCENARIO`, read ONCE and in one place.
  *
- * IT MUST NOT NARROW THIS SUITE AMBIENTLY, and it used to do exactly that. The
- * single test asserted `report.scenarios` equalled `[env.KINU_RUNTIME_SCENARIO]`
- * when the variable was set — so an eight-scenario matrix collapsed to one and
- * the equality still passed — and then `return`ed before every fact assertion:
+ * IT MUST NOT NARROW THIS SUITE AMBIENTLY. A single test that asserted
+ * `report.scenarios` equalled `[env.KINU_RUNTIME_SCENARIO]` when the variable
+ * was set — so an eight-scenario matrix collapsed to one and the equality still
+ * passed — and then `return`ed before every fact assertion loses all of it:
  * group-commit batching, both mmap rounds, the first fence's extents, torn
  * intents, durable results, compaction shrinkage, the three raced shutdowns, and
- * the re-audit of a real exported fence through the production client. All of it
- * gone, one passing test reported, and nothing in the output saying so. A
- * variable exported in a shell, or left in a CI env block, silently turned this
+ * the re-audit of a real exported fence through the production client. One
+ * passing test reported, and nothing in the output saying so. A variable
+ * exported in a shell, or left in a CI env block, would silently turn this
  * suite into an eighth of itself.
  *
- * The narrowing is STRUCTURAL now: the two tests at the bottom are mutually
+ * The narrowing is STRUCTURAL: the two tests at the bottom are mutually
  * exclusive, and whichever one a run is not doing appears in the report as a
- * SKIP. A narrowed run can no longer look like a full one, because the
- * full-matrix test is visibly absent from it — and the narrowed test carries the
- * scenario name in its own title, so the report says which eighth it measured.
+ * SKIP. A narrowed run cannot look like a full one, because the full-matrix
+ * test is visibly absent from it — and the narrowed test carries the scenario
+ * name in its own title, so the report says which eighth it measured.
  */
 const NARROWED = process.env.KINU_RUNTIME_SCENARIO;
 
@@ -180,10 +180,11 @@ function isScenarioName(name: string): name is ScenarioName {
  * Every scenario the matrix runs, and the FACTS each one's report must carry.
  *
  * Enumerated as a total map rather than as a sequence of statements after the
- * matrix returns, because the narrowing knob below used to skip all of them at
- * once. A scenario whose report this suite makes no further claim about is an
- * EXPLICIT empty entry: `[]` is a decision someone wrote down, an absent key is
- * an omission, and the two used to look identical.
+ * matrix returns, because statements after the matrix are what a narrowing knob
+ * skips all at once. A scenario whose report this suite makes no further claim
+ * about is an EXPLICIT empty entry: `[]` is a decision someone wrote down, an
+ * absent key is an omission, and a sequence of statements makes the two look
+ * identical.
  */
 const SCENARIO_FACTS = {
   'posix-fence-continuity': async (report) => {
@@ -301,9 +302,9 @@ describe('journal daemon runtime', () => {
       const report = await runMatrix(exportDir);
       expect(report.scenarios.map((candidate) => candidate.name)).toEqual([scenario]);
       assertMatrixOk(report);
-      // The named scenario's OWN facts still hold. The narrowed path used to
-      // assert `report.ok` and nothing else, so the one scenario a developer was
-      // debugging was also the one whose facts stopped being checked.
+      // The named scenario's OWN facts still hold. A narrowed path asserting
+      // `report.ok` and nothing else would make the one scenario a developer is
+      // debugging the one whose facts stop being checked.
       await SCENARIO_FACTS[scenario](report);
     },
     1_800_000,

@@ -208,7 +208,7 @@ export function judgeAdvisories(
           invariant: 'REVIEWED_ADVISORIES describes the tree as it is now',
           at,
           found: packagesSeen.has(pkg)
-            ? 'recorded as accepted, but no installed version matches it any more'
+            ? 'recorded as accepted, but no installed version matches it'
             : `recorded as accepted, but ${pkg} now has no matching advisory at all`,
           silently: 'a fixed or withdrawn advisory keeps its acceptance, so the list stops being '
             + 'a statement about reality and the next real advisory against this package is '

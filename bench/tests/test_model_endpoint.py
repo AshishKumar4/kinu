@@ -32,7 +32,7 @@ WRANGLER = (REPO_ROOT / "packages/cf-backend/wrangler.jsonc").read_text(encoding
 
 class ModelEndpointTest(unittest.TestCase):
     def test_the_default_endpoint_is_staging_not_production(self) -> None:
-        """The default used to be production, so a run that named nothing hit it."""
+        """The default is staging, so a run that names no origin cannot hit production."""
         self.assertEqual(
             DEFAULT_WORKERS_AI_MODEL_ID,
             "@cf/zai-org/glm-5.3",
@@ -62,13 +62,13 @@ class ModelEndpointTest(unittest.TestCase):
         self.assertEqual(token, "pta_eval")
 
     def test_product_proxy_never_reads_the_operators_signed_in_session(self) -> None:
-        """The defect this whole module was rewritten for.
+        """The defect this whole module exists to prevent.
 
-        A stored session sitting in the config file is a person's credential. It
-        used to be the fallback here, which is how twenty-two ``drill*``
-        workspaces and a ``settle-probe`` came to sit on the owner's PRODUCTION
-        account. Present-and-ignored is the assertion; merely absent would pass
-        against the old code too.
+        A stored session sitting in the config file is a person's credential,
+        and a fallback to it here is how twenty-two ``drill*`` workspaces and a
+        ``settle-probe`` could come to sit on the owner's PRODUCTION account.
+        Present-and-ignored is the assertion; an absent config file would pass
+        whether or not the fallback exists.
         """
         with tempfile.TemporaryDirectory() as temp:
             config_path = Path(temp) / "config.json"

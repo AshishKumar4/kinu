@@ -266,7 +266,7 @@ describe('against the real tree', () => {
     expect(audit.citedIds.length).toBeGreaterThan(0);
   });
 
-  test('the prompt no longer types the platform number as prose', () => {
+  test('the prompt cites PLATFORM_CATALOG and types no platform number as prose', () => {
     // Source-level, and deliberately free of the core module graph: eight
     // streams are editing `packages/core` concurrently, and a sibling's
     // half-written import would otherwise report THIS invariant as broken.
@@ -277,9 +277,9 @@ describe('against the real tree', () => {
 
   test('the number the model is told about the workspace is RENDERED from the catalog', async () => {
     // Source text alone only proves the import exists. This renders the real
-    // prompt and reads the sentence back: it used to type "~128 MB" as prose,
-    // and byte-identical output is what proves the derivation REPLACED the
-    // literal rather than sitting beside it.
+    // prompt and reads the sentence back, so a hard-typed "~128 MB" cannot sit
+    // beside the derivation and pass: the number the model is told about the
+    // workspace has to come from the catalog.
     //
     // Dynamic because `createTestRuntime` reaches package internals that must
     // resolve after this file's own module graph, exactly as the core suites do.
@@ -294,6 +294,6 @@ describe('against the real tree', () => {
     });
     const mb = platformFact('worker.isolate.memory').limit?.value ?? 0;
     expect(mb).toBeGreaterThan(0);
-    expect(rendered).toContain(`~${String(mb / (1000 * 1000))} MB shared by everything in it`);
+    expect(rendered).toContain(`The shell shares ~${String(mb / (1000 * 1000))} MB with the Worker.`);
   });
 });

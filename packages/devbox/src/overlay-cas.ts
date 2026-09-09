@@ -48,7 +48,7 @@
  *   (blob reuse).
  *
  *   THAT BYTE FIGURE IS SUPERSEDED and is kept only as the labelled record of
- *   what was measured. The manifest is no longer on this path: a restore reads
+ *   what was measured. There is no manifest on this path: a restore reads
  *   `cursor.json` and lists `journal/`, and `tests/overlay-runner.test.ts`
  *   asserts that trace exactly, against prefixes differing 100× in object
  *   count. Nothing re-measured the LOCAL harness after the change, so the
@@ -232,9 +232,9 @@ export interface OverlayCasPorts {
    * mount's answer would come from a cache.
    *
    * CHECKPOINT ONLY, AND ATTACH MUST NEVER CALL IT. This is a LIST over the
-   * whole prefix, so its cost rises with the tree — and attach used to call it
+   * whole prefix, so its cost rises with the tree — and an attach calling it
    * twice, once to describe an already-mounted overlay and once to classify a
-   * fresh one, which put an O(tree) term in the one operation whose whole claim
+   * fresh one, puts an O(tree) term in the one operation whose whole claim
    * is that recovery is O(pending change). A checkpoint has already scanned the
    * upper and moved bytes when it asks, and `CheckpointOutcome.bytes` is the
    * cross-strategy figure that answer feeds; attach classifies from the restore
@@ -249,10 +249,10 @@ export interface OverlayCasPorts {
    *
    * MEASURED DEFECT THIS REPAIRS. A container replaced under an attached box
    * has no overlay, and every write until the replacement is noticed lands in
-   * the bare work directory. The attach that follows used to lay the overlay
-   * straight OVER those bytes: they were still on the disk, invisible under the
-   * mount, so the upper this strategy scans was empty, no journal entry was
-   * ever written, the fold had nothing to fold, and the wake reported `empty`
+   * the bare work directory. The attach that follows must NOT lay the overlay
+   * straight over those bytes: they stay on the disk, invisible under the
+   * mount, so the upper this strategy scans reads empty, no journal entry is
+   * ever written, the fold has nothing to fold, and the wake reports `empty`
    * for a box that had been written to — twice, on the deployed runs of
    * 2026-08-31 (`overlay-cas` arm).
    *
@@ -472,15 +472,14 @@ export function overlayCasStorage(ports: OverlayCasPorts): DevboxStorage {
     // marker that had been journalled, folded and cursored came back as
     // `skipped 0B /workspace holds no objects yet` and was then lost.
     //
-    // BOTH FACTS ARE REQUIRED, because `movedBytes` now measures the bytes the
+    // BOTH FACTS ARE REQUIRED, because `movedBytes` measures the bytes the
     // run actually WROTE rather than the logical size of the journalled files. A skip
     // asserts it moved nothing — see CheckpointOutcome — and a run that
     // journalled no entry can still have written its scan cache: a redrive whose
     // journal batch already landed re-measures the upper, finds the pending
     // journal already holds it, and refreshes the rows so the next tick does not
     // re-digest the whole workspace. Reporting a skip for that would deny bytes
-    // that are durable, on the strength of a counter that used to be blind to
-    // them.
+    // that are durable, on the strength of a counter blind to them.
     if (kind === 'tick' && receipt.entries === 0 && receipt.movedBytes === 0) {
       return {
         kind: 'skipped',

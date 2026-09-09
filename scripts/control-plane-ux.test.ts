@@ -538,14 +538,15 @@ describe('the control plane in a browser', () => {
   }, 120_000);
 
   /**
-   * The four verbs that used to be API-only.
+   * The four verbs a panel can leave stranded.
    *
-   * `job.cancel`, `job.retry`, `job.dismiss` and `approvals.decide` were declared
-   * in the action union, proxied, and audited — and reachable from nothing but
-   * curl, because the jobs and approvals panels rendered a count and a
-   * `JSON.stringify`. This is the repo's built-but-unwired defect class, and the
-   * assertion that closes it is the SENT BODY: a button that opened a
-   * confirmation and posted nothing would satisfy a click-only check.
+   * `job.cancel`, `job.retry`, `job.dismiss` and `approvals.decide` are declared
+   * in the action union, proxied, and audited — all of which a jobs or approvals
+   * panel that renders a count and a `JSON.stringify` satisfies while leaving
+   * them reachable from nothing but curl. This is the repo's built-but-unwired
+   * defect class, and the assertion that closes it is the SENT BODY: a button
+   * that opened a confirmation and posted nothing would satisfy a click-only
+   * check.
    */
   test('every job and approval control sends its action, bound to the owning account', async () => {
     await withGallery(async ({ browser, origin }) => {

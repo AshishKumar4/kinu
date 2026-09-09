@@ -8,11 +8,11 @@
 // why it exists.
 //
 // The two defects have one shape: a durable row and a container process are two
-// steps, and every earlier version did them in the order that leaves the row
-// disagreeing with the world. Starting recorded the row AFTER the process, so a
-// lost answer hid a live process from the next attempt, which started a second
-// one. Stopping dropped the row EVEN WHEN THE KILL FAILED, so a process that was
-// still running lost the only thing that named it.
+// steps, and only one order leaves the row agreeing with the world. Starting
+// records the row BEFORE the process, so a lost answer cannot hide a live
+// process from the next attempt and send it to start a second one. Stopping
+// keeps the row UNLESS THE KILL IS CONFIRMED, so a process that is still
+// running never loses the only thing that names it.
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { Devbox, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
@@ -124,8 +124,8 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
 
   test('a kill that failed keeps the SAME spec, so a later stop can retry it', async () => {
     // KINU-N011. The spec is the only thing that names the process, and the
-    // restoration walks specs — so deleting it on a kill that did not land left
-    // a live server the box could no longer list, stop or bring back.
+    // restoration walks specs — so deleting it on a kill that did not land
+    // leaves a live server the box can no longer list, stop or bring back.
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
     container.killFaults.push(new Error('container transport reset'));
@@ -166,14 +166,14 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
   });
 
   test('KINU-N011: prose saying "unknown" and "not found" is NOT absence', async () => {
-    // What the classification used to be: `/not found|unknown/` over the
-    // rendered cause chain. Neither failure below says the process is gone.
-    // The first is the container reporting a failure IT could not classify,
-    // which is the SDK's own `UNKNOWN_ERROR`; the second is a value the SDK
-    // never classified at all, which is what every platform and transport
-    // failure reaching this call from outside its error tree looks like. Prose
-    // was the only thing that made either look like absence, and dropping the
-    // spec on it left a live server nothing named, listed, stopped or restored.
+    // NOT A PROSE MATCH: `/not found|unknown/` over the rendered cause chain
+    // classifies both failures below as absence, and neither says the process
+    // is gone. The first is the container reporting a failure IT could not
+    // classify, which is the SDK's own `UNKNOWN_ERROR`; the second is a value
+    // the SDK never classified at all, which is what every platform and
+    // transport failure reaching this call from outside its error tree looks
+    // like. Dropping the spec on prose leaves a live server nothing names,
+    // lists, stops or restores.
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
     container.killFaults.push(

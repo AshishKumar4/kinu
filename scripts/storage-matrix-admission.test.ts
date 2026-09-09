@@ -201,17 +201,16 @@ describe('G0-G9 storage run admission', () => {
 
   test('an arm whose cells OBSERVED every preregistered witness satisfies G2 and still ranks', () => {
     // THE RULING THIS PINS. A preregistered defect is a MEASURED COST, so an arm
-    // that reproduced all of its own is admitted AND rank-eligible. It used to
-    // be neither: `devboxArmEvidence` marked the incumbent `kind: 'control'`
-    // with `rankEligible: false`, and G2 would have refused any attempt to
-    // rank it.
+    // that reproduced all of its own is admitted AND rank-eligible. Marking the
+    // incumbent `kind: 'control'` with `rankEligible: false` in
+    // `devboxArmEvidence` would make it neither, and G2 would refuse any attempt
+    // to rank it.
     //
-    // The repair the witness cells exist for: the expectations are unchanged and
-    // the observation now happens, so a control that failed as predicted stops
-    // refusing the run it was meant to validate. The incumbent is the one
-    // frozen arm that preregisters witnesses; a retired arm keeps its witnesses
-    // and stays out of the ranking by the scope freeze, which the next test
-    // covers.
+    // What the witness cells buy: the expectations are unchanged and the
+    // observation happens, so a control that failed as predicted stops refusing
+    // the run it was meant to validate. The incumbent is the one frozen arm that
+    // preregisters witnesses; a retired arm keeps its witnesses and stays out of
+    // the ranking by the scope freeze, which the next test covers.
     const observed = devboxArmEvidence({
       strategy: 'snapshot-chain',
       verifyPassed: true,
@@ -470,17 +469,18 @@ describe('G0-G9 storage run admission', () => {
 
 // ── the devbox run's own requirements on the shared gates ───────────────────
 //
-// `evaluateRun` judges a RECORD, and the record this driver used to hand it had
-// `restore: []`, `declaredStages: []`, `cells: []` and `deciding: []`. Every one
-// of those gates then passed VACUOUSLY — `restoreProblems` iterates an empty
-// array, `completenessProblems` compares against `expectedCells([])`, and
+// `evaluateRun` judges a RECORD, and a record carrying `restore: []`,
+// `declaredStages: []`, `cells: []` and `deciding: []` passes every one of those
+// gates VACUOUSLY — `restoreProblems` iterates an empty array,
+// `completenessProblems` compares against `expectedCells([])`, and
 // `censorProblems` guards its only run-level check behind `scored.length > 0` —
-// so three of the ten gates could not fail at all. Its provenance was no better:
-// `git rev-parse HEAD` cannot see uncommitted driver changes, both timestamps
-// were synthesized from the calendar date one second apart, and `versions` held
-// the container image under the `@cloudflare/sandbox` key.
+// so three of the ten gates cannot fail at all. Provenance goes the same way:
+// `git rev-parse HEAD` cannot see uncommitted driver changes, two timestamps
+// synthesized from the calendar date one second apart time no run, and
+// `versions` holding the container image under the `@cloudflare/sandbox` key
+// names the wrong thing.
 //
-// Each test below fixes one of those directions. G3 and G4 refuse throughout by
+// Each test below pins one of those directions. G3 and G4 refuse throughout by
 // design (this driver runs no fault-cut or security-cell instrumentation), so
 // every assertion names its own gate rather than the whole verdict.
 
@@ -663,7 +663,7 @@ describe('the devbox run\'s own admission requirements', () => {
     expect(gateReasons(malformed, 'G0')).toContain('is not a sha256 digest');
   });
 
-  test('G0 refuses the synthesized one-second window the artifact used to carry', () => {
+  test('G0 refuses a run whose start and finish are the same instant', () => {
     const verdict = devboxVerdict(completeArms(), CANDIDATE_ARMS, fullIdentity({
       startedAt: '2026-08-30T00:00:00.000Z',
       finishedAt: '2026-08-30T00:00:00.000Z',

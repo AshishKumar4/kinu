@@ -107,9 +107,9 @@ describe('a candidate cold attach asks the container once per question', () => {
     // The empty box attached: no head, so nothing to restore and no runner to
     // start — the state a first cold attach is really in.
     expect(outcome.kind).toBe('empty');
-    // THE REGRESSION GUARD. The loop this replaced asked `JOURNAL_READY_ATTEMPTS`
-    // times — forty — and a container that answered slowly turned each of those
-    // into an unbounded SDK retry.
+    // THE REGRESSION GUARD. A host-side loop asks the question once per
+    // attempt — forty times — and a container that answers slowly turns each
+    // of those into an unbounded SDK retry.
     expect(readinessAsks(container.execs)).toHaveLength(1);
     // And the daemon really is serving, from the container's own report rather
     // than from the call having returned.

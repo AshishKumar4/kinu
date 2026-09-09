@@ -597,11 +597,11 @@ describe('every self-re-arming schedule needs a first link', () => {
   test('the sweep of unreachable schedule rows runs at activation, before any arming', () => {
     // MEASURED IN PRODUCTION (build 6d19d50e7): `Callback
     // snapshotWorkspaceIfDue not found or is not a function`, twice a second
-    // per sandbox object, with the alarm re-arming for ever. The sweep used to
-    // run first inside `#armContainerSchedules`, but the container-start hook
-    // never fires on a wake whose container is asleep, while the alarm loop
-    // still runs — so a start-gated sweep could never reach the rows that spin
-    // the loop. The sweep runs in the constructor's activation gate instead,
+    // per sandbox object, with the alarm re-arming for ever. A sweep inside
+    // `#armContainerSchedules` cannot reach those rows: the container-start
+    // hook never fires on a wake whose container is asleep, while the alarm
+    // loop still runs, so a start-gated sweep could never reach the rows that
+    // spin the loop. The sweep runs in the constructor's activation gate,
     // which settles before the runtime delivers any event, alarm included; the
     // start hook arms and nothing else.
     const schedules = bodyOf('async #armContainerSchedules(');
@@ -635,15 +635,15 @@ describe('every self-re-arming schedule needs a first link', () => {
   });
 
   test('every self-re-arming callback re-arms through ONE guard, not by hand', () => {
-    // This used to count the occurrences of `#arm(HEARTBEAT_CALLBACK)` in the
-    // heartbeat and require exactly five, one per path that leaves the box
-    // alive. That pin held the right property with the wrong instrument: it
-    // could not see a SIXTH path added without a re-arm, it broke on any
-    // refactor that did not change behaviour, and it said nothing at all about
-    // the other way the chain dies — a throw, which the alarm loop reduces to a
-    // console line before deleting the row.
+    // NOT BY COUNTING `#arm(HEARTBEAT_CALLBACK)`. Requiring exactly five
+    // occurrences in the heartbeat, one per path that leaves the box alive,
+    // holds the right property with the wrong instrument: it cannot see a
+    // SIXTH path added without a re-arm, it breaks on any refactor that does
+    // not change behaviour, and it says nothing at all about the other way the
+    // chain dies — a throw, which the alarm loop reduces to a console line
+    // before deleting the row.
     //
-    // Both failures are now one wrapper's job, except a failed container
+    // Both failures are one wrapper's job, except a failed container
     // admission: that callback must record its classified refusal and leave a
     // startup successor before it returns. The remaining calls are first links:
     // the container-start hook forges one per self-re-arming chain, the recovery
@@ -925,9 +925,9 @@ describe('the attach budget', () => {
   });
 
   test('the remainder only ever falls', async () => {
-    // ONE CLOCK FOR THE WHOLE RESTORATION. Every phase after the attach used to
-    // run outside any budget, and the listener proof carried a window per port,
-    // so three silent ports added about ninety seconds and nothing bounded the
+    // ONE CLOCK FOR THE WHOLE RESTORATION. Leave the phases after the attach
+    // outside any budget, with the listener proof carrying a window per port,
+    // and three silent ports add about ninety seconds with nothing bounding the
     // sum.
     const budget = openStartBudget(25_000);
     const first = budget.remainingMs();
@@ -1035,10 +1035,11 @@ describe('the attach budget', () => {
 
 describe('mount facts — the kernel is asked, not a marker', () => {
   test('DEPLOYED DEFECT: a fuse-overlayfs mount reads as mounted with NO dir options', () => {
-    // A deployed container answered "produced an overlay whose upper directory
-    // (unnamed) does not exist" because an earlier version parsed `upperdir` out
-    // of the mount line. fuse-overlayfs never publishes it. Both overlay
-    // families must read as mounted, and neither answer may depend on options.
+    // fuse-overlayfs never publishes `upperdir`, so nothing here may read the
+    // upper directory out of the mount line — that read is what produced the
+    // deployed answer "produced an overlay whose upper directory (unnamed)
+    // does not exist". Both overlay families must read as mounted, and neither
+    // answer may depend on options.
     expect(isOverlayMounted(OVERLAY_MOUNTS, '/workspace')).toBe(true);
     expect(isOverlayMounted(KERNEL_OVERLAY_MOUNTS, '/workspace')).toBe(true);
     expect(OVERLAY_MOUNTS).not.toContain('upperdir');
@@ -1080,9 +1081,9 @@ describe('mount facts — the kernel is asked, not a marker', () => {
 // 2)`, in both cases AFTER the checkpoint had already committed.
 //
 // The command is asked the same question the container asks — see
-// `support/session-shell.ts`, which every fake exec seam in this package now
-// runs first, so a template that loses a separator fails the suite rather than
-// the deployment.
+// `support/session-shell.ts`, which every fake exec seam in this package runs
+// first, so a template that loses a separator fails the suite rather than the
+// deployment.
 describe('a composed container command is one a POSIX shell will run', () => {
   test('the holder-release command parses, and says nothing that ends the shell', () => {
     const command = releaseWorkdirHoldersCommand(DEVBOX_WORKDIR);
@@ -1159,9 +1160,9 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
    * string. Three of them, one per class of holder this command distinguishes:
    *
    *   - a STRANGER holding an fd is signalled, dies, and is therefore ABSENT
-   *     from the answer. That absence is the repair: the command used to echo
-   *     the list it captured BEFORE signalling, so a writer it had just killed
-   *     was still reported as holding. Deployed runs `probe09011530` and
+   *     from the answer. That absence is the whole point: a command that echoed
+   *     the list it captured BEFORE signalling would still report a writer it
+   *     had just killed as holding. Deployed runs `probe09011530` and
    *     `hp0901170218` both refused a stop naming a `bun` pid that the `/proc`
    *     report taken afterwards proves was already gone — a survivor of
    *     SIGKILL, which cannot exist, sent the diagnosis after the wrong process
@@ -1198,13 +1199,12 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
    * leaked two `sleep 60` processes whenever an assertion failed before its
    * last line.
    *
-   * WHAT IT NO LONGER EXERCISES: a pid that answers NEITHER probe — a zombie,
-   * or another user's process refusing both reads. A host process table offered
+   * WHAT IT DOES NOT EXERCISE: a pid that answers NEITHER probe — a zombie,
+   * or another user's process refusing both reads. A host process table offers
    * those by accident; eight pids under one uid do not. A zombie planted on
    * purpose was reaped by the shell in one run of three, which is the kind of
-   * green this repair exists to remove, so it is not planted. Both cases are
-   * handled by the `2>/dev/null` on each probe and neither was asserted here
-   * before.
+   * green this suite exists to remove, so it is not planted. Both cases are
+   * handled by the `2>/dev/null` on each probe, and neither is asserted here.
    *
    * Linux only, like the `/proc` walk it exercises. It needs `unshare` and an
    * unprivileged user namespace — a weaker demand than the privileged
@@ -1610,9 +1610,9 @@ describe('archive options', () => {
   });
 
   test('the excludes come from the caller, so both modes obey one policy', () => {
-    // This function used to spell CHAIN_EXCLUDES itself while the chain path
-    // asked the box for `archiveExcludes`, so a box that replaced the policy was
-    // obeyed in one mode and ignored in the other.
+    // `chainBackupOptions` spelling CHAIN_EXCLUDES itself while the chain path
+    // asks the box for `archiveExcludes` would obey a box that replaced the
+    // policy in one mode and ignore it in the other.
     expect(chainBackupOptions(false, ['only-this']).excludes).toEqual(['only-this']);
   });
 });
@@ -1647,9 +1647,9 @@ describe('the storage dispatch is exhaustive over the strategy union', () => {
   // source shape for the same reason `onStart`'s arming is. The rule is what
   // matters: every name the union admits has an EXPLICIT arm in `#buildStorage`.
   //
-  // The defect it exists for is silence, not a crash. The dispatch used to end
-  // in `: snapshotChainStorage(...)`, so a strategy nobody had wired still
-  // produced a working box — the chain, wearing the other strategy's name. A
+  // The defect it exists for is silence, not a crash. A dispatch ending in
+  // `: snapshotChainStorage(...)` lets a strategy nobody wired still
+  // produce a working box — the chain, wearing the other strategy's name. A
   // benchmark arm in that state reports a full column of numbers that are the
   // chain measured twice, and nothing looks wrong anywhere.
   const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');

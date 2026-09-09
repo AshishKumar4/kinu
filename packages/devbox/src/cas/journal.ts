@@ -56,9 +56,9 @@ export function stampEntries(
  * The seq through which `tree/` has been folded.
  *
  * ABSENT means zero and that is a real state: a store nothing has folded yet.
- * PRESENT BUT MALFORMED is corruption and it refuses, naming the key. It used
- * to fall back to 0, which reads as "nothing folded" — so a single unreadable
- * cursor would silently re-fold the entire store from the beginning and, worse,
+ * PRESENT BUT MALFORMED is corruption and it refuses, naming the key. Falling
+ * back to 0 there reads as "nothing folded" — so a single unreadable cursor
+ * would silently re-fold the entire store from the beginning and, worse,
  * make every already-folded path look pending. Loud beats an unbounded redo
  * wearing the face of a fresh store.
  */

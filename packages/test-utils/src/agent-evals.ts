@@ -153,9 +153,9 @@ export interface SettleVisibilityScore {
  *
  * Two kinds of root are excluded in SQL rather than missed. Steer-as-Branch runs
  * journal through the same seam but are deliberately filtered out of the run list by
- * their id prefix, and a legacy NULL root is invisible to every root-scoped query —
- * counting either would report a permanent, unfixable failure and teach everyone to
- * ignore this score.
+ * their id prefix, and a row whose root is NULL is invisible to every root-scoped
+ * query — counting either would report a permanent, unfixable failure and teach
+ * everyone to ignore this score.
  *
  * `read` defaults to the production reader and exists so the scorer's own tests can
  * hand it the reader as it was WHEN THE BUG SHIPPED — one that reads a single half.
@@ -519,9 +519,9 @@ export const spillRetrieval: BehaviourScorer = {
  * A run record carries the census as prose because `EvalScoreRow` has one
  * `detail` string, so the mix is the only durable record of WHICH calls failed.
  * `scripts/eval-triage.ts` reads it back to rank a defect against its key, and a
- * reader that guessed at this format would read the LEGACY detail — a usage
- * histogram carrying no failure attribution at all, which is why the label is
- * matched rather than the shape.
+ * reader that guessed at this format would take a detail that is only a usage
+ * histogram — succeeded/failed/unmeasured counts, no failure attribution at all
+ * — which is why the label is matched rather than the shape.
  */
 const FAILURE_MIX_LABEL = 'failed: ';
 
@@ -553,8 +553,9 @@ export function parseFailureMix(detail: string): readonly (readonly [string, num
 }
 
 /** Tool health is attributed by the producer outcome, not by returned text.
- * Missing historical outcomes stay in the observed denominator and suppress
- * the rate. Explicit legacy errors prove generic failure, not a failure class. */
+ * A row with no outcome stays in the observed denominator and suppresses the
+ * rate. A row carrying only an `error` string proves generic failure, not a
+ * failure class. */
 export const toolOutcomes: BehaviourScorer = {
   name: 'tool_outcomes',
   asserts: 'producer-attributed tool outcomes, with complete attribution required for a rate',

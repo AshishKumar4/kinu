@@ -97,7 +97,7 @@ describe('the stale bystander rule — an unjournalled path stays detectable', (
 
   test('A RE-MEASURED ROW IDENTICAL TO THE STORED ONE IS NOT A CHANGE, which is what '
     + 'keeps an idle tick from writing', () => {
-    // The condition the caller used to infer from entry counts. A scan that
+    // The condition a caller would infer from entry counts. A scan that
     // measures the same bytes it measured last time produces the same row, and
     // storing it again would cost a PUT proportional to the whole upper to
     // publish bytes already there.
@@ -294,7 +294,7 @@ describe('overlay CAS runner', () => {
       const receipt = await runOverlayRunner({ operation: 'fold', upper: paths.upper, store: paths.store });
       // 5 content bytes plus the journal batch, the scan cache, the tree copy,
       // the manifest and the cursor — every object a fold writes, which is what
-      // `movedBytes` now means. Asserted exactly below in its own suite.
+      // `movedBytes` means. Asserted exactly below in its own suite.
       expect(receipt).toMatchObject({ operation: 'fold', entries: 1, foldedEntries: 1, foldedSeq: 1 });
       expect(receipt.movedBytes).toBeGreaterThan(5);
       expect((await scanCache(paths.store))['hello.txt']?.kind).toBe('file');
@@ -461,12 +461,12 @@ function bytesWritten(watched: WatchedCasStore): number {
 
 describe('attach cost — fixed when nothing is pending, whatever the tree holds', () => {
   test('A 100× LARGER TREE COSTS THE SAME ATTACH, byte for byte and call for call', async () => {
-    // THE TREE-SIZE TERM, measured. attach used to call `inventory()`, a LIST
-    // over the whole prefix, to decide whether a store was empty and to describe
-    // one already mounted — so the operation advertised as O(pending change)
-    // carried a term that grew with every fold. Two stores differing 100× in
-    // object count have to produce the IDENTICAL trace; a listing anywhere in
-    // the attach path makes the second one longer or its bytes larger.
+    // THE TREE-SIZE TERM, measured. An attach calling `inventory()` — a LIST
+    // over the whole prefix — to decide whether a store is empty and to
+    // describe one already mounted puts a term that grows with every fold into
+    // the operation advertised as O(pending change). Two stores differing 100×
+    // in object count have to produce the IDENTICAL trace; a listing anywhere
+    // in the attach path makes the second one longer or its bytes larger.
     //
     // THE CURSOR IS HELD EQUAL ON PURPOSE. Only the object count varies here,
     // because `foldedSeq` is written as a decimal and a larger one is a longer

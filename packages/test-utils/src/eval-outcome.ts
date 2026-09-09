@@ -2,15 +2,15 @@
  * The task-outcome contract: DID THE AGENT SOLVE THE CHALLENGE, on a continuous
  * scale, against ground truth nobody had to be persuaded of.
  *
- * WHY THIS EXISTS. The tier used to have no way to say a task was solved.
- * `EvalObservation` carried the eight mechanism scorers, the turn count and the
- * tool-call count and nothing else, and the headline "success" predicate was
- * `turns > 0 && toolCalls > 0` — the ADMISSIBILITY predicate wearing a
- * pass-rate's clothes. Every admissible observation satisfies it by
- * construction, so `pass@1` read 1.000 → 1.000 across two full runs and the
- * measured dispersion was exactly 0.0000: the metric could not vary. Hard tasks
- * bolted onto that instrument would have reported 1.000 → 1.000 too. So the
- * first thing to fix was never the corpus.
+ * WHY THIS EXISTS. Solved-or-not is a measurement the tier has to make for
+ * itself: `EvalObservation`'s mechanism scorers, turn count and tool-call count
+ * say only that a run HAPPENED. A headline built out of those is an
+ * ADMISSIBILITY predicate wearing a pass-rate's clothes — every admissible
+ * observation satisfies `turns > 0 && toolCalls > 0` by construction, which is
+ * how such a headline read `pass@1` 1.000 → 1.000 across two full runs with a
+ * measured dispersion of exactly 0.0000: a metric that cannot vary. Hard tasks
+ * bolted onto that instrument would report 1.000 → 1.000 too, so the first
+ * thing to fix is never the corpus.
  *
  * WHY IT IS ONE ROW AND NOT A NEW PIPELINE. `EvalScoreRow` already flows through
  * persistence, the paired comparator, admissibility and the tier's judges. The

@@ -219,10 +219,10 @@ destroys nothing, and refuses again if the attach fails again. Any attach that
 lands deletes the row.
 
 ONE BUDGET covers the whole restoration: the attach, the workload restart, each
-listener proof, each exposure, and the boot stamp. Only `attach()` used to be
-wrapped, and the listener proof carried a window per port, so three silent ports
-added about ninety seconds while every caller waited in the readiness gate and
-nothing bounded the total. Each step now draws an allowance — what is left divided
+listener proof, each exposure, and the boot stamp. Wrapping `attach()` alone,
+with the listener proof carrying a window per port, leaves three silent ports
+adding about ninety seconds while every caller waits in the readiness gate and
+nothing bounds the total. Each step draws an allowance — what is left divided
 by the steps still declared, every probe and exposure and the boot stamp included
 — so no one step can spend what the rest still need, and nothing is reserved.
 
@@ -272,10 +272,10 @@ instance the durable state expects. Replacement is a platform fact, not a
 package failure.
 
 Three of four schedule rows re-arm themselves. A broken chain does not restart
-itself. Devbox now arms all three initial rows because `devboxHeartbeat` cannot
+itself. Devbox arms all three initial rows because `devboxHeartbeat` cannot
 supply its own first link. Its idempotence guard counts only strictly-future
 rows: the SDK retains a fired row until its callback returns, so counting the
-active row used to suppress its successor.
+active row would suppress its successor.
 
 Devbox never enables `setKeepAlive(true)`. The SDK alarm loop's activity branch
 returns without an alarm. With keepAlive on, `onActivityExpired` logs, then an
@@ -300,10 +300,10 @@ a baseline, content counts as change.
 packages/devbox` exits 0. Each suite passes standalone, and their standalone
 counts equal the directory total.
 
-NO TEST COUNT IS RECORDED HERE, deliberately. This file used to carry one, and it
-was wrong within the hour every time: two runs of the same commit minutes apart
-gave different totals while suites landed around it, so the number measured the
-moment it was written rather than the package. Run the command; it answers with
+NO TEST COUNT IS RECORDED HERE, deliberately. A count written here is wrong
+within the hour: two runs of the same commit minutes apart gave different totals
+while suites landed around them, so the number measures the moment it was
+written rather than the package. Run the command; it answers with
 today's total. What is worth writing down is which suite pins WHAT, which is what
 follows.
 

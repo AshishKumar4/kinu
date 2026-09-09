@@ -307,7 +307,7 @@ try {
     assert.equal(
       firedIn(green, rule).length,
       0,
-      `anti-slop/${rule} fires on the corrected form, so the cutover has no green state to reach`,
+      `anti-slop/${rule} fires on the corrected form, so there is no green state to reach`,
     );
   }
 

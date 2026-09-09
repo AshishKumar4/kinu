@@ -31,9 +31,9 @@ export type UpperSignature = {
  * interval gate compares against, and `lastFailure` is how a refusal survives
  * the isolate: a scheduled callback reduces a throw to a console line, so
  * durable state is the only place a repeatedly failing checkpoint stays
- * visible. The signature rows this row used to carry moved into the store with
- * the scan that produces them — the Durable Object never reads them, and a
- * copy nothing reads is a copy that drifts.
+ * visible. The signature rows live in the store beside the scan that produces
+ * them, never here — the Durable Object never reads them, and a copy nothing
+ * reads is a copy that drifts.
  */
 export interface OverlayCasState {
   readonly lastCheckpointAt: number;
