@@ -72,22 +72,6 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
   return { text, reasoning, toolCalls };
 }
 
-/**
- * The whole run's trace, for a reader that has a finished result rather than
- * a live head: every step that carried prose, reasoning or a tool call, in
- * order. `toHeadStep` is the live path and this is the retrospective one, so
- * a report reconstructed after the fact reads the same as one streamed.
- */
-export function extractHeadSteps(steps?: ReadonlyArray<TraceStepLike>): HeadStep[] {
-  if (!Array.isArray(steps)) return [];
-  const trace: HeadStep[] = [];
-  for (const step of steps) {
-    const row = toHeadStep(step);
-    if (row) trace.push(row);
-  }
-  return trace;
-}
-
 /** The head's real final answer: the last text-bearing step (not just the last
  *  step), falling back to the model's reasoning text. */
 export function extractFinalText(result: ResultLike): string {

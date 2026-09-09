@@ -38,6 +38,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # `gate:commit-message` is a commit-tier gate, and the CI tier includes
+          # every commit-tier gate, so this job reads the range from the
+          # convention's boundary commit to HEAD. The default depth-1 checkout
+          # has no such range: the gate now refuses one rather than reporting a
+          # clean history it never read. Same setting and same reason as
+          # security-scan.yml.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Bun

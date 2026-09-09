@@ -325,7 +325,7 @@ describe('T4/T5: a request joins the one attempt, and is never held hostage to i
     // every later checkpoint behind it, and the armed operation row stayed
     // `pending` while the box answered every other segment with `a restoration
     // has been running in the request for N ms`. That is run 20260903140046's
-    // overlay-cas arm exactly: its first decisive `npm` checkpoint never
+    // shape exactly: its first decisive `npm` checkpoint never
     // settled inside the 1,500,000 ms operation deadline, and every segment
     // after it was refused with that sentence until the runner died.
     //

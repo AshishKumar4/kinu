@@ -1,11 +1,11 @@
-// One contract, five strategies.
+// One contract, one strategy, every point a container can die.
 //
-// WHY THIS FILE EXISTS, AND WHY IT IS NOT A SIXTH PER-STRATEGY SUITE. Four
-// classes of defect reached deployed benchmark runs with 15k lines of local
-// tests already green, and every one of them was a property of the CONTRACT
-// rather than of a strategy:
+// WHY THIS FILE EXISTS, AND WHY IT IS NOT PART OF `snapshot-chain.test.ts`.
+// Four classes of defect reached deployed benchmark runs with 15k lines of
+// local tests already green, and every one of them was a property of the
+// CONTRACT rather than of an implementation detail:
 //
-//   1. Control-plane envelopes written under the container's own mount subtree,
+//   1. Control-plane records written under the container's own mount subtree,
 //      so replacing the mount took the head with it.
 //   2. A wake refusing forever because a recorded delta size drifted from the
 //      object the store actually held.
@@ -13,22 +13,16 @@
 //      between the two durable writes of one commit.
 //   4. Teardown racing a container that had already stopped.
 //
-// Each per-strategy suite could see one strategy at one moment; none of them
-// asked "does this arm hand back the bytes it was given, from a blank disk,
-// after dying at each of its own commit sub-steps". That question has one
-// answer per strategy and the same shape for all five, so it is asked once,
-// here, through `tests/support/strategy-machine.ts` — which drives the SHIPPED
-// adapters through their own production ports and runs the shipped
-// container-side codecs in-process.
-//
-// IT FOUND TWO. `candidateContainerStorage` compared an operation kind against
-// a checkpoint kind, so every published quiesce re-entered its own loop and
-// published generations forever; and the merkle-pack index declared only the
-// packs its own build staged, so every THIRD commit failed. Both are one line,
-// both were invisible to every existing suite, and both have a named case here.
+// `snapshot-chain.test.ts` models the store as key-to-SIZE, so no byte ever
+// travels through it, and it cannot ask "does the strategy hand back the bytes
+// it was given, from a blank disk, after dying at each of its own commit
+// sub-steps". That question is asked here, through
+// `tests/support/strategy-machine.ts` — which drives the SHIPPED adapter
+// through its own production ports over a durable store and a container disk
+// that a replacement blanks.
 //
 // THE DENOMINATOR IS TYPE-CHECKED. `CONFORMANCE_ARMS` is keyed by
-// `DevboxStrategyName`, so a sixth strategy cannot be added to the union
+// `DevboxStrategyName`, so a second strategy cannot be added to the union
 // without this battery failing to compile, and `every declared seam is reached`
 // below refuses a seam list that has drifted from the code it names.
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -53,15 +47,13 @@ import {
   heldBytes,
   Seeded,
   textTree,
+  type NodeEntry,
   type TreeProperty,
 } from './support/tree-model';
-import { type NodeEntry } from '../src/capture/model';
-import { DURABILITY_AWAIT_POINTS, type DurabilityAwaitPoint } from '../src/durability/contracts';
 import { describeThrown } from '../src/lifecycle';
 import {
   ATTACH_OUTCOME_KINDS,
   parseDevboxStrategyName,
-  type CheckpointKind,
   type CheckpointOutcome,
   type DevboxStrategyName,
 } from '../src/storage';
@@ -94,9 +86,9 @@ async function expectOneGeneration(arm: ConformanceArm, what: string): Promise<v
   );
 }
 
-/** One tree as one comparable line. Path order is a strategy's own business:
- *  a chain lists the merged overlay, r2fs lists a key range, and a difference
- *  in order is not a difference in content. */
+/** One tree as one comparable line. Path order is the strategy's own business:
+ *  it lists the merged overlay, and a difference in order is not a difference
+ *  in content. */
 function canonical(rows: Record<string, string | undefined>): string {
   return JSON.stringify(
     Object.fromEntries(Object.entries(rows).sort(([left], [right]) => left < right ? -1 : 1)),
@@ -190,7 +182,7 @@ test('every strategy name has an arm, and every arm names a strategy', () => {
   // `DevboxStrategyName` breaks this file's types. This asserts the other
   // direction — that no key here is a name the package does not know.
   for (const [name] of armEntries) expect(parseDevboxStrategyName(name)).toBe(name);
-  expect(armEntries.length).toBe(5);
+  expect(armEntries.length).toBe(1);
 });
 
 for (const [name, open] of armEntries) {
@@ -213,12 +205,12 @@ for (const [name, open] of armEntries) {
 
     test('a quiesce with pending changes publishes exactly once and returns', async () => {
       // THE CASE THAT FOUND THE STALL, and the reason it is its own test rather
-      // than a consequence of the loop above. `candidateContainerStorage`
-      // compared its operation's kind (`barrier`) against the checkpoint's kind
-      // (`quiesce`) before returning, so a published quiesce always took the
-      // `continue`: every stop on a candidate arm published a fresh generation
-      // forever. A bounded-work budget makes that a NAMED failure at the second
-      // publication rather than a suite that hangs and gets its timeout raised.
+      // than a consequence of the loop above. A commit loop that compared its
+      // operation's kind (`barrier`) against the checkpoint's kind (`quiesce`)
+      // before returning took the `continue` on every published quiesce, so a
+      // stop published a fresh generation forever. A bounded-work budget makes
+      // that a NAMED failure at the second publication rather than a suite that
+      // hangs and gets its timeout raised.
       const arm = open();
       await attach(arm);
       for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
@@ -239,9 +231,8 @@ for (const [name, open] of armEntries) {
       // format's Nth generation is the first thing ever to READ the (N-1)th as
       // a parent — a restore reads the tree, not the closure — so a closure a
       // generation declares wrongly stays invisible until the generation after
-      // it. merkle-pack's index declared only the packs its own build staged,
-      // which made every third commit fail with "index extent is outside its
-      // declared pack" while two commits passed forever.
+      // it. An index that declared only the objects its own build staged made
+      // every third commit fail while two commits passed forever.
       const arm = open();
       await attach(arm);
       const seen: Record<string, string> = {};
@@ -326,9 +317,9 @@ for (const [name, open] of armEntries) {
 
       const after = await arm.controlPlane();
       if (before.objectKeys.length === 0 && before.rows.length === 0) {
-        // NO CONTROL PLANE AT ALL, which is r2fs's whole design: the object
-        // store IS the filesystem, so the payload subtree is the box and wiping
-        // it wipes everything. The obligation is the opposite one and it is
+        // NO CONTROL PLANE AT ALL is a real design: where the object store IS
+        // the filesystem, the payload subtree is the box and wiping it wipes
+        // everything. The obligation is the opposite one and it is
         // still real — a box with nothing left must stop claiming a head, or it
         // would serve a workspace it cannot fill while reporting success.
         expect(after.head).toBe(null);
@@ -369,26 +360,9 @@ for (const [name, open] of armEntries) {
 
       const declared = await arm.declaredPayload();
       // THE DECLARATION IS THE CONTRACT, so it is asserted rather than sniffed:
-      // an arm that quietly stopped declaring payload identities would
-      // otherwise slide into the weaker branch below and take the suite with it.
-      expect(declared.length > 0).toBe(arm.refusesCorruptPayload);
-      if (!arm.refusesCorruptPayload) {
-        // A PASS-THROUGH ARM DECLARES NOTHING, so there is nothing for it to
-        // refuse against — and pretending otherwise would assert a property the
-        // strategy never claimed. What it owes instead: it serves exactly the
-        // bytes the store holds, and it reports exactly the count the store
-        // holds, so a corruption is visible rather than laundered.
-        const key = arm.durable.list(arm.payloadPrefixes()[0]!)[0]!;
-        arm.durable.corrupt(key, 'flip');
-        const woken = await wake(arm);
-        const stored = arm.durable.get(key);
-        expect(stored).not.toBe(null);
-        expect(Object.values(await tree(arm))).toContain(new TextDecoder().decode(stored!));
-        expect(woken.detail).toContain(
-          String(arm.durable.inventory(arm.payloadPrefixes()[0]!).bytes),
-        );
-        return;
-      }
+      // an arm that quietly stopped declaring payload identities would corrupt
+      // nothing below and pass while doing it.
+      expect(declared.length).toBeGreaterThan(0);
 
       const target = declared[0]!;
       arm.durable.corrupt(target.key, 'flip');
@@ -494,7 +468,7 @@ for (const [name, open] of armEntries) {
 // payload refused by name), 6.8 (commit interrupted by a replacement) and 6.16
 // (teardown and checkpoint on a stopped container). They stay as they are: the
 // matrix below names them as `existing` rows. Cell 6.19 (stop then wake on the
-// SAME instance) needs the Devbox class and lives in `candidate-attach.test.ts`.
+// SAME instance) needs the Devbox class and lives in the harness suites.
 //
 // EVERY OTHER CELL IS NEW AND RED-CAPABLE. A cell is a function of an arm; the
 // matrix runs each cell against each of the five arms and records one of three
@@ -586,96 +560,7 @@ interface ComplexitySample {
  *  shows what it measured before the assertion fired. */
 const complexitySamples = new Map<string, ComplexitySample[]>();
 
-/**
- * Which rule a faulted await point answers to, by where its durable effect
- * sits relative to the head pointer advance. Before the CAS nothing is
- * durable, so a commit through the fault may never report `committed`. At
- * or after the CAS the head is durable, so `committed` is the truth and the
- * obligation is convergence: one head, exact wake. Attach-path points are
- * reached by a wake, never by a commit, and are faulted there. Every register
- * member is named, so a point added to the contract fails to compile here.
- */
-const AWAIT_POINT_GROUPS = {
-  'issue-payload-grant': 'pre-cas',
-  'create-multipart': 'pre-cas',
-  'upload-multipart-part': 'pre-cas',
-  'complete-multipart': 'pre-cas',
-  'verify-upload': 'pre-cas',
-  'upload-root': 'pre-cas',
-  'publish-head': 'pre-cas',
-  'create-pin': 'post-cas',
-  'renew-pin': 'post-cas',
-  'release-pin': 'post-cas',
-  'read-mark-page': 'post-cas',
-  'complete-mark': 'post-cas',
-  'retire-object': 'post-cas',
-  'delete-retired-object': 'post-cas',
-  'mount-root': 'attach',
-  'cleanup-resource': 'post-cas',
-} satisfies Record<DurabilityAwaitPoint, 'pre-cas' | 'post-cas' | 'attach'>;
-
 const CELLS: readonly Cell[] = [
-  {
-    id: '6.5',
-    title: 'fault at every DURABILITY_AWAIT_POINTS value',
-    async run(arm) {
-      if (arm.awaitPoints.none !== undefined) throw new ArmRefused('6.5', arm.awaitPoints.none);
-      const uses = new Set<string>(arm.awaitPoints.uses);
-      const problems: string[] = [];
-      for (const point of DURABILITY_AWAIT_POINTS) {
-        const fresh = CONFORMANCE_ARMS[arm.name]();
-        await attach(fresh);
-        expectCommitted(await commit(fresh, OLD), `the commit before the ${point} fault`);
-        if (!uses.has(point)) {
-          expectCommitted(await commit(fresh, NEW), `an ordinary commit while ${point} is declared unreached`);
-          await wake(fresh);
-          if (fresh.awaitVisits(point) !== 0) problems.push(`${point}: declared unreached, visited ${fresh.awaitVisits(point)} times`);
-          continue;
-        }
-        const group = AWAIT_POINT_GROUPS[point];
-        if (group === 'attach') {
-          // An attach-path point is reached by a WAKE, never by a commit: the
-          // fault is armed on the replacement's attach. The faulted attach may
-          // refuse or report; the next attach on the same replacement converges.
-          expectCommitted(await commit(fresh, NEW), `the commit before the ${point} wake fault`);
-          fresh.replaceContainer();
-          fresh.faultAt(point);
-          const faulted = await thrownBy(async () => { await fresh.storage().attach(); });
-          if (faulted !== null && !(faulted instanceof Error)) problems.push(`${point}: non-Error thrown`);
-          if (fresh.awaitVisits(point) === 0) problems.push(`${point}: declared used, never visited by the wake`);
-          const again = await thrownBy(async () => {
-            const woken = await fresh.storage().attach();
-            if (woken.kind === 'empty') problems.push(`${point}: the attach after the fault answered empty`);
-          });
-          if (again !== null) problems.push(`${point}: the attach after the fault refused: ${describeThrown({ cause: again })}`);
-          const wokenTree = canonical(await tree(fresh));
-          if (wokenTree !== canonical(MERGED)) problems.push(`${point}: the attach after the fault served ${wokenTree}`);
-          continue;
-        }
-        fresh.faultAt(point);
-        const thrown = await thrownBy(async () => {
-          const outcome = await commit(fresh, NEW);
-          // BEFORE THE POINTER ADVANCE nothing is durable, so `committed` is a
-          // lie. AT OR AFTER IT the head is durable and `committed` is the
-          // truth, told off the record; what such a fault may never do is
-          // leave the operation unrecoverable.
-          if (group === 'pre-cas' && outcome.kind === 'committed') problems.push(`${point}: reported committed through the fault`);
-        });
-        if (thrown !== null && !(thrown instanceof Error)) problems.push(`${point}: non-Error thrown`);
-        if (fresh.awaitVisits(point) === 0) problems.push(`${point}: declared used, never visited`);
-        const woken = await wake(fresh);
-        if (woken.kind !== 'attached') problems.push(`${point}: wake answered ${woken.kind}`);
-        const served = canonical(await tree(fresh));
-        if (group === 'pre-cas' && served !== canonical(OLD) && served !== canonical(MERGED)) problems.push(`${point}: wake served a blend or a blank`);
-        if (group === 'post-cas' && served !== canonical(MERGED)) problems.push(`${point}: the head was durable and the wake served ${served}`);
-        const redriven = await fresh.storage().checkpoint('quiesce');
-        if (redriven.kind === 'failed') problems.push(`${point}: the re-drive failed: ${redriven.reason}`);
-        const heads = await fresh.committedHeads();
-        if (heads.length !== 1) problems.push(`${point}: ${heads.length} heads after the re-drive`);
-      }
-      if (problems.length > 0) throw new Error(problems.join('; '));
-    },
-  },
   {
     id: '6.9',
     title: 'DO reset mid-restore: one daemon, one restore, tree exact',
@@ -704,10 +589,6 @@ const CELLS: readonly Cell[] = [
         if (mismatches.length > 0) problems.push(`${seam}: ${describeMismatches(mismatches).slice(0, 200)}`);
         const mounts = arm.disk().mountCalls;
         if (mounts !== baselineMounts) problems.push(`${seam}: ${mounts} mounts across both isolates, an uninterrupted wake makes ${baselineMounts}`);
-        const counts = arm.lifecycleCounts?.();
-        if (counts !== undefined && (counts.daemonStarts !== 1 || counts.restoreStarts !== 1)) {
-          problems.push(`${seam}: ${counts.daemonStarts} daemon starts, ${counts.restoreStarts} restores`);
-        }
       }
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
@@ -943,15 +824,6 @@ const CELLS: readonly Cell[] = [
       if (refusal === null) problems.push('the quota never refused a write');
       else if (!(refusal instanceof DiskFull) || !refusal.message.includes('ENOSPC')) problems.push(`the refusal was not ENOSPC: ${refusal.message}`);
       if (canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('the tree differs from the acknowledged writes');
-      const journal = arm.journalFacts?.();
-      if (journal !== undefined) {
-        const paths = new Set(await arm.workspace.paths());
-        for (const record of journal.records) {
-          const path = record.split(' ')[1] ?? '';
-          if (!paths.has(path)) problems.push(`WAL record without an effect: ${record}`);
-        }
-        if (journal.failedWrites.length === 0) problems.push('the refused write left no cancelled record');
-      }
       const outcome = await arm.storage().checkpoint('quiesce');
       if (outcome.kind === 'committed' && canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('a commit under quota changed the tree');
       if (outcome.kind === 'failed') problems.push(`the checkpoint under quota failed: ${outcome.reason}`);
@@ -1053,7 +925,7 @@ async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
     return { kind: 'pass' };
   } catch (error) {
     if (error instanceof ArmRefused) {
-      const declared = arm.refusedCells[error.cell]?.reason ?? (error.cell === '6.5' ? arm.awaitPoints.none : undefined);
+      const declared = arm.refusedCells[error.cell]?.reason;
       if (declared === error.reason && error.cell === cell.id) return { kind: 'refused', reason: error.reason };
       return { kind: 'fail', reason: `refused ${error.cell} without a matching declaration: ${error.reason}` };
     }
@@ -1075,7 +947,7 @@ for (const [name, open] of armEntries) {
           : `${cell.id} ${cell.title}`;
       test(label, async () => {
         const arm = open();
-        const outcome = declaredRefusal !== undefined && cell.id !== '6.14' && cell.id !== '6.5'
+        const outcome = declaredRefusal !== undefined && cell.id !== '6.14'
           ? { kind: 'refused' as const, reason: declaredRefusal.reason }
           : await runCell(cell, arm);
         let row = matrix.get(cell.id);
@@ -1117,7 +989,7 @@ test('every bug-list row names a live arm and a live cell', () => {
 
 /** An arm whose wake serves a blank workspace: the silent-blank defect. */
 function blankWakeArm(): ConformanceArm {
-  const arm = CONFORMANCE_ARMS['merkle-pack']();
+  const arm = CONFORMANCE_ARMS['snapshot-chain']();
   const broken: ConformanceArm = Object.create(arm);
   Object.defineProperty(broken, 'storage', {
     value: () => {
@@ -1148,88 +1020,6 @@ async function runCellOn(cell: Cell, broken: ConformanceArm): Promise<Outcome> {
 }
 
 describe('red direction — every new cell fails against a deliberately broken arm', () => {
-  test('6.5 fails when a pre-CAS fault is reported as committed', async () => {
-    // The lie: a commit that lost its payload upload claims committed. The
-    // broken arm reports the outcome of the fault-free base commit again.
-    const cell = CELLS.find((row) => row.id === '6.5')!;
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
-    const broken: ConformanceArm = Object.create(arm);
-    Object.defineProperty(broken, 'storage', {
-      value: () => {
-        const raw = arm.storage();
-        return {
-          ...raw,
-          checkpoint: async (kind: CheckpointKind) => {
-            const outcome = await raw.checkpoint(kind);
-            if (outcome.kind !== 'failed') return outcome;
-            return { kind: 'committed' as const, reason: 'lied', bytes: 0, movedBytes: 0 };
-          },
-        };
-      },
-    });
-    Object.defineProperty(broken, 'name', { value: 'merkle-pack' });
-    const outcome = await runCellOn(cell, broken);
-    expect(outcome.kind).toBe('fail');
-    expect(outcome.kind === 'fail' ? outcome.reason : '').toContain('reported committed through the fault');
-  });
-
-  test('6.5 fails when a post-CAS fault loses the durable head', async () => {
-    const cell = CELLS.find((row) => row.id === '6.5')!;
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
-    const broken: ConformanceArm = Object.create(arm);
-    // After the head is durable a completion-mark fault must still serve the
-    // new generation; a wake that serves the old one lost a committed head.
-    Object.defineProperty(broken, 'replaceContainer', {
-      value: () => {
-        for (const key of arm.durable.list('boxes/box-conformance/')) {
-          if (key.includes('envelope') && arm.durable.head(key) !== null && arm.durable.list('boxes/box-conformance/').filter((k) => k.includes('envelope')).length > 1) {
-            arm.durable.delete(key);
-            break;
-          }
-        }
-        arm.replaceContainer();
-      },
-    });
-    const outcome = await runCellOn(cell, broken);
-    expect(outcome.kind).toBe('fail');
-  });
-
-  test('6.5 fails when a wake never recovers from an attach-path fault', async () => {
-    const cell = CELLS.find((row) => row.id === '6.5')!;
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
-    const broken: ConformanceArm = Object.create(arm);
-    // Poisoned from the mount-root fault until the next point is armed: the
-    // wake after that fault never comes back, and only that wake.
-    let poisoned = false;
-    Object.defineProperty(broken, 'faultAt', {
-      value: (point: DurabilityAwaitPoint) => {
-        poisoned = point === 'mount-root';
-        arm.faultAt(point);
-      },
-    });
-    Object.defineProperty(broken, 'storage', {
-      value: () => {
-        const raw = arm.storage();
-        return {
-          ...raw,
-          attach: async () => {
-            // The faulted attach itself refuses through the armed seam; the NEXT
-            // attach on the same replacement is the one that must converge, and
-            // this arm's never does. Poison covers exactly that second attach.
-            if (poisoned && arm.deaths.armed === null && arm.awaitVisits('mount-root') > 0) {
-              poisoned = false;
-              throw new Error('the mount never comes back');
-            }
-            return await raw.attach();
-          },
-        };
-      },
-    });
-    const outcome = await runCellOn(cell, broken);
-    expect(outcome.kind).toBe('fail');
-    expect(outcome.kind === 'fail' ? outcome.reason : '').toContain('mount-root');
-  });
-
   test('6.11 fails when the wake serves a blank tree', async () => {
     const cell = CELLS.find((row) => row.id === '6.11')!;
     const outcome = await runCell(cell, blankWakeArm());
@@ -1247,7 +1037,7 @@ describe('red direction — every new cell fails against a deliberately broken a
   }, 120_000);
 
   test('6.20 fails when the store loses a reachable key', async () => {
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
     const cell = CELLS.find((row) => row.id === '6.20')!;
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'declaredPayload', {
@@ -1263,7 +1053,7 @@ describe('red direction — every new cell fails against a deliberately broken a
   });
 
   test('6.12 fails when the publish counter lies about the store', async () => {
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
     const cell = CELLS.find((row) => row.id === '6.12')!;
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'work', {
@@ -1279,20 +1069,6 @@ describe('red direction — every new cell fails against a deliberately broken a
     void cell;
   });
 
-  test('6.18 fails when a write lands without its record', async () => {
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
-    await attach(arm);
-    expectCommitted(await commit(arm, OLD), 'the commit');
-    const facts = arm.journalFacts!();
-    await arm.workspace.write('recorded.txt', 'x');
-    expect(facts.records.some((record) => record.includes('recorded.txt'))).toBe(true);
-    // An effect with no record: the tree gains a file the WAL never saw.
-    await arm.workspace.plant(textTree({ 'unrecorded.txt': 'y' }));
-    const paths = new Set(await arm.workspace.paths());
-    const recorded = new Set(facts.records.map((record) => record.split(' ')[1]));
-    expect([...paths].filter((path) => path.endsWith('.txt') && !recorded.has(path) && !(path in OLD))).toEqual(['unrecorded.txt']);
-  });
-
   test('6.13 fails when eviction cannot be trusted for the re-read', async () => {
     // THE EVICTION DIRECTION. Dropping a clean page is safe only because the
     // re-read that follows is a digest-verified fetch of the SAME bytes; a
@@ -1301,7 +1077,7 @@ describe('red direction — every new cell fails against a deliberately broken a
     // every payload object right after the sweep runs, so the drop already
     // happened when the bytes underneath it stop matching what was dropped.
     const cell = CELLS.find((row) => row.id === '6.13')!;
-    const arm = CONFORMANCE_ARMS['merkle-pack']();
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
     const broken: ConformanceArm = Object.create(arm);
     Object.defineProperty(broken, 'evictCleanBytes', {
       value: () => {
@@ -1341,7 +1117,7 @@ afterAll(() => {
       return 'RED'.padEnd(width);
     }).join('')}  ${cell.title}`);
   }
-  lines.push(`${'6.19'.padEnd(8)}${arms.map(() => 'harness'.padEnd(width)).join('')}  stop then wake on the same instance: candidate-attach.test.ts`);
+  lines.push(`${'6.19'.padEnd(8)}${arms.map(() => 'harness'.padEnd(width)).join('')}  stop then wake on the same instance: the devbox-harness suites`);
   lines.push('', ...legend, '');
   // Cell 6.21 leaves numbers, not just a verdict: one table per arm beside
   // the matrix, with the measured sizes in the header. Measured 2026-09-05.

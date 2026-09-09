@@ -23,13 +23,15 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import * as v from 'valibot';
+import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import {
   ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
-  NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest, inspect,
-  sizeViolations, subjectOf, proseOnly,
+  NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
+  committedIdentifierTest, inspect, sizeViolations, subjectOf, proseOnly,
+  truncatedHistoryRefusal,
 } from './commit-hygiene';
 import { isParseable, readMatching } from './sources';
 
@@ -138,26 +140,21 @@ describe('a legitimate product possessive PASSES — the false-positive control'
     }
   });
 
-  test('the list is the measured five, the owner, and two deleted identifiers', () => {
+  test('the list is the measured five and the owner, and holds no deleted identifier', () => {
     // The list's whole defence is that it stays short and every entry is a fact
-    // someone can check, so its exact contents are the assertion. Two entries are
-    // deleted-class citations the gate's own doc reserves room for: `FacetIdentity`
-    // is out of the tree and `76936034ba` cites it correctly, and `NodeLoopHost` —
-    // the seam a facet ran a swarm node through, now the required
-    // `AgentsForkDeps.hostNode` — is out too, and `9078d528c8` line 3 cites it
-    // correctly. Both name a type this repository shipped, so both are checkable
-    // at the SHA that cites them.
+    // someone can check, so its exact contents are the assertion. It carried two
+    // deleted-class citations, `FacetIdentity` and `NodeLoopHost`, and both are
+    // gone: `committedIdentifierTest` resolves them from the trees that cite
+    // them, and a row here would exempt the name in every OTHER commit as well,
+    // because the list short-circuits before the identifier test ever runs.
     expect([...NAMES_WITHOUT_CODE].sort()).toEqual([
-      'AlphaEvolve', 'AshishKumar4', 'FacetIdentity', 'FunSearch', 'GitHub', 'JavaScript',
-      'NodeLoopHost', 'TypeScript',
+      'AlphaEvolve', 'AshishKumar4', 'FunSearch', 'GitHub', 'JavaScript', 'TypeScript',
     ]);
     expect(inspect("chore(deps): move to TypeScript 7\n\nTypeScript's project references now "
       + 'resolve the scripts project.', isCode)).toEqual([]);
   });
 
-  test('a deleted class is clean only once declared — an undeclared one still fires', () => {
-    expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
-      + "the init RPC before its ack, following FacetIdentity's pattern.", isCode)).toEqual([]);
+  test('a name the injected corpus does not hold still fires', () => {
     expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
       + "the init RPC before its ack, following FacetBinding's pattern.", isCode)
       .map((violation) => violation.rule)).toEqual(['named-actor']);
@@ -278,10 +275,10 @@ describe('a message that narrates the session or argues in the first person is r
 
   test('a commit that QUOTES a shipped product string is not held to its content', () => {
     // `packages/core/src/evolution/engine.ts:678` emits a user-facing digest whose
-    // text contains the words `this session`. Without this carve-out a body
-    // quoting it accurately is a finding while misquoting it passes, which is
-    // backwards. Measured over the 1,898-commit history: of 172 narration hits,
-    // ZERO sit inside a fenced block and ZERO on an indented line, so the
+    // text contains the words `this session`. A body quoting it accurately was a
+    // finding while misquoting it would have passed, which is backwards. Measured
+    // before carving this out: of 172 narration hits across the 1,898-commit
+    // history, ZERO sit inside a fenced block and ZERO on an indented line, so the
     // carve-out costs no coverage.
     const indented = 'evolution: add changelog digest with revert dispatch across surfaces\n\n'
       + 'The digest is emitted as a background event so every entry is revertable.\n\n'
@@ -442,6 +439,131 @@ describe('the identifier allowlist is derived from code, not from prose', () => 
     for (const name of ['SealSideDoor', 'FixtureZero', 'AxisErgonomics', 'LiteratureGate']) {
       expect(live(name)).toBe(false);
     }
+  });
+});
+
+/**
+ * A repository holding the defect's exact shape: a type declared at one commit,
+ * a message citing it, and a later commit deleting the file that declared it.
+ *
+ * Temporary and built here rather than asserted against this repository's own
+ * history, because the property is about what a LATER commit does to an EARLIER
+ * verdict, and no assertion pinned to real SHAs survives the next cutover — which
+ * is the same rot this fix exists to remove.
+ */
+function cutoverRepo() {
+  const repo = scratchDir('commit-hygiene-provenance');
+  initRepo(repo);
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src/delta.ts'), 'export type DeltaManifestV2 = { ops: string[] };\n');
+  writeFileSync(join(repo, 'src/read.ts'), "import type { DeltaManifestV2 } from './delta';\n"
+    + 'export const rows = (m: DeltaManifestV2): string[] => m.ops;\n');
+  git(repo, 'add', 'src/delta.ts', 'src/read.ts');
+  git(repo, 'commit', '-qm', 'feat(delta): one manifest schema\n\n'
+    + "Rows take their type from DeltaManifestV2['ops'][number] rather than restating it, "
+    + 'and SealSideDoor is a name no tree here declares.');
+  const cited = git(repo, 'rev-parse', 'HEAD').trim();
+  rmSync(join(repo, 'src/delta.ts'));
+  writeFileSync(join(repo, 'src/read.ts'), 'export const rows = (ops: string[]): string[] => ops;\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-qm', 'refactor(delta): retire the manifest schema');
+  return { repo, cited, deletion: git(repo, 'rev-parse', 'HEAD').trim() };
+}
+
+describe('a historical message is judged against the tree it shipped', () => {
+  test('a type deleted AFTER the commit that cites it is still code at that commit', () => {
+    // The defect, at full size: `DeltaManifestV2` is declared at `cited`, gone at
+    // `deletion`, and judging the older message against the newer tree turns a
+    // correct citation into a colleague being credited by name.
+    const { repo, cited, deletion } = cutoverRepo();
+    expect(committedIdentifierTest(repo, cited)('DeltaManifestV2')).toBe(true);
+    expect(committedIdentifierTest(repo, deletion)('DeltaManifestV2')).toBe(true);
+    const message = git(repo, 'log', '-1', '--format=%B', cited).trim();
+    expect(inspect(message, committedIdentifierTest(repo, cited))).toEqual([]);
+  });
+
+  test('a name no tree ever declared is still refused at its own commit', () => {
+    // The half that must stay red. Provenance widens WHICH tree answers; it must
+    // not widen the answer, or every subagent name passes once its commit ages.
+    const { repo, cited } = cutoverRepo();
+    const at = committedIdentifierTest(repo, cited);
+    expect(at('SealSideDoor')).toBe(false);
+    expect(inspect("fix(x): land it\n\nSealSideDoor's finding is folded in.", at)
+      .map((violation) => violation.rule)).toEqual(['named-actor']);
+  });
+
+  test('a commit may name what it REMOVES: the deletion commit spans its parent', () => {
+    // `f9c0b3847`'s body quotes `FacetIdentity`, the type it deletes, so its own
+    // tree does not hold it. Post-state alone is the live-tree error one commit
+    // narrower, and it is why the parents are asked too.
+    const { repo, deletion } = cutoverRepo();
+    expect(committedIdentifierTest(repo, deletion)('DeltaManifestV2')).toBe(true);
+    expect(committedIdentifierTest(repo, deletion)('SealSideDoor')).toBe(false);
+  });
+
+  test('the working-tree test still answers about the working tree', () => {
+    // The hook keeps the corpus it had: the message being written describes the
+    // tree being committed, so a name introduced by this very change is code.
+    const live = codeIdentifierTest(new Map([
+      ['src/new.ts', 'export class BrandNewThing {}'],
+    ]));
+    expect(live('BrandNewThing')).toBe(true);
+    expect(live('SealSideDoor')).toBe(false);
+  });
+});
+
+describe('history mode refuses a clone that has no history, and says how to get one', () => {
+  /** `cutoverRepo`'s two commits, cloned at depth 1 — what `actions/checkout@v4`
+   *  produces by default, reproduced rather than described. */
+  const shallowClone = (): string => {
+    const { repo } = cutoverRepo();
+    const clone = join(scratchDir('commit-hygiene-shallow'), 'clone');
+    git(repo, 'clone', '-q', '--depth', '1', `file://${repo}`, clone);
+    return clone;
+  };
+
+  test('a depth-1 clone is refused, naming both ways to supply the history', () => {
+    // Not a green badge over zero commits, and not the raw
+    // `fatal: ambiguous argument 'HEAD^..HEAD'` this used to die on: a shallow
+    // clone reports HEAD as the commit that ADDED this file, so the governed
+    // range collapses and `commitsFrom` asks git for a parent it does not have.
+    const clone = shallowClone();
+    expect(git(clone, 'rev-parse', '--is-shallow-repository').trim()).toBe('true');
+    const refusal = truncatedHistoryRefusal(clone);
+    expect(refusal).toBeDefined();
+    expect(refusal?.fix).toContain('git fetch --unshallow');
+    expect(refusal?.fix).toContain('fetch-depth: 0');
+    expect(refusal?.silently).toContain('zero commits');
+  });
+
+  test('a full clone is not refused, and neither is an empty governed range', () => {
+    // The control that keeps this from becoming "refuse everything". Emptiness is
+    // legitimate — `boundary..HEAD` is empty right after the gate lands — so the
+    // refusal is keyed on TRUNCATION, and a one-commit repository that is not a
+    // shallow clone passes.
+    const { repo } = cutoverRepo();
+    expect(truncatedHistoryRefusal(repo)).toBeUndefined();
+    const fresh = scratchDir('commit-hygiene-fresh');
+    initRepo(fresh);
+    writeFileSync(join(fresh, 'only.ts'), 'export const only = 1;\n');
+    git(fresh, 'add', 'only.ts');
+    git(fresh, 'commit', '-qm', 'chore(repo): seed');
+    expect(truncatedHistoryRefusal(fresh)).toBeUndefined();
+  });
+
+  test('the shallow clone still answers the current-tree question the hook asks', () => {
+    // The other boundary. `commit-msg` reads the working tree and the message
+    // file and asks the history nothing, so a shallow checkout must still be able
+    // to commit — a gate that blocks committing in the clone CI hands you would
+    // be worse than the defect.
+    const clone = shallowClone();
+    const live = codeIdentifierTest(new Map([
+      ['src/read.ts', readFileSync(join(clone, 'src/read.ts'), 'utf8')],
+    ]));
+    expect(live('rows')).toBe(true);
+    expect(live('SealSideDoor')).toBe(false);
+    expect(inspect('fix(delta): keep the rows honest\n\n`rows` no longer restates its element '
+      + 'type.', live)).toEqual([]);
   });
 });
 

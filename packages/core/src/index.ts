@@ -1451,7 +1451,7 @@ export {
   // resolve it identically
   headMergeLLM,
   type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
-  extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
+  extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,

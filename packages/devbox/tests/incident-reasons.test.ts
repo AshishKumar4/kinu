@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { candidateBox } from './support/candidate-box';
+import { chainBox } from './support/chain-box';
 
 describe('devboxIncidentReasons reports filed failures oldest first', () => {
   test('an empty ledger reads empty', async () => {
-    const { box } = candidateBox('bounded-layers');
+    const { box } = chainBox();
     expect(await box.devboxIncidentReasons()).toEqual([]);
   });
 
   test('two refused attaches come back with stages and reasons', async () => {
-    const { box, container } = candidateBox('bounded-layers');
+    const { box, container } = chainBox();
     container.containerUnavailable = new Error('capacity exhausted (probe A)');
     await expect(box.attachNow()).rejects.toThrow();
     container.containerUnavailable = new Error('capacity exhausted (probe B)');
