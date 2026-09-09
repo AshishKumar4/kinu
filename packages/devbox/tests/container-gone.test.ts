@@ -1,7 +1,7 @@
 // A container that is gone, and the two flows that used to act as if it were
 // there: the heartbeat's replacement detector and the stop.
 //
-// MEASURED, run kinu-devbox-bench-20260906072721 (2026-09-06, merkle-pack,
+// MEASURED, run kinu-devbox-bench-20260906072721 (2026-09-06,
 // Worker tail with SANDBOX_LOG_LEVEL=debug):
 //
 //   * 07:30:14-16Z, the post-ladder wake. The wake's attempt was mounting the
@@ -22,8 +22,8 @@
 //     runner results under that restore (`ENOENT ... control.json`), and its
 //     stop landed on the restore's mount command: `Sandbox operation
 //     commands.execute was interrupted while the runtime connection was
-//     closing`. The same sentence failed the merkle-pack post-ladder stop of
-//     run 20260905232937 (2026-09-05).
+//     closing`. The same sentence failed the post-ladder stop of run
+//     20260905232937 (2026-09-05).
 //
 // So: a restoration in flight owns the container's identity, and a heartbeat
 // must not second-guess it; a stop or a discard on a box whose container is
@@ -32,7 +32,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { candidateBox, candidateHead } from './support/candidate-box';
+import { chainBox, chainHead } from './support/chain-box';
 import { Devbox, gate, harness, STAMP_COMMAND } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
@@ -102,82 +102,63 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
 });
 
 describe('a stop or a discard on a box whose container is gone resurrects nothing', () => {
-  /** A merkle-pack box that has published one head and then lost its
-   *  container the way the platform loses one: the instance is gone and
-   *  nothing told the box. */
+  /** A box that has published one generation and then lost its container the
+   *  way the platform loses one: the instance is gone and nothing told the
+   *  box. */
   async function published() {
-    const arm = candidateBox('merkle-pack');
+    const arm = chainBox();
     expect((await arm.box.attachNow()).kind).toBe('empty');
     await arm.box.writeFile('/workspace/ladder/c64.bin', 'sixty-four KiB of ladder bytes');
     expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
-    const head = candidateHead(arm.rows, 'merkle-pack');
-    if (head === null) throw new Error('the quiesce published no head');
+    const head = chainHead(arm.rows);
+    if (head === null) throw new Error('the quiesce published no generation');
     arm.container.running.running = false;
     arm.container.processes.clear();
     return { ...arm, head };
   }
 
   test('a stop commits nothing, asks the container nothing, and the next wake restores the head', async () => {
-    const { box, container, runner, rows, head } = await published();
+    const { box, container, rows, head } = await published();
     const asked = container.execs.length;
     const started = container.starts.length;
-    const answered = runner.invocations.length;
 
     const outcome = await box.quiesce();
 
     // NOTHING TO COMMIT AND NOTHING TO ASK. The work directory died with the
-    // instance; a checkpoint runner started now would run on a fresh instance
-    // the SDK starts to run it, against no mount and no daemon.
+    // instance; a checkpoint issued now would archive a bare directory on a
+    // fresh instance the SDK starts to run it, against no mount at all.
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('not running');
     expect({
       commands: container.execs.length - asked,
       processStarts: container.starts.length - started,
-      runnerInvocations: runner.invocations.length - answered,
-    }).toEqual({ commands: 0, processStarts: 0, runnerInvocations: 0 });
+    }).toEqual({ commands: 0, processStarts: 0 });
     // And the box no longer claims a work directory it does not have.
     expect((await box.devboxState()).restoration).not.toBe('attached');
 
-    // The next wake is an ordinary restoration of the published head.
+    // The next wake is an ordinary restoration of the published generation.
+    container.running.running = true;
     await box.kickStartup();
     await box.devboxStartup();
     const state = await box.devboxState();
     expect(state.restoration).toBe('attached');
     expect(state.lastAttach?.detail).toContain(head);
-    expect(candidateHead(rows, 'merkle-pack')).toBe(head);
+    expect(chainHead(rows)).toBe(head);
   });
 
   test('a discard drops the durable state without a container command', async () => {
-    const { box, container, runner, rows } = await published();
+    const { box, container, rows } = await published();
     const asked = container.execs.length;
     const started = container.starts.length;
-    const answered = runner.invocations.length;
 
     await box.discardState();
 
-    expect(candidateHead(rows, 'merkle-pack')).toBeNull();
+    expect(chainHead(rows)).toBeNull();
     expect(rows.has('devbox:last-attach')).toBe(false);
     expect({
       commands: container.execs.length - asked,
       processStarts: container.starts.length - started,
-      runnerInvocations: runner.invocations.length - answered,
       kills: container.kills.length,
-    }).toEqual({ commands: 0, processStarts: 0, runnerInvocations: 0, kills: 0 });
-  });
-
-  test('a discard on a RUNNING container still releases its journal and its mount', async () => {
-    // The container-side half is skipped only when there is no container:
-    // a live one keeps a daemon over the work directory and a store mount,
-    // and a discard that left them would hand the next attach a second
-    // daemon over a mount the first still owns.
-    const arm = candidateBox('merkle-pack');
-    expect((await arm.box.attachNow()).kind).toBe('empty');
-    expect(arm.container.journalRunning()).toBe(true);
-
-    await arm.box.discardState();
-
-    expect(arm.container.journalRunning()).toBe(false);
-    expect(arm.container.mountCalls.at(-1)).toBe('unmount:/var/tmp/devbox/candidate-r2');
-    expect(candidateHead(arm.rows, 'merkle-pack')).toBeNull();
+    }).toEqual({ commands: 0, processStarts: 0, kills: 0 });
   });
 });

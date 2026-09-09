@@ -6,11 +6,11 @@ describe('fake storage transactions hold the runtime contract', () => {
     const storage = fakeStorage();
     await expect(
       storage.handle.transaction(async (transaction) => {
-        await transaction.put('devbox:candidate-control:bounded-layers', { version: 1 });
+        await transaction.put('devbox:storage-state', { mode: 'chain', rev: 1 });
         throw new Error('head CAS lost its race');
       }),
     ).rejects.toThrow('head CAS lost its race');
-    expect(storage.rows.has('devbox:candidate-control:bounded-layers')).toBe(false);
+    expect(storage.rows.has('devbox:storage-state')).toBe(false);
   });
 
   test('sequential read-modify-writes all commit', async () => {

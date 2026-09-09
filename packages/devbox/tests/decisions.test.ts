@@ -13,7 +13,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 
@@ -53,11 +52,6 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
-import {
-  JOURNAL_READY_WAIT_SECONDS,
-  journalReadyCommand,
-  readJournalReady,
-} from '../src/capture/journal/command';
 import { requireSessionShellAccepts } from './support/session-shell';
 import {
   baseObjectKey,
@@ -73,7 +67,6 @@ import {
   shouldCheckpoint,
   type ChainLayer,
 } from '../src/snapshot-chain';
-import { isS3fsMounted } from '../src/r2fs';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 /** The generation a record retains as its restore fallback. */
@@ -726,11 +719,10 @@ describe('every self-re-arming schedule needs a first link', () => {
   test('a commit asks the same question, because a heartbeat cadence is not a fence', () => {
     // MEASURED, TWICE. Detection every `heartbeatSeconds` leaves every operation
     // in between running against a container that no longer holds the mount, and
-    // `ensureReady()` accepts this object's in-memory `attached` restoration as
-    // proof that it does. The deployed control arms died of exactly that on
-    // 2026-08-31: `r2fs` wrote into a bare `/workspace` until s3fs refused the
-    // mountpoint forever, and `overlay-cas` had its writes hidden under the next
-    // overlay so nothing was ever journalled and the wake reported `empty`.
+    // proof that it does. Deployed control boxes died of exactly that on
+    // 2026-08-31: writes landed in a bare `/workspace` until the mount was
+    // refused forever, and writes hidden under the next overlay made a wake
+    // report `empty` for a box that had been written to.
     //
     // A COMMIT is where it has to be asked: it is the moment a box claims bytes
     // are durable, it runs at checkpoint cadence rather than per operation, and
@@ -1050,20 +1042,15 @@ describe('mount facts — the kernel is asked, not a marker', () => {
   });
 
   test('a non-overlay mount at the same path is NOT an overlay', () => {
-    // This is the whole reason the fstype is checked: an s3fs mount at
+    // This is the whole reason the fstype is checked: a plain FUSE mount at
     // /workspace is a real mount and a real filesystem, and reading it as an
     // overlay would make the chain archive a directory that has no upper.
     expect(isOverlayMounted(FUSE_MOUNTS, '/workspace')).toBe(false);
-    expect(isS3fsMounted(FUSE_MOUNTS, '/workspace')).toBe(true);
-    // And the reverse, which a bare `fuse` test would get wrong: fuse-overlayfs
-    // reports `fuse.fuse-overlayfs`, so each strategy would claim the other's
-    // box.
-    expect(isS3fsMounted(OVERLAY_MOUNTS, '/workspace')).toBe(false);
+    expect(findMount(FUSE_MOUNTS, '/workspace')?.fstype).toBe('fuse.s3fs');
   });
 
-  test('nothing mounted reads as nothing mounted, for both strategies', () => {
+  test('nothing mounted reads as nothing mounted', () => {
     expect(isOverlayMounted(NO_MOUNTS, '/workspace')).toBe(false);
-    expect(isS3fsMounted(NO_MOUNTS, '/workspace')).toBe(false);
     expect(findMount(NO_MOUNTS, '/workspace')).toBeUndefined();
     expect(findMount(NO_MOUNTS, '/')?.fstype).toBe('ext4');
   });
@@ -1075,9 +1062,9 @@ describe('mount facts — the kernel is asked, not a marker', () => {
 // with a SPACE, so the container received `… fi done if [ -z "$holders" ] …`.
 // `sh` answered `Syntax error: "do" unexpected`, exited 2, and because every
 // command runs inside the SDK's ONE persistent session shell that ended the
-// session: run `e2e20260901140445` lost `stop-small` on snapshot-chain (2,362
-// ms) and r2fs (785 ms) to `Session 'sandbox-default' shell exited (exit code:
-// 2)`, in both cases AFTER the checkpoint had already committed.
+// session: run `e2e20260901140445` lost `stop-small` twice (2,362 ms and 785
+// ms) to `Session 'sandbox-default' shell exited (exit code: 2)`, in both
+// cases AFTER the checkpoint had already committed.
 //
 // The command is asked the same question the container asks — see
 // `support/session-shell.ts`, which every fake exec seam in this package now
@@ -1277,105 +1264,6 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
     },
     25_000,
   );
-
-  test('the journal readiness probe parses, waits in the container, and never ends the shell', () => {
-    const command = journalReadyCommand({
-      mount: DEVBOX_WORKDIR,
-      socket: '/var/tmp/devbox/candidate-journal/state/control.sock',
-    });
-    requireSessionShellAccepts(command);
-    expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
-    // A WALL DEADLINE, NOT AN ITERATION COUNT, and it is the constant rather
-    // than a second opinion of it. The loop this replaced counted forty
-    // attempts, which bounds nothing when each attempt is a round trip that
-    // can retry inside the SDK for minutes.
-    expect(command).toContain(`$(date +%s)+${String(JOURNAL_READY_WAIT_SECONDS)}`);
-    // The answer is on stdout. A probe that reported through its exit status
-    // would be indistinguishable from a container that refused the command.
-    expect(command).toContain('echo "socket=$socket mount=$mount"');
-  });
-
-  test('a socket path holding a quote is still one shell word', () => {
-    requireSessionShellAccepts(journalReadyCommand({
-      mount: "/work'dir",
-      socket: "/state'dir/control.sock",
-    }));
-  });
-
-  test('the probe\'s own answers are read back, and an unanswered probe is not a reading', () => {
-    expect(readJournalReady('socket=yes mount=yes\n')).toEqual({ socket: true, mount: true });
-    expect(readJournalReady('socket=yes mount=no\n')).toEqual({ socket: true, mount: false });
-    expect(readJournalReady('socket=no mount=no\n')).toEqual({ socket: false, mount: false });
-    // NOT `{ socket: false, mount: false }`: a container that never ran the
-    // command and a daemon that never came up are different findings, and the
-    // failure the caller reports says which.
-    expect(readJournalReady('')).toBeUndefined();
-    expect(readJournalReady('sh: syntax error')).toBeUndefined();
-  });
-
-  /**
-   * THE PROBE, RUN FOR REAL, against this host's own `/proc` and a real socket.
-   *
-   * The parse gate proves a shell accepts it; only running it proves the wait
-   * is honoured, that a fractional `sleep` does not break it, and that both
-   * halves are read from the world rather than assumed. The deployed defect
-   * was a readiness question that cost forty round trips and no deadline; a
-   * replacement that answers wrongly, or that returns instantly because its
-   * loop never runs, would be no better.
-   *
-   * Linux only, like the `/proc/mounts` read it exercises.
-   */
-  test.skipIf(process.platform !== 'linux')(
-    'the probe waits out its deadline for a daemon that never serves, and breaks early for one that does',
-    async () => {
-      const dir = scratchDir('devbox-journal-ready');
-      const socket = join(dir, 'control.sock');
-      // A mount this host really has whose type begins `fuse` — the same shape
-      // the daemon's own mount has, found rather than assumed.
-      const fuseMount = readFileSync('/proc/mounts', 'utf8')
-        .split('\n')
-        .map((line) => line.split(' '))
-        .find((fields) => fields[2]?.startsWith('fuse') === true)?.[1];
-      const run = (mount: string, waitSeconds: number) => {
-        const at = Date.now();
-        const ran = spawnSync('sh', ['-c', journalReadyCommand({ mount, socket }, waitSeconds)], {
-          encoding: 'utf8', timeout: 30_000,
-        });
-        return { stdout: ran.stdout, ms: Date.now() - at };
-      };
-
-      // Nothing present: both halves read `no`, and the command really waited.
-      // `date +%s` counts whole seconds, so a deadline of N spends between
-      // N-1 and N of them — bounded either way, which is the property the
-      // forty-attempt loop it replaced did not have.
-      const absent = run(DEVBOX_WORKDIR, 2);
-      expect(readJournalReady(absent.stdout)).toEqual({ socket: false, mount: false });
-      expect(absent.ms).toBeGreaterThanOrEqual(1_000);
-      expect(absent.ms).toBeLessThan(3_000);
-
-      const listening = createServer();
-      await new Promise<void>((resolve) => { listening.listen(socket, () => { resolve(); }); });
-      try {
-        // The socket half alone is not readiness: the daemon has a control
-        // surface and no mount, and the probe still spends its deadline.
-        const half = run(DEVBOX_WORKDIR, 2);
-        expect(readJournalReady(half.stdout)).toEqual({ socket: true, mount: false });
-        expect(half.ms).toBeGreaterThanOrEqual(1_000);
-
-        if (fuseMount !== undefined) {
-          // Both halves: the loop breaks on the first pass rather than sleeping
-          // out a deadline nobody is waiting for.
-          const served = run(fuseMount, 5);
-          expect(readJournalReady(served.stdout)).toEqual({ socket: true, mount: true });
-          expect(served.ms).toBeLessThan(2_000);
-        }
-      } finally {
-        await new Promise<void>((resolve) => { listening.close(() => { resolve(); }); });
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
-    40_000,
-  );
 });
 
 // ── identity ────────────────────────────────────────────────────────────────
@@ -1447,8 +1335,8 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       .toBeNull();
     expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, objectVersion: '' } }))
       .toBeNull();
-    // A retained fallback survives it too, delta and all: a candidate the
-    // reader cannot check is a candidate a restore cannot use.
+    // A retained fallback survives it too, delta and all: a generation the
+    // reader cannot check is a generation a restore cannot use.
     const withFallback = {
       ...sound,
       fallback: {
@@ -1627,11 +1515,14 @@ describe('thrown values', () => {
 });
 
 describe('bench arm selection fails closed', () => {
-  test('missing and unknown strategy names never become snapshot-chain', () => {
+  test('missing and unknown strategy names never become the shipped strategy', () => {
     expect(parseDevboxStrategyName(undefined)).toBeNull();
     expect(parseDevboxStrategyName(null)).toBeNull();
     expect(parseDevboxStrategyName('unknown')).toBeNull();
-    expect(parseDevboxStrategyName('overlay-cas')).toBe('overlay-cas');
+    // A name that was once a format is a name that is not one now: bytes
+    // written by a format nothing builds are bytes nothing can serve.
+    expect(parseDevboxStrategyName('a-retired-format')).toBeNull();
+    expect(parseDevboxStrategyName('snapshot-chain')).toBe('snapshot-chain');
   });
 
   test('the deployed worker routes through the fail-closed parser', () => {
@@ -1639,52 +1530,6 @@ describe('bench arm selection fails closed', () => {
     expect(worker).toContain('const strategy = parseDevboxStrategyName(requested);');
     expect(worker).toContain('if (strategy === null)');
     expect(worker).not.toContain(": 'snapshot-chain';");
-  });
-});
-
-describe('the storage dispatch is exhaustive over the strategy union', () => {
-  // A Durable Object cannot be constructed in a unit test, so this is pinned as
-  // source shape for the same reason `onStart`'s arming is. The rule is what
-  // matters: every name the union admits has an EXPLICIT arm in `#buildStorage`.
-  //
-  // The defect it exists for is silence, not a crash. The dispatch used to end
-  // in `: snapshotChainStorage(...)`, so a strategy nobody had wired still
-  // produced a working box — the chain, wearing the other strategy's name. A
-  // benchmark arm in that state reports a full column of numbers that are the
-  // chain measured twice, and nothing looks wrong anywhere.
-  const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-  const storageSource = readFileSync(join(import.meta.dir, '..', 'src', 'storage.ts'), 'utf8');
-  const dispatch = (() => {
-    // The DECLARATION, not the call in `#requireStorage` a few lines above it:
-    // matching the bare name found the call site and sliced the wrong method.
-    const from = devboxSource.indexOf('\n  #buildStorage(');
-    const tail = devboxSource.slice(from);
-    return tail.slice(0, tail.indexOf('\n  }'));
-  })();
-
-  /** The union, read from its declaration rather than restated here: a member
-   *  added there must show up as a missing arm, not as a stale duplicate. */
-  const strategies = [...(
-    /export type DevboxStrategyName =([^;]+);/.exec(storageSource)?.[1] ?? ''
-  ).matchAll(/'([^']+)'/g)].map(match => match[1]!);
-
-  test('the union is read, not restated', () => {
-    expect(strategies.length).toBeGreaterThan(1);
-    expect(strategies).toContain('snapshot-chain');
-  });
-
-  test('every strategy the union admits is dispatched explicitly', () => {
-    const unwired = strategies.filter(name => !dispatch.includes(`=== '${name}'`));
-    expect(unwired).toEqual([]);
-  });
-
-  test('an unrecognised strategy is refused by name, never served as the chain', () => {
-    expect(dispatch).toContain('throw new Error(');
-    // The refusal names what it did not recognise, or a reader cannot tell
-    // which of three strategies the box was actually asked for.
-    expect(dispatch).toContain('${String(this.strategy)}');
-    // And no arm is reachable by falling through to it.
-    expect(dispatch).not.toContain(': snapshotChainStorage(');
   });
 });
 
@@ -1701,7 +1546,7 @@ import {
 } from '../src/incidents';
 import type { CheckpointOutcome } from '../src/storage';
 
-describe('the checkpoint lane — one strategy checkpoint at a time', () => {
+describe('the checkpoint lane — one checkpoint at a time', () => {
   const ok = (): Promise<CheckpointOutcome> => Promise.resolve({
     kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1,
   });
@@ -1814,7 +1659,7 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
     expect(box.rows.has('devbox:incident:d0000')).toBe(false);
     expect(box.rows.has('devbox:incident:d0054')).toBe(false);
     expect(box.rows.has(`devbox:incident:d${String(55).padStart(4, '0')}`)).toBe(true);
-    // ...and PENDING is never a candidate, however far over the cap they push.
+    // ...and PENDING is never reaped, however far over the cap they push.
     for (let p = 0; p < 5; p += 1) {
       expect(box.rows.has(`devbox:incident:pending${p}`)).toBe(true);
     }

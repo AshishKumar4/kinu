@@ -622,7 +622,7 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
-    // The deployed merkle-pack release of run 20260905075659: the attach was
+    // The deployed release of run 20260905075659: the attach was
     // abandoned at its budget and classified terminal, and the stop's final
     // checkpoint then waited on the container the abandoned restore was still
     // running in, past the driver's 120 s release deadline. A box that
@@ -911,7 +911,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   };
 
   test('the next operation drives the attach when no row is left to deliver it', async () => {
-    // The deployed shape: `overlay-cas` failed its attach with
+    // The deployed shape: a box failed its attach with
     // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
     // the ONE schedule row that answer armed was the only thing that could
     // re-drive it — `ensureReady` refused every operation on `unattached` and
@@ -1120,8 +1120,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     async () => {
       // The other half of the split, and it must not regress: an attach
       // abandoned mid-mount leaves work a retry would collide with, so the
-      // identity goes. `r2fs.test.ts` drives the real strategy attach; this pins
-      // the class-level consequence through the ladder.
+      // identity goes. `snapshot-chain.test.ts` drives the real strategy
+      // attach; this pins the class-level consequence through the ladder.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: PREVIOUS, stage: 'retry' });
