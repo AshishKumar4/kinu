@@ -740,19 +740,12 @@ export abstract class ActorAgent extends Think<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
-    // THERE IS NOTHING TO PUSH IT DOWN TO.
-    //
-    // Hosted actors present the workspace's token by reading it — one row, this
-    // workspace's, through `workspaceCapabilityToken()` on the runtime the host
-    // built for them — so a reissue takes effect on their very next call with
-    // no fan-out, no missed count, and no window in which a revoked token is
-    // still in use somewhere. A COPY per actor is what would need the fan-out:
-    // one pass over the roster to every hired subordinate's own
-    // `workspace_capability` row, another over the SDK's facet registry to every
-    // long-running head and node that read the token at spawn time, each of them
-    // presenting a revoked one until it finished. A copy is a thing that can go
-    // stale. `missed` is therefore always zero and is kept in the answer because
-    // callers report it.
+    // Hosted actors read the workspace's single capability row through their
+    // runtime, so a reissue takes effect on their next call without
+    // propagating token copies. Per-actor copies would require reconciliation
+    // and could keep presenting revoked tokens; `missed` is always zero
+    // because this design has no such copies, and it is kept in the answer
+    // because callers report it.
     return { ok: true, missed: 0 };
   }
 
@@ -803,22 +796,17 @@ export abstract class ActorAgent extends Think<Env> {
       text     TEXT NOT NULL,
       UNIQUE (actor_id, id)
     )`);
-    // The durable admission ledger: the claim a turn is issued under, with its
-    // actor, run, epoch, selected program identity and admitted context. A
-    // single `active_durable_turn` row keyed `id = 1` could hold ONE turn id for
-    // the whole database, so it could neither name which issued actor owned the
-    // turn nor tell an evicted activation apart from the one that replaced it.
-    // Created here rather than in `ensureSchema` for the reason the row below it
-    // is:
-    // the recovery sweep reads it from `onStart`, which is not guaranteed to
-    // follow a root's `ensureSchema`.
+    // The admission ledger records the issued actor, run, execution epoch,
+    // selected program and admitted context; one workspace-wide turn pointer
+    // cannot distinguish concurrent actors or evicted activations. Initialize
+    // it here because onStart recovery can read it before a root's
+    // ensureSchema runs.
     initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
-    // Here for the same reason as the row above it, and one more: the recovery
-    // sweep reads it from `onStart`, which is not guaranteed to follow a root's
+    // Here for the same reason as the row above it: the recovery sweep reads
+    // it from `onStart`, which is not guaranteed to follow a root's
     // `ensureSchema`. Idempotent DDL, so a re-activation costs nothing.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
-
   /** Every table this root carries, created before any read. Declared here
    *  because `installWorkspaceCapability` — a native DO RPC reachable before
    *  `onStart` — has to be able to demand it. */
