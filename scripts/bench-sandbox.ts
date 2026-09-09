@@ -8,15 +8,15 @@
 //     it cannot read the defect patch or any held-out task.
 //   - The solver never scores itself (guarded paths are restored from the
 //     pristine tree between the attempt and the checks).
-import { cpSync, existsSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { attemptPassed } from '../packages/core/src/index';
 import type { AttemptBudget, BenchCheck, BenchTask, CheckOutcome } from '../packages/core/src/index';
 import { tolerate } from '../packages/core/src/obs/index';
 import { ARTIFACT_DIRNAME } from './bench-retention';
-import { workspaceScope } from './sources';
+import { workspacePackages } from '../packages/test-utils/src/workspace-resolution';
 
 /** Paths never copied into a sandbox. `tests/bench` is the seal's outermost
  *  ring: an agent that cannot read the corpus cannot read the held-out tasks,
@@ -38,11 +38,6 @@ const SANDBOX_EXCLUDES = [
  *  solver's cross-package edits be seen, so those must be copied. */
 const SANDBOX_EXCLUDED_NAMES = new Set(['.git']);
 
-/** Workspace scope whose links must be re-pointed into the sandbox copy. Read
- *  from the manifests, not spelled here: a stale literal skips the re-pointing
- *  below, and every solver edit is then graded against the real repo instead of
- *  the sandbox copy — silently, because the donor's links still resolve. */
-const WORKSPACE_SCOPE = workspaceScope();
 const NESTED_CHECKOUT_DIRS = ['.claude', 'external'] as const;
 
 const OUTPUT_TAIL_BYTES = 4000;
@@ -90,30 +85,50 @@ export interface CreateSandboxOptions {
  * `../../packages/core` then resolved relative to the REAL repo's node_modules
  * — every workspace import inside a sandbox read pristine code, and a solver's
  * cross-package edits were graded as if they had never been made.
+ *
+ * EVERY WORKSPACE PACKAGE THE TREE DECLARES, from `workspacePackages` — the same
+ * enumeration `tests/workspace-resolution.test.ts` then judges the result by.
+ * This used to re-point the one scope `sources.ts:workspaceScope()` returns,
+ * which is the PRODUCT scope and by construction cannot name the vendored
+ * `@agent-core` one (sources.ts skips its manifest to stay singular). That scope
+ * was therefore mirrored as an absolute link to the DONOR's directory, its own
+ * `core -> ../../packages/agent-core` resolved from there, and every sandbox —
+ * every scored bench attempt included — imported the donor checkout's
+ * agent-core while reporting on the copy. A builder reading one list and the
+ * guard reading another is this repo's set-equality defect; there is one list
+ * now, so a scope the guard checks cannot be a scope the sandbox skipped.
+ *
+ * Built from the TREE's manifests, never from what the donor happens to have
+ * installed, for the reason `setup-worktree.sh` records against the same
+ * mistake: a package this tree declares but the donor has not installed yet is
+ * exactly the one that must still be linked, and the donor as proxy leaves it
+ * missing.
  */
 function linkNodeModules(repo: string, dir: string): void {
   const nodeModules = join(repo, 'node_modules');
   if (!existsSync(nodeModules)) return;
 
+  const packages = workspacePackages(repo);
+  // The top-level node_modules entry each workspace package occupies: its scope
+  // directory, or the bare name when it is unscoped. Those are rebuilt below, so
+  // mirroring the donor's copy of them is what has to be skipped.
+  const owned = new Set([...packages.keys()]
+    .map((name) => (name.startsWith('@') ? name.slice(0, name.indexOf('/')) : name)));
+
   const target = join(dir, 'node_modules');
   mkdirSync(target, { recursive: true });
   for (const entry of readdirSync(nodeModules)) {
-    if (entry === WORKSPACE_SCOPE) continue;
+    if (owned.has(entry)) continue;
     symlinkSync(join(nodeModules, entry), join(target, entry));
   }
 
-  const scope = join(nodeModules, WORKSPACE_SCOPE);
-  if (!existsSync(scope)) return;
-  const scopeDir = join(target, WORKSPACE_SCOPE);
-  mkdirSync(scopeDir, { recursive: true });
-  for (const pkg of readdirSync(scope)) {
-    // Reuse bun's own relative target so it resolves inside the sandbox. An
-    // absolute one would point back at the real repo, which is the whole bug.
-    const linked = readlinkSync(join(scope, pkg));
-    const relativeTarget = isAbsolute(linked)
-      ? join('..', '..', relative(repo, linked))
-      : linked;
-    symlinkSync(relativeTarget, join(scopeDir, pkg));
+  for (const [name, packageDir] of packages) {
+    const link = join(target, name);
+    mkdirSync(dirname(link), { recursive: true });
+    // Relative to the link's OWN directory, so it resolves inside the sandbox
+    // whatever the nesting. An absolute target points back at the real repo,
+    // which is the whole bug.
+    symlinkSync(relative(dirname(link), join(dir, relative(repo, packageDir))), link);
   }
 }
 
