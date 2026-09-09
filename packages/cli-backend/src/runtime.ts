@@ -811,14 +811,10 @@ export async function buildLocalActorRuntime(
 /**
  * The runtime a single local head (a fork of the parent workspace) runs over.
  *
- * ONE DATABASE. A head is a logical actor of the workspace it forks, so its
- * rows are its own rows in the parent's database rather than a file of its
- * own: its scaffold pointer, its claims, its journal steps and its program
- * state are all actor-keyed, and the parent can therefore read what its own
- * fork did. A per-head scratch file under `~/.kinu/heads/` would provision a
- * whole second workspace inside it — a second filesystem, a second memory
- * index, a second craft store — which is precisely the per-actor store open-38
- * removes.
+ * ONE DATABASE. A head shares the workspace database, filesystem, memory index
+ * and craft store; its scaffold pointer, claims, journal steps and program
+ * state are actor-keyed, so the parent can read what its own fork did. See
+ * open-38 for the one-workspace-store constraint.
  *
  * What stays private is what makes this a FORK rather than a second view: its
  * own HOME in the one filesystem (`headAgentName`, uid-confined where the
