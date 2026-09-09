@@ -380,7 +380,6 @@ export function admitSubordinateTask(log: EventLog, input: {
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  deadlineHint?: string;
   inheritedContext?: string;
   creationId?: string;
   mode: WorkMode;
@@ -389,7 +388,6 @@ export function admitSubordinateTask(log: EventLog, input: {
   const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
   const body = requiredText(input.body, 'body');
   const deliverable = optionalText(input.deliverable);
-  const deadlineHint = optionalText(input.deadlineHint);
   const inheritedContext = optionalText(input.inheritedContext);
   const payload = {
     from_workspace: fromWorkspace,
@@ -398,7 +396,6 @@ export function admitSubordinateTask(log: EventLog, input: {
     kinu_mode: input.mode,
   };
   if (deliverable) Object.assign(payload, { deliverable });
-  if (deadlineHint) Object.assign(payload, { deadline_hint: deadlineHint });
   if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
   if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
   return log.publish({
@@ -547,7 +544,6 @@ export interface SubordinateRuntime {
     body: string;
     mode: WorkMode;
     deliverable?: string;
-    deadlineHint?: string;
     inheritedContext?: string;
     creationId?: string;
   }): Promise<SubordinateHandoff>;
@@ -791,14 +787,12 @@ export function createTeamToolDeps(deps: {
       let handoff: SubordinateHandoff;
       try {
         const deliverable = optionalText(input.deliverable);
-        const deadlineHint = optionalText(input.deadlineHint);
         const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
         const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
           body: task,
           mode: input.mode,
         };
         if (deliverable) Object.assign(assignment, { deliverable });
-        if (deadlineHint) Object.assign(assignment, { deadlineHint });
         if (inheritedContext) Object.assign(assignment, { inheritedContext });
         handoff = await deps.runtime.assign(input.name, assignment);
         // Inside the rollback scope, not after it: this write compensates the

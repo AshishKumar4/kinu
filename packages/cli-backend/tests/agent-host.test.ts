@@ -387,7 +387,7 @@ function pendingOutboxRows(dbPath: string): Array<{ id: string; state: string; a
 /**
  * A model that ANSWERS a peer ask the way the product does: it finds the event
  * id the drain told it to cite, calls the real `agents` tool with
- * `action:'reply'`, and then closes the turn.
+ * `action:'msg'` with an `event_id`, and then closes the turn.
  *
  * Reading the id out of its own prompt is the point rather than a shortcut —
  * that hint is the only way a real model learns which event to answer, so a
@@ -425,7 +425,7 @@ function replyingModel(answer: string) {
                 type: 'tool-call',
                 toolCallId: `reply-${answered.size}`,
                 toolName: 'agents',
-                input: JSON.stringify({ action: 'reply', event_id: replyTo, message: answer }),
+                input: JSON.stringify({ action: 'msg', event_id: replyTo, message: answer }),
               });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });

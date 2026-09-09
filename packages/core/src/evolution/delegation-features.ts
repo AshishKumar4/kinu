@@ -195,7 +195,9 @@ function agentsAction(call: ToolCallRecord): string | null {
 
 /** The persistent rung's actions. */
 const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
-const MESSAGING_ACTIONS = { ask: true, send: true, reply: true } satisfies Record<string, true>;
+/** The addressing action, plus the three verbs it replaced: these tables read
+ *  STORED rows, so a turn recorded before the collapse still classifies. */
+const MESSAGING_ACTIONS = { msg: true, ask: true, send: true, reply: true } satisfies Record<string, true>;
 /** The ephemeral-search rung's action. */
 const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 

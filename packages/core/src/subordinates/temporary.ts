@@ -1,12 +1,13 @@
 /**
- * TEMPORARY AGENTS — one full child agent, run to completion inside the call
- * that asked for it, and released when it answers.
+ * TASK-LIFETIME AGENTS — one full child agent, run to completion inside the
+ * call that asked for it, and released when it answers.
  *
- * `agents({action:'ask', role, message})` is the third lifetime on the one
- * delegation ladder, and the only one whose answer arrives as the tool RESULT.
- * A `hire` is durable and stays; an `ask` to an existing agent is a handoff
- * whose report wakes the caller turns later; a role-targeted `ask` creates an
- * agent for exactly this question, waits for its single answer, and retires it.
+ * `agents({action:'hire', lifetime:'task', role, mission})` is the cheap half of
+ * the hire rung, and the only delegation whose answer arrives as the tool
+ * RESULT. A `lifetime:'durable'` hire stays in the roster; a hire naming an
+ * agent that already exists is a handoff whose report wakes the caller turns
+ * later; this one creates an agent for exactly this question, waits for its
+ * single answer, and retires it.
  *
  * IT IS THE SAME CHILD, IN THE SAME ROSTER. There is no second child substrate,
  * no second loop, no second facet builder — and no second table. A temporary run
@@ -45,15 +46,15 @@ import type { SubordinateRuntime } from './support';
 import { finishSubordinateBirth, type SubordinateBirth } from './birth';
 
 /**
- * How long a roster row is meant to live. The one non-derivable fact a
- * role-targeted ask adds to the roster, and the reason it is a column rather
+ * How long a roster row is meant to live. The one non-derivable fact `hire`'s
+ * `lifetime` field writes onto the roster, and the reason it is a column rather
  * than an inference: a task-lifetime row working on its question and a durable
  * row working on an assignment are indistinguishable by state.
  */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
-/** The lifetime a temporary agent is listed under. */
+/** The lifetime a task-lifetime hire is listed under. */
 export const TEMPORARY_LIFETIME = 'task';
 
 
@@ -94,7 +95,7 @@ export interface TemporaryRunOutcome {
 }
 
 /**
- * A refusal RAISED BEFORE THE CHILD EXISTS — the only shape a role-targeted ask
+ * A refusal RAISED BEFORE THE CHILD EXISTS — the only shape a task-lifetime hire
  * returns that is not {@link TemporaryRunOutcome}, and not an exception to "one
  * stable shape": there is no agent yet to report on, so an outcome naming one
  * would be a fiction.
@@ -112,12 +113,16 @@ export interface TemporaryRunRequest {
   readonly roleLabel: string;
   readonly task: string;
   /**
-   * Workspace paths the child reads ITSELF.
+   * Workspace paths the child reads ITSELF, named in its brief.
    *
-   * The bytes never enter the asking agent's window: this side only authorizes
-   * the paths against the workspace file plane and names them in the child's
-   * brief. That is the whole point of the channel — material a parent does not
-   * need to look at should not cost the parent its context to ask about.
+   * PROGRAMMATIC CALLERS ONLY. The model-facing field this used to mirror is
+   * gone: a task-lifetime hire shares this workspace's file plane, so naming a
+   * path in the question is already enough, and the preflight that used to
+   * authorize the paths here only duplicated the refusal the child's own file
+   * read produces — one round trip earlier and one agent further from the
+   * error. What remains is for callers that ASSEMBLE the list rather than
+   * typing it: `evolution/refinement-lane.ts` fills it from what the workspace
+   * actually holds, and renders it as "Files you may read yourself".
    */
   readonly contextRefs?: readonly string[];
   readonly mode: WorkMode;
@@ -133,7 +138,7 @@ export interface TemporaryRunRequest {
  * listing method here would be a second read model over the same state.
  *
  * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever a backend wires a roster: an
- * actor without it has no role-targeted ask in its schema, in its codemode
+ * actor without it has no `lifetime` field in its schema, in its codemode
  * namespace or in its prompt, so absence is structural rather than a runtime
  * refusal.
  */
@@ -156,7 +161,7 @@ export interface TemporaryAgentPort {
    * mid-task `progress` note, which is NOT the answer
    * ({@link temporaryRunSettles}) and must therefore not discharge what it owes
    * — suppressing the terminal report on "the child spoke this turn" rather than
-   * on "the child already answered" is precisely how an ask came to park forever.
+   * on "the child already answered" is precisely how a task hire came to park forever.
    * Both backends track the two facts separately for that reason.
    *
    * So silence is not a reachable state rather than a bounded one, which is the
@@ -231,7 +236,7 @@ const TASK_ENDING_REPORT = {
  * turn and an empty one, because an answer nobody asked for is not progress —
  * and applying that selectivity to a task child turned three ordinary endings
  * (a provider error, an interruption, a turn that finished with nothing to say)
- * into an ask that never returned.
+ * into a hire that never returned.
  *
  * So the rule inverts for this lifetime: a task child ALWAYS reports, exactly
  * once, and the status is what differs. `completed` is the answer; `blocked`
@@ -286,11 +291,11 @@ export function temporaryRunSettles(input: {
 }
 
 /**
- * A temporary agent's brief.
+ * A task-lifetime hire's brief.
  *
  * Three facts, in the order they change what gets written: what it is being
  * asked, which paths hold the material, and that its NEXT MESSAGE is the whole
- * deliverable. The last one is the difference between this rung and a hire — a
+ * deliverable. The last one is the difference between the two lifetimes — a
  * durable subordinate can come back for more, and this one cannot, so a partial
  * first answer is the only answer.
  */
@@ -314,7 +319,7 @@ export function renderTemporaryTaskBrief(input: {
 }
 
 /**
- * THE TEMPORARY-AGENT POLICY, over the SAME roster and the SAME child substrate.
+ * THE TASK-LIFETIME POLICY, over the SAME roster and the SAME child substrate.
  *
  * Every durable step here is one the roster and the event log already own:
  * `provision` writes the row (with `lifetime:'task'`), `runtime.assign` admits
@@ -343,14 +348,6 @@ export function createTemporaryAgentPort(deps: {
    * other handoff rule, and this rung consumes it rather than re-deciding it.
    */
   renderInheritedContext(): string | undefined;
-  /**
-   * The workspace file plane one `context_ref` path is AUTHORIZED against —
-   * existence only, never the bytes. Reading them here would put the material in
-   * the asking agent's isolate, which is the one cost this channel exists to
-   * avoid. Absent is a session with no file plane, and then a ref is refused by
-   * name instead of silently ignored.
-   */
-  statRef?(path: string): Promise<boolean>;
 }): TemporaryAgentPort {
   // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
@@ -394,32 +391,10 @@ export function createTemporaryAgentPort(deps: {
 
     run: async (request) => {
       const task = request.task.trim();
-      if (!task) return { reason: 'bad_input', error: 'ask requires a non-empty message' };
+      if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
       const refs = request.contextRefs ?? [];
-      if (refs.length > 0) {
-        const statRef = deps.statRef;
-        if (!statRef) {
-          return {
-            reason: 'unavailable',
-            error: 'context_ref names workspace paths and this session wired no file plane to '
-              + 'authorize them against, so they could only be ignored. Put the material in '
-              + '`message` instead.',
-          };
-        }
-        const missing = (await Promise.all(refs.map(async (path) =>
-          (await statRef(path)) ? null : path))).filter((path) => path !== null);
-        if (missing.length > 0) {
-          return {
-            reason: 'missing',
-            error: `context_ref paths this workspace cannot resolve: ${missing.join(', ')}. `
-              + 'Nothing was sent and nothing was guessed — a helper answering about material '
-              + 'it never saw is worse than this message.',
-          };
-        }
-      }
-
       const roleLabel = request.roleLabel.trim();
-      if (!roleLabel) return { reason: 'bad_input', error: 'ask requires a role' };
+      if (!roleLabel) return { reason: 'bad_input', error: 'hire requires a role' };
       const name = deps.createName(`ask-${roleLabel}`);
       const startedAt = deps.now();
       const failure = (
@@ -471,7 +446,7 @@ export function createTemporaryAgentPort(deps: {
       const settlement = await waiter.promise;
       await release();
       if (settlement === 'cancelled') {
-        return failure('cancelled', 'the caller cancelled this ask before the agent answered.');
+        return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
       }
       if (settlement.status === 'blocked') return failure('unavailable', settlement.content);
       return {

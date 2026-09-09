@@ -183,11 +183,11 @@ The current backend runs every full agent — main, subordinate, temporary and t
 | Swarm | Explore alternatives under a stated search configuration and objective. | Context initialization, tool use, scoring, settlement and resource budgets are explicit. A judged search and an unranked ideation sweep are not reported as measured optimization. |
 | Ask a workspace peer | Ask an authorized agent in another workspace. | Waits for the peer reply. Its workspace ownership boundary is preserved; this is not an implicit child or shared-filesystem grant. |
 
-`agent` and `role` are different ask targets. Invalid combinations and unknown fields must be refused before work or spend begins.
+`agent` and `role` are different `hire` targets: `role` creates the agent and `lifetime` says how long it lives, `agent` hands the workstream to one that exists. Invalid combinations and unknown fields must be refused before work or spend begins.
 
-This target-dependent settlement is deliberate: message 748 explicitly accepts immediate subordinate assignment and awaited peer replies. Native and codemode forms must agree for each target; the specification does not homogenize them into a different return contract. `send` and `reply` retain their own message/event correlation.
+This target-dependent settlement is deliberate: message 748 explicitly accepts immediate subordinate assignment and awaited peer replies. Native and codemode forms must agree for each target; the specification does not homogenize them into a different return contract. `msg` retains its own message/event correlation at both of its targets.
 
-A `context_ref` names a file or other admitted context source for the receiver to read. Passing a path is not proof that the receiver read it. Acceptance must inspect actual calls or resulting source-grounded evidence.
+Naming a workspace path in a delegation's brief points the receiver at context to read itself. Passing a path is not proof that the receiver read it. Acceptance must inspect actual calls or resulting source-grounded evidence.
 
 ![Delegation and fork distinctions](diagrams/product-delegation.svg)
 
@@ -857,7 +857,7 @@ The comparison preserves these later decisions:
 
 - Message 942 asks for an agent-core notice **left uncommitted**. The checked notice is `packages/agent-core/OWNER-NOTICE-VIEWS.md` in the separate agent-core checkout; leaving it untracked is the requested outcome, not a missing publication task.
 - Message 944 asks how Node/Vite hosting and a broader agent-core composition would work. It is not, by itself, authorization to implement a new Node host or replace the entire product.
-- Messages 748–750 define recursive existing/temporary `agents.ask` and persistent `agents.hire`; the requirement is not unspecified and must not be replaced by a standalone `rlm.query`.
+- Messages 748–750 define recursive existing/temporary delegation and persistent hiring; both are `agents.hire` — `lifetime:'task'` for the temporary one, `agent` for one that exists — and the requirement must not be replaced by a standalone `rlm.query`.
 - Message 822 rejects doc-claim gates. This specification is not permission to add one.
 - Message 969 reverses the rejected landing polish **for now**. It does not cancel the underlying future design request.
 - Message 975 explicitly requests the shared-SQLite and editable actual context/loop target. The shared-SQLite half is cut over in source (§4); only the rows this catalogue still marks open may be claimed, never the whole target by relabelling.

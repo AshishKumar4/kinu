@@ -239,8 +239,8 @@ not conversations to reopen. The canonical cloud read is still
 
 `fork` names two live features: conversation walk-back and cloud workspace
 fork. The delegation action of that name was deleted: `AGENTS_TOOL_ACTIONS`
-(`packages/core/src/tools/registry.ts:323`) is `swarm`, `hire`, `ask`, `send`,
-`reply`, `list`, `dismiss`; parallel work is `swarm`. See
+(`packages/core/src/tools/registry.ts`) is `swarm`, `hire`, `msg`, `list`,
+`dismiss`; parallel work is `swarm`. See
 [EXPLORATION.md](EXPLORATION.md).
 
 `/fork [n]` restarts the conversation just before an earlier user message.

@@ -236,7 +236,7 @@ describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
     const description = executeToolsDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
-    for (const member of ['swarm(input', 'hire(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
+    for (const member of ['swarm(input', 'hire(input', 'msg(input', 'list(input', 'dismiss(input']) {
       expect(description).toContain(member);
     }
     // Its neighbours are untouched — this is one more namespace, not a rewrite.
