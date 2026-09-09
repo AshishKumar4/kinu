@@ -1,7 +1,6 @@
-// The swarm engine and the pieces a backend or the agents tool reaches it
-// through. No `ExplorationStrategy` registry seam heads this list: no production
-// path builds one, and the mcts/heads/single-shot adapter contract has its only
-// reader in the eval harness, which owns it at `eval/strategy.ts`.
+// This module exports the swarm engine and the pieces its backend and
+// agents-tool callers use. The mcts/heads/single-shot adapter contract belongs
+// to its sole consumer, the eval harness, at `eval/strategy.ts`.
 export * from './objective';
 export * from './swarm';
 export * from './effort';

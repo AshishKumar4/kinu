@@ -1043,9 +1043,9 @@ export class EvolutionEngine {
    *  surface only when a recorded outcome already backs the window; otherwise
    *  it waits in the lessons ledger as provisional until one corroborates it. */
   private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
-    // The reflection input is the ledger's newest CORROBORATED lessons — not a
-    // MEMORY.md heading parse, which would find nothing: no lesson is ever
-    // copied there, and every reader of recent lessons reads the rows.
+    // The reflection input is the ledger's newest CORROBORATED lessons, which
+    // own their status there. Every recent-lesson reader uses those rows, so a
+    // memory file's headings or contents cannot decide which lessons qualify.
     const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
 
     if (!recentLessons.trim()) return;

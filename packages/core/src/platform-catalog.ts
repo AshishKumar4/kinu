@@ -1136,17 +1136,11 @@ export const PLATFORM_CATALOG = {
       + 'preventive only. And for the facet leak below, bytes are NOT the binding constraint: see '
       + 'do.facet.count, which is reached roughly an order of magnitude sooner.'
       + ' '
-      + 'THIS LEAK IS CLOSED, AND CLOSED BY REMOVAL RATHER THAN BY A CAREFUL DELETE. The leak '
-      + 'mechanism, for whoever next reaches for a facet: abortSubAgent '
-      + '(git 4b732f164:packages/cf-backend/src/facet-spawn.ts:61) only does ctx.facets.abort '
-      + 'and explicitly does NOT wipe storage, and deleteSubAgent covers a hired subordinate '
-      + 'and never a facet in head or branch mode, so every head and every MCTS branch facet '
-      + 'leaks its SQLite permanently at a default 15 fresh-nanoid facets per search. A '
-      + 'terminal-only delete would fix that, and none is needed: no Kinu actor owns a facet '
-      + 'database at all. Every logical actor — hired subordinate, temporary, head, swarm node, '
-      + 'MCTS branch — is bound over the ONE workspace object'+"'"+'s SQLite by '
-      + 'packages/core/src/state/actor-host.ts, so there is no per-actor storage to leak and no '
-      + 'facet to spawn. The facet ceilings below remain recorded as platform knowledge.',
+      + 'The facet implementation recorded at git 4b732f164:packages/cf-backend/src/facet-spawn.ts:61 '
+      + 'aborts without wiping storage and deletes hired actors only, a combination that leaks head '
+      + 'and branch SQLite at 15 fresh facet IDs per default search unless terminal deletion covers '
+      + 'them. Kinu binds every logical actor through state/actor-host.ts to the workspace SQLite, '
+      + 'so the facet measurements are preventive platform knowledge, not the storage topology.',
   },
 
   'sqlite.nomem': {
@@ -1740,17 +1734,11 @@ export const PLATFORM_CATALOG = {
       + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2 — so a '
       + 'root-only count under-reports a recursive split.'
       + ' '
-      + 'THIS LEAK IS CLOSED, AND CLOSED BY REMOVAL RATHER THAN BY A CAREFUL DELETE. The leak '
-      + 'mechanism, for whoever next reaches for a facet: abortSubAgent '
-      + '(git 4b732f164:packages/cf-backend/src/facet-spawn.ts:61) only does ctx.facets.abort '
-      + 'and explicitly does NOT wipe storage, and deleteSubAgent covers a hired subordinate '
-      + 'and never a facet in head or branch mode, so every head and every MCTS branch facet '
-      + 'leaks its SQLite permanently at a default 15 fresh-nanoid facets per search. A '
-      + 'terminal-only delete would fix that, and none is needed: no Kinu actor owns a facet '
-      + 'database at all. Every logical actor — hired subordinate, temporary, head, swarm node, '
-      + 'MCTS branch — is bound over the ONE workspace object'+"'"+'s SQLite by '
-      + 'packages/core/src/state/actor-host.ts, so there is no per-actor storage to leak and no '
-      + 'facet to spawn. The facet ceilings below remain recorded as platform knowledge.',
+      + 'The facet implementation recorded at git 4b732f164:packages/cf-backend/src/facet-spawn.ts:61 '
+      + 'aborts without wiping storage and deletes hired actors only, a combination that leaks head '
+      + 'and branch SQLite at 15 fresh facet IDs per default search unless terminal deletion covers '
+      + 'them. Kinu binds every logical actor through state/actor-host.ts to the workspace SQLite, '
+      + 'so the facet measurements are preventive platform knowledge, not the storage topology.',
   },
 
   'do.facet.clone_name_unvalidated': {

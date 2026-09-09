@@ -325,12 +325,10 @@ export class ConversationSearchStore {
    * Idempotent: drop any `messages_fts` index and its triggers, create the
    * derived `conversation_fts`, then sync.
    *
-   * `conversation_fts` owns its content and its own reference columns and is
-   * fed from the authority by the watermark sync. An external-content fts5
-   * index over `messages` with sync triggers indexes whatever `messages`
-   * holds, which on a pane-store backend is not the default chat at all. Both
-   * are disposable derived state, so the older table is dropped once here and
-   * the index is rebuilt from the authority.
+   * `messages_fts` and its triggers are disposable derived state and are dropped
+   * here because `messages` is not the default-chat authority on a pane-store
+   * backend. `conversation_fts` owns its content and reference columns and is
+   * populated from the conversation authority by watermark sync.
    */
   private ensure(): void {
     if (this.ensured) return;

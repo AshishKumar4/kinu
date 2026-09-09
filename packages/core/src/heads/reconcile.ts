@@ -171,12 +171,10 @@ export const FORK_INTERRUPTED_SIGNAL = 'fork_interrupted';
  * distinguish an operator cancel from a process exit from a DO eviction — this
  * file's own header names all three — and it must not pick one.
  *
- * The wording names no mechanism and is not shaped like a thrown error. "settled at
- * start of life, having outlived the activation that spawned it" would name one — a
- * head that ran past its owner — which is false for the operator cancel; and
- * error-shaped phrasing gets read as a runtime crash rather than what this is, a
- * bookkeeping entry written by the routine that retires stale rows. It has been
- * reported as a crash on that basis.
+ * The message describes bookkeeping, not a runtime crash, and must not imply
+ * that the head outlived its owner: an operator cancellation is also
+ * consistent with these rows. Naming a specific mechanism or using
+ * error-shaped wording would misrepresent what reconciliation knows.
  */
 export const FORK_INTERRUPTED_REASON =
   'no executor: spawned, never reported, and retired when a later activation '

@@ -227,11 +227,9 @@ function aggregatedAnswers(parents: readonly FanInParent[]): string {
  * The expansion prompt for one child: what it is asked, the angle its siblings do
  * not have, what this path has measured, and the branch it may propose.
  *
- * THE ANGLE IS UNCONDITIONAL. There is no `decorrelate` axis to gate it on: three
- * values that all hand out angles anyway — `blind` included, which names the opposite
- * — select nothing. Angles cannot be turned OFF; what is genuinely missing,
- * and is a separate instrument rather than a fourth value, is a detector that notices
- * siblings converged despite them.
+ * Every child receives an angle; this surface provides no angle-off setting.
+ * Detecting siblings that converge despite their angles requires a separate
+ * detector, which is not implemented here.
  */
 export function branchPrompt(input: {
   readonly resolved: ResolvedSwarm;
