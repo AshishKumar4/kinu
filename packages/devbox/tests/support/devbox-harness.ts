@@ -1245,7 +1245,15 @@ export class FakeSandbox {
     if (fault !== undefined) throw fault;
   }
 
-  async startAndWaitForPorts(): Promise<void> {
+  /** Every `startAndWaitForPorts` call's first argument: the admission shape the
+   *  box asked for. The box admits only through this method — the one that marks
+   *  the container healthy BEFORE the start hook (`container.js:632-636`) — so
+   *  an admission that bypassed it would be the nested-start deadlock coming
+   *  back. Delegates to `start()`, which runs the hook inline the way the SDK
+   *  runs it inside its block. */
+  readonly startAndWaitPortsOptions: unknown[] = [];
+  async startAndWaitForPorts(...args: unknown[]): Promise<void> {
+    this.startAndWaitPortsOptions.push(args[0]);
     await this.start();
   }
 

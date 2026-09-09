@@ -1,5 +1,5 @@
 diff --git a/dist/sandbox-CPj2jsbz.js b/dist/sandbox-CPj2jsbz.js
-index cdb0475de10c97155df743e0c727f866d5c5c884..060fff6ae598ed3c15b5963fcb0cbf5eddb818a1 100644
+index cdb0475de10c97155df743e0c727f866d5c5c884..6999efbae31ab29ff74a68f74fd9a395753c2fc4 100644
 --- a/dist/sandbox-CPj2jsbz.js
 +++ b/dist/sandbox-CPj2jsbz.js
 @@ -8291,10 +8291,13 @@ var Sandbox = class Sandbox extends Container {
@@ -20,7 +20,24 @@ index cdb0475de10c97155df743e0c727f866d5c5c884..060fff6ae598ed3c15b5963fcb0cbf5e
  					}
  					unmounted = true;
  					mountInfo.mounted = false;
-@@ -11495,7 +11498,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -8830,7 +8833,15 @@ var Sandbox = class Sandbox extends Container {
+ 	*/
+ 	async startContainerForRPC() {
+ 		try {
+-			await this.startAndWaitForPorts({
++			// An RPC (re)connect on a container that is already running AND already
++			// marked healthy needs no start at all. `containerFetch` uses exactly
++			// this conjunction to route directly to the container, and running the
++			// wait again would re-enter `onStart` inside a nested
++			// `blockConcurrencyWhile` — once per reconnect, on a container that
++			// never restarted. A fresh container, a stopped one, or one whose
++			// status has not reached healthy still takes the full path below.
++			const state = await this.getState();
++			if (this.ctx.container?.running !== true || state.status !== "healthy") await this.startAndWaitForPorts({
+ 				ports: 3e3,
+ 				cancellationOptions: {
+ 					instanceGetTimeoutMS: RPC_START_INSTANCE_GET_TIMEOUT_MS,
+@@ -11495,7 +11506,7 @@ var Sandbox = class Sandbox extends Container {
  		const ctx = this.ctx;
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("R2 binding mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("R2 binding mounts require exporting ContainerProxy from the Worker entrypoint");
@@ -29,7 +46,7 @@ index cdb0475de10c97155df743e0c727f866d5c5c884..060fff6ae598ed3c15b5963fcb0cbf5e
  		if (Object.keys(params.buckets).length > 0) await this.setOutboundByHost("r2.internal", "r2EgressMount", params);
  		else await this.removeOutboundByHost("r2.internal");
  		this.logger.debug("r2 egress: registering host interception", {
-@@ -11520,7 +11523,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -11520,7 +11531,7 @@ var Sandbox = class Sandbox extends Container {
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("Credential proxy bucket mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("Credential proxy bucket mounts require exporting ContainerProxy from the Worker entrypoint");
  		const hosts = [S3_CREDENTIAL_PROXY_HOST, S3_CREDENTIAL_PROXY_DIAGNOSTIC_HOST];
