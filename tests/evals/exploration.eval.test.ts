@@ -233,10 +233,10 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // assertions below as `ranked: 0` — indistinguishable without this line.
     // Printed unconditionally rather than in a failure branch, because the
     // passing run's margin over the 0.3 floor is the number that says how close
-    // this suite is to going red for a reason nobody changed. The engine NAMES
-    // which refusal it took (`reason`); a strategy adapter in front of it
-    // flattens both into one candidate score and leaves the reader inferring the
-    // difference from a duplicate.
+    // this suite is to going red for a reason nobody changed. The engine's
+    // `reason` distinguishes identical candidate scores from a best score below
+    // `minAcceptableScore`. Preserve and print that reason: a candidate score
+    // alone leaves the reader inferring which refusal occurred.
     console.log(`    winner score: ${result.winnerValue.toFixed(3)} (floor `
       + `${String(DEFAULT_CONFIG.mcts.minAcceptableScore)}), converged: `
       + `${String(result.converged)}${result.converged ? '' : ` (${result.reason})`}`);
