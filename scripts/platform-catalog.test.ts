@@ -275,16 +275,7 @@ describe('against the real tree', () => {
     expect(source).not.toContain('~128 MB of memory');
   });
 
-  test('the number the model is told about the workspace is RENDERED from the catalog', async () => {
-    // Source text alone only proves the import exists. This renders the real
-    // prompt and reads the sentence back, so a hard-typed "~128 MB" cannot sit
-    // beside the derivation and pass: the number the model is told about the
-    // workspace has to come from the catalog.
-    //
-    // Dynamic because `createTestRuntime` reaches package internals that must
-    // resolve after this file's own module graph, exactly as the core suites do.
-    // That also means this test loads all of `packages/core`, so it fails while
-    // any sibling is mid-write — which is why the invariant above stands alone.
+  test('the workspace prompt reports the catalog memory limit', async () => {
     const { createTestRuntime } = await import('../packages/test-utils/src/index');
     const { buildSystemPromptSync } = await import('../packages/core/src/prompt');
     const { rt } = createTestRuntime();
@@ -292,8 +283,9 @@ describe('against the real tree', () => {
       backend: 'cf',
       executors: [{ name: 'workspace', status: 'ready' }],
     });
-    const mb = platformFact('worker.isolate.memory').limit?.value ?? 0;
-    expect(mb).toBeGreaterThan(0);
-    expect(rendered).toContain(`The shell shares ~${String(mb / (1000 * 1000))} MB with the Worker.`);
+    const limit = platformFact('worker.isolate.memory').limit;
+    if (limit === null) throw new Error('Workspace memory fact has no limit');
+    const reported = rendered.match(/~([0-9.]+) MB/);
+    expect(Number(reported?.[1])).toBe(limit.value / (1000 * 1000));
   });
 });

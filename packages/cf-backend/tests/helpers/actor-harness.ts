@@ -48,6 +48,7 @@ import {
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import type { ExplorationHostSeams } from '../../src/exploration-hosting';
+import type { HostedTaskProfile } from '../../src/subordinate-hosting';
 import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -569,46 +570,49 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  rather than a re-declaration of it. */
   observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
 
-  /** A hired child's DELEGATED-turn ToolSet, as the delegated head received it.
+  /** A hired child's DELEGATED-turn profile, as the runner received it: the
+   *  ToolSet it may call and the framing it was told it runs under.
    *
-   * The same surface a delegated turn runs: confined builtins over the child's
-   * own runtime plus the report lane. Suites that assert the subordinate's
-   * model-facing profile (conformance, tool confinement) read this rather than
+   * The same profile a delegated turn runs: the full-agent surface over the
+   * child's own runtime plus the report lane, and the assigned-turn framing
+   * rendered from it. Suites that assert the subordinate's model-facing profile
+   * (conformance, tool confinement, framing) read this rather than
    * re-declaring the wiring — a re-declaration would agree with itself while
    * the product drifted.
    *
    * OBSERVED THROUGH THE PRODUCTION RUNNER rather than built beside it.
    * `runHostedTask` is where a delegated turn's `HeadInput` is built, and it
-   * hands that ONE value to `taskTools` and to the runner together; what this
-   * captures at that seam is therefore the surface the head really got. Building
-   * an input here to build a surface from would be the two-shapes-for-one-turn
-   * the builder exists to end, and it would keep agreeing with itself after
-   * production's shape moved. The runtime narrowing moved with it: the runner
-   * recovers the concrete `CFRuntime` at the one place that needs it.
+   * hands that ONE value to `taskProfile` and to the runner together; what this
+   * captures at that seam is therefore the profile the turn really got.
+   * Building an input here to build a profile from would be the
+   * two-shapes-for-one-turn the builder exists to end, and it would keep
+   * agreeing with itself after production's shape moved. The runtime narrowing
+   * moved with it: the runner recovers the concrete `CFRuntime` at the one
+   * place that needs it.
    *
    * The turn behind the observation reaches the model and fails there — the
    * harness resolves a provider it cannot call under bun — which costs the
-   * observation nothing, because the surface is built before the first request.
+   * observation nothing, because the profile is built before the first request.
    * A suite that wants the turn itself injects a model and drives
    * `runHostedTaskTurn` below.
    */
-  async observeHostedTaskTools(child: HostedActor, task: string): Promise<ToolSet> {
+  async observeHostedTaskProfile(child: HostedActor, task: string): Promise<HostedTaskProfile> {
     const seams = this.subordinateSeams();
     // Collected rather than assigned to a nullable: one delegated turn builds
-    // one surface, and an EMPTY array is the honest reading of "the runner never
-    // reached its tool seam" — which is a broken observation, not an empty one.
-    const built: ToolSet[] = [];
+    // one profile, and an EMPTY array is the honest reading of "the runner never
+    // reached its profile seam" — which is a broken observation, not an empty one.
+    const built: HostedTaskProfile[] = [];
     await runHostedTask({
       ...seams,
-      taskTools: (actor, runtime, reports, input) => {
-        const tools = seams.taskTools(actor, runtime, reports, input);
-        built.push(tools);
-        return tools;
+      taskProfile: async (turn) => {
+        const profile = await seams.taskProfile(turn);
+        built.push(profile);
+        return profile;
       },
     }, child.reference, { body: task, mode: 'build', sequenceId: crypto.randomUUID() });
-    const [tools] = built;
-    if (tools === undefined) throw new Error('the delegated turn never built its tool surface');
-    return tools;
+    const [profile] = built;
+    if (profile === undefined) throw new Error('the delegated turn never built its profile');
+    return profile;
   }
 
   /** Drive one delegated task turn for a hired child through the production

@@ -77,6 +77,7 @@ const neverHost: ExplorationHostSeams = {
     resumable() { throw new Error('mergeLLM read the resumable claims'); },
   },
   register() { throw new Error('mergeLLM reached actor registration'); },
+  watchWrites() { throw new Error("mergeLLM watched an actor's writes"); },
   profile() { throw new Error('mergeLLM resolved an exploration profile'); },
   resolveModel() { throw new Error('mergeLLM resolved a model through the seams'); },
   webSearch() { throw new Error('mergeLLM reached the web search provider'); },
