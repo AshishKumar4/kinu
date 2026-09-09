@@ -132,7 +132,6 @@ def attachCost (hasDelta : Bool) : Cost :=
   { classA := 0
     classB := layers hasDelta
     bytes := 0
-    journalScanned := 0
     layersMounted := layers hasDelta }
 
 /-- Restated over the size record so independence from n and p is a
@@ -184,7 +183,6 @@ def extractAttachCost (n : Nat) : Cost :=
   { classA := 0
     classB := 1
     bytes := n
-    journalScanned := 0
     layersMounted := 0 }
 
 theorem extract_attach_is_linear_in_n (n : Nat) :
@@ -235,14 +233,12 @@ def tickCost (c excluded : Nat) : Cost :=
   { classA := 1
     classB := 0
     bytes := tickUpload c excluded
-    journalScanned := 0
     layersMounted := 0 }
 
 def firstBaseCost (n excluded : Nat) : Cost :=
   { classA := 1
     classB := 0
     bytes := n - excluded
-    journalScanned := 0
     layersMounted := 0 }
 
 theorem first_base_uploads_unexcluded_bytes (n excluded : Nat) :
