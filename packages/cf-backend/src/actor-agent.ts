@@ -3655,8 +3655,12 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Tell every open client that one branch's ledger moved. Ordering and
    *  failure isolation belong to {@link LiveHeadJournal}, which calls this only
-   *  after its write has returned and never lets a throw here reach core. */
-  private announceHeadActivity(headId: string): void {
+   *  after its write has returned and never lets a throw here reach core.
+   *
+   *  Protected because a HOSTED actor's search announces through the same
+   *  listener: the workspace owns the socket, whichever of its actors spawned
+   *  the head whose row moved. */
+  protected announceHeadActivity(headId: string): void {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
     if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
@@ -5675,12 +5679,18 @@ export abstract class ActorAgent extends Think<Env> {
    */
 
   /**
-   * The parent's recent conversation, handed to each spawned head so it sees
-   * the full context. Capped to the last N messages to bound head LLM context
-   * over long sessions (Think Session already compacts the table at the
+   * ONE actor's recent conversation, handed to each spawned head so it sees the
+   * full context. Capped to the last N messages to bound head LLM context over
+   * long sessions (Think Session already compacts the table at the
    * orchestrator level; this is a second safety net for head spawns).
+   *
+   * WHOSE conversation is an argument, defaulting to this object's own actor.
+   * The transcript table is `actor_id`-scoped, and a HOSTED actor hiring a
+   * child of its own passes what IT has said rather than what the workspace
+   * root has: a hire handed the root's transcript inherits a conversation it
+   * was never party to.
    */
-  protected readInheritedContext(): SerializedMessage[] {
+  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): SerializedMessage[] {
     // The agents SDK's session provider creates assistant_messages on its first
     // append, so an agent that has not run a turn has none. Asked directly:
     // catching instead made "no conversation yet" indistinguishable from a read
@@ -5693,7 +5703,7 @@ export abstract class ActorAgent extends Think<Env> {
       FROM (
         SELECT id, role, content, created_at
         FROM assistant_messages
-        WHERE actor_id = ${this.actorHandle().actorId}
+        WHERE actor_id = ${actor.actorId}
         ORDER BY created_at DESC
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
@@ -5702,7 +5712,7 @@ export abstract class ActorAgent extends Think<Env> {
     // beside a page from one actor's would report a fork inheriting context it
     // was never given, which is the reading this cap exists to bound.
     const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages
-      WHERE actor_id = ${this.actorHandle().actorId}`[0]?.n ?? rows.length;
+      WHERE actor_id = ${actor.actorId}`[0]?.n ?? rows.length;
     return inheritedContextFromRows(
       rows.map((r) => ({
         id: r.id,
@@ -5798,8 +5808,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  same resolution getModel() applies. Computing the threshold from the raw
    *  stored spec leaves an unset model on the generic context window instead
    *  of the resolved default model's real limit. Falls back to the raw spec
-   *  only pre-claim (no provider registry yet). */
-  private effectiveModelSpec(): string {
+   *  only pre-claim (no provider registry yet).
+   *
+   *  Protected because a hosted actor's search prices its estimate against the
+   *  workspace's own catalog session, which is this resolution. */
+  protected effectiveModelSpec(): string {
     const stored = this._turnProfile?.tier.model ?? this.getStoredModelId();
     try {
       return this.providerRegistry().normalizeSpecSync(stored);
