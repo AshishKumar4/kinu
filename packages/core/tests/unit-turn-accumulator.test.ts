@@ -1,11 +1,12 @@
-// TurnAccumulator — the per-turn accounting hoisted out of the cf-backend hooks
-// (re-arch P2). Verifies the logic the DO used to own inline is preserved.
+// TurnAccumulator — the per-turn accounting the cf-backend hooks drive through
+// `AgentOrchestrator.acc`. One object owns it, so no hook keeps a second copy.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { MissionGovernor } from '../src/mission-budget';
 import type { Usage } from '../src/usage';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 
@@ -76,22 +77,21 @@ describe('TurnAccumulator', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
     a.recordToolCall({ toolName: 'run', success: false, reason: null, error: new Error('boom') });
-    // ONE description of the failure in both ledgers. They used to disagree —
-    // `.message` in the core record against `String(error)` at the sink — so the
-    // same call read as `boom` in the evolution signal and `Error: boom` in the
-    // run-event log.
+    // ONE description of the failure in both ledgers. `.message` in the core record
+    // against `String(error)` at the sink makes them disagree — the same call reads
+    // as `boom` in the evolution signal and `Error: boom` in the run-event log.
     expect(a.toolCalls[0]).toEqual({ name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
 
   test('recordToolCall — a failure with NO error is never recorded as clean', () => {
-    // The measured invisibility path. `String(c.error ?? '')` wrote `error: ''`,
+    // The measured invisibility path. `String(c.error ?? '')` writes `error: ''`,
     // and every reader's discriminator is `error != null && error !== ''` — so a
-    // tool reporting failure without saying why was scored as a successful call,
-    // while `hadError` on the same branch knew it had failed. Three nullish
-    // shapes, because `String(undefined)` and `String(null)` produce fabricated
-    // text rather than an empty string and the old code did both in two places.
+    // tool reporting failure without saying why is scored as a successful call,
+    // while `hadError` on the same branch knows it failed. Three nullish shapes,
+    // because `String(undefined)` and `String(null)` produce fabricated text rather
+    // than an empty string.
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
@@ -179,8 +179,8 @@ describe('TurnAccumulator', () => {
   test('recordStep names tool calls from either SDK shape (toolName or name)', () => {
     const details: Array<string | undefined> = [];
     const a = new TurnAccumulator({ logActivity: (_e, d) => details.push(d) });
-    a.recordStep({ toolCalls: [{ toolName: 'current' }, { name: 'legacy' }, {}] });
-    expect(details[0]).toContain('tools=3[current,legacy,?]');
+    a.recordStep({ toolCalls: [{ toolName: 'by-toolname' }, { name: 'by-name' }, {}] });
+    expect(details[0]).toContain('tools=3[by-toolname,by-name,?]');
   });
 
   test('a non-string finishReason reaches the step sink as undefined, not as "undefined"', () => {
@@ -256,7 +256,13 @@ describe('TurnAccumulator', () => {
 
   test('a reported zero is a report; a step with no report meters nothing', () => {
     const db = new Database(':memory:');
-    const governor = new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    // The cap is per actor, so the governor is bound to the actor whose spend
+    // the accumulator is metering.
+    const governor = new MissionGovernor({
+      storage: { sql, execRaw }, actor: createTestActors(sql, execRaw).main,
+    });
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const events: Array<{ usage?: Usage }> = [];

@@ -15,7 +15,6 @@
 -/
 
 import Kinu
-import Kinu.Storage.DurableRoot
 
 /-! ## Kinu/Agent/FiberDurability.lean -/
 
@@ -173,68 +172,12 @@ import Kinu.Storage.DurableRoot
 #print axioms Kinu.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
 #print axioms Kinu.Storage.SnapshotChain.without_a_sweep_the_population_grows
 #print axioms Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
-
-/-! ## Kinu/Storage/OverlayCas.lean -/
-
-#print axioms Kinu.Storage.OverlayCas.overlay_mounts_two_layers
-#print axioms Kinu.Storage.OverlayCas.overlay_layers_le_two
-#print axioms Kinu.Storage.OverlayCas.replay_is_linear_in_pending
-#print axioms Kinu.Storage.OverlayCas.overlay_attach_independent_of_n
-#print axioms Kinu.Storage.OverlayCas.overlay_attach_independent_of_cumulative
-#print axioms Kinu.Storage.OverlayCas.overlay_attach_scans_only_pending
-#print axioms Kinu.Storage.OverlayCas.read_is_one_lookup_and_one_chunk
-#print axioms Kinu.Storage.OverlayCas.overlay_read_independent_of_n
-#print axioms Kinu.Storage.OverlayCas.tick_is_blobs_plus_one_put_per_batch
-#print axioms Kinu.Storage.OverlayCas.batching_the_journal_beats_one_put_per_entry
-#print axioms Kinu.Storage.OverlayCas.one_entry_costs_one_journal_put
-#print axioms Kinu.Storage.OverlayCas.batches_cover_the_pending_change
-#print axioms Kinu.Storage.OverlayCas.a_crash_redoes_at_most_one_batch
-#print axioms Kinu.Storage.OverlayCas.a_redone_batch_stages_no_bytes
-#print axioms Kinu.Storage.OverlayCas.overlay_tick_independent_of_n
-#print axioms Kinu.Storage.OverlayCas.overlay_tick_independent_of_cumulative
-#print axioms Kinu.Storage.OverlayCas.overlay_tick_beats_the_chain_when_pending_is_small
-#print axioms Kinu.Storage.OverlayCas.quiesce_fold_carries_the_one_linear_term
-#print axioms Kinu.Storage.OverlayCas.the_fold_operation_count_is_not_linear_in_the_tree
-#print axioms Kinu.Storage.OverlayCas.quiesce_minus_the_fold_is_the_tick
-#print axioms Kinu.Storage.OverlayCas.tick_does_not_fold
-#print axioms Kinu.Storage.OverlayCas.discard_is_one_prefix_delete
-#print axioms Kinu.Storage.OverlayCas.gc_is_bounded_by_listing_and_orphans
-#print axioms Kinu.Storage.OverlayCas.gc_is_off_the_hot_path
-#print axioms Kinu.Storage.OverlayCas.the_sweep_does_read_the_listing
-#print axioms Kinu.Storage.OverlayCas.the_hot_path_lists_only_the_journal_prefix
-#print axioms Kinu.Storage.OverlayCas.runOf_nil
-#print axioms Kinu.Storage.OverlayCas.runOf_cons
-#print axioms Kinu.Storage.OverlayCas.runOf_append
-#print axioms Kinu.Storage.OverlayCas.empty_is_ordered
-#print axioms Kinu.Storage.OverlayCas.step_preserves_ordering
-#print axioms Kinu.Storage.OverlayCas.ordering_is_invariant
-#print axioms Kinu.Storage.OverlayCas.no_cursor_ahead_of_its_fold
-#print axioms Kinu.Storage.OverlayCas.no_journal_entry_names_an_unstaged_blob
-#print axioms Kinu.Storage.OverlayCas.no_fold_precedes_its_journal_entry
-#print axioms Kinu.Storage.OverlayCas.the_cursor_never_passes_a_staged_blob
-#print axioms Kinu.Storage.OverlayCas.no_reap_precedes_its_cursor
-#print axioms Kinu.Storage.OverlayCas.the_reap_never_passes_a_staged_blob
-#print axioms Kinu.Storage.OverlayCas.blobless_entry_can_be_journalled
-#print axioms Kinu.Storage.OverlayCas.dropping_blob_before_journal_names_an_unstaged_blob
-#print axioms Kinu.Storage.OverlayCas.dropping_fold_before_cursor_advances_past_the_fold
-#print axioms Kinu.Storage.OverlayCas.dropping_journal_before_fold_folds_an_unrecorded_entry
-#print axioms Kinu.Storage.OverlayCas.dropping_cursor_before_reap_leaves_a_hole
-#print axioms Kinu.Storage.OverlayCas.a_tick_journals_without_folding
-#print axioms Kinu.Storage.OverlayCas.a_quiesce_folds_and_advances
-#print axioms Kinu.Storage.OverlayCas.the_reversed_order_does_nothing
-#print axioms Kinu.Storage.OverlayCas.a_tombstone_stages_no_bytes
-#print axioms Kinu.Storage.OverlayCas.a_rename_stages_no_bytes
-#print axioms Kinu.Storage.OverlayCas.a_fresh_write_stages_its_bytes
 #print axioms Kinu.Storage.SnapshotChain.a_completed_tick_closes_the_window
 #print axioms Kinu.Storage.SnapshotChain.a_tick_free_segment_only_writes
 #print axioms Kinu.Storage.SnapshotChain.loss_is_the_writes_since_the_last_tick
 #print axioms Kinu.Storage.SnapshotChain.skipped_ticks_preserve_loss
 #print axioms Kinu.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
 #print axioms Kinu.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
-#print axioms Kinu.Storage.OverlayCas.batch_step_preserves_order
-#print axioms Kinu.Storage.OverlayCas.batch_trace_from
-#print axioms Kinu.Storage.OverlayCas.batch_trace_invariant
-#print axioms Kinu.Storage.OverlayCas.batch_crash_loss_le_writes_since_tick
 
 /-! ## Kinu/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 
@@ -250,8 +193,8 @@ import Kinu.Storage.DurableRoot
 #print axioms Kinu.Exploration.floorAdmissible_rejects_negative_margin
 #print axioms Kinu.Exploration.floorAdmissible_rejects_breaching_baseline
 #print axioms Kinu.Exploration.floorAdmissible_rejects_adversary
-#print axioms Kinu.Exploration.old_majority_floor_escapes_c1
-#print axioms Kinu.Exploration.fixed_majority_floor_has_more_room
+#print axioms Kinu.Exploration.defective_majority_floor_escapes_c1
+#print axioms Kinu.Exploration.corrected_majority_floor_has_more_room
 #print axioms Kinu.Exploration.c1_refuses_a_refuted_floor
 
 /-! ### Kinu/Exploration/Publication.lean -/
@@ -518,84 +461,3 @@ import Kinu.Storage.DurableRoot
 #print axioms Kinu.Exploration.Rebase.the_base_key_ignores_untouched_paths
 #print axioms Kinu.Exploration.Rebase.the_rebase_stops_at_the_stale_member
 #print axioms Kinu.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
-
-/-! ## Kinu/Storage/DurableRoot.lean -/
-
-#print axioms Kinu.Storage.DurableRoot.await_point_register_is_total
-#print axioms Kinu.Storage.DurableRoot.await_point_register_has_sixteen
-
-/-! ### Capture soundness — mutation durability ordering -/
-
-#print axioms Kinu.Storage.DurableRoot.journal_intent_precedes_effect
-#print axioms Kinu.Storage.DurableRoot.effect_precedes_journal_result
-#print axioms Kinu.Storage.DurableRoot.journal_result_precedes_reply
-
-/-! ### Capture soundness — fence durability ordering -/
-
-#print axioms Kinu.Storage.DurableRoot.admission_closes_before_drain
-#print axioms Kinu.Storage.DurableRoot.drain_precedes_root_syncfs
-#print axioms Kinu.Storage.DurableRoot.root_syncfs_precedes_stage
-#print axioms Kinu.Storage.DurableRoot.sealed_stage_precedes_manifest_fsync
-#print axioms Kinu.Storage.DurableRoot.manifest_fsync_precedes_fence_fsync
-
-/-! ### Capture soundness — the fenced linearization point -/
-
-#print axioms Kinu.Storage.DurableRoot.fenced_point_is_linearization_point
-#print axioms Kinu.Storage.DurableRoot.fenced_point_is_process_quiescent
-#print axioms Kinu.Storage.DurableRoot.fenced_point_has_one_committed_generation
-#print axioms Kinu.Storage.DurableRoot.fenced_capture_is_not_torn
-#print axioms Kinu.Storage.DurableRoot.fenced_capture_cut_excluded
-#print axioms Kinu.Storage.DurableRoot.fenced_capture_excludes_private_and_mount
-#print axioms Kinu.Storage.DurableRoot.journal_capture_sound
-
-/-! ### Reset-safe durable root -/
-
-#print axioms Kinu.Storage.DurableRoot.runOf_nil
-#print axioms Kinu.Storage.DurableRoot.runOf_cons
-#print axioms Kinu.Storage.DurableRoot.initial_safe
-#print axioms Kinu.Storage.DurableRoot.step_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.run_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.published_root_closure
-#print axioms Kinu.Storage.DurableRoot.monotone_fenced_head
-#print axioms Kinu.Storage.DurableRoot.run_monotone_fenced_head
-#print axioms Kinu.Storage.DurableRoot.single_operation_row
-#print axioms Kinu.Storage.DurableRoot.redrive_preserves_safe
-#print axioms Kinu.Storage.DurableRoot.redrive_idempotent
-#print axioms Kinu.Storage.DurableRoot.reset_at_every_await
-#print axioms Kinu.Storage.DurableRoot.reset_discards_activation_memory
-#print axioms Kinu.Storage.DurableRoot.redrive_after_every_reset_is_idempotent
-#print axioms Kinu.Storage.DurableRoot.stale_completion_garbage_only
-#print axioms Kinu.Storage.DurableRoot.on_start_idempotent
-#print axioms Kinu.Storage.DurableRoot.on_start_once_per_generation
-#print axioms Kinu.Storage.DurableRoot.restore_exact_head
-#print axioms Kinu.Storage.DurableRoot.restore_ignores_activation_memory
-#print axioms Kinu.Storage.DurableRoot.container_crash_preserves_durable_outcome
-#print axioms Kinu.Storage.DurableRoot.crash_during_sweep_leaks_only
-#print axioms Kinu.Storage.DurableRoot.pin_gc_noninterference
-#print axioms Kinu.Storage.DurableRoot.root_set_change_aborts_mark_sweep
-#print axioms Kinu.Storage.DurableRoot.idempotent_deletion
-#print axioms Kinu.Storage.DurableRoot.delete_preserves_closure
-#print axioms Kinu.Storage.DurableRoot.barrier_prefix_survives_crash
-#print axioms Kinu.Storage.DurableRoot.async_suffix_loss
-#print axioms Kinu.Storage.DurableRoot.payload_excluded_from_durable_view
-#print axioms Kinu.Storage.DurableRoot.payload_excluded_from_restore
-#print axioms Kinu.Storage.DurableRoot.unbounded_wait_counterexample
-#print axioms Kinu.Storage.DurableRoot.safety_has_no_unconditional_wall_clock_bound
-#print axioms Kinu.Storage.DurableRoot.collision_resistance_separates_objects
-#print axioms Kinu.Storage.DurableRoot.capture_sound_is_explicit
-#print axioms Kinu.Storage.DurableRoot.acknowledge_is_event_only
-#print axioms Kinu.Storage.DurableRoot.retry_reads_head
-#print axioms Kinu.Storage.DurableRoot.durable_intent_before_external_await
-#print axioms Kinu.Storage.DurableRoot.sealed_carries_only_verified_root_id
-#print axioms Kinu.Storage.DurableRoot.published_and_acknowledged_bind
-#print axioms Kinu.Storage.DurableRoot.gc_candidates_derive_from_two_manifests
-#print axioms Kinu.Storage.DurableRoot.unique_attempt_fence
-#print axioms Kinu.Storage.DurableRoot.container_mount_is_envelope_identity
-#print axioms Kinu.Storage.DurableRoot.omitted_intent_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.omitted_fence_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.omitted_pin_has_gc_witness
-#print axioms Kinu.Storage.DurableRoot.parent_before_child_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.acknowledgement_before_head_has_unsafe_witness
-#print axioms Kinu.Storage.DurableRoot.receipt_release_too_early_witness
-#print axioms Kinu.Storage.DurableRoot.root_set_race_witness
-#print axioms Kinu.Storage.DurableRoot.container_onstart_activation_memory_witness

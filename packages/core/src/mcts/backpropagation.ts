@@ -15,6 +15,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 /**
  * Backpropagate reward from leaf to root via WITH RECURSIVE CTE.
@@ -30,6 +31,7 @@ import type { SqlExecutor } from '../types/primitives';
  */
 export function backpropagate(
   sql: SqlExecutor,
+  actor: ActorHandle,
   leafNodeId: string,
   reward: number,
 ): void {
@@ -37,17 +39,18 @@ export function backpropagate(
   reward = Math.max(0, Math.min(1, reward));
   void sql`
     WITH RECURSIVE ancestors(id, depth) AS (
-      SELECT id, 0 FROM search_nodes WHERE id = ${leafNodeId}
+      SELECT id, 0 FROM search_nodes
+        WHERE actor_id = ${actor.actorId} AND id = ${leafNodeId}
       UNION ALL
       SELECT s.parent_id, a.depth + 1
       FROM search_nodes s
       JOIN ancestors a ON s.id = a.id
-      WHERE s.parent_id IS NOT NULL
+      WHERE s.actor_id = ${actor.actorId} AND s.parent_id IS NOT NULL
     )
     UPDATE search_nodes
     SET
       visits = visits + 1,
       value  = (value * visits + ${reward}) / (visits + 1)
-    WHERE id IN (SELECT id FROM ancestors)
+    WHERE actor_id = ${actor.actorId} AND id IN (SELECT id FROM ancestors)
   `;
 }

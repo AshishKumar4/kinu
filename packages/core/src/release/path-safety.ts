@@ -5,9 +5,10 @@ export interface ReleasePathValidation {
   path?: string;
   error?: string;
   /** The rejection was a secret/config path rather than a traversal or an
-   *  absolute path. Carried as a field because `isSecretReleasePath` used to
-   *  recover it by running /secret|config/ over this record's human-readable
-   *  `error`, which made rewording that sentence silently change the predicate. */
+   *  absolute path. Carried as a field so `isSecretReleasePath` reads the
+   *  decision instead of recovering it by running /secret|config/ over this
+   *  record's human-readable `error`, where rewording that sentence would
+   *  silently change the predicate. */
   secret?: boolean;
 }
 
@@ -19,9 +20,9 @@ const SECRET_PATH_PATTERNS: RegExp[] = [
   /(^|\/)\.aws(\/|$)/i,
   /(^|\/)\.ssh(\/|$)/i,
   /(^|\/)credentials(?:\.json)?$/i,
-  // Both spellings. This list matched only `wrangler.toml`, and every manifest
-  // in this repository — the one carrying the account id, the routes and the
-  // binding set — is `wrangler.jsonc`, so the rule named a file that is not here.
+  // Both spellings. Every manifest in this repository — the one carrying the
+  // account id, the routes and the binding set — is `wrangler.jsonc`, so a rule
+  // that named only `wrangler.toml` would name a file that is not here.
   /(^|\/)wrangler\.(?:toml|jsonc?)$/i,
   // A patch that writes into `.git` is not a code change: hooks there run on
   // the next git command, with whatever authority the release step holds.

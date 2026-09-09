@@ -10,18 +10,17 @@
  * `rm -rf ~/work` at two in the morning, on a card whose only real choice was
  * whether to keep working.
  *
- * A prompt that nobody answered is neither answer. It used to resolve as
- * `deny`, so the model was told its request had been refused when the owner
- * was simply away from the keyboard — and an agent meant to run for hours
- * unattended reads a refusal as policy and stops asking, turning a temporary
- * absence into a permanent capability loss. The two outcomes carry different
- * words.
+ * A prompt that nobody answered is neither answer. Resolving it as `deny`
+ * tells the model its request was refused when the owner was simply away from
+ * the keyboard — and an agent meant to run for hours unattended reads a
+ * refusal as policy and stops asking, turning a temporary absence into a
+ * permanent capability loss. The two outcomes carry different words.
  *
  * The registry below is the waiting half: raise a prompt, park the caller on a
- * promise, and settle it when the owner answers or when the prompt expires. It
- * was written as Durable Object state, and nothing about it is: the only
- * platform-shaped piece is telling whoever can answer that a decision is
- * waiting, which arrives as one `announce` callback.
+ * promise, and settle it when the owner answers or when the prompt expires.
+ * Nothing about it is Durable Object state: the only platform-shaped piece is
+ * telling whoever can answer that a decision is waiting, which arrives as one
+ * `announce` callback.
  */
 
 import type { DynamicApproval } from '../prompting/volatile-context';

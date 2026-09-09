@@ -6,12 +6,14 @@
   what `mergeBack` does with its two answers (`merge-back.ts:591-602`).
 
   -- WHY THE ALGORITHM IS MODELLED AND NOT ITS POSTCONDITION. The order is a
-  DERIVED value: `merge-back.ts:446-451` records that `sequential-rebase` used to be
-  handed an order and trusted, and that trust is what a fan-in breaks. So a model
-  that asserted "the output is a topological order" as a postcondition would assume
-  the thing at issue. `sweeps` below is the repeated sweep the source runs, bounded
-  by the member count for the reason the source gives — "the member count bounds the
-  sweeps" — and every theorem is about that definition.
+  DERIVED value: `merge-back.ts:446-451` derives it from the edges the members
+  declare and never from settle order, because a settle order is a dependency
+  order only where the tree's shape happens to BE the dependency graph's — which
+  a fan-in breaks. So a model that asserted "the output is a topological order"
+  as a postcondition would assume the thing at issue. `sweeps` below is the
+  repeated sweep the source runs, bounded by the member count for the reason the
+  source gives — "the member count bounds the sweeps" — and every theorem is
+  about that definition.
 
   -- WHAT A TOPOLOGICAL ORDER IS HERE, and why it is stated as rule 1. `mergeBack`
   refuses a member whose declared dependency has not landed

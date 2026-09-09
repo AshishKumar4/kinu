@@ -2,10 +2,9 @@
  * Canonical scaffold-safety patterns — the single source of truth.
  *
  * These gate what agent-authored scaffold (and GEPA-proposed scaffold)
- * source is allowed to contain. They were previously copy-pasted across
- * scaffold/modify.ts and evolution/gepa/scaffold-bridge.ts — a security
- * blocklist that would drift the moment one copy was edited. Import from
- * here instead.
+ * source is allowed to contain. Both enforcement points — scaffold/modify.ts
+ * and evolution/gepa/scaffold-bridge.ts — import from here: a copy of a
+ * security blocklist drifts the moment one copy is edited.
  */
 
 /** Constructs the scaffold sandbox must never reference — module loaders,

@@ -50,15 +50,6 @@ const WITNESSED_FACTS: ControlWitnessFacts = {
     bytesBefore: 65_536,
     bytesAfter: 131_072,
   },
-  unboundedPendingReplay: {
-    smallPending: 50, smallReplayed: 50, largePending: 500, largeReplayed: 500,
-  },
-  upperScan: { smallEntries: 210, smallMs: 900, largeEntries: 2_010, largeMs: 7_400 },
-  openWriteLoss: { wroteBytes: 41, survivedBytes: null },
-  nonAtomicRename: {
-    fileBytes: 1_048_576, storeOps: 3, sourcePresent: false, destinationBytes: 1_048_576,
-  },
-  posixGap: { syncedKeyPresent: false, key: 'boxes/probe/witness-open-write.bin' },
 };
 
 function candidateArm(overrides: Partial<ArmEvidence> = {}): ArmEvidence {
@@ -168,7 +159,7 @@ describe('G0-G9 storage run admission', () => {
     const record: StorageRunRecord = {
       ...validRecord(),
       arms: [...validRecord().arms, candidateArm({
-        arm: 'red-overlay-cas',
+        arm: 'red-control-a',
         kind: 'control',
         rankEligible: false,
         expectedRedChecks: ['restore-class-unbounded'],
@@ -182,7 +173,7 @@ describe('G0-G9 storage run admission', () => {
   test('a devbox run whose witness cells never ran cannot recommend', () => {
     const record: StorageRunRecord = {
       ...validRecord(),
-      arms: (['snapshot-chain', 'r2fs', 'overlay-cas'] as const).map((strategy) => devboxArmEvidence({
+      arms: (['snapshot-chain'] as const).map((strategy) => devboxArmEvidence({
         strategy,
         verifyPassed: true,
         verifyChecks: [],
@@ -232,44 +223,31 @@ describe('G0-G9 storage run admission', () => {
     expect(observed.rankEligible).toBe(true);
   });
 
-  test('a retired arm that observed every witness is still refused a rank', () => {
-    for (const strategy of ['r2fs', 'overlay-cas'] as const) {
-      const retired = devboxArmEvidence({
-        strategy,
-        verifyPassed: true,
-        verifyChecks: [],
-        phases: [],
-        checkpoints: [],
-        decisiveTicks: [],
-        witnessChecks: controlWitnessChecks(strategy, WITNESSED_FACTS),
-      });
-      expect(retired.expectedRedChecks).toEqual(retired.observedRedChecks);
-      expect(retired.rankEligible).toBe(false);
-      const g2 = evaluateRun({ ...validRecord(), arms: [...validRecord().arms, retired] })
-        .gates.find((row) => row.gate === 'G2');
-      expect(g2?.reasons).toEqual([`competing arm \`${strategy}\` is marked rank-ineligible`]);
-    }
-  });
-
-  test('one witness that vanished still refuses, with the others observed', () => {
+  test('one witness that vanished still refuses, with the other observed', () => {
     const arm = devboxArmEvidence({
-      strategy: 'r2fs',
+      strategy: 'snapshot-chain',
       verifyPassed: true,
       verifyChecks: [],
       phases: [],
       checkpoints: [],
       decisiveTicks: [],
-      // The rename is atomic now — which would be an improvement, and is exactly
-      // the drift a control exists to notice rather than absorb.
-      witnessChecks: controlWitnessChecks('r2fs', {
+      // The delta is immutable now — which would be an improvement, and is
+      // exactly the drift a witness exists to notice rather than absorb.
+      witnessChecks: controlWitnessChecks('snapshot-chain', {
         ...WITNESSED_FACTS,
-        nonAtomicRename: { fileBytes: 1_048_576, storeOps: 0, sourcePresent: false, destinationBytes: 1_048_576 },
+        mutableDelta: {
+          key: 'backups/chain-7/delta.sqsh',
+          etagBefore: 'e1',
+          etagAfter: 'e1',
+          bytesBefore: 65_536,
+          bytesAfter: 65_536,
+        },
       }),
     });
     expectsGate(
       { ...validRecord(), arms: [...validRecord().arms, arm] },
       'G2',
-      'did NOT produce its expected red witness "non-atomic-rename"',
+      'did NOT produce its expected red witness "mutable-delta"',
     );
   });
 
@@ -279,7 +257,7 @@ describe('G0-G9 storage run admission', () => {
       arms: [
         candidateArm(),
         candidateArm({
-          arm: 'red-r2fs',
+          arm: 'red-control-b',
           kind: 'control',
           rankEligible: false,
           expectedRedChecks: ['fsync-directory'],
@@ -494,10 +472,6 @@ function fullIdentity(overrides: Partial<RunIdentity> = {}): RunIdentity {
     finishedAt: '2026-08-30T10:41:00.000Z',
     image: SANDBOX_IMAGE,
     imageSha256: SANDBOX_IMAGE_DIGEST,
-    dockerfileSha256: `sha256:${'a'.repeat(64)}`,
-    candidateRunnerSha256: `sha256:${'b'.repeat(64)}`,
-    overlayRunnerSha256: `sha256:${'c'.repeat(64)}`,
-    journalDaemonSha256: `sha256:${'d'.repeat(64)}`,
     ...overrides,
   };
 }
@@ -558,20 +532,19 @@ function measuredArm(strategy: Strategy, overrides: Partial<ArmResult> = {}): Ar
     treeBytes: {},
     ops: { calls: { put: 4, get: 2 }, classA: 4, classB: 2, classFree: 0, total: 6 },
     teardown: null,
-    // A CANDIDATE PREREGISTERS NO WITNESS, so an empty list here is complete
-    // evidence rather than a missing cell. Control arms carry the rows their
-    // cells observed; `controlWitnessChecks` builds those.
-    witnessChecks: [],
+    // THE SHIPPED STRATEGY PREREGISTERS WITNESSES, so a complete arm is one
+    // whose cells OBSERVED them; an empty list here would refuse under G2.
+    witnessChecks: controlWitnessChecks('snapshot-chain', WITNESSED_FACTS),
     notes: [],
     ...overrides,
   };
 }
 
-const CANDIDATE_ARMS: readonly Strategy[] = ['bounded-layers', 'merkle-pack'];
+const REQUESTED_ARMS: readonly Strategy[] = ['snapshot-chain'];
 
 function devboxVerdict(
   arms: readonly ArmResult[],
-  requested: readonly Strategy[] = CANDIDATE_ARMS,
+  requested: readonly Strategy[] = REQUESTED_ARMS,
   identity: RunIdentity = fullIdentity(),
   /** What `--repetitions` asked for. Two by default, which is what a decisive
    *  run asks for and the fewest G9 will score. */
@@ -585,8 +558,8 @@ function devboxVerdict(
     meta: {
       date: '2026-08-30',
       run: 'kinu-devbox-bench-20260830',
-      worker: 'kinu-devbox-bench-20260830-bounded-layers, kinu-devbox-bench-20260830-merkle-pack',
-      bucket: 'kinu-devbox-bench-20260830-bounded-layers, kinu-devbox-bench-20260830-merkle-pack',
+      worker: 'kinu-devbox-bench-20260830-snapshot-chain',
+      bucket: 'kinu-devbox-bench-20260830-snapshot-chain',
       image: SANDBOX_IMAGE,
       seed: '20260824',
       'loop budget ms': '8000',
@@ -605,8 +578,8 @@ function gateHeld(verdict: AdmissionVerdict, gate: GateId): boolean {
   return verdict.gates.find((row) => row.gate === gate)?.ok === true;
 }
 
-/** The complete two-candidate run every test below degrades one field of. */
-const completeArms = (): ArmResult[] => CANDIDATE_ARMS.map((strategy) => measuredArm(strategy));
+/** The complete run every test below degrades one field of. */
+const completeArms = (): ArmResult[] => REQUESTED_ARMS.map((strategy) => measuredArm(strategy));
 
 describe('the devbox run\'s own admission requirements', () => {
   test('a complete run holds G0, G6, G7 and G9, so the refusals below are discriminating', () => {
@@ -625,14 +598,10 @@ describe('the devbox run\'s own admission requirements', () => {
       ['workerVersion', 'worker-version'],
       ['image', 'container-image'],
       ['imageSha256', 'container-image-digest'],
-      ['dockerfileSha256', 'candidate-image-dockerfile'],
-      ['candidateRunnerSha256', 'candidate-runner-bundle'],
-      ['overlayRunnerSha256', 'overlay-cas-runner-bundle'],
-      ['journalDaemonSha256', 'journal-daemon-source'],
       ['dirtyDigest', 'source-tree'],
     ];
     for (const [field, recorded] of blanked) {
-      const verdict = devboxVerdict(completeArms(), CANDIDATE_ARMS, fullIdentity({ [field]: '' }));
+      const verdict = devboxVerdict(completeArms(), REQUESTED_ARMS, fullIdentity({ [field]: '' }));
       expect(gateHeld(verdict, 'G0'), field).toBe(false);
       expect(gateReasons(verdict, 'G0')).toContain(`no ${recorded}`);
     }
@@ -641,7 +610,7 @@ describe('the devbox run\'s own admission requirements', () => {
   test('G0 refuses a dirty-tree digest that is neither `clean` nor a digest', () => {
     const verdict = devboxVerdict(
       completeArms(),
-      CANDIDATE_ARMS,
+      REQUESTED_ARMS,
       fullIdentity({ dirtyDigest: 'dirty' }),
     );
     expect(gateReasons(verdict, 'G0')).toContain('neither `clean` nor a digest');
@@ -650,21 +619,21 @@ describe('the devbox run\'s own admission requirements', () => {
   test('G0 refuses a tag-only image or a malformed image digest', () => {
     const tagged = devboxVerdict(
       completeArms(),
-      CANDIDATE_ARMS,
+      REQUESTED_ARMS,
       fullIdentity({ image: 'docker.io/cloudflare/sandbox:0.12.8' }),
     );
     expect(gateReasons(tagged, 'G0')).toContain('is not pinned to');
 
     const malformed = devboxVerdict(
       completeArms(),
-      CANDIDATE_ARMS,
+      REQUESTED_ARMS,
       fullIdentity({ imageSha256: 'sha256:not-a-digest' }),
     );
     expect(gateReasons(malformed, 'G0')).toContain('is not a sha256 digest');
   });
 
   test('G0 refuses the synthesized one-second window the artifact used to carry', () => {
-    const verdict = devboxVerdict(completeArms(), CANDIDATE_ARMS, fullIdentity({
+    const verdict = devboxVerdict(completeArms(), REQUESTED_ARMS, fullIdentity({
       startedAt: '2026-08-30T00:00:00.000Z',
       finishedAt: '2026-08-30T00:00:00.000Z',
     }));
@@ -677,7 +646,7 @@ describe('the devbox run\'s own admission requirements', () => {
     // The refusal names the missing source per field, not a blanket sentence:
     // an arm whose bracket never landed says which bill is missing, and the
     // byte fields refuse on their own line.
-    for (const strategy of CANDIDATE_ARMS) {
+    for (const strategy of REQUESTED_ARMS) {
       expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` totalRemoteOps: the wake-window /ops bracket never landed`);
       expect(gateReasons(verdict, 'G5')).toContain(`arm \`${strategy}\` metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally`);
     }
@@ -685,8 +654,7 @@ describe('the devbox run\'s own admission requirements', () => {
 
   test('G6 refuses a cold attach past the admission ceiling, whatever the fixture budget allows', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { attachColdMs: COLD_ATTACH_CEILING_MS + 1 }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { attachColdMs: COLD_ATTACH_CEILING_MS + 1 }),
     ]);
     expect(gateHeld(verdict, 'G6')).toBe(false);
     expect(gateReasons(verdict, 'G6')).toContain(`past the ${COLD_ATTACH_CEILING_MS} ms admission ceiling`);
@@ -697,22 +665,19 @@ describe('the devbox run\'s own admission requirements', () => {
 
   test('G6 accepts a cold attach exactly at the ceiling', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { attachColdMs: COLD_ATTACH_CEILING_MS }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { attachColdMs: COLD_ATTACH_CEILING_MS }),
     ]);
     expect(gateHeld(verdict, 'G6'), gateReasons(verdict, 'G6')).toBe(true);
   });
 
   test('G6 refuses missing cold evidence and a warm attach that changed generation', () => {
     const noCold = devboxVerdict([
-      measuredArm('bounded-layers', { attachColdMs: null }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { attachColdMs: null }),
     ]);
     expect(gateReasons(noCold, 'G6')).toContain('recorded no cold attach');
 
     const wrongKind = devboxVerdict([
-      measuredArm('bounded-layers', { attachWarmKind: 'empty' }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { attachWarmKind: 'empty' }),
     ]);
     expect(gateReasons(wrongKind, 'G6')).toContain('did not observe the unchanged generation');
 
@@ -720,35 +685,31 @@ describe('the devbox run\'s own admission requirements', () => {
     // restore successfully and still report that kind. The boot ids prove this
     // warm probe observed the generation wake had already attached.
     const replaced = devboxVerdict([
-      measuredArm('bounded-layers', { attachWarmBootId: 'replacement-generation' }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { attachWarmBootId: 'replacement-generation' }),
     ]);
     expect(gateReasons(replaced, 'G6')).toContain('warm attach changed generation');
 
     const unrecorded = devboxVerdict([
-      measuredArm('bounded-layers', { wakeBootId: null, attachWarmBootId: null }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { wakeBootId: null, attachWarmBootId: null }),
     ]);
     expect(gateReasons(unrecorded, 'G6')).toContain('unchanged attach was not evidenced');
   });
 
   test('G6 refuses a short checkpoint ladder rather than completing the cell anyway', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { checkpoints: ladderRows.slice(0, EXPECTED_LADDER_ROWS - 1) }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { checkpoints: ladderRows.slice(0, EXPECTED_LADDER_ROWS - 1) }),
     ]);
     expect(gateReasons(verdict, 'G6')).toContain(
       `recorded ${EXPECTED_LADDER_ROWS - 1} of ${EXPECTED_LADDER_ROWS} ladder checkpoints`,
     );
   });
 
-  test('G7 refuses an arm with no tally instead of summing only the arms that reported one', () => {
+  test('G7 refuses an arm with no tally instead of pricing the run off a partial total', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers'),
-      measuredArm('merkle-pack', { ops: null }),
+      measuredArm('snapshot-chain', { ops: null }),
     ]);
     expect(gateHeld(verdict, 'G7')).toBe(false);
-    expect(gateReasons(verdict, 'G7')).toContain('arm `merkle-pack` recorded no `/ops` tally');
+    expect(gateReasons(verdict, 'G7')).toContain('arm `snapshot-chain` recorded no `/ops` tally');
     // And the summed row is withheld entirely, so the shared gate cannot price
     // the run off a partial total either.
     expect(gateReasons(verdict, 'G7')).toContain('no operation accounting at all');
@@ -756,16 +717,14 @@ describe('the devbox run\'s own admission requirements', () => {
 
   test('G7 refuses a tally carrying no total', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { ops: { calls: { put: 1 }, classA: 1, classB: 0, classFree: 0 } }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { ops: { calls: { put: 1 }, classA: 1, classB: 0, classFree: 0 } }),
     ]);
     expect(gateReasons(verdict, 'G7')).toContain('reported a tally carrying no total');
   });
 
   test('G9 refuses one deciding repetition instead of scoring an unrepeated median as stable', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { phases: [probeRun(1.10)] }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { phases: [probeRun(1.10)] }),
     ]);
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain(
@@ -781,22 +740,16 @@ describe('the devbox run\'s own admission requirements', () => {
     // what a decisive run now asks for, and this is the pair of directions
     // that makes the count load-bearing rather than decorative.
     const twice = devboxVerdict(
-      [
-        measuredArm('bounded-layers', { phases: [probeRun(1.10), probeRun(1.15)] }),
-        measuredArm('merkle-pack', { phases: [probeRun(1.20), probeRun(1.24)] }),
-      ],
-      CANDIDATE_ARMS,
+      [measuredArm('snapshot-chain', { phases: [probeRun(1.10), probeRun(1.15)] })],
+      REQUESTED_ARMS,
       fullIdentity(),
       2,
     );
     expect(gateHeld(twice, 'G9'), gateReasons(twice, 'G9')).toBe(true);
 
     const once = devboxVerdict(
-      [
-        measuredArm('bounded-layers', { phases: [probeRun(1.10)] }),
-        measuredArm('merkle-pack', { phases: [probeRun(1.20)] }),
-      ],
-      CANDIDATE_ARMS,
+      [measuredArm('snapshot-chain', { phases: [probeRun(1.10)] })],
+      REQUESTED_ARMS,
       fullIdentity(),
       1,
     );
@@ -805,63 +758,56 @@ describe('the devbox run\'s own admission requirements', () => {
   });
 
   test('G9 refuses an arm that measured fewer repetitions than the run asked for', () => {
-    // A run that asked for two and got one LOST a repetition. The floor check
-    // alone would report the survivor as the whole intent, so the count the
+    // A run that asked for three and got two LOST a repetition. The floor check
+    // alone would report the survivors as the whole intent, so the count the
     // driver asked for is fed to admission and named in the refusal.
     const verdict = devboxVerdict(
-      [
-        measuredArm('bounded-layers', { phases: [probeRun(1.10), probeRun(1.15), probeRun(1.12)] }),
-        measuredArm('merkle-pack', { phases: [probeRun(1.20), probeRun(1.24)] }),
-      ],
-      CANDIDATE_ARMS,
+      [measuredArm('snapshot-chain', { phases: [probeRun(1.20), probeRun(1.24)] })],
+      REQUESTED_ARMS,
       fullIdentity(),
       3,
     );
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain('2 time(s) where the run asked for 3');
-    // And the arm that produced all three is not named by that refusal.
-    expect(gateReasons(verdict, 'G9')).not.toContain('`bounded-layers` measured the deciding metric');
   });
 
   test('G9 refuses an arm that measured the deciding metric not at all', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { phases: [] }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { phases: [] }),
     ]);
     expect(gateReasons(verdict, 'G9')).toContain('0 time(s)');
   });
 
   test('G9 censors dispersed repetitions rather than ranking their midpoint', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', { phases: [probeRun(1), probeRun(100)] }),
-      measuredArm('merkle-pack'),
+      measuredArm('snapshot-chain', { phases: [probeRun(1), probeRun(100)] }),
     ]);
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain('CV');
   });
 
   test('G5, G6 and G9 each refuse an arm set that is not exactly the requested one', () => {
-    const lost = devboxVerdict([measuredArm('bounded-layers')]);
+    const lost = devboxVerdict([]);
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(lost, gate)).toContain(
-        'arm `merkle-pack` was requested but contributed no result row',
-      );
-    }
-
-    const extra = devboxVerdict([...completeArms(), measuredArm('overlay-cas')], CANDIDATE_ARMS);
-    for (const gate of ['G5', 'G6', 'G9'] as const) {
-      expect(gateReasons(extra, gate)).toContain(
-        'arm `overlay-cas` produced a result row without being requested',
+        'arm `snapshot-chain` was requested but contributed no result row',
       );
     }
 
     const duplicate = devboxVerdict(
-      [...completeArms(), measuredArm('bounded-layers')],
-      CANDIDATE_ARMS,
+      [...completeArms(), measuredArm('snapshot-chain')],
+      REQUESTED_ARMS,
     );
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(duplicate, gate)).toContain(
-        'arm `bounded-layers` produced 2 result rows but was requested 1 time(s)',
+        'arm `snapshot-chain` produced 2 result rows but was requested 1 time(s)',
+      );
+    }
+
+    const unrequested = devboxVerdict(completeArms(), []);
+    for (const gate of ['G5', 'G6', 'G9'] as const) {
+      expect(gateReasons(unrequested, gate)).toContain(
+        'arm `snapshot-chain` produced a result row without being requested',
       );
     }
 
@@ -873,15 +819,14 @@ describe('the devbox run\'s own admission requirements', () => {
 
   test('an arm whose lifecycle proof failed cannot complete the declared cell', () => {
     const verdict = devboxVerdict([
-      measuredArm('bounded-layers', {
+      measuredArm('snapshot-chain', {
         verifyPassed: false,
         verifyChecks: [{
-          name: 'the work directory is the journal daemon\'s FUSE mount',
+          name: 'the wake attached durable bytes',
           pass: false,
           detail: '/workspace is not mounted',
         }],
       }),
-      measuredArm('merkle-pack'),
     ]);
     expect(gateHeld(verdict, 'G6')).toBe(false);
     expect(gateReasons(verdict, 'G6')).toContain('T0/C0/K0');

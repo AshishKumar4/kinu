@@ -1,6 +1,16 @@
 /**
  * LocalAgentHost — the durable-agent substrate owned by the local daemon.
  *
+ * ONE PHYSICAL WORKSPACE PER TREE, N LOGICAL ACTORS IN IT. A root agent is one
+ * SQLite file; every actor beneath it — a hired subordinate, an ask-by-role
+ * temporary, an exploration head, a swarm node, a branch — is a row in that
+ * file's `workspace_actors` table and its rows are actor-keyed rows in that
+ * same file. Nothing under a root opens a database: no `<child>/agent.db`, no
+ * per-head scratch, no second identity table. What each actor has of its own is
+ * its RUNTIME OBJECTS — session, stores, queue, abort, roles, alarms — and those
+ * come from the ONE {@link ActorHost} this host builds over the root's storage
+ * and the root's actor directory.
+ *
  * The host keeps one LocalAgentSession per bound AGENT for the daemon's whole
  * process lifetime: every root agent it was handed a ref for, and every live
  * subordinate beneath one. A root is not "the workspace" — several roots share
@@ -13,18 +23,21 @@
  * restart, and delivers session events to subscribers.
  */
 
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import {
   EventLog,
   ReplyChannelStore,
   SubordinateRosterStore,
+  SubordinateIdentityStore,
   admitSubordinateTask,
-  createAgentConfigStore,
+  actorReferenceOf,
   canonicalConversationId,
+  childContextResolver,
+  createActorHost,
   createLocalPeerEndpoint,
+  defaultLoopOrigin,
   samePeerGroup,
   createTeamToolDeps,
   createTemporaryAgentPort,
@@ -33,20 +46,27 @@ import {
   delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromHistory,
-  initWorkspaceSchema,
+  headAgentName,
+  nodeAgentName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
-  readMission,
   renderSoulMarkdown,
   mintSubordinateName,
   subordinateDescriptorSource,
   subordinateRelaysTurnEnd,
+  facetHomeReleaser,
+  readSoul,
+  recoverSubordinateLifecycles,
+  SOUL_PATH,
   TEMPORARY_LIFETIME,
   temporaryRunSettles,
   terminalTaskReport,
-  writeSoul,
-  InstructionApprovalStore,
+  type ActorHost,
+  type ActorReference,
+  type AgentRuntime,
   type AdmittedSubordinateReport,
+  type BoundActor,
+  type HostedActor,
   type ReportToolDeps,
   type SubordinateReportOrigin,
   type SubordinateEventResult,
@@ -57,7 +77,6 @@ import {
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
-  type RoleId,
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
@@ -65,25 +84,33 @@ import {
   type SubordinateRuntime,
   type TeamToolDeps,
   type TemporaryAgentPort,
-  type TierId,
   type SerializedMessage,
   type WorkMode,
+  type WorkspaceActor,
+  type WorkspaceActorDirectory,
+  recoverActorTurns,
 } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/identity';
 import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
-  makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, shareLocalWorkspacePlane,
-  cleanupFacetCwdScratch,
+  createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
+  buildLocalActorRuntime, cleanupFacetCwdScratch,
   type CLIRuntime,
 } from '../runtime';
-import { openWorkspaceCLI, type CLIOpenConfig } from '../open';
+import type { CLIOpenConfig } from '../open';
+import {
+  bindLocalActor, bindLocalActorReference, localActorDirectory, localActorMission, localActorOwner,
+  adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
+  requireLocalActorWorkspace, type LocalActorBinding,
+} from '../actor-identity';
 import {
   DriverLeaseHold,
   type DriverKind, type DriverLeaseHolder,
 } from './driver-lease';
 import {
   LocalAgentSession,
+  createLocalOrchestration,
   type LocalAgentSessionOpts,
+  type LocalOrchestration,
   type LocalParentRelay,
   type SessionEvent,
 } from '../local-session';
@@ -133,18 +160,18 @@ export interface LocalAgentHostOptions {
    * after the process started becomes reachable without a restart.
    *
    * The refs are the authority on which roots exist and which virtual
-   * workspace each belongs to. A root with no ref is not hosted: it has no
-   * `cwd` to bind its plane to and no peer group, and binding it from the
-   * mere existence of an `agent.db` is the inference this cutover removes.
+   * workspace each belongs to. A root with no ref is not hosted: the mere
+   * existence of an `agent.db` is not the inference, a ref is — a root without
+   * one has no `cwd` to bind its plane to and no peer group.
    */
   roster(): readonly HostedAgentRef[];
   /** Build one already-created ROOT agent over the host-owned handle. The ref
    *  carries the physical directory its plane must be bound to. */
   open(ref: HostedAgentRef, db: Database, dbPath: string): Promise<LocalHostedAgent>;
+  /** Where one ROOT's database is. There is no child equivalent, and that is
+   *  the whole of open-38 on this backend: a subordinate has no path because it
+   *  has no file. */
   dbPath(name: string): string;
-  /** Return `<child-root>/agent.db`. The host owns that child root and deletes
-   *  it recursively only for explicit keepHistory=false. */
-  childDbPath(parentDbPath: string, child: string): string;
   /**
    * Ask the driver to run another pass no later than `at` — the peer outbox's
    * retry schedule, the local answer to the cloud backend's alarm.
@@ -188,6 +215,47 @@ export interface LocalTickResult {
   readonly heldBy?: DriverLeaseHolder;
 }
 
+/**
+ * ONE root's physical workspace: the file, the actor host over it, and this
+ * process's single claim on driving it.
+ *
+ * Shared by every entry in the subtree, because there is exactly one of each
+ * per DATABASE. The driver lease especially: `driver_lease` holds one row per
+ * file ("one row, one conversation"), so a hold per entry would have each
+ * actor's `acquire` mint a new token and silently invalidate its siblings'.
+ */
+interface HostTree {
+  readonly dbPath: string;
+  readonly db: Database;
+  /** The ONE actor host for every logical actor in this database. */
+  readonly host: ActorHost;
+  /**
+   * The ONE actor directory for this database, held rather than re-derived.
+   *
+   * `localActorDirectory` refuses a non-root handle — "only the local root owns
+   * the actor directory" — so a per-entry `localActorDirectory(entry.ws.rt.actor)`
+   * asked the wrong question the moment an entry's runtime carried a CHILD's
+   * handle: there is one directory per database and it is the root's. Holding
+   * it here makes that shared-per-database fact structural instead of
+   * rediscovered from whichever handle happened to be nearest.
+   */
+  readonly directory: WorkspaceActorDirectory;
+  /** This process's ONE hold on this database's driver row. */
+  readonly hold: DriverLeaseHold;
+  /** Converting operations in flight under that hold. A daemon hands the lease
+   *  back when the LAST one finishes: releasing at the end of one pass while a
+   *  concurrent pass is mid-flight would cut that pass short at its next
+   *  boundary for no reason. */
+  driving: number;
+  /** Runtimes this host built outside `runtimeFor` — the ROOT's, which is
+   *  opened before the host that would otherwise build it. */
+  readonly runtimes: Map<string, CLIRuntime>;
+  /** Each actor's orchestration, kept from `orchestrationFor` so the session
+   *  built for that actor receives the SAME engine, governor and event rail the
+   *  host constructed its `ActorSession` from. */
+  readonly orchestrations: Map<string, LocalOrchestration>;
+}
+
 interface HostEntry {
   /** Address inside this process: root, root/child, root/child/grandchild.
    *  Root and child addresses are unchanged by virtual workspaces — the
@@ -200,8 +268,12 @@ interface HostEntry {
    *  virtual workspace as the root it hangs from. */
   ref: HostedAgentRef;
   parentKey: string | null;
-  dbPath: string;
-  db: Database;
+  /** The physical workspace this actor lives in — shared with every actor in
+   *  the tree, which is what open-38 means. */
+  tree: HostTree;
+  /** This actor as the tree's host bound it: its reference, directory row,
+   *  handle, stores, runtime and the ONE ActorSession its turns are claimed on. */
+  actor: HostedActor;
   ws: LocalHostedAgent;
   sessionId: string;
   session: LocalAgentSession;
@@ -245,13 +317,22 @@ export type AgentEventListener = (agent: string, event: SessionEvent) => void;
 
 export class LocalAgentHost {
   private readonly entries = new Map<string, HostEntry>();
+  /**
+   * The same entries by ACTOR ID.
+   *
+   * The actor host's dependencies are handed a reference, not an address, and
+   * every one of them has to reach the entry the reference belongs to — the
+   * parent whose provider wiring a hire opens with, and the session an
+   * orchestration's ports resolve at call time. An id is what the directory
+   * issues, so an id is what this is keyed by.
+   */
+  private readonly byActor = new Map<string, HostEntry>();
   private readonly listeners = new Set<AgentEventListener>();
   /** First-open fence per address. Recovery must run once even when a timer,
    *  client event, and team call arrive together on a cold daemon. */
   private readonly opening = new Map<string, Promise<HostEntry>>();
-  /** This process's lease on each bound agent's conversation. One per address,
-   *  built when the entry is, so every driving boundary asks the same object. */
-  private readonly driverHolds = new Map<string, DriverLeaseHold>();
+  /** One physical workspace per root address. */
+  private readonly trees = new Map<string, HostTree>();
   private closed = false;
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
@@ -260,35 +341,30 @@ export class LocalAgentHost {
     return this.opts.driverKind ?? 'interactive';
   }
 
-  /** This process's hold on one agent's conversation, created on first use. */
-  private driverHold(entry: HostEntry): DriverLeaseHold {
-    const existing = this.driverHolds.get(entry.key);
-    if (existing) return existing;
-    const hold = new DriverLeaseHold(
-      { sql: makeSql(entry.db), execRaw: makeExecRaw(entry.db) },
-      this.driverKind,
-    );
-    this.driverHolds.set(entry.key, hold);
-    return hold;
-  }
-
   /**
-   * Run one CONVERTING operation as this agent's driver, or decline and say who
-   * owns it. Converting means it binds durable rows to a turn — a pass, and the
-   * recovery drain a cold host performs on open, which is the same conversion
-   * with a different trigger.
+   * Run one CONVERTING operation as this workspace's driver, or decline and say
+   * who owns it. Converting means it binds durable rows to a turn — a pass, and
+   * the recovery drain a cold host performs on open, which is the same
+   * conversion with a different trigger.
    *
-   * A daemon hands the lease back at the end, so an interactive process
-   * arriving between passes does not have to preempt anything. An interactive
-   * host keeps it until the session ends, which is what stops a daemon pass
-   * landing in the middle of somebody's conversation.
+   * TWO gates, and they answer different questions. The driver lease is
+   * CROSS-PROCESS: one row per database, so it says whether this OS process may
+   * convert anything in this workspace at all. `host.run` is IN-PROCESS and PER
+   * ACTOR: it serializes this actor's own conversions against each other, so a
+   * wake that arrives while a pass is running queues behind it rather than
+   * interleaving with it, and a sibling actor's pass is unaffected.
+   *
+   * A daemon hands the lease back when the LAST converting operation finishes,
+   * so an interactive process arriving between passes does not have to preempt
+   * anything. An interactive host keeps it until the session ends, which is what
+   * stops a daemon pass landing in the middle of somebody's conversation.
    */
   private async drive<T>(
     entry: HostEntry,
     run: () => Promise<T>,
   ): Promise<{ ran: true; value: T } | { ran: false; heldBy: DriverLeaseHolder }> {
-    const hold = this.driverHold(entry);
-    const refusal = hold.acquire();
+    const tree = entry.tree;
+    const refusal = tree.hold.acquire();
     if (refusal) {
       diagnostics.event('driver.pass_deferred', {
         agent: entry.key,
@@ -297,10 +373,12 @@ export class LocalAgentHost {
       });
       return { ran: false, heldBy: refusal.holder };
     }
+    tree.driving += 1;
     try {
-      return { ran: true, value: await run() };
+      return { ran: true, value: await tree.host.run(entry.actor.reference, () => run()) };
     } finally {
-      if (this.driverKind === 'daemon') hold.release();
+      tree.driving -= 1;
+      if (this.driverKind === 'daemon' && tree.driving === 0) tree.hold.release();
     }
   }
 
@@ -351,6 +429,28 @@ export class LocalAgentHost {
     return (await this.resolveEntry(address)).peers;
   }
 
+  /**
+   * Turns this process interrupted, as the durable claims that outlived it.
+   *
+   * The recovery read: an unsettled claim is a turn something admitted and
+   * nothing finished, and it is answered from the rows rather than from
+   * anything this process remembers — so a cold host reads exactly what a warm
+   * one would. No timer arms it: the caller that just opened the workspace IS
+   * the trigger.
+   */
+  async resumable(address: string, limit?: number): Promise<ReturnType<ActorHost['resumable']>> {
+    const entry = await this.resolveEntry(address);
+    return limit === undefined ? entry.tree.host.resumable() : entry.tree.host.resumable(limit);
+  }
+
+  /** Every actor of one root's workspace, in any lifecycle state, without
+   *  starting any of them. */
+  async actors(address: string): Promise<readonly WorkspaceActor[]> {
+    const entry = await this.resolveEntry(address);
+    return entry.tree.host.list().map((reference) => entry.tree.host.describe(reference.actorId))
+      .filter((record): record is WorkspaceActor => record !== null);
+  }
+
   /** End every session, then release every database handle. */
   async close(): Promise<void> {
     if (this.closed) return;
@@ -374,16 +474,21 @@ export class LocalAgentHost {
           { agent: entry.key },
         );
       }
-      // Released BEFORE the handle closes, and only if the row is still ours.
-      // An interactive process holds its lease for the whole session, so this is
-      // where a daemon becomes able to drive again — without it, a conversation
-      // stays locked to a process that has exited and only a liveness check
-      // would recover it, which is the slower and less obvious path.
-      this.driverHolds.get(entry.key)?.release();
-      entry.db.close();
+    }
+    // The runtime objects, then the lease, then the file — in that order, and
+    // once per TREE rather than once per actor. Released BEFORE the handle
+    // closes and only if the row is still ours: an interactive process holds
+    // its lease for the whole session, so this is where a daemon becomes able
+    // to drive again. Without it a conversation stays locked to a process that
+    // has exited and only a liveness check would recover it.
+    for (const tree of this.trees.values()) {
+      tree.host.releaseAll();
+      tree.hold.release();
+      tree.db.close();
     }
     this.entries.clear();
-    this.driverHolds.clear();
+    this.byActor.clear();
+    this.trees.clear();
   }
 
   // ── host lifecycle ──────────────────────────────────────────────────
@@ -440,19 +545,197 @@ export class LocalAgentHost {
     const db = new Database(dbPath);
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      return await this.buildEntry({
-        key: name,
-        name,
-        ref,
-        parentKey: null,
-        dbPath,
-        db,
-        ws,
-      });
+      const tree = this.createTree(ref, db, dbPath, ws);
+      this.trees.set(name, tree);
+      try {
+        const actor = await tree.host.acquire(actorReferenceOf(ws.rt.actor));
+        return await this.buildEntry({ key: name, name, ref, parentKey: null, tree, actor, ws });
+      } catch (error) {
+        // THE HOLD GOES WITH THE TREE. This file's own invariant is "the lease
+        // is the TREE's and stays … released once, in close()" — but this path
+        // never reaches close(): it DISCARDS the tree. Without releasing here
+        // the durable `driver_lease` row keeps naming this pid while the tree
+        // that owned it is gone, so `holderAt(dbPath)` reports a live
+        // interactive holder that does not exist. It only looked harmless
+        // because the next acquire happens to build a fresh hold under the same
+        // pid and kind; a different process, or the same one after a driverKind
+        // change, would inherit a lease nobody holds.
+        try { tree.hold.release(); }
+        catch (cause) {
+          // RECORDED, not swallowed: a hold that cannot be released is already
+          // not held, so this must not replace the open failure being thrown
+          // below — but a release that fails for any OTHER reason is the stale
+          // `driver_lease` row this branch exists to prevent, and it would then
+          // be invisible.
+          diagnostics.failure('driver.lease_release_failed', toKinuError({
+            doing: 'releasing the discarded tree\'s driver lease', cause, otherwise: 'io',
+          }), { workspace: name });
+        }
+        this.trees.delete(name);
+        throw error;
+      }
     } catch (error) {
       db.close();
       throw error;
     }
+  }
+
+  /**
+   * The ONE actor host over one root's database.
+   *
+   * Its three factories are the whole of what "a logical actor" means on this
+   * backend: `runtimeFor` gives an actor its own agent-state subtree and its own
+   * scaffold pointer over the SHARED workspace plane, `loopFor` seeds the
+   * promoted loop it runs (a hire starts on the builtin program, a fork inherits
+   * its parent's), and `orchestrationFor` gives it its own event rail, engine,
+   * governor and client fan-out. None of them opens a file.
+   */
+  private createTree(
+    ref: HostedAgentRef,
+    db: Database,
+    dbPath: string,
+    ws: LocalHostedAgent,
+  ): HostTree {
+    const { directory } = localActorDirectory(ws.rt.actor);
+    const sql = makeSql(db);
+    const hubSql = makeSqlExec(db);
+    const runtimes = new Map<string, CLIRuntime>([[ws.rt.actor.actorId, ws.rt]]);
+    const orchestrations = new Map<string, LocalOrchestration>();
+    const host = createActorHost({
+      storage: {
+        sql,
+        transactionSync: (write) => db.transaction(write)(),
+        exec: hubSql.exec,
+      },
+      directory,
+      // The local host publishes NO installed build identity for its builtin
+      // loop: there is no build stamp on a `bun`-run checkout and the package
+      // version in this repo is a placeholder, so a claim for a builtin turn
+      // records the build as unknown rather than naming one nobody can verify.
+      installedBuild: null,
+      runtimeFor: (bound) => this.runtimeFor(runtimes, dbPath, db, bound),
+      loopFor: (bound) => {
+        const parentId = bound.reference.parentActorId;
+        const parentEntry = parentId === null ? null : this.requireActorEntry(parentId);
+        // The origin the CREATION SITE named, or this kind's default — never the
+        // default alone. The seating session records what it was asked for
+        // before it acquires, and only it knows: a head that names ONE version
+        // of its parent's lineage was silently given the parent's CURRENT source
+        // here while a bare session honoured the request.
+        const named = parentEntry?.session.pendingLoopOrigin(bound.reference.actorId);
+        return {
+          origin: named ?? defaultLoopOrigin(bound.record.kind),
+          parent: parentEntry === null ? null : parentEntry.ws.rt,
+        };
+      },
+      orchestrationFor: (bound) => {
+        const orchestration = createLocalOrchestration({
+          runtime: bound.runtime,
+          // This ACTOR's own durable event rail — the queue both of its
+          // ingresses publish into.
+          eventLog: new EventLog(hubSql, bound.handle),
+          // Resolved at CALL time: the host builds orchestration BEFORE the
+          // ActorSession exists (it needs orchestration to construct one), and
+          // the session that answers these ports is built from that session.
+          session: () => this.requireActorEntry(bound.reference.actorId).session,
+          oneShot: false,
+          autoEvolve: true,
+        });
+        // Retained only for the kinds that go on to get a HostEntry, and
+        // consumed by the one that does. A head's or a node's orchestration is
+        // owned by its seat and dies with it, so retaining it here would grow a
+        // map for the length of the process and hand a re-acquired id an object
+        // from a seat that is already over.
+        if (bound.record.kind === 'main' || bound.record.kind === 'subordinate') {
+          orchestrations.set(bound.reference.actorId, orchestration);
+        }
+        return orchestration.deps;
+      },
+      // The actor whose context moved is the actor the evidence is about, so
+      // the recorder is asked per actor rather than defaulted.
+      contextEvents: (bound) => bound.stores.eventRecorder,
+      discardBytes: (record) => this.discardActorBytes(ref, ws, record),
+    });
+    return {
+      dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
+      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db) }, this.driverKind),
+    };
+  }
+
+  /**
+   * One actor's runtime, over the workspace's ONE database.
+   *
+   * A ROOT's runtime is not built here: it is opened before the host that would
+   * build it (the host is constructed FROM the root's storage and directory), so
+   * it is prepared and handed back. A HIRE is built from its parent's provider
+   * wiring and retained, because the entry built next reads it back. A HEAD or a
+   * NODE is built fresh per acquisition and retained nowhere: its runtime
+   * belongs to the seat that asked for it, and a memo keyed on an actor id
+   * would both grow without bound and hand a re-acquired id a runtime whose
+   * seat has ended.
+   */
+  private async runtimeFor(
+    runtimes: Map<string, CLIRuntime>,
+    dbPath: string,
+    db: Database,
+    bound: BoundActor,
+  ): Promise<AgentRuntime> {
+    const prepared = runtimes.get(bound.reference.actorId);
+    if (prepared) return prepared;
+    const parentId = bound.reference.parentActorId;
+    if (parentId === null) {
+      throw new KinuError('missing', 'A local root is opened before its host, never by it.');
+    }
+    const parent = this.requireActorEntry(parentId);
+    if (bound.record.kind !== 'subordinate') {
+      // The observer the SEATER named, read off the parent entry's session for
+      // the same reason `loopFor` reads the parent entry's runtime: the host
+      // builds this runtime, and only the caller that asked for the seat knows
+      // what has to watch it. A head run's file attribution is per run, so it
+      // reaches here as a slot filled before `acquire` rather than as a wider
+      // `runtimeFor`.
+      return await buildLocalActorRuntime(
+        parent.ws.rt, bound, parent.session.pendingWriteObserver(bound.reference.actorId),
+      );
+    }
+    const binding = bindLocalActorReference(parent.ws.rt.actor, bound.reference);
+    // The HOST's handle, not one derived here: a hire is a CHILD, so the
+    // identity rule applies with no exemption — the release fence is bound to
+    // this object and a second binding of the same child would outlive it.
+    adoptLocalActorHandle(parent.ws.rt.actor, bound.reference, bound.handle);
+    const openConfig = this.childOpenConfig(parent, binding);
+    const built = createCLIRuntime(db, {
+      ...openConfig, dbPath, agentName: binding.name, actor: bound.handle,
+    });
+    const shared = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);
+    runtimes.set(bound.reference.actorId, shared);
+    return shared;
+  }
+
+  /**
+   * The bytes one destroyed actor owned OUTSIDE the database.
+   *
+   * Only bytes: its rows go with its directory row, and there is no file to
+   * unlink because it never had one. What it does own is a scratch HOME — a
+   * directory under the bound project for a physical plane, a uid-confined home
+   * in the workspace filesystem otherwise — named from its storage key and its
+   * kind, which is what the directory row records.
+   */
+  private async discardActorBytes(
+    ref: HostedAgentRef,
+    ws: LocalHostedAgent,
+    record: WorkspaceActor,
+  ): Promise<void> {
+    const agentName = record.kind === 'head'
+      ? headAgentName(record.storageKey)
+      : record.kind === 'node'
+        ? nodeAgentName(record.storageKey)
+        : subordinateAgentName(record.storageKey);
+    if (ref.cwd) {
+      cleanupFacetCwdScratch(ref.cwd, agentName);
+      return;
+    }
+    if (ws.rt.nodeHome) await facetHomeReleaser(ws.rt.nodeHome())(agentName);
   }
 
   private async buildEntry(input: {
@@ -460,25 +743,43 @@ export class LocalAgentHost {
     name: string;
     ref: HostedAgentRef;
     parentKey: string | null;
-    dbPath: string;
-    db: Database;
+    tree: HostTree;
+    actor: HostedActor;
     ws: LocalHostedAgent;
-    instructionApprovals?: InstructionApprovalStore;
   }): Promise<HostEntry> {
-    const config = createAgentConfigStore(input.ws.rt.storage.sql);
-    const hubSql = makeSqlExec(input.db);
-    const roster = new SubordinateRosterStore(hubSql);
+    const config = input.ws.rt.actor.config;
+    const hubSql = makeSqlExec(input.tree.db);
+    const orchestration = input.tree.orchestrations.get(input.actor.reference.actorId);
+    if (!orchestration) {
+      throw new KinuError('missing', 'The hosted actor was acquired without an orchestration.');
+    }
+    // CONSUMED. The session below holds the three objects from here on, so the
+    // handover slot is emptied rather than left as a second reference nothing
+    // reads and a re-acquisition could pick up.
+    input.tree.orchestrations.delete(input.actor.reference.actorId);
+    // THE PARENT'S roster: subordinate names are per-parent, so this store is
+    // bound to the actor that hires into it — this one.
+    const roster = new SubordinateRosterStore(hubSql, input.actor.handle);
     roster.ensureSchema();
     const sessionId = canonicalConversationId(config);
     const sessionOpts: LocalAgentSessionOpts = {
       rt: input.ws.rt,
-      db: input.db,
+      db: input.tree.db,
+      // THE HOSTED ACTOR. Its session, stores, engine, governor and event rail
+      // are the ones this tree's host already built — so the loop a head or a
+      // node claims a turn on is the very session this chat runs on.
+      hosted: {
+        actor: input.actor,
+        host: input.tree.host,
+        engine: orchestration.engine,
+        budget: orchestration.budget,
+        eventLog: orchestration.eventLog,
+      },
       // The physical plane and the prompt's runtime context read ONE directory:
       // the one on this agent's ref. Every peer and every subordinate under
       // them binds the same bytes.
       cwd: input.ref.cwd,
       onEvent: (event) => this.onSessionEvent(input.key, event),
-      instructionApprovals: input.instructionApprovals,
     };
     // A subagent's prompt names the workspace it works in, and its own config
     // holds only its own title. Read at prompt time rather than captured now:
@@ -492,26 +793,30 @@ export class LocalAgentHost {
     if (input.ws.providerRevision) sessionOpts.providerRevision = input.ws.providerRevision;
     const session = new LocalAgentSession(sessionOpts);
     const entry: HostEntry = {
-      ...input,
+      key: input.key,
+      name: input.name,
+      ref: input.ref,
+      parentKey: input.parentKey,
+      tree: input.tree,
+      actor: input.actor,
+      ws: input.ws,
       sessionId,
       session,
       config,
-      eventLog: new EventLog(hubSql),
+      eventLog: orchestration.eventLog,
       lifetime: lifetimeOf(config),
       roster,
       temporary: createTemporaryAgentPort({
         roster,
         // The SAME child substrate the roster drives, so a temporary agent is a
-        // real local actor with its own database, session and tool loop.
+        // real local actor with its own session and tool loop — over this
+        // workspace's one database, like every other actor here.
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
         renderInheritedContext: () => renderSubordinateInheritedContext(
           inheritedContextFromHistory(readConversationTail(this.requireEntry(input.key))),
         ),
         createName: mintSubordinateName,
-        // Existence only — the bytes are the child's to read, never this
-        // actor's, which is the saving the channel exists for.
-        statRef: async (path) => (await input.ws.rt.storage.vfs.stat(path)) !== null,
       }),
       team: null,
       peers: null,
@@ -521,19 +826,29 @@ export class LocalAgentHost {
         : { ownerDriven: false, reportedThisTurn: false, settledRun: false, mode: 'build' },
     };
     this.entries.set(input.key, entry);
+    this.byActor.set(input.actor.reference.actorId, entry);
     // THE REAL TEAM TRANSPORT. The roster needs the session's broadcast, which
     // only exists once the session is constructed — so the deps are installed
     // immediately after, before any turn can run.
     entry.session.setTeam(this.buildTeam(entry));
+    // THE ACTORS THIS ONE MANAGES, for its own `/context/agents/` listing. The
+    // resolver is the host's, so a subordinate's working history is reachable
+    // from its parent's plane without either of them opening anything.
+    input.ws.rt.setChildContext?.(childContextResolver({
+      host: input.tree.host,
+      directory: input.tree.directory,
+      parent: input.actor.handle,
+      events: (child) => child.stores.eventRecorder,
+    }));
     // THE DRIVER LEASE. Same reason it lands here: it closes over the entry.
     // The pump consults it before every turn, so an interactive process takes
     // the lease from a daemon at that boundary rather than interleaving with it.
     // A closed host refuses instead of reaching the lease: the gate can fire
     // from a turn continuation that outlives close(), and close() has already
-    // released the holds and closed this entry's database handle.
+    // released the holds and closed this tree's database handle.
     entry.session.setDriverGate(() => this.closed
       ? refusalOf(new KinuError('unavailable', 'this host is closed; no driver conversion may start'))
-      : this.driverHold(entry).acquire()?.refused ?? null);
+      : entry.tree.hold.acquire()?.refused ?? null);
     // The two transports that split on the same fact, installed here for the
     // same reason as the team deps: both close over this entry's session.
     //
@@ -582,35 +897,68 @@ export class LocalAgentHost {
       // sequence is claimed per turn, not re-run), which is why the `recovered`
       // ending is emitted there and not here.
       await this.drive(entry, async () => {
+        // CLAIMS BEFORE ROWS, and the order is the same one the cf sweep runs:
+        // the reclaim below hands a dead process's assignment back to the
+        // pending pool and the drain RE-RUNS it, but a turn that process had
+        // already admitted still holds an unsettled claim — and per-actor
+        // serialization would refuse the re-run rather than start it. So the
+        // claims are reconciled first: verified ones resume under the exact
+        // bytes they were admitted with, and the rest are settled
+        // `indeterminate`, which is what is known about them.
+        //
+        // This is the caller the recovery read was written for and never had.
+        // `resumable` says "no timer arms it: the caller that just opened the
+        // workspace IS the trigger" — this is that caller, on both backends now
+        // through the one core implementation.
+        const recovered = await recoverActorTurns(input.tree.host);
+        if (recovered.resumed.length + recovered.refused.length + recovered.unreadable.length > 0) {
+          // `unreadable` is reported apart from `refused` because the two mean
+          // different things to whoever reads this line: a refused turn was
+          // SETTLED indeterminate, an unreadable one is still owed.
+          diagnostics.event('actor.turns_recovered', {
+            resumed: recovered.resumed.length,
+            refused: recovered.refused.length,
+            unreadable: recovered.unreadable.length,
+          });
+        }
         session.reclaimStrandedEventDeliveries();
         await session.flushPendingDrains();
       });
       return entry;
     } catch (error) {
       this.entries.delete(input.key);
+      this.byActor.delete(input.actor.reference.actorId);
       const cleanupErrors: Error[] = [];
       try {
         await session.end();
       } catch (cleanupError) {
         cleanupErrors.push(new Error('ending the failed hosted session', { cause: cleanupError }));
       }
-      // Released and forgotten before the caller closes `input.db`. Leaving the
-      // hold in this map poisons a retry: `driverHold` returns the old object,
-      // whose SQL executor closes over the failed entry's now-closed Database.
-      // It also leaves the interactive lease row owned by a host that never
-      // opened. Each caller owns the handle itself and closes it after this
-      // throws; this method owns the memoized object it created.
-      const hold = this.driverHolds.get(input.key);
-      try {
-        hold?.release();
-      } catch (cleanupError) {
-        cleanupErrors.push(new Error('releasing the failed hosted session driver lease', { cause: cleanupError }));
+      // The runtime objects go back to the host, so a retry re-acquires them
+      // rather than reusing half-built ones. The lease is the TREE's and stays:
+      // its other actors are still driving under it, and it is released once,
+      // in close().
+      // A CHILD releases; the ROOT does not. The root's binding belongs to
+      // whoever opened the workspace, and `createTopLevel`'s own catch deletes
+      // the whole tree — host, hold, runtimes map and database — so releasing
+      // an actor from a host that is about to be dropped achieves nothing and
+      // the refusal it earns would bury the REAL failure inside an
+      // AggregateError: a failed open would report "did not release" instead of
+      // the drain error that actually failed it. A child's release is the case
+      // this cleanup exists for, and its host is one the retry will reuse.
+      if (input.actor.reference.parentActorId !== null) {
+        try {
+          input.tree.host.release(input.actor.reference);
+        } catch (cleanupError) {
+          cleanupErrors.push(new Error('releasing the failed hosted actor', { cause: cleanupError }));
+        }
       }
-      this.driverHolds.delete(input.key);
+      input.tree.orchestrations.delete(input.actor.reference.actorId);
+      input.tree.runtimes.delete(input.actor.reference.actorId);
       if (cleanupErrors.length > 0) {
         throw new AggregateError(
           [new Error(`opening hosted agent "${input.key}"`, { cause: error }), ...cleanupErrors],
-          `opening hosted agent "${input.key}" failed and its session or driver lease did not close`,
+          `opening hosted agent "${input.key}" failed and its session or hosted actor did not release`,
           { cause: error },
         );
       }
@@ -620,7 +968,7 @@ export class LocalAgentHost {
 
   private async recoverChildren(parent: HostEntry): Promise<void> {
     for (const roster of parent.roster.list()) {
-      if (parent.children.has(roster.name) || this.opening.has(`${parent.key}/${roster.name}`)) continue;
+      if (roster.birth !== null || roster.deleteRequested || parent.children.has(roster.name)) continue;
       try {
         await this.openChildEntry(parent, roster.name);
       } catch (error) {
@@ -636,35 +984,45 @@ export class LocalAgentHost {
   private async openChildEntry(parent: HostEntry, childName: string): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${childName}`;
-    const pending = this.opening.get(key);
+    const binding = openLocalActor(parent.ws.rt.actor, childName);
+    const openingKey = `${parent.key}/${binding.storageKey}`;
+    const pending = this.opening.get(openingKey);
     if (pending) return await pending;
     const existing = parent.children.get(childName);
-    if (existing) return existing;
-
-    const opening = this.openExistingChild(parent, childName, key);
-    this.opening.set(key, opening);
+    if (existing) {
+      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The cached actor is a different creation.');
+      requireLocalActorWorkspace(parent.ws.rt.actor, existing.ws.rt.actor);
+      return existing;
+    }
+    const opening = this.openExistingChild(parent, binding, key);
+    this.opening.set(openingKey, opening);
     try {
       return await opening;
     } finally {
-      if (this.opening.get(key) === opening) this.opening.delete(key);
+      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
     }
   }
 
+  /**
+   * Bind an already-created subordinate.
+   *
+   * There is nothing to open and nothing to check for existence: the child's
+   * state IS its rows in this tree's database, and whether those rows may be
+   * bound is the directory's answer — `openLocalActor` already refused a
+   * retired creation. The host builds its runtime and its session; the file was
+   * opened once, by the root.
+   */
   private async openExistingChild(
     parent: HostEntry,
-    childName: string,
+    binding: LocalActorBinding,
     key: string,
   ): Promise<HostEntry> {
-    const dbPath = this.opts.childDbPath(parent.dbPath, childName);
-    if (!existsSync(dbPath)) {
-      throw new Error(`subordinate "${childName}" has a roster row but no actor state at ${dbPath}`);
-    }
-    const db = new Database(dbPath);
+    const childName = binding.name;
+    const actor = await parent.tree.host.acquire(binding.reference);
     try {
-      const openConfig = this.childOpenConfig(parent, childName);
-      const opened = await openWorkspaceCLI(db, dbPath, openConfig);
-      const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
-      const ws: LocalHostedAgent = { rt, openConfig };
+      const rt = parent.tree.runtimes.get(binding.reference.actorId);
+      if (!rt) throw new KinuError('missing', 'The hosted subordinate has no bound runtime.');
+      const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
       if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
@@ -678,15 +1036,15 @@ export class LocalAgentHost {
         name: childName,
         ref: childRef(parent, childName),
         parentKey: parent.key,
-        dbPath,
-        db,
+        tree: parent.tree,
+        actor,
         ws,
-        instructionApprovals: parent.session.instructionApprovalAuthority(),
       });
+      requireLocalActorWorkspace(parent.ws.rt.actor, rt.actor);
       parent.children.set(childName, entry);
       return entry;
     } catch (error) {
-      db.close();
+      parent.tree.host.release(binding.reference);
       throw error;
     }
   }
@@ -700,17 +1058,18 @@ export class LocalAgentHost {
    * root's bytes" then holds by construction: whatever the caller put in the
    * root's `openConfig`, a child cannot be opened against a different plane.
    */
-  private childOpenConfig(parent: HostEntry, childName: string): CLIOpenConfig & { facet: string } {
-    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(childName) };
+  private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
+    if (binding.kind !== 'subordinate') throw new KinuError('denied', 'The roster path is not a subordinate actor.');
+    return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(binding.storageKey), actorBinding: binding };
   }
 
   /** One agent's peer endpoint, over the same `outbox_peer`/`reply_channels`
-   *  tables its own SQLite file already holds. */
+   *  tables its own workspace database already holds. */
   private buildPeerEndpoint(entry: HostEntry, hubSql: SqlExec): LocalPeerEndpoint {
     // The store and the endpoint are mutually dependent — a reply routes back
     // over the endpoint's outbox, and the endpoint answers through the store —
     // so the dispatcher reads `entry.peers` at DISPATCH time, by then set.
-    const replyChannels = new ReplyChannelStore(hubSql, {
+    const replyChannels = new ReplyChannelStore(hubSql, entry.actor.handle, {
       peer_back: {
         dispatch: async (channel, payload) => {
           const endpoint = entry.peers;
@@ -763,10 +1122,12 @@ export class LocalAgentHost {
   /**
    * One agent's pass, then each subordinate's.
    *
-   * Every actor here has its OWN database and therefore its own driver row, so
-   * every one of them is bracketed separately. A subordinate used to be gated
-   * on a token nobody had taken for it, which meant its triggers, drains and
-   * evolution silently never ran on a cold host.
+   * Every actor is bracketed separately, and the bracket is two gates, not
+   * one: the tree's cross-process lease says whether this process may convert
+   * anything here, and `host.run` serializes THIS actor's conversions. Neither
+   * gate is a per-subordinate lease token — gating a subordinate on a token
+   * nobody takes for it strands its triggers, drains and evolution silently on
+   * a cold host.
    *
    * `ran` describes THIS agent's pass. A subordinate that is busy elsewhere
    * does not make its parent's pass a non-event, but its schedule still rides
@@ -774,7 +1135,7 @@ export class LocalAgentHost {
    */
   private async tickEntry(entry: HostEntry, now: number): Promise<LocalTickResult> {
     const outcome = await this.drive(entry, () => this.runPass(entry, now));
-    let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.db);
+    let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.tree.db);
     for (const child of entry.children.values()) {
       const childNext = (await this.tickEntry(child, now)).nextAt;
       if (childNext !== null) nextAt = nextAt === null ? childNext : Math.min(nextAt, childNext);
@@ -792,14 +1153,30 @@ export class LocalAgentHost {
    * the new driver owns it.
    */
   private async runPass(entry: HostEntry, now: number): Promise<number | null> {
-    const hold = this.driverHold(entry);
+    const hold = entry.tree.hold;
+    const lifecyclePending = await recoverSubordinateLifecycles(entry.roster, this.childRuntime(entry.key));
+    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    if (entry.parentKey === null) {
+      // A retirement this process interrupted, finished. The bytes are the only
+      // thing outside the database, and the rows the retirement releases are
+      // this tree's own — so there is no file walk here, just the
+      // storage path the directory recorded.
+      await recoverLocalActorRetirements(entry.ws.rt.actor, async (path) => {
+        const storageKey = path[path.length - 1];
+        if (storageKey === undefined) return;
+        const record = entry.tree.host.describe(storageKey);
+        if (record) await this.discardActorBytes(entry.ref, entry.ws, record);
+      });
+      if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    }
     await entry.session.fireDueTriggers(now);
-    if (!hold.held()) return nextTriggerAt(entry.db);
+    if (!hold.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.flushPendingDrains();
-    if (!hold.held()) return nextTriggerAt(entry.db);
+    if (!hold.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.runDueEvolution();
 
-    let next = nextTriggerAt(entry.db);
+    let next = nextTriggerAt(entry.tree.db);
+    if (lifecyclePending) next = next === null ? now : Math.min(next, now);
     // Pending peer mail is durable, so a process that died mid-delivery has
     // rows waiting. Draining here is what re-drives them after a restart, and
     // the soonest retry rides back out so the driver's next sleep covers it.
@@ -821,11 +1198,12 @@ export class LocalAgentHost {
   /**
    * Track what a child's turn IS, for the relay decision its own roster makes.
    *
-   * No `turn-end` branch any more. The automatic report used to be started from
-   * here as an untracked promise, so a process that died before the parent's
-   * ingress admitted it left nothing recording that a retry was owed. The child's
-   * terminal roster owns it now, through {@link parentRelayFor} — which reads the
-   * same two facts this keeps, while the turn's answer is still being committed.
+   * No `turn-end` branch. The child's terminal roster owns the automatic
+   * report, through {@link parentRelayFor} — which reads the same two facts
+   * this keeps, while the turn's answer is still being committed. Starting it
+   * from here as an untracked promise would let a process die before the
+   * parent's ingress admitted it, leaving nothing recording that a retry was
+   * owed.
    *
    * No `tool-call` branch either. The reported flag is set by the report dep
    * itself (see buildEntry), which is the only place that sees BOTH the native
@@ -844,17 +1222,15 @@ export class LocalAgentHost {
   /**
    * The automatic turn-end report, as an effect the child's settled turn OWES.
    *
-   * Every decision stays where it already lived: whether a DURABLE turn relays is
-   * core's `subordinateRelaysTurnEnd` over the state {@link observeChildTurn}
-   * keeps, and which words a TASK child's ending earns is core's closed
-   * `terminalTaskReport` map. What changes is that the child's ledger now holds
-   * the obligation, so an interruption before the parent admitted it leaves a row
-   * a later start replays.
+   * Core's `subordinateRelaysTurnEnd` decides whether a DURABLE turn relays
+   * using the state {@link observeChildTurn} keeps, and `terminalTaskReport`
+   * supplies a TASK child's ending text. The child's ledger records the
+   * obligation for replay if parent admission is interrupted.
    *
-   * There is no `error` branch and no `turn-end` branch here any more. Both used
-   * to start their own detached relay, which is how one failing turn — an `error`
-   * event AND a `turn-end` event — could reach the parent twice. The session
-   * declares one report per ending now, and this port only answers which.
+   * There is no `error` branch and no `turn-end` branch here. Two branches each
+   * starting their own detached relay is how one failing turn — an `error` event
+   * AND a `turn-end` event — reaches the parent twice. The session declares one
+   * report per ending, and this port only answers which.
    */
   private parentRelayFor(child: HostEntry): LocalParentRelay {
     return {
@@ -923,12 +1299,14 @@ export class LocalAgentHost {
       log: parent.eventLog,
       roster: parent.roster,
       vfs: parent.ws.rt.storage.vfs,
-      // REAL, over the PARENT's connection — both writes land in its database.
+      // REAL, over the workspace's ONE connection — both writes land in the
+      // same file, which is also the file the child wrote its answer in.
       // Core's replay fast path reads the dedupe key and answers `already_held`
-      // without re-applying the report, so an interruption between the event
-      // insert and the roster update used to leave a completed child `working`
-      // in its parent's eyes forever, with no retry able to correct it.
-      transaction: (body) => parent.db.transaction(body)(),
+      // without re-applying the report, so nothing but this transaction keeps an
+      // interruption between the event insert and the roster update from leaving
+      // a completed child `working` in its parent's eyes forever, with no retry
+      // able to correct it.
+      transaction: (body) => parent.tree.db.transaction(body)(),
       announce: (report: AdmittedSubordinateReport) => {
         const metadata: JsonObject = {
           kind: 'report',
@@ -1003,7 +1381,7 @@ export class LocalAgentHost {
         inheritedContextFromHistory(readConversationTail(parent)),
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
-      ownMission: () => readMission(parent.ws.rt.storage.sql) ?? '',
+      ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.broadcast(event),
       broadcastTask: (event) => parent.session.broadcast({
@@ -1039,7 +1417,7 @@ export class LocalAgentHost {
    * THE child substrate of one hosted agent: birth, assign, status, rename,
    * retire. One object for both rungs — the durable roster and the temporary
    * register — so a temporary agent is the same kind of local actor a hire is,
-   * with its own database, its own session and its own tool loop.
+   * with its own session and its own tool loop over the workspace's one store.
    *
    * Keyed by ADDRESS rather than closing over the entry, because the temporary
    * port is built with the entry and therefore before it is registered. Every
@@ -1049,7 +1427,13 @@ export class LocalAgentHost {
   private childRuntime(parentKey: string): SubordinateRuntime {
     const parentOf = () => this.requireEntry(parentKey);
     return {
-      spawn: async (input) => { await this.birthChild(parentOf(), input); },
+      spawn: async (input) => { const child = await this.birthChild(parentOf(), input); return actorReferenceOf(child.ws.rt.actor); },
+      cancelBirth: async (input) => {
+        const parent = parentOf();
+        return await this.retireCreation(parent, {
+          name: input.name, creationId: input.creationId, lifetime: input.lifetime,
+        });
+      },
       assign: async (name, input) => {
         const parent = parentOf();
         const child = await this.openChildEntry(parent, name);
@@ -1057,7 +1441,7 @@ export class LocalAgentHost {
       },
       status: async (name) => {
         const child = await this.openChildEntry(parentOf(), name);
-        return readSubordinateLiveStatus(makeSqlExec(child.db));
+        return readSubordinateLiveStatus(makeSqlExec(child.tree.db), child.actor.handle);
       },
       message: async (name, content, mode) => {
         const parent = parentOf();
@@ -1069,8 +1453,8 @@ export class LocalAgentHost {
         child.config.setDisplayNameOrigin(displayName, nameOrigin);
         child.session.broadcast({ type: 'workspace_renamed', displayName });
       },
-      dismiss: async (name, keepHistory) => {
-        await this.removeChild(parentOf(), name, keepHistory);
+      dismiss: async (name, keepHistory, reference) => {
+        await this.removeChild(parentOf(), name, keepHistory, reference);
       },
     };
   }
@@ -1078,6 +1462,15 @@ export class LocalAgentHost {
   private requireEntry(key: string): HostEntry {
     const entry = this.entries.get(key);
     if (!entry) throw new Error(`local agent "${key}" is not hosted`);
+    return entry;
+  }
+
+  /** The entry one ISSUED actor id belongs to. The host's dependencies are
+   *  handed references, and this is how a reference becomes the actor's own
+   *  session, parent wiring and tree. */
+  private requireActorEntry(actorId: string): HostEntry {
+    const entry = this.byActor.get(actorId);
+    if (!entry) throw new KinuError('missing', `local actor "${actorId}" is not hosted`);
     return entry;
   }
 
@@ -1097,78 +1490,84 @@ export class LocalAgentHost {
   ): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${input.name}`;
-    if (this.opening.has(key) || this.entries.has(key)) {
-      throw new Error(`subordinate "${input.name}" is already being created`);
+    const binding = registerLocalActor(parent.ws.rt.actor, { name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime });
+    const openingKey = `${parent.key}/${binding.storageKey}`;
+    const pending = this.opening.get(openingKey);
+    if (pending) return await pending;
+    const existing = this.entries.get(key);
+    if (existing) {
+      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The actor alias is held by a different creation.');
+      return existing;
     }
-    const opening = this.birthChildEntry(parent, input, key);
-    this.opening.set(key, opening);
+    const opening = this.birthChildEntry(parent, input, key, binding);
+    this.opening.set(openingKey, opening);
     try {
       return await opening;
     } finally {
-      if (this.opening.get(key) === opening) this.opening.delete(key);
+      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
     }
   }
 
+  /**
+   * Create one subordinate: its descriptor rows, then its hosted actor.
+   *
+   * NO DATABASE IS CREATED. The child's identity is the `workspace_actors` row
+   * its registration wrote, and its descriptor, depth and lifetime are rows in
+   * the same file its parent is bound to — so this is a transaction, not a file
+   * creation, and there is no window in which a half-made child owns a file
+   * nothing points at. The promoted loop it starts on is seeded by the host
+   * (`loopFor`), which is why nothing bootstraps a scaffold here.
+   */
   private async birthChildEntry(
     parent: HostEntry,
-    input: {
-      name: string;
-      /** Empty when nothing the caller said can name this agent yet. */
-      displayName: string;
-      nameOrigin: 'user' | 'auto';
-      role: RoleId;
-      tier?: TierId;
-      mission: string;
-      lifetime: SubordinateLifetime;
-    },
+    input: Parameters<SubordinateRuntime['spawn']>[0],
     key: string,
+    binding: LocalActorBinding,
   ): Promise<HostEntry> {
     const llm = parent.ws.openConfig.llm;
     if (!llm) {
       throw new Error('No provider configured for this host — subordinate creation needs a connected provider.');
     }
-    const dbPath = this.opts.childDbPath(parent.dbPath, input.name);
-    if (existsSync(dbPath)) {
-      throw new Error(`subordinate "${input.name}" already has actor state at ${dbPath}`);
-    }
-    mkdirSync(dirname(dbPath), { recursive: true });
-    const db = new Database(dbPath);
-    db.exec('PRAGMA journal_mode = WAL');
+    const tree = parent.tree;
+    const exec = makeSqlExec(tree.db);
+    const sql = makeSql(tree.db);
+    const owner = localActorOwner(parent.ws.rt.actor);
+    const depth = treeDepthOf(parent.config) + 1;
     try {
-      await createWorkspace(db, {
-        // Address and title, separately. `input.name` is the slug the tree
-        // addresses this subagent by; the title is what a person calls it, and
-        // a one-click hire has none until its first message names it.
-        name: input.name,
-        title: input.displayName,
-        purpose: input.mission,
-        llm,
-      });
-      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-      const openConfig = this.childOpenConfig(parent, input.name);
-      const opened = await openWorkspaceCLI(db, dbPath, openConfig);
-      const rt = await shareLocalWorkspacePlane(opened.rt, parent.ws.rt, openConfig.facet);
-      const config = createAgentConfigStore(rt.storage.sql);
-      config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
-      config.setRoleSelection(input.role);
-      config.setAssignedTier(input.tier ?? null);
+      tree.db.transaction(() => {
+        // The child's own handle, bound to its own directory row — the only
+        // identity a local actor has. Every store below is scoped to it, so
+        // one workspace database holds N descriptors keyed by actor rather
+        // than one singleton row that only the last child could own.
+        const actor = bindLocalActor(sql, binding);
+        const subordinateIdentity = new SubordinateIdentityStore(exec, actor);
+        subordinateIdentity.ensureSchema();
+        subordinateIdentity.seed({
+          name: input.name, mission: input.mission,
+          ownerUserId: owner.ownerUserId, parentWorkspace: owner.workspaceName,
+          depth, lifetime: input.lifetime,
+        });
+        actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
+        actor.config.setRoleSelection(input.role);
+        actor.config.setAssignedTier(input.tier ?? null);
+        const inheritedModel = parent.config.getModel();
+        if (inheritedModel) actor.config.setModel(inheritedModel);
+        actor.config.set(CHILD_DEPTH_KEY, String(depth));
+        actor.config.set(CHILD_LIFETIME_KEY, input.lifetime);
+      })();
+      const actor = await tree.host.acquire(binding.reference);
+      const rt = tree.runtimes.get(binding.reference.actorId);
+      if (!rt) throw new KinuError('missing', 'The created subordinate has no bound runtime.');
+      const config = rt.actor.config;
       const descriptor = subordinateDescriptorSource(config).read();
       if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
-      // The child keeps the parent's model only as its STARTING point; its
-      // tier (when it has one) resolves at its own turn boundary. No model
-      // spec travels with a hire — tier is the one routing input.
-      const inheritedModel = parent.config.getModel();
-      if (inheritedModel) config.setModel(inheritedModel);
-      config.set(CHILD_DEPTH_KEY, String(treeDepthOf(parent.config) + 1));
-      config.set(CHILD_LIFETIME_KEY, input.lifetime);
       // SOUL belongs to the AGENT, never to the shared directory. With a bound
       // cwd, `storage.vfs` IS the user's project, so writing there would drop a
       // SOUL.md into their repo and every peer's hire would overwrite the last
       // one. `agentStateVfs` is this agent's own tree; the `??` is the spelling
       // for backends where the two coincide.
-      await writeSoul(
-        rt.agentStateVfs ?? rt.storage.vfs,
-        rt.storage.sql,
+      const actorFiles = rt.agentStateVfs ?? rt.storage.vfs;
+      if (!(await readSoul(actorFiles))) await actorFiles.writeFile(SOUL_PATH,
         [
           renderSoulMarkdown({ name: descriptor.displayName, mission: input.mission }),
           '',
@@ -1177,7 +1576,7 @@ export class LocalAgentHost {
           `Role: ${descriptor.role}${descriptor.tier ? ` (tier ${descriptor.tier})` : ''}`,
         ].join('\n'),
       );
-      const ws: LocalHostedAgent = { rt, openConfig };
+      const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
       if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
       if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
       if (parent.ws.mcpServers) ws.mcpServers = parent.ws.mcpServers;
@@ -1187,16 +1586,20 @@ export class LocalAgentHost {
         name: input.name,
         ref: childRef(parent, input.name),
         parentKey: parent.key,
-        dbPath,
-        db,
+        tree,
+        actor,
         ws,
-        instructionApprovals: parent.session.instructionApprovalAuthority(),
       });
+      requireLocalActorWorkspace(parent.ws.rt.actor, rt.actor);
       parent.children.set(input.name, entry);
       return entry;
     } catch (error) {
-      db.close();
-      removeChildState(dbPath);
+      tree.host.release(binding.reference);
+      const installed = this.entries.get(key);
+      if (installed?.ws.rt.actor.actorId === binding.reference.actorId) {
+        this.entries.delete(key);
+        this.byActor.delete(binding.reference.actorId);
+      }
       throw error;
     }
   }
@@ -1209,7 +1612,6 @@ export class LocalAgentHost {
       body: string;
       mode: WorkMode;
       deliverable?: string;
-      deadlineHint?: string;
       inheritedContext?: string;
     },
   ): SubordinateHandoff {
@@ -1219,7 +1621,6 @@ export class LocalAgentHost {
       kind: input.kind,
       body: input.body,
       deliverable: input.deliverable,
-      deadlineHint: input.deadlineHint,
       inheritedContext: input.inheritedContext,
       mode: input.mode,
       now: Date.now(),
@@ -1227,24 +1628,57 @@ export class LocalAgentHost {
     const handoff = describeSubordinateHandoff({
       admission,
       turnInFlight: child.session.turnInFlight(),
-      live: readSubordinateLiveStatus(makeSqlExec(child.db)),
+      live: readSubordinateLiveStatus(makeSqlExec(child.tree.db), child.actor.handle),
     });
     if (admission.admitted) this.wake(child, 'subordinate task');
     return handoff;
   }
 
-  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean): Promise<void> {
+  /**
+   * Retire a creation that was cancelled before it ran.
+   *
+   * Through the host, like every other retirement: it drops the runtime objects
+   * and discards the bytes, and the rows stay or go by the directory's own
+   * cancel/release rules.
+   */
+  private async retireCreation(
+    parent: HostEntry,
+    input: { name: string; creationId: string; lifetime: WorkspaceActor['lifetime'] },
+  ): Promise<ActorReference> {
+    // The creation is CANCELLED against the record it was admitted under, not
+    // registered and then destroyed: `cancelCreation` refuses a name, kind or
+    // lifetime that disagrees with the admitted birth, and never activates the
+    // row, so no roster read can see a child that was never born. The physical
+    // half still goes through the host, which owns this actor's runtime objects
+    // and is the thing that refuses a stale alias.
+    const reference = cancelLocalCreation(parent.ws.rt.actor, {
+      name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
+    });
+    await parent.tree.host.retire(parent.actor.reference, {
+      reference, name: input.name, destroy: true,
+    });
+    return reference;
+  }
+
+  private async removeChild(parent: HostEntry, name: string, keepHistory: boolean, reference: ActorReference): Promise<void> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const child = parent.children.get(name);
-    const dbPath = child?.dbPath ?? this.opts.childDbPath(parent.dbPath, name);
+    const candidate = parent.children.get(name) ?? this.entries.get(`${parent.key}/${name}`);
+    const child = candidate?.ws.rt.actor.actorId === reference.actorId ? candidate : undefined;
     if (child) {
       await child.session.end();
-      child.db.close();
-      parent.children.delete(name);
-      this.entries.delete(child.key);
+      if (parent.children.get(name)?.ws.rt.actor.actorId === reference.actorId) parent.children.delete(name);
+      if (this.entries.get(child.key)?.ws.rt.actor.actorId === reference.actorId) this.entries.delete(child.key);
+      this.byActor.delete(reference.actorId);
     }
-    cleanupFacetCwdScratch(parent.ref.cwd, subordinateAgentName(name));
-    if (!keepHistory) removeChildState(dbPath);
+    parent.tree.runtimes.delete(reference.actorId);
+    parent.tree.orchestrations.delete(reference.actorId);
+    // KEEP HISTORY IS LITERAL. A retained dismissal keeps the actor's history
+    // as readable rows in the workspace database, addressable by actor id.
+    // Only its scratch bytes are removed.
+    const retirement: Parameters<ActorHost['retire']>[1] = {
+      reference, name, destroy: !keepHistory,
+    };
+    await parent.tree.host.retire(parent.actor.reference, retirement);
   }
 
   /** Drain now because something landed in this agent's inbox. Bracketed like
@@ -1252,7 +1686,7 @@ export class LocalAgentHost {
    *  simply that driver's work, and its rows are still pending for them. */
   private wake(entry: HostEntry, source: string): void {
     // Wakes arrive from listeners and timers that can outlive close(), and a
-    // drive after close() would recreate a lease hold on a closed database.
+    // drive after close() would convert rows over a closed database handle.
     if (this.closed) return;
     queueMicrotask(async () => {
       if (this.closed) return;
@@ -1294,9 +1728,10 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
 }
 
 function readConversationTail(entry: HostEntry): ModelMessage[] {
-  const rows = makeSql(entry.db)<{ role: string; content: string }>`
+  const rows = makeSql(entry.tree.db)<{ role: string; content: string }>`
     SELECT role, content FROM messages
-    WHERE session_id = ${entry.sessionId} AND role IN ('user', 'assistant')
+    WHERE actor_id = ${entry.ws.rt.actor.actorId} AND session_id = ${entry.sessionId}
+      AND role IN ('user', 'assistant')
     ORDER BY created_at DESC, rowid DESC LIMIT 16`;
   return rows.reverse().map((row): ModelMessage => ({
     role: row.role === 'assistant' ? 'assistant' : 'user',
@@ -1304,6 +1739,18 @@ function readConversationTail(entry: HostEntry): ModelMessage[] {
   }));
 }
 
+/**
+ * When this PROCESS must next wake, over every actor in the workspace.
+ *
+ * Deliberately unscoped, and one of the few reads in this tree that must be.
+ * `triggers` is actor-scoped storage, but this is not a read of one actor's
+ * state — it is the daemon's own timer, and the daemon hosts every actor in
+ * the file. Scoping it to the root would make the process sleep through a
+ * hired subordinate's due trigger, which is the failure this fold exists to
+ * prevent. The same contract as `hasLiveJobsInWorkspace()`: workspace-wide by
+ * design, not by omission. It takes a bare `Database` for exactly that reason
+ * — there is no one actor whose handle would be the right one to hold here.
+ */
 function nextTriggerAt(db: Database): number | null {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='triggers'`).get();
   if (!table) return null;
@@ -1312,9 +1759,4 @@ function nextTriggerAt(db: Database): number | null {
     WHERE state = 'active' AND next_fire_at IS NOT NULL
   `).get();
   return row?.next_fire_at ?? null;
-}
-
-function removeChildState(dbPath: string): void {
-  const root = dirname(dbPath);
-  if (existsSync(root)) rmSync(root, { recursive: true, force: true });
 }

@@ -1,30 +1,30 @@
 /**
  * The Exploration canvas, one page at a time.
  *
- * The surface used to fetch the fork list, then the selected run's tree, then
- * that run's detail — one request per thing on screen, each on its own
- * revalidation clock. That is why only one tree could ever be drawn: showing all
- * of a workspace's trees side by side would have meant N growing round trips,
- * and the list, the parameters and the trees could disagree about what exists.
+ * One request per thing on screen — the fork list, then the selected run's tree,
+ * then that run's detail — each on its own revalidation clock, is what caps a
+ * canvas at ONE tree: showing all of a workspace's trees side by side means N
+ * growing round trips, and the list, the parameters and the trees can disagree
+ * about what exists.
  *
  * So the composition happens here, once, against one snapshot of the storage.
  * And it composes into ONE ROW PER RUN rather than three parallel collections
- * the caller re-associates by id. That is not tidiness: the collections were
- * separately bounded, by different ordering keys, and at the boundary the canvas
- * drew a listed run with no tree beside a tree for a run it had not listed.
- * Three collections that have to agree about which runs exist is a fact that
- * can be stated twice, so it is now stated once.
+ * the caller re-associates by id. That is not tidiness: separately bounded
+ * collections, each with its own ordering key, disagree at the boundary — a
+ * listed run with no tree drawn beside a tree for a run that was never listed.
+ * Which runs exist is one fact, so it is stated once.
  *
  * The page is the run list's page. Every other field is derived from the runs on
  * it, so nothing here is bounded a second time and there is no second window to
  * disagree with — INCLUDING the journalled half. A run's journalled nodes are not
- * in `search_nodes`, and the surface used to fetch them as a separately bounded
- * `getHeadRuns` read: page two of the canvas then held runs whose nodes were
- * outside that window, so they drew as "no branches were ever written" while the
- * journal held them. Every half of a run now arrives on the page the run is on.
+ * in `search_nodes`, and fetching them as a separately bounded `getHeadRuns`
+ * read leaves page two's runs outside that window: they draw as "no branches
+ * were ever written" while the journal holds them. Every half of a run arrives
+ * on the page the run is on.
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
@@ -60,8 +60,8 @@ export interface ParetoFrontier {
   }[];
 }
 
-/** A page of the canvas. Thirty is what the bare `LIMIT` was, kept so the first
- *  page is the window the surface already sized its list for. */
+/** A page of the canvas. Thirty is the window the surface sizes its list for,
+ *  so the first page is exactly that window. */
 const DEFAULT_CANVAS_PAGE = 30;
 
 /**
@@ -71,10 +71,11 @@ const DEFAULT_CANVAS_PAGE = 30;
  */
 export function readExplorationCanvas(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_CANVAS_PAGE,
 ): Page<ExplorationCanvasRun> {
-  return mapPage(listForkRuns(sql, cursor, limit), (runs) => composeRuns(sql, runs));
+  return mapPage(listForkRuns(sql, actor, cursor, limit), (runs) => composeRuns(sql, actor, runs));
 }
 
 /**
@@ -82,24 +83,25 @@ export function readExplorationCanvas(
  *
  * The same shape rather than a summary, because the drill-down that opens one run
  * is the surface with the most room to show what that run was dispatched with, and
- * the parameters used to travel only on the canvas page: reading one run's judge
- * clamp meant fetching thirty runs and their trees to render one. Through the same
- * composer, so the two reads cannot come to disagree about one run.
+ * parameters that travel only on the canvas page would make reading one run's
+ * judge clamp mean fetching thirty runs and their trees to render one. Through
+ * the same composer, so the two reads cannot come to disagree about one run.
  */
-export function readExplorationRun(sql: SqlExecutor, rootId: string): ExplorationCanvasRun | null {
-  const run = readForkRun(sql, rootId);
-  return run === null ? null : composeRuns(sql, [run])[0] ?? null;
+export function readExplorationRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ExplorationCanvasRun | null {
+  const run = readForkRun(sql, actor, rootId);
+  return run === null ? null : composeRuns(sql, actor, [run])[0] ?? null;
 }
 
 /** Both halves and the parameters of each named run, in one read per store. */
 function composeRuns(
   sql: SqlExecutor,
+  actor: ActorHandle,
   runs: readonly ForkRunSummary[],
 ): ExplorationCanvasRun[] {
   const params = new Map(
-    readForkRunParams(sql, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
+    readForkRunParams(sql, actor, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
   );
-  const journal = new HeadJournal(sql);
+  const journal = new HeadJournal(sql, actor);
   return runs.map((run) => ({
     run,
     params: params.get(run.id) ?? null,
@@ -108,18 +110,20 @@ function composeRuns(
     // settlement tag: the tag admitted one half per run, so the swarm's tree — four
     // rows and a winner — was dropped before the response was serialised, and no
     // client could recover what the server never sent.
-    tree: run.hasSearchTree ? readSearchTree(sql, run.id) : [],
+    tree: run.hasSearchTree ? readSearchTree(sql, actor, run.id) : [],
     head: run.hasNodeTranscripts ? journal.readRun(run.id) : null,
-    frontier: readParetoFrontier(sql, run.id),
+    frontier: readParetoFrontier(sql, actor, run.id),
   }));
 }
 
 
-function readParetoFrontier(sql: SqlExecutor, rootId: string): ParetoFrontier | null {
+function readParetoFrontier(
+  sql: SqlExecutor, actor: ActorHandle, rootId: string,
+): ParetoFrontier | null {
   const table = sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
   if (table.length === 0) return null;
-  const candidates = readSwarmNodeRecords(sql, rootId).flatMap(({ nodeId, record }) =>
+  const candidates = readSwarmNodeRecords(sql, actor, rootId).flatMap(({ nodeId, record }) =>
     record.outcome?.kind === 'pareto'
       ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]
       : []);

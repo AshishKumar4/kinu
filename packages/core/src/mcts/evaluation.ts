@@ -338,9 +338,9 @@ export async function evaluateWithMultiModelJudging(
     // Inside the fail band the MEASURED share of checks that held positions the
     // branch, and the judge is not consulted for it. That share is LATS's
     // backpropagated reward, and it is the difference between a search with a
-    // gradient and one without: every failing branch used to land at
-    // FAIL_FLOOR + FAIL_SPAN·judge, so "three of four aspects correct" and
-    // "nothing works" were separated only by judge noise — which is the binary
+    // gradient and one without: score every failing branch at
+    // FAIL_FLOOR + FAIL_SPAN·judge and "three of four aspects correct" and
+    // "nothing works" are separated only by judge noise — which is the binary
     // reward this repo already measured degenerates a search toward best-of-n
     // (test-utils/src/eval-outcome.ts). The judge still positions inside the
     // PASS band, where the fraction is 1 by construction and carries nothing,

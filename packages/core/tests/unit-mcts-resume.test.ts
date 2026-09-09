@@ -32,7 +32,7 @@ describe('MCTS evict-resume (B6)', () => {
   test('an interrupted search resumes from checkpoint, continues remaining budget, converges', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
 
     // ── Run 1: budget 4, "evicted" after 2 iterations ──────────────────────
     const ctrl = new AbortController();
@@ -80,7 +80,7 @@ describe('MCTS evict-resume (B6)', () => {
   test('a completed search is not re-resumed; a new run of the same task starts fresh', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
 
     await runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1, search: store });
     expect(store.findResumable(TASK)).toBeNull();   // converged → not resumable
@@ -108,7 +108,7 @@ const isCheckpointLine = (line: string): boolean => line.includes('"event":"mcts
 function checkpointedRuntime() {
   const { rt, db } = createTestRuntime();
   initTables(rt);
-  return { rt, store: new MctsSearchStore(makeSql(db)) };
+  return { rt, store: new MctsSearchStore(makeSql(db), rt.actor) };
 }
 
 describe('MCTS per-iteration checkpoint logging', () => {
@@ -120,15 +120,15 @@ describe('MCTS per-iteration checkpoint logging', () => {
     const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
     // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
-    // filter and order on, which the old interpolated `iteration=1/3` string was not.
+    // filter and order on, which an interpolated `iteration=1/3` string is not.
     expect(JSON.parse(checkpointLines[0]!).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
     expect(JSON.parse(checkpointLines[2]!).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
-  // Regression: the heartbeat used to go to stdout, which under
-  // `kinu exec --json` IS the NDJSON event stream — four corrupt,
-  // unparseable lines per run for any CI consumer. Workers Logs capture stderr
-  // just the same, so one channel serves both surfaces.
+  // Regression: a heartbeat on stdout lands in what `kinu exec --json` uses as
+  // the NDJSON event stream — four corrupt, unparseable lines per run for any
+  // CI consumer. Workers Logs capture stderr just the same, so one channel
+  // serves both surfaces.
   test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {
     const { rt, store } = checkpointedRuntime();
     const { stdout } = await captureConsole(() =>
@@ -152,22 +152,23 @@ describe('MCTS per-iteration checkpoint logging', () => {
  * The judge ensemble a run was OBSERVED to sample, folded onto its ledger row.
  *
  * The number exists because the two spend knobs share one per-evaluation call pool, so
- * a request the pool cannot fund is realised lower — and it used to be disclosed once,
- * in the settle report of the call that ran, and persisted nowhere. `fork-params.ts`
- * answered a reader by recomputing the pool's CEILING from the knobs, which is not what
- * a run that short-circuited before judging actually sampled.
+ * a request the pool cannot fund is realised lower. Disclosed once in the settle report
+ * of the call that ran and persisted nowhere, it leaves `fork-params.ts` answering a
+ * reader by recomputing the pool's CEILING from the knobs, which is not what a run that
+ * short-circuited before judging actually sampled.
  */
 describe('the ledger records the ensemble a run was observed to sample', () => {
   function ledger() {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     store.begin({
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 2, branches: 2, judgeSamples: 20 }, budget: 2, now: 1_000,
     });
     const realised = () => makeSql(db)<{ judge_samples_realised: number | null }>`
-      SELECT judge_samples_realised FROM mcts_search_runs WHERE root_id = 'r1'`[0]
+      SELECT judge_samples_realised FROM mcts_search_runs
+      WHERE actor_id = ${rt.actor.actorId} AND root_id = 'r1'`[0]
       ?.judge_samples_realised ?? null;
     return { store, realised };
   }
@@ -211,7 +212,7 @@ describe('the resume loop reclaims its own engine only', () => {
   test('a still-running swarm row is never handed to the resume loop', () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     store.begin({
       rootId: 'swarm-root', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
@@ -235,7 +236,7 @@ describe('the resume loop reclaims its own engine only', () => {
   test('the ledger lists both engines and says which each row is', () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     store.begin({
       rootId: 'swarm-root', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 6, branches: 3 }, budget: 6, now: 1_000,
@@ -261,7 +262,7 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
   function store() {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const s = new MctsSearchStore(makeSql(db));
+    const s = new MctsSearchStore(makeSql(db), rt.actor);
     s.begin({
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 2, branches: 2 }, budget: 2, now: 1_000,
@@ -300,18 +301,16 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
 });
 
 /**
- * The table ships WHOLE. `initMctsSearchTable` used to follow its CREATE with a
- * `reconcileColumns` pass re-adding `engine` and `judge_samples_realised` for a
- * workspace whose table predated them; both sit in the CREATE and `begin` names
- * both, so the pass had nothing left to repair and is gone. These tests are what
- * keeps that true: a column that reaches the writer but not the DDL now fails
- * here instead of being silently re-added on the next boot.
+ * The table ships WHOLE: `engine` and `judge_samples_realised` sit in the CREATE
+ * and `begin` names both, so there is nothing for a `reconcileColumns` pass to
+ * repair. These tests are what keeps that true: a column that reaches the writer
+ * but not the DDL fails here instead of being silently re-added on the next boot.
  */
 describe('the search ledger is created whole', () => {
   function fresh() {
     const { rt, db } = createTestRuntime();
     initMctsSearchTable(rt.storage.execRaw);
-    return { db, sql: makeSql(db) };
+    return { db, sql: makeSql(db), actor: rt.actor };
   }
 
   test('the CREATE alone carries every column the writer names', () => {
@@ -319,48 +318,50 @@ describe('the search ledger is created whole', () => {
     const columns = sql<{ name: string }>`SELECT name FROM pragma_table_info('mcts_search_runs')`
       .map((row) => row.name);
     expect(columns).toEqual([
-      'root_id', 'task', 'engine', 'root_msg_id', 'config_json', 'iteration',
+      'actor_id', 'root_id', 'task', 'engine', 'root_msg_id', 'config_json', 'iteration',
       'budget', 'status', 'epoch', 'judge_samples_realised', 'created_at', 'updated_at',
     ]);
   });
 
   test('begin writes the engine discriminator and the unobserved ensemble', () => {
-    const { db, sql } = fresh();
-    new MctsSearchStore(makeSql(db)).begin({
+    const { db, sql, actor } = fresh();
+    new MctsSearchStore(makeSql(db), actor).begin({
       rootId: 'r1', task: TASK, engine: 'swarm', rootMsgId: null,
       config: { budget: 3, branches: 3 }, budget: 3, now: 1_000,
     });
     // The discriminator is load-bearing: it is what stops the MCTS resume loop
     // re-entering a swarm's tree. An unobserved ensemble is NULL, not 0.
     expect(sql<{ engine: string; judge_samples_realised: number | null }>`
-      SELECT engine, judge_samples_realised FROM mcts_search_runs WHERE root_id = 'r1'`[0])
+      SELECT engine, judge_samples_realised FROM mcts_search_runs
+      WHERE actor_id = ${actor.actorId} AND root_id = 'r1'`[0])
       .toEqual({ engine: 'swarm', judge_samples_realised: null });
   });
 
   test('a ledger row whose config will not parse refuses instead of resuming', () => {
-    const { db, sql } = fresh();
-    const store = new MctsSearchStore(makeSql(db));
+    const { db, sql, actor } = fresh();
+    const store = new MctsSearchStore(makeSql(db), actor);
     void sql`INSERT INTO mcts_search_runs
-      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+      (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
        judge_samples_realised, created_at, updated_at)
-      VALUES ('r1', ${TASK}, 'mcts', 'm1', '{', 0, 2, 'running', 0, NULL, 1000, 1000)`;
+      VALUES (${actor.actorId}, 'r1', ${TASK}, 'mcts', 'm1', '{', 0, 2, 'running', 0, NULL, 1000, 1000)`;
     // `begin` wrote this column with JSON.stringify, so an unparseable row is
     // corruption. Resuming on a fabricated default would re-enter the search
     // with one branch and no budget and call that a resume.
     expect(() => store.findResumable(TASK)).toThrow();
 
     // The swarm reader refuses by name rather than reporting a budget nobody set.
-    void sql`UPDATE mcts_search_runs SET engine = 'swarm' WHERE root_id = 'r1'`;
+    void sql`UPDATE mcts_search_runs SET engine = 'swarm'
+      WHERE actor_id = ${actor.actorId} AND root_id = 'r1'`;
     expect(() => store.findRunningSwarms(TASK)).toThrow('its ledger config_json will not parse');
   });
 
   test('a config that parses but carries no budget refuses by name', () => {
-    const { db, sql } = fresh();
-    const store = new MctsSearchStore(makeSql(db));
+    const { db, sql, actor } = fresh();
+    const store = new MctsSearchStore(makeSql(db), actor);
     void sql`INSERT INTO mcts_search_runs
-      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+      (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
        judge_samples_realised, created_at, updated_at)
-      VALUES ('r1', ${TASK}, 'swarm', '', '{"branches":3}', 0, 3, 'running', 0, NULL, 1000, 1000)`;
+      VALUES (${actor.actorId}, 'r1', ${TASK}, 'swarm', '', '{"branches":3}', 0, 3, 'running', 0, NULL, 1000, 1000)`;
     expect(() => store.findRunningSwarms(TASK)).toThrow('carries no budget');
   });
 });
@@ -377,12 +378,12 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
     const sql = makeSql(db);
-    const store = new MctsSearchStore(sql);
+    const store = new MctsSearchStore(sql, rt.actor);
     const session = createMockSession();
 
     // A search begun at budget 10, evicted with 6 iterations done and 4 left.
     const rootId = 'resume-budget-root';
-    const rootMsgId = await recordNode(session, rt.storage.sql, {
+    const rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
       nodeId: rootId,
       parentNodeId: null,
       parentMsgId: null,
@@ -431,7 +432,7 @@ describe('a repeated begin on a live root throws instead of resetting it', () =>
   test('root id reuse refuses and the checkpointed progress survives', () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db));
+    const store = new MctsSearchStore(makeSql(db), rt.actor);
     store.begin({
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 10, branches: 2 }, budget: 10, now: 1_000,

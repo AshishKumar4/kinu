@@ -751,7 +751,7 @@ describe('device-connect install hardening', () => {
     // The hub's first ticket answer is a 404 the daemon retries a second
     // later; the second is a 401, so the daemon logs the rejection and exits
     // 4 about 1.2 s in. That exit is the definitive failure, and the wait
-    // ends on it. It used to wait out a 20 s bound and report the bound as
+    // ends on it. Waiting out the 20 s bound instead reports the bound as
     // the daemon's failure (red 2026-09-05: `{"kind":"timeout"}` after
     // 20429 ms, 20 list polls).
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404, 401] });
@@ -1182,15 +1182,59 @@ describe('/connect slash command', () => {
 });
 
 describe('desktop command reuses device-connect', () => {
-  test('desktop.ts keeps zero duplicated daemon/registration logic', () => {
-    const source = readFileSync(resolve(repoRoot, 'packages/cli/src/commands/desktop.ts'), 'utf8');
-    expect(source).toContain("from '../device-connect'");
-    expect(source).toContain('connectDevice');
-    // The machinery lives in the module only.
-    expect(source).not.toContain('registerCloudDevice');
-    expect(source).not.toContain('listCloudDevices');
-    expect(source).not.toContain('spawn');
-    expect(source).not.toContain('writeFileSync');
-    expect(source).not.toContain('daemon.js`');
+  // This asserts BEHAVIOUR, never `desktop.ts`'s text. Substring assertions
+  // over source — `toContain('connectDevice')` plus a blocklist of
+  // `not.toContain('spawn' | 'writeFileSync' | 'registerCloudDevice' | ...)` —
+  // cannot fail on the defect they name: a duplicated installer spelled
+  // `Bun.write`, `child_process.fork`, or an inline `fetch` of the device
+  // route passes every one of those substrings, while a COMMENT containing
+  // the word "spawn" fails all of them. That is a ratchet on wording.
+  //
+  // The observable half of "thin shell" is that the desktop surface reports
+  // the paths the module owns. Both are derived from KINU_HOME at import, so
+  // a second copy in `desktop.ts` — the actual duplication — prints a
+  // different path than the module's own constant and fails here.
+  //
+  // NOT COVERED, stated rather than pretended: a byte-identical duplicate
+  // that never drifts is invisible to any runtime probe, because it behaves
+  // identically by definition. That claim is a review concern, not a test.
+  test('desktop status and logs report the paths device-connect owns', async () => {
+    const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
+    const stdout = await runScript(home, `
+      import { desktopCommand } from './packages/cli/src/commands/desktop.ts';
+      import { DEVICE_CONFIG_PATH, DAEMON_LOG_PATH } from './packages/cli/src/device-connect.ts';
+      import { writeFileSync } from 'node:fs';
+      writeFileSync(DAEMON_LOG_PATH, 'daemon line one\\ndaemon line two\\n');
+      const lines = [];
+      const real = console.log;
+      console.log = (...args) => { lines.push(args.join(' ')); };
+      await desktopCommand('status', {});
+      await desktopCommand('logs', {});
+      console.log = real;
+      console.log(JSON.stringify({ printed: lines.join('\\n'), DEVICE_CONFIG_PATH, DAEMON_LOG_PATH }));
+    `);
+    const seen = v.parse(
+      v.object({ printed: v.string(), DEVICE_CONFIG_PATH: v.string(), DAEMON_LOG_PATH: v.string() }),
+      JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}'),
+    );
+
+    // The module's paths are inside this test's home, so they are the real
+    // env-derived constants and not a repo-relative accident.
+    expect(seen.DEVICE_CONFIG_PATH.startsWith(home)).toBe(true);
+    expect(seen.DAEMON_LOG_PATH.startsWith(home)).toBe(true);
+    // ...and the desktop surface printed those exact strings.
+    expect(seen.printed).toContain(seen.DEVICE_CONFIG_PATH);
+    expect(seen.printed).toContain(seen.DAEMON_LOG_PATH);
+    // `logs` read the module's log file rather than a path of its own.
+    expect(seen.printed).toContain('daemon line two');
+  });
+
+  test('an unknown desktop subcommand names the three it has', async () => {
+    const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
+    const failure = await scriptFailure(home, `
+      import { desktopCommand } from './packages/cli/src/commands/desktop.ts';
+      await desktopCommand('reinstall-everything', {});
+    `);
+    expect(failure).toContain('Usage: kinu desktop [connect|status|logs]');
   });
 });

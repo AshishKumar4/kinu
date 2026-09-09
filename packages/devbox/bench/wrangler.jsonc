@@ -1,7 +1,7 @@
 // BENCHMARK FIXTURE CONFIG. Not part of any product deploy: no deploy script
 // names this file, and it exists so a driver can raise a real container with a
-// real R2 mount, run both durability strategies against one workload, and then
-// delete the Worker and the bucket.
+// real R2 mount, run the shipped durability strategy against one workload, and
+// then delete the Worker and the bucket.
 //
 // Everything that could change a measurement is pinned to the product's own
 // value, with the reason beside it.
@@ -20,8 +20,8 @@
   // ≥ 2025-12-01 is REQUIRED, not preferred: `ctx.exports` — which is how the
   // Sandbox object reaches `ContainerProxy` to build its interception fetchers —
   // does not exist before it. Without interception there is no credential-less
-  // R2 binding mount, so BOTH strategies lose their production path: the chain
-  // cannot mount a layer and r2fs cannot mount at all.
+  // R2 binding mount, so the strategy loses its production path: the chain
+  // cannot mount a layer at all.
   "compatibility_date": "2025-12-01",
   // `nodejs_compat` for the same reason the product sets it. A different runtime
   // is a different measurement.
@@ -40,15 +40,10 @@
 
   "durable_objects": {
     "bindings": [
-      // One class per strategy. A box's strategy cannot change once it holds
-      // bytes — the two write different things — so the arm is chosen by
-      // choosing a namespace rather than by a runtime switch that could be
-      // pointed at bytes written the other way.
+      // ONE class, and the strategy is the class rather than a runtime switch:
+      // a box's storage layout cannot change once it holds bytes, so the class
+      // is what the migration and the container binding name.
       { "class_name": "SnapshotChainBox", "name": "SnapshotChainBox" },
-      { "class_name": "R2fsBox", "name": "R2fsBox" },
-      { "class_name": "OverlayCasBox", "name": "OverlayCasBox" },
-      { "class_name": "BoundedLayersBox", "name": "BoundedLayersBox" },
-      { "class_name": "MerklePackBox", "name": "MerklePackBox" },
       // Accumulates R2 operation counts flushed from the ContainerProxy. A
       // Durable Object rather than module state because the proxy and the fetch
       // handler are separate entrypoints with no guarantee of sharing an
@@ -67,7 +62,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["SnapshotChainBox", "R2fsBox", "OverlayCasBox", "BoundedLayersBox", "MerklePackBox", "BenchOpCounter"]
+      "new_sqlite_classes": ["SnapshotChainBox", "BenchOpCounter"]
     }
   ],
 
@@ -76,35 +71,11 @@
   // package.json: the SDK asks the container for its own SANDBOX_VERSION on
   // every start and logs a mismatch.
   //
-  // `max_instances` is 1 per class because a run drives one box at a time; a
-  // second would compete for account capacity while a measurement is running.
+  // `max_instances` is 1 because a run drives one box at a time; a second
+  // would compete for account capacity while a measurement is running.
   "containers": [
     {
       "class_name": "SnapshotChainBox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
-      "max_instances": 1,
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
-    },
-    {
-      "class_name": "R2fsBox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
-      "max_instances": 1,
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
-    },
-    {
-      "class_name": "OverlayCasBox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
-      "max_instances": 1,
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
-    },
-    {
-      "class_name": "BoundedLayersBox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
-      "max_instances": 1,
-      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
-    },
-    {
-      "class_name": "MerklePackBox",
       "image": "docker.io/cloudflare/sandbox:0.12.8",
       "max_instances": 1,
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }

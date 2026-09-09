@@ -69,6 +69,7 @@ import type { HeadStep } from '../heads/types';
 import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type {
   FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,
@@ -257,30 +258,35 @@ const RecordVersionSchema = v.object({ v: v.number() });
  *  post-release column for a workspace to be missing. */
 export function initSwarmNodeRecords(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS swarm_node_records (
-    node_id     TEXT PRIMARY KEY,
+    actor_id    TEXT NOT NULL,
+    node_id     TEXT NOT NULL,
     root_id     TEXT NOT NULL,
     record_json TEXT NOT NULL,
     merged_at   INTEGER,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, node_id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_swarm_node_records_root
-    ON swarm_node_records(root_id)`);
+    ON swarm_node_records(actor_id, root_id)`);
 }
 
 /** The ONE writer of a node's record, so a second cannot drift from it. `INSERT OR
  *  REPLACE` because a re-entry that re-expands a node writes the node's row again,
  *  under the same id the grant reserved. */
-export function recordSwarmNode(sql: SqlExecutor, input: {
+export function recordSwarmNode(sql: SqlExecutor, actor: ActorHandle, input: {
   readonly rootId: string;
   readonly nodeId: string;
   readonly record: SwarmNodeRecord;
   readonly now: number;
 }): void {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   void sql`INSERT OR REPLACE INTO swarm_node_records
-    (node_id, root_id, record_json, merged_at, created_at)
-    VALUES (${input.nodeId}, ${input.rootId},
+    (actor_id, node_id, root_id, record_json, merged_at, created_at)
+    VALUES (${actorId}, ${input.nodeId}, ${input.rootId},
             ${JSON.stringify({ v: RECORD_SCHEMA_VERSION, ...input.record })},
-            (SELECT merged_at FROM swarm_node_records WHERE node_id = ${input.nodeId}),
+            (SELECT merged_at FROM swarm_node_records
+               WHERE actor_id = ${actorId} AND node_id = ${input.nodeId}),
             ${input.now})`;
 }
 
@@ -288,8 +294,12 @@ export function recordSwarmNode(sql: SqlExecutor, input: {
  *  writer: the record blob is what the node produced and this is what the run then did
  *  with it, and a re-entry offering an already-merged member to a fan-in would re-apply
  *  bytes the origin holds. */
-export function markSwarmNodeMerged(sql: SqlExecutor, nodeId: string, now: number): void {
-  void sql`UPDATE swarm_node_records SET merged_at = ${now} WHERE node_id = ${nodeId}`;
+export function markSwarmNodeMerged(
+  sql: SqlExecutor, actor: ActorHandle, nodeId: string, now: number,
+): void {
+  actor.assertCurrent();
+  void sql`UPDATE swarm_node_records SET merged_at = ${now}
+    WHERE actor_id = ${actor.actorId} AND node_id = ${nodeId}`;
 }
 
 /** One node of an interrupted search, as the re-entry hands it back. */
@@ -420,14 +430,13 @@ interface NodeRow {
  *  4. READ THE TREE, with each node's record and its reconstructed turns.
  *  5. CLAIM THE UNFINISHED WORK ({@link PendingSwarmNode}) rather than retiring it.
  *
- * STEP 5 REPLACED A TERMINAL WRITE, and that is this function's own defect closed.
- * It used to call `HeadJournal.abandonRunning` here, scoped to the root, stamping
- * every unreported row `aborted` with prose that said the nodes after it were the
- * continuation — while the accounting, blind to those rows, went on to create that
- * continuation out of fresh ids. Both halves were wrong and they compounded: a
- * five-node search reported five failures and five new nodes per eviction.
+ * STEP 5 CLAIMS RATHER THAN TERMINATES. A `HeadJournal.abandonRunning` here, scoped to
+ * the root, would stamp every unreported row `aborted` with prose saying the nodes
+ * after it are the continuation — while the accounting, blind to those rows, goes on to
+ * create that continuation out of fresh ids. Both halves are wrong and they
+ * compound: a five-node search reports five failures and five new nodes per eviction.
  *
- * `abandonRunning` KEEPS ITS ONE MEANING, which is why nothing here writes a status
+ * `abandonRunning` HAS ONE MEANING, which is why nothing here writes a status
  * at all: it says "nothing will ever continue this run", and the only caller that can
  * honestly say so is the start-of-life reconciliation, for a root whose durable job
  * the resume gate could not re-drive (`heads/reconcile.ts`). A re-entry is the exact
@@ -438,10 +447,16 @@ export function reenterSwarm(deps: {
   readonly sql: SqlExecutor;
   readonly ledger: MctsSearchStore;
   readonly journal: HeadJournal;
+  /** Whose re-entry. The journal rows a pending node is read from are
+   *  actor-private, so the raw read below carries the same owner the ledger
+   *  and journal above are bound to. */
+  readonly actor: ActorHandle;
 }, input: {
   readonly task: string;
   readonly now: number;
 }): SwarmReentry | null {
+  deps.actor.assertCurrent();
+  const actorId = deps.actor.actorId;
   const [newest, ...older] = deps.ledger.findRunningSwarms(input.task);
   if (!newest) return null;
   const superseded = older.map((row) => row.rootId);
@@ -450,11 +465,12 @@ export function reenterSwarm(deps: {
   if (epoch === null) return null;
   const rows = deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
-    WHERE root_id = ${newest.rootId} ORDER BY depth ASC, created_at ASC`;
+    WHERE actor_id = ${actorId} AND root_id = ${newest.rootId}
+    ORDER BY depth ASC, created_at ASC`;
   const records = new Map<string, { record: string; merged: boolean }>();
   for (const row of deps.sql<{ node_id: string; record_json: string; merged_at: number | null }>`
     SELECT node_id, record_json, merged_at FROM swarm_node_records
-    WHERE root_id = ${newest.rootId}`) {
+    WHERE actor_id = ${actorId} AND root_id = ${newest.rootId}`) {
     records.set(row.node_id, { record: row.record_json, merged: row.merged_at !== null });
   }
   const nodes = rows.map((row): ReenteredSwarmNode => {
@@ -480,7 +496,7 @@ export function reenterSwarm(deps: {
     originContext: deps.ledger.readSwarmOriginContext(newest.rootId) ?? [],
     nodes,
     superseded,
-    pending: pendingNodes(deps.sql, newest.rootId),
+    pending: pendingNodes(deps.sql, deps.actor.actorId, newest.rootId),
   };
 }
 
@@ -504,7 +520,7 @@ export function reenterSwarm(deps: {
  * moves its `spawned_at` forward, so ordering on that column would reshuffle siblings
  * on the second re-entry and hand them each other's diversity angles.
  */
-function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNode[] {
+function pendingNodes(sql: SqlExecutor, actorId: string, rootId: string): readonly PendingSwarmNode[] {
   // EVERY CHILD THIS SEARCH SPAWNED, recorded or not, because a pending node's slot
   // is its position among its PARENT'S children and that cannot be read off the
   // pending set alone. `recorded` is the join that says which of them the tree
@@ -514,10 +530,12 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
     task: string; rationale: string | null; recorded: number;
   }>`
     SELECT j.id, j.parent_id, j.depth, j.task, j.rationale,
-      (SELECT COUNT(*) FROM search_nodes s WHERE s.id = j.id) AS recorded
+      (SELECT COUNT(*) FROM search_nodes s
+         WHERE s.actor_id = ${actorId} AND s.id = j.id) AS recorded
     FROM head_journal j
-    WHERE j.root_id = ${rootId}
-      AND j.parent_id IN (SELECT id FROM search_nodes WHERE root_id = ${rootId})
+    WHERE j.actor_id = ${actorId} AND j.root_id = ${rootId}
+      AND j.parent_id IN (
+        SELECT id FROM search_nodes WHERE actor_id = ${actorId} AND root_id = ${rootId})
     ORDER BY j.depth ASC, j.rowid ASC`;
   const levels = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -577,10 +595,10 @@ function pendingNodes(sql: SqlExecutor, rootId: string): readonly PendingSwarmNo
 export function readStartedSwarmProfile(storage: {
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
-}, task: string): SwarmProfileSnapshot | null {
+}, actor: ActorHandle, task: string): SwarmProfileSnapshot | null {
   initSearchTables(storage.execRaw);
   initMctsSearchTable(storage.execRaw);
-  const ledger = new MctsSearchStore(storage.sql);
+  const ledger = new MctsSearchStore(storage.sql, actor);
   const [newest] = ledger.findRunningSwarms(task);
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
@@ -632,12 +650,13 @@ function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
 }
 
 export function readSwarmNodeRecords(
-  sql: SqlExecutor, rootId: string,
+  sql: SqlExecutor, actor: ActorHandle, rootId: string,
 ): readonly { readonly nodeId: string; readonly record: SwarmNodeRecord }[] {
+  actor.assertCurrent();
   return sql<{ node_id: string; record_json: string }>`
     SELECT node_id, record_json
     FROM swarm_node_records
-    WHERE root_id = ${rootId}
+    WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY node_id ASC`
     .map((row) => ({ nodeId: row.node_id, record: parseRecord(row.node_id, row.record_json) }));
 }
@@ -723,12 +742,11 @@ export interface SwarmHarvest {
  *
  * A background `agents.swarm` job is bounded: it may be re-driven only so many times
  * and may live only so long (`jobs/runner.ts`). When a bound is reached the job has to
- * settle, and the question is what it settles WITH. It used to be nothing — an
- * eviction message — and that was measured costing the owner real work: root
- * `2rye1eyny1efm9583sqye` held TWO completed candidates with real content while its
- * job showed nothing at all, and the owner asked why the turn would not give itself
- * up. PARTIAL CANDIDATES ARE RESULTS. A search that measured two of five answers
- * measured two answers.
+ * settle, and the question is what it settles WITH. Settling with nothing — an eviction
+ * message — costs the owner real work, measured: root `2rye1eyny1efm9583sqye` held TWO
+ * completed candidates with real content while its job showed nothing at all, and the
+ * owner asked why the turn would not give itself up. PARTIAL CANDIDATES ARE RESULTS. A
+ * search that measured two of five answers measured two answers.
  *
  * READ-ONLY, and deliberately so: this is what the search HAS, not a transition. The
  * caller that reaches a bound is the one that settles the ledger row, because it is
@@ -741,14 +759,20 @@ export interface SwarmHarvest {
 export function harvestSwarm(deps: {
   readonly sql: SqlExecutor;
   readonly ledger: MctsSearchStore;
+  /** Whose harvest. The tree and the node records are actor-private, so the raw
+   *  reads below carry the same owner the ledger above is bound to. */
+  readonly actor: ActorHandle;
 }, task: string): SwarmHarvest | null {
+  deps.actor.assertCurrent();
+  const actorId = deps.actor.actorId;
   const [running] = deps.ledger.findRunningSwarms(task);
   if (!running) return null;
 
   const records = new Map<string, SwarmNodeRecord>();
   const unreadable = new Set<string>();
   for (const row of deps.sql<{ node_id: string; record_json: string }>`
-    SELECT node_id, record_json FROM swarm_node_records WHERE root_id = ${running.rootId}`) {
+    SELECT node_id, record_json FROM swarm_node_records
+    WHERE actor_id = ${actorId} AND root_id = ${running.rootId}`) {
     // A row this build cannot read is SKIPPED rather than thrown, and that is the
     // opposite of `parseRecord`'s rule on purpose: a re-entry that misreads a record
     // would continue a tree and crown a candidate it never measured, so it must stop.
@@ -769,7 +793,7 @@ export function harvestSwarm(deps: {
   const candidates: HarvestedCandidate[] = [];
   for (const row of deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
-    WHERE root_id = ${running.rootId} AND parent_id IS NOT NULL
+    WHERE actor_id = ${actorId} AND root_id = ${running.rootId} AND parent_id IS NOT NULL
     ORDER BY depth ASC, created_at ASC`) {
     const outcome = records.get(row.id)?.outcome ?? null;
     if (unreadable.has(row.id)) continue;

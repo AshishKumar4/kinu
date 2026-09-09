@@ -132,7 +132,6 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   return render(OPERATING_GUIDANCE, {
     kimi: family === 'kimi',
     gpt: family === 'gpt',
-    backgroundResume: surface.provenance === 'background_resume',
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
   });
@@ -191,7 +190,7 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 }
 
 /** The number the workspace sentence tells the model, from `worker.isolate.memory`.
- *  Derived rather than typed: this used to read "~128 MB" as prose, which is the
+ *  Derived rather than typed: a hand-written "~128 MB" in prose is exactly the
  *  drift the catalog exists to stop. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
@@ -251,6 +250,11 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     hasDevices: devices.length > 0,
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
+    // A slate previews on the workspace's OWN preview origin, so the slate
+    // route exists exactly when the workspace is one of the executors that can
+    // publish one. Stating it against a workspace that cannot would send the
+    // model at an operation that must refuse.
+    workspacePreview: previewExecutors.some((exec) => exec.name === 'workspace'),
     exposeCalls: previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or '),
   });
 }
@@ -274,7 +278,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
     const has = (action: (typeof actions)[number]) => actions.includes(action);
     parts.push(render(DELEGATION_SECTION, {
       hasActions: actions.length > 0,
-      hasTemporaryAsk: surface.temporaryAsk && has('ask'),
+      hasTemporaryAsk: surface.temporaryAsk && has('hire'),
       hasSwarm: has('swarm'),
       hasHire: has('hire'),
       // Both backends build the `agents.*` codemode provider from the deps that
@@ -435,4 +439,55 @@ export function buildSystemPromptSync(
     // prompt" and put Context "near the end".
     renderRuntimeContext(opts),
   ].filter(Boolean).join('\n\n');
+}
+
+/** The prompt and the opening message ONE turn runs under. */
+export interface AssignedTurnFraming {
+  readonly system: string;
+  readonly messages: readonly ModelMessage[];
+}
+
+/**
+ * THE FRAMING A PARENT-ASSIGNED TURN RUNS UNDER — a hire working on the brief
+ * whoever hired it wrote.
+ *
+ * ONE definition for both backends, and it exists because the two reach the
+ * turn by different roads. A local hire is a session of its own: an assignment
+ * lands in its event log, it takes an ordinary turn, and that turn is framed by
+ * {@link buildSystemPromptSync} like every other (`cli-backend`'s
+ * `local-session.ts`). A hosted hire runs on the shared head/node runner, which
+ * frames a FORK when its caller names no framing — so a colleague hired into a
+ * workspace was told it was one of several parallel reasoning threads, given
+ * conventions for tools it does not hold and a merge nobody was running. This
+ * is the sentence that stops that: an assigned turn is framed as the AGENT it
+ * is, through the one builder both backends already share.
+ *
+ * What the caller supplies is its own actor's surface — soul, executors, tool
+ * names, role, identity — because those are facts only a backend holds. What is
+ * decided HERE is what makes it an ASSIGNED turn:
+ *
+ *   - `planSubmissionAvailable` is false. A delegated turn reports to whoever
+ *     assigned it; owning an independent plan review is the other case, and
+ *     `PromptSurfaceOptions` states that distinction where the flag is declared.
+ *   - the brief is the turn's one opening message, in the user role, because
+ *     that is what it is: input to the turn rather than policy for it.
+ *
+ * That the prompt NAMES the actor as a hire is not decided here either, and
+ * deliberately: it follows from `report` being on the surface the caller passed
+ * (core's `state/delegation` section), so a turn that cannot report upward is
+ * never told that it can.
+ */
+export function assignedTurnFraming(
+  rt: AgentRuntime,
+  input: {
+    /** The brief this turn was assigned, as its hirer wrote it. */
+    readonly brief: string;
+    /** The actor's own prompt surface, from the backend that built it. */
+    readonly surface: SystemPromptOptions;
+  },
+): AssignedTurnFraming {
+  return {
+    system: buildSystemPromptSync(rt, { ...input.surface, planSubmissionAvailable: false }),
+    messages: [{ role: 'user', content: input.brief }],
+  };
 }

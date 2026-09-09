@@ -251,20 +251,32 @@ export interface ReviewedPackage {
 }
 
 /**
- * Every advisory this repository accepts, reviewed 2026-08-17 against bun.lock
- * at d02f146b: 54 ids over 19 packages. Provenance in every reason is measured
- * `bun pm why` output, not inference.
+ * Every advisory this repository accepts, first reviewed 2026-08-17 against
+ * bun.lock at d02f146b and carried forward since: 21 ids over 11 packages.
+ * Provenance in every reason is measured `bun pm why` output, not inference.
  *
- * Seventeen arrive through wrangler, miniflare, puppeteer, the MCP SDK, @opentui
- * and the pi-coding-agent dev toolchain, most at versions those parents pin
- * exactly. Two are our own direct dependencies — `valibot` and `shell-quote` —
- * and in both the vulnerable function is called nowhere in tracked source.
- * `react-router` is the one entry that ships in code we serve.
+ * Most arrive through wrangler, miniflare, the MCP SDK, @opentui and the
+ * pi-coding-agent dev toolchain, at versions those parents pin exactly.
+ * `valibot` is the one that is still our own direct dependency, and the
+ * vulnerable function is called nowhere in tracked source. `react-router` is
+ * the one entry that ships in code we serve.
  *
- * Six entries say a lockfile refresh would clear them. That is a statement this
+ * Four entries say a lockfile refresh would clear them. That is a statement this
  * gate then enforces: once the refresh happens the ids stop reproducing and the
  * gate fails until the entries are deleted, so "we will fix it later" cannot
- * quietly become "we accepted it forever".
+ * quietly become "we accepted it forever". It has already collected three times.
+ * `extract-zip` and `js-yaml` were both reached only through puppeteer, and the
+ * puppeteer 25 upgrade — `@puppeteer/browsers` 3.2.2 unpacks with `modern-tar`
+ * plus a system `unzip`, and puppeteer reads its config with `lilconfig` — took
+ * their three ids out of the graph rather than out of this list; nothing
+ * accepted extract-zip's second advisory, GHSA-7pqw-9j4j-h8q3, which has no
+ * fixed publish and so could only ever be removed that way. `hono` went the
+ * same way: its twelve ids were all against the 4.12.23 copy under
+ * `@modelcontextprotocol/sdk`, and the root `hono` override onto 4.13.7 — added
+ * for three NEWER advisories that hit that copy and the `@cloudflare/sandbox`
+ * one alike — carried it past all twelve. An override that clears a reviewed
+ * entry is the same event as a refresh that clears one, and this list has to
+ * shrink for it either way.
  */
 export const REVIEWED_ADVISORIES = {
   '@hono/node-server': {
@@ -290,40 +302,17 @@ export const REVIEWED_ADVISORIES = {
       + 'pin blocks until it moves.',
     ids: [1112706],
   },
-  'extract-zip': {
-    reason: 'transitive: @puppeteer/browsers <- puppeteer (dev). Unvalidated symlink path '
-      + 'traversal while unpacking; the only archive it unpacks is the Chrome build puppeteer '
-      + 'downloads. No fixed release exists — the advisory covers <=2.0.1, the latest publish.',
-    ids: [1139346],
-  },
   'file-type': {
     reason: 'transitive: @jimp/core requires ^16.0.0 <- jimp <- @opentui/core, the CLI\'s TUI '
       + 'image path. Infinite loop in the ASF parser on malformed input. 16.5.4 is the last of '
       + 'that major line, so the fix (21.3.1) needs a @jimp bump.',
     ids: [1114301],
   },
-  hono: {
-    reason: 'transitive: @modelcontextprotocol/sdk requires ^4.11.4, resolved 4.12.23. The '
-      + '4.13.2 copy our @cloudflare/sandbox path uses matches none of these. All twelve are '
-      + 'middleware and adapter defects — CORS, JSX/memo per-request context, Lambda and API '
-      + 'Gateway adapters, serve-static — in an app this repository never mounts. The SDK range '
-      + 'admits the fixed 4.12.34.',
-    ids: [
-      1123997, 1123998, 1123999, 1124000, 1124001, 1124005,
-      1124009, 1124010, 1130733, 1138771, 1138772, 1138773,
-    ],
-  },
   'ip-address': {
     reason: 'transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero '
       + 'octet and IPv4-mapped misclassification that can bypass an SSRF check — in the rate '
       + 'limiter, which nothing here mounts.',
     ids: [1130722, 1130723, 1130724],
-  },
-  'js-yaml': {
-    reason: 'transitive: cosmiconfig 9.0.1 <- puppeteer (dev). Quadratic CPU on merge-key chains '
-      + 'and !!omap; the only YAML it loads is a puppeteer config in this repository. Fixed in '
-      + '4.3.0/4.3.1, inside cosmiconfig\'s ^4.1.0.',
-    ids: [1123911, 1138115],
   },
   nanoid: {
     reason: 'transitive: postcss requires ^3.3.12 <- vite <- vitest. The non-secure generator '
@@ -345,12 +334,12 @@ export const REVIEWED_ADVISORIES = {
     ids: [1124268, 1124271, 1124272, 1124276, 1138769],
   },
   'shell-quote': {
-    reason: 'TRANSITIVE since the unused @kinu.run/agent-utils declaration was deleted: the '
-      + 'only remaining edge is @opentui/react -> react-devtools-core (^1.6.1), a devtools '
-      + 'bridge no shipped code path starts, and the quadratic parse() is called by no tracked '
-      + 'source. No fixed release exists either: the advisory covers <=1.8.4, which is the '
-      + 'latest publish. Deleting the direct declaration was what this entry used to ask for '
-      + 'and it did not clear the id, because the package stayed in the graph underneath.',
+    reason: 'TRANSITIVE: the only edge is @opentui/react -> react-devtools-core '
+      + '(^1.6.1), a devtools bridge no shipped code path starts, and the quadratic '
+      + 'parse() is called by no tracked source. No fixed release exists either: the '
+      + 'advisory covers <=1.8.4, which is the latest publish. Deleting the direct '
+      + '@kinu.run/agent-utils declaration does not clear the id, because the package '
+      + 'stays in the graph underneath.',
     ids: [1123944],
   },
   valibot: {

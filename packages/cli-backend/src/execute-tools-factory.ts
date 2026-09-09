@@ -86,10 +86,10 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
       // renderExecuteToolsDescription) so this builder really is the CF
       // codemode tool on a different runtime rather than a different tool. The
       // namespace declarations are the point: each provider carries its own
-      // `types`, and this path used to collect them in adaptExecutorProvider
-      // and never read one, so the model was told nothing about `memory.*`,
-      // `tasks.*`, `agents.*`, `web.*` or `llm.*` while being handed all of
-      // them as callables.
+      // `types` and every one of them is read into this description.
+      // Collecting them and reading none tells the model nothing about
+      // `memory.*`, `tasks.*`, `agents.*`, `web.*` or `llm.*` while handing it
+      // all of them as callables.
       description: renderExecuteToolsDescription(
         [
           toolsDeclaration,

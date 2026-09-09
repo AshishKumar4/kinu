@@ -344,10 +344,10 @@ describe('admitMcpDescriptors', () => {
 
 describe('mcpToolKey', () => {
   test('keys on the SERVER NAME, so the key is portable across backends', () => {
-    // It used to key on the random nanoid(8) registration id, which made the
-    // same MCP tool resolve under a different name for every user — and under
-    // a different name again after a re-add. The CLI keyed on the server name
-    // all along, so the two backends never agreed.
+    // Keying on the random nanoid(8) registration id instead would resolve the
+    // same MCP tool under a different name for every user — and under a
+    // different name again after a re-add. The CLI keys on the server name, so
+    // both backends land on one key.
     expect(mcpToolKey('github', 'list_issues')).toBe('mcp_github_list_issues');
   });
   test('replaces characters no provider tool-name grammar accepts', () => {

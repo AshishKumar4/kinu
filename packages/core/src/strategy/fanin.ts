@@ -38,6 +38,7 @@ import {
 } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import type { VFS } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import type { SwarmBudget } from './swarm-budget';
 import type { BranchContext } from './swarm';
@@ -118,6 +119,9 @@ export interface LevelFanInDeps<N extends FanInNode, V extends { readonly id: st
   /** Selection lineage from a node up to the root — the ancestors a vertex names. */
   readonly ancestorPath: (parent: N) => readonly N[];
   readonly rootId: string;
+  /** Whose search. The pruned-parent read below is over this run's tree, and the
+   *  run belongs to the actor that opened it. */
+  readonly actor: ActorHandle;
   readonly maxDepth: number;
   /** Decide-and-debit in one step; read for the absent-spawner case. */
   readonly budget: Pick<SwarmBudget, 'take' | 'remaining'>;
@@ -306,7 +310,8 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       }
     }
     for (const row of deps.sql<{ id: string }>`
-      SELECT id FROM search_nodes WHERE root_id = ${deps.rootId} AND status = 'pruned'`) {
+      SELECT id FROM search_nodes
+      WHERE actor_id = ${deps.actor.actorId} AND root_id = ${deps.rootId} AND status = 'pruned'`) {
       if (known.has(row.id)) prunedParents.add(row.id);
     }
 

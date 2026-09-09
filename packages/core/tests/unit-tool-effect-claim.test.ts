@@ -11,21 +11,25 @@
  * a fixture store would prove things about the fixture.
  */
 import { describe, expect, test } from 'bun:test';
-import { createTestSql, toolExecute } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import {
   claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims, settleToolEffect,
   withEffectClaims, replayPolicyFor, type EffectClaimDeps, type JsonValue,
 } from '../src/index';
 
-/** A workspace's claim table over a real SQLite, plus the deps the wrapper
- *  reads. `turnId` is mutable so a test can move to the next turn. */
+/** A workspace's claim table over a real SQLite, the actor whose turn is
+ *  making the calls, and the deps the wrapper reads. `turnId` is mutable so a
+ *  test can move to the next turn; the ACTOR is not, because a claim key is
+ *  `(actor_id, turn, call, digest)` and moving the owner would make every
+ *  re-entry below look like first sight. */
 function claimPlane(turnId = 'turn-1') {
   const { sql, execRaw } = createTestSql();
   initToolEffectClaimTable(execRaw);
+  const actor = createTestActors(sql, execRaw).main;
   const scope = { turnId };
-  const deps: EffectClaimDeps = { sql, turnId: () => scope.turnId };
-  return { sql, deps, scope };
+  const deps: EffectClaimDeps = { sql, actor, turnId: () => scope.turnId };
+  return { sql, actor, deps, scope };
 }
 
 /** The effectful tool's input, in the same `jsonSchema<T>` form every tool in
@@ -146,12 +150,12 @@ describe('tool effect claims', () => {
   });
 
   test('a released turn no longer replays, because its answer is durable', async () => {
-    const { sql, deps, scope } = claimPlane();
+    const { sql, actor, deps, scope } = claimPlane();
     const { calls, tools } = countingTool();
     const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
 
     await execute({ to: 'ops@example.test' }, OPTIONS);
-    releaseTurnEffectClaims(sql, scope.turnId);
+    releaseTurnEffectClaims(sql, actor, scope.turnId);
     // A LATER turn asking for the same thing is new work, not a replay.
     scope.turnId = 'turn-2';
     await execute({ to: 'ops@example.test' }, OPTIONS);
@@ -246,14 +250,14 @@ describe('tool effect claims', () => {
     // through the wrapper because the wrapper's own re-entry refuses before it
     // reaches a settle, so the guard on `result_json IS NULL` would otherwise be
     // unreachable and therefore unasserted.
-    const { sql, deps } = claimPlane();
+    const { sql, actor, deps } = claimPlane();
     const key = { turnId: deps.turnId(), callId: 'call-a1', digest: 'digest-a1' };
 
-    expect(claimToolEffect(sql, key).kind).toBe('claimed');
-    settleToolEffect(sql, key, JSON.stringify({ attempt: 1 }));
-    settleToolEffect(sql, key, JSON.stringify({ attempt: 2 }));
+    expect(claimToolEffect(sql, actor, key).kind).toBe('claimed');
+    settleToolEffect(sql, actor, key, JSON.stringify({ attempt: 1 }));
+    settleToolEffect(sql, actor, key, JSON.stringify({ attempt: 2 }));
 
-    const claim = claimToolEffect(sql, key);
+    const claim = claimToolEffect(sql, actor, key);
     expect(claim.kind === 'settled' ? claim.result : null).toEqual({ attempt: 1 });
   });
 

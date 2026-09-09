@@ -8,7 +8,7 @@ it is.
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
 | `ModelProvider` | `core/providers/types.ts` | `packages/core/src/providers/` (platform agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
-| `ActorAgent` | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
+| `ActorAgent` | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent |
 | `KinuExtension` | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
 Only `ModelProvider` is a production registry. `AgentProviderRegistry` holds
@@ -16,12 +16,7 @@ stateless implementations. Per-call state flows through `ProviderDeps`.
 `ActorAgent` is class-level. `KinuExtension` is per-turn, and
 [EXTENSIONS.md](./EXTENSIONS.md) documents it separately.
 
-A fourth point used to be listed here: `ExplorationStrategy`, a plug-in seam
-over "explore N candidates, score them, return the best", dispatched from a
-`StrategyRegistry`. No production path ever built that registry, and its three
-implementations (MCTS, heads, single-shot) had no reader outside the eval
-it. The harness's own A/B contract (two arms, one task, a cost) survives at
-`core/src/eval/strategy.ts`, where its only consumers are.
+Exploration is not a production extension registry: its engines are reached through their own paths — lifetime evolution calls `runMCTS`, branching work runs through `HeadController`, `agents.swarm()` calls `runSwarm`. The eval-only A/B contract (two arms, one task, a cost) lives at `core/src/eval/strategy.ts`, where its only consumers are.
 
 ## Registration is not reachability
 
@@ -39,16 +34,15 @@ objects. To make another policy model-facing, add it to the closed swarm
 preset and validity system, then dispatch the resolved tuple to its engine.
 An adapter alone reaches only callers that import it.
 
-The `agents` tool has seven actions: `swarm`, `hire`, `ask`, `send`, `reply`,
-`list`, and `dismiss`. `fork` remains a swarm context axis, workspace copy
-operation and durable-conversation branch command. It is not a delegation
-action.
+The `agents` tool has five actions: `swarm`, `hire`, `msg`, `list`, and
+`dismiss`. `fork` remains a swarm context axis, workspace copy operation and
+durable-conversation branch command. It is not a delegation action.
 
 `toolSurfacing` makes the same point. It is a `buildBuiltinTools` option, but
 no backend passes it. A caller must wire it before the policy affects an
 agent.
 
-## Two extension points that no longer exist
+## Two extension points that do not exist
 
 There is no `InferenceLoop` and no `packages/core/src/loops/`. Replacing the
 turn's inference loop is the mutable scaffold's job, through Think's
@@ -75,8 +69,7 @@ export class MyAgent extends ActorAgent {
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
-  facetClass(): SubAgentClass<SubordinateAgent> { /* the class every facet runs as */ }
-  facetHomes(): HostedFacetHomes { /* where this actor's facets get their homes */ }
+  protected actorHost(): ActorHost { /* the workspace's one host, which acquires every logical actor */ }
   protected ownMission(): string { /* the mission text titling names you after */ }
   protected persistAutoTitle(displayName: string): Promise<boolean> { /* where a title lands */ }
   protected promptIdentity(): Promise<PromptIdentity> { /* the identity the prompt renders */ }
@@ -97,32 +90,36 @@ browser socket must not reach.
 
 The tool surface follows from `actorToolDeps()` alone. `DEPS_GATED_TOOLS` is
 in Core (`core/src/tools/registry.ts:196`), so a builtin rename moves its gate.
-The old cf-local `['report']` matched nothing after a rename. The Core list
+A cf-local `['report']` would match nothing after a rename. The Core list
 still holds `report`, and `actorActiveTools()` (line 603) drops it when
 unwired. `team` and `peers` gate `agents` actions through
 `actorAgentsActions()` (line 614), which always passes a `fork` marker, so
-every CF actor advertises `swarm`. `release` left the native surface.
+every CF actor advertises `swarm`. `release` is not on the native surface.
 `deps.releases` feeds only the `release.*` codemode namespace and gates
 nothing in `actorActiveTools()`. No flag or allowlist decides this.
 
 `ActorToolDeps` (line 571) has `team`, `peers`, `report`, `releases` and
 `submitPlan`. `teamProfile()` (line 1074) returns `{ team }` while an actor has
 tree below it and `{}` at the depth cap, so delegation budget, not class,
-stops recursion. `SubordinateAgent.actorToolDeps()`
-(`cf-backend/src/subordinate-agent.ts:353`) adds `report` on a parent-assigned
-turn or `submitPlan` on an owner turn.
+stops recursion. A hosted subordinate's delegated-turn surface is built by the
+ROOT and reaches its runner through `SubordinateHostSeams.taskTools`
+(`cf-backend/src/subordinate-hosting.ts`), adding `report` on a parent-assigned
+turn or `submitPlan` on an owner turn — a per-ACTOR narrowing keyed on
+the turn, not on a class. A head's and a node's surface is built by
+`cf-backend/src/exploration-hosting.ts` over that actor's own runtime. An MCTS
+branch has no tool surface at all and acquires no execution plane, which is a
+fact about its construction rather than a filter applied to it.
 
 `OwnedModelServices` (`cf-backend/src/owned-model-services.ts:39`) holds
 per-actor model/provider state by composition: `providerRegistry()`,
 `resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
 constructs it with `ownerRequired: true`
-(`cf-backend/src/actor-agent.ts:1409`). `SubordinateAgent` builds a second
-instance for its exploration modes with `ownerRequired: false`
-(`facetModelServices` in `cf-backend/src/subordinate-agent.ts`). The seed
-decides containment. The constructor seals the boot RPC surface. Each seed
-narrows the instance to its family surface. A head cannot resolve a
-subordinate seed across a stub. A subordinate cannot resolve a head seed
-across a stub.
+(`cf-backend/src/actor-agent.ts:1409`). A hosted exploration actor gets its own
+instance with `ownerRequired: false` (`cf-backend/src/exploration-hosting.ts`).
+The actor's KIND decides containment, and it is the directory row that says
+which kind it is — not a seed a worker reports about itself. Each hosted actor
+is narrowed to its family surface: a head cannot resolve a subordinate's
+services and a subordinate cannot resolve a head's.
 
 ## Adding a new ModelProvider
 
@@ -338,7 +335,7 @@ useful "when to use" guidance.
   real cooldown turns a wait into a failed turn.
 - Request starts are paced per provider host. `ProviderPacer.admit`
   (`core/src/providers/pacing.ts`) spaces starts and holds callers behind a
-  host's cooldown. A swarm level used to send N simultaneous first requests
+  host's cooldown. Without it a swarm level sends N simultaneous first requests
   on one credential. It holds the lane only through headers, so a request
   sleeping for `Retry-After` frees capacity and streaming bodies are not
   throttled.
@@ -399,16 +396,18 @@ Core owns these six turn parts. Check it before writing one in a backend.
 One `model_call` builder gives a spend census one row shape. One
 `DEFAULT_ROLE_ID` stops a hardcoded `'general'` drifting from its catalog.
 
-## Worked example: a temporary agent per question
+## Worked example: a lifetime per question
 
-`agents({action:'ask', role, message})` adds a lifetime to the delegation
-ladder. It adds no table, no loop, and no facet builder:
+`agents({action:'hire', lifetime:'task', role, mission})` adds a lifetime to the
+delegation ladder. It adds no action, no table, no loop, and no facet builder:
 
-1. Declare the rung once. `DELEGATION_RUNGS.temporary`
+1. Declare the rung once. `DELEGATION_RUNGS.hire`
    (`core/src/tools/registry.ts`) is the selection doctrine every surface
-   renders; `ASK_ROLE_FIELDS` and `AgentsActionInputVariant.excludes`
-   (`core/src/tools/agents-tool.ts`) make `agent` and `role` exclusive in the
-   advertised JSON Schema, the sandbox declaration and the dispatch.
+   renders, and it states both lifetimes; `HIRE_CREATE_FIELDS`,
+   `HIRE_EXISTING_FIELDS` and `AgentsActionInputVariant.excludes`
+   (`core/src/tools/agents-tool.ts`) separate creating an agent from handing the
+   work to one that exists, in the advertised JSON Schema, the sandbox
+   declaration and the dispatch.
 2. Reuse the child substrate. `createTemporaryAgentPort`
    (`core/src/subordinates/temporary.ts`) drives the same `SubordinateRuntime`
    a hire drives through spawn, assign and dismiss. The child is a real actor

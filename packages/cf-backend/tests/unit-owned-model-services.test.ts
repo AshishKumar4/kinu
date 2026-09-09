@@ -62,18 +62,23 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
-  test('ActorAgent and its exploration modes wire their distinct settled policies', () => {
+  test('ActorAgent owns the one registry every mode resolves through', () => {
     const source = (file: string) => readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
     const actor = source('actor-agent.ts');
-    const facet = source('subordinate-agent.ts');
+    const orchestrator = source('orchestrator.ts');
+    const hosting = source('exploration-hosting.ts');
 
     expect(actor).toContain("appTitle: 'Kinu',\n    ownerRequired: true,");
-    expect(facet).toContain("appTitle: 'Kinu (exploration)',\n    ownerRequired: false,");
     expect(actor).toContain('return this.ownedModelServices.providerRegistry();');
     expect(actor).toContain('return this.ownedModelServices.getWebSearchProvider();');
     expect(actor).toContain('this.ownedModelServices.invalidate();');
-    expect(facet).not.toContain('createAgentProviderRegistry');
-    expect(facet).not.toMatch(/\n  getModel\(/);
+    // No second registry: exploration runners resolve through the root's owned
+    // services — a hosted head runs in a claimed workspace, so there is no
+    // ownerless mode to settle a separate policy for.
+    expect(hosting).not.toContain('createAgentProviderRegistry');
+    expect(hosting).not.toContain('ownerRequired');
+    expect(orchestrator).toContain('resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),');
+    expect(actor.match(/new OwnedModelServices\(/g)).toHaveLength(1);
   });
 
   test('required owners fail with ActorAgent\'s established error', () => {
@@ -336,14 +341,15 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect([a.cache, b.cache, c.cache].filter((outcome) => outcome === 'joined')).toHaveLength(2);
     expect(b.snapshot.revision).toBe(a.snapshot.revision);
     expect(c.snapshot.revision).toBe(a.snapshot.revision);
-    // This is the TTFT half: three streams opening together used to start three
-    // credential sweeps, each one a models.dev and Codex refresh deep.
+    // This is the TTFT half: three streams opening together would otherwise
+    // start three credential sweeps, each one a models.dev and Codex refresh
+    // deep.
     expect(mock.matching('models.dev/api.json')).toHaveLength(oneSweep);
   });
 
   test('a sweep the change landed on top of is answered, and never becomes the next turn\'s answer', async () => {
     // The interleaving that matters, held open where it really happens: INSIDE
-    // the sweep. `profileProviderSnapshot` now reads the account's credential
+    // the sweep. `profileProviderSnapshot` reads the account's credential
     // revision before it reads the listing, so a change arriving before that
     // read produces a post-change sweep (which is correct to cache, and is
     // covered by the revision compare below). What must still never be cached

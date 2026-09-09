@@ -3,7 +3,7 @@
  * actor on the Cloudflare backend.
  *
  * OrchestratorAgent (the top-level workspace DO) and any future facet actor
- * (a subordinate riding the workspace via subAgent()) are Think subclasses
+ * (there is one: the workspace root) are Think subclasses
  * that differ only in the profile members below: identity bootstrap
  * (getOwnerUserId), exec-plane keying (workspaceName), tool surface
  * (actorToolDeps / extraCodemodeProviders), evolution engine, and owner
@@ -18,21 +18,17 @@
 
 import {
   callable,
-  type AgentContext, type Connection, type ConnectionContext, type SubAgentClass,
+  type AgentContext, type Connection, type ConnectionContext,
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-// Type-only, so it is erased and the base class carries no runtime import of
-// its own subclass. The VALUE comes from `facetClass()`, which each
-// concrete actor supplies.
-import type { SubordinateAgent } from './subordinate-agent';
 import { inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
   SubordinateRosterEntry as SubordinateView,
 } from './lib/protocol';
-import { parseProtocolMessage } from "agents/chat";
+import { MessageType, parseProtocolMessage } from "agents/chat";
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -42,11 +38,10 @@ import {
   cliScopesConnectionTag,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
-  rejectOutOfScopeRpc,
+  rejectOutOfScopeRpc, requiredRpcAccess,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
 import { retryTransientDO } from "./lib/do-rpc";
-import { isExplorationFacetKey } from "./facet-spawn";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
@@ -70,10 +65,17 @@ import type {
   StreamableResult,
 } from "@cloudflare/think";
 import {
-  EvolutionEngine, type EvolutionConfig,
+  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
+  type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
+  type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
-  scaffoldInferenceTransform, type ScaffoldRunOptions,
+  scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
+  // Durable admission — the claim a turn is issued under, and the per-step
+  // context plane its revisions are recorded on.
+  initActorClaimTables, programIdentityOf, ActorClaimStore,
+  type ActorTurnClaim, type ClaimOutcome,
+  createActorContextPlane, type ActorContextPlane,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
@@ -126,8 +128,6 @@ import {
   type HeadStreamFrame,
   type HeadId, type HeadInput, type HeadReport, type MergeStrategy,
   type SerializedMessage, type HeadRuntime, type HeadGrounding, type MergeResult,
-  type NodeLoopHost, type NodeArbiter, type BranchProposal, type BranchDecision,
-  type NodeWorkspaceProvisioner,
   // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
   // Durable run-event log
@@ -136,6 +136,7 @@ import {
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   // The one normalized provider usage report
   normalizeUsage, type Usage,
+  explorePrompt, reflectionPrompt,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
@@ -195,7 +196,6 @@ import {
   // One minting rule for every subordinate, on either backend
   mintSubordinateName,
   // The subordinate tree's depth cap — derived per child, never stated by one
-  DELEGATION_MAX_DEPTH,
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   // Automatic titling — one policy for every root that can be talked to
@@ -215,7 +215,7 @@ import {
   collectWorkspaceAgentsMd, type AgentsMdSources,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
-  listInstructionApprovals, gatherApprovableInstructions, snapshotExistingInstructions,
+  listInstructionApprovals, gatherApprovableInstructions,
   openInstructionSource, admitInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   stepContextLimit,
@@ -233,15 +233,19 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
-  toolsForInvocation, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
+  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime,
-  type CFRuntime, type CFRuntimeHooks, type HostedNodeHome,
+  type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
-import type { HostedFacetHomes } from "./node-home";
+import {
+  hostNodeSeat, hostBranch, abortHostedBranch,
+  type ExplorationHostSeams, type BranchRunnerDeps,
+} from "./exploration-hosting";
+import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordinate-hosting";
 import {
   // The durable lanes' recovery roster — synchronous classification, six arms,
   // terminal-result discipline — and this backend's three cf-minted lane names.
@@ -270,7 +274,6 @@ import {
 import { createExecuteToolsFactory, type ExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
-import { hostNodeLoop } from "./facet-spawn";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import {
@@ -279,10 +282,10 @@ import {
   type PromptCacheStrategy,
 } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
-import { workspaceOwner } from "./workspace-box-rpc";
+import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
-import { diagnostics, KinuError, toKinuError, tolerate, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import type { UserCaller } from "./user/workspace-capability";
@@ -412,6 +415,11 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   return recorded;
 }
 
+const PlanApprovalMetadataSchema = v.pipe(v.string(), v.parseJson(), v.object({
+  kinuEvent: v.literal('plan_approved'), planId: v.string(),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
+}));
+
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
  *  matches without needing to know the AI SDK content-part union shape.
@@ -526,7 +534,7 @@ export interface ActorToolDeps {
  *  no link to the tool it names, so renaming the builtin leaves a gate
  *  matching nothing. The `agents` tool is never dropped on cf — every
  *  actor has the fork substrate — but its ACTIONS gate on the same profile (see
- *  actorAgentsActions). `release` is not a native tool anymore (release.* is
+ *  actorAgentsActions). `release` is not a native tool at all (release.* is
  *  codemode-only), so `deps.releases` gates nothing here; it feeds that codemode
  *  namespace directly.
  *
@@ -593,6 +601,40 @@ export type SteerTurnLanding = 'mid-turn' | 'queued';
  *  out or broke mid-read. Every other class is the turn's own fault. */
 const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable', 'timeout', 'io']);
 
+/**
+ * WHAT A HOSTED ACTOR'S BINDING REACHES: its OWN files, its OWN tables, its OWN
+ * tasks and its OWN facts — never the workspace actor's.
+ *
+ * Built from that actor's runtime and store bundle rather than from the root's,
+ * which is the whole of the property `tests/unit-slate-composition.test.ts`
+ * pins: a binding held by a subordinate must land in the subordinate's tree
+ * under the subordinate's uid. The runtime the host built for it already carries
+ * both — its execution router's providers act as its credential on both planes —
+ * so this is a list, not a policy.
+ *
+ * The workspace-level surfaces are deliberately absent: `web`, `agents` and the
+ * MCP descriptor cache belong to the actor that owns the workspace's outbound
+ * reach and its delegation ladder, and a binding is not the way to borrow them.
+ */
+function hostedActorNamespaces(actor: HostedActor): CodemodeProvider[] {
+  // SAFETY: this runtime came from `ActorHostDeps.runtimeFor`, which on this
+  // backend IS `createCFRuntime` — the core seam narrows the RETURN type to
+  // `AgentRuntime`, it does not narrow the value, and `CFRuntime` always builds
+  // a vector store (a noop one when the bindings are absent). The alternative
+  // is teaching core about Vectorize to satisfy a cf read, which is backwards:
+  // the whole point of `runtimeFor` is that the BACKEND owns the runtime.
+  const runtime = actor.runtime as CFRuntime;
+  return [
+    ...(runtime.executionRouter?.getProviders() ?? []),
+    createDbCodemodeProvider(actor.stores.appData),
+    createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
+    createMemoryCodemodeProvider(() => ({
+      memory: runtime.memory, vectorStore: runtime.vectorStore,
+      facts: actor.stores.facts, sql: runtime.storage.sql, actor: actor.handle,
+    })),
+  ];
+}
+
 export abstract class ActorAgent extends Think<Env> {
   // ── The actor profile — what a concrete actor class supplies ─────────
   // The rest of this class is actor-agnostic; these members are the whole
@@ -602,7 +644,24 @@ export abstract class ActorAgent extends Think<Env> {
    *  The orchestrator reads workspace_identity; a facet actor reads the
    *  owner row its parent seeded. */
   protected abstract getOwnerUserId(): string | null;
+  protected abstract actorHandle(): ActorHandle;
+  abstract actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult>;
 
+  private actorRuntimeRefusal(): Refusal | null {
+    try {
+      this.actorHandle();
+      return null;
+    } catch (cause) {
+      if (cause instanceof KinuError && cause.code === 'missing') return refusalOf(cause);
+      throw cause;
+    }
+  }
+
+  override async alarm(): Promise<void> {
+    const refusal = this.actorRuntimeRefusal();
+    if (refusal) throw new KinuError(refusal.reason, refusal.error);
+    await super.alarm();
+  }
   /**
    * Which kind of actor this class is, for the operational dataset's `agentKind`
    * dimension.
@@ -645,7 +704,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  attenuated exactly as the workspace is, with no per-facet bookkeeping to
    *  forget. Null before the Worker has claimed the workspace and issued one.
    *
-   *  Stored in its own table rather than agent_config: it is identity, not
+   *  Stored in its own table rather than actor_config: it is identity, not
    *  configuration, and must not be reachable through any config or snapshot
    *  surface. There is deliberately no RPC that reads it back out — the token
    *  only ever travels parent -> facet, so nothing name-addressable can be
@@ -668,11 +727,10 @@ export abstract class ActorAgent extends Think<Env> {
   /** Install the capability token the owner's UserDO minted for this
    *  workspace. Worker-side DO RPC only — deliberately not `@callable`.
    *
-   *  `missed` counts the subtree pushes that failed. A suppressed push is no
-   *  longer the end of the story: the caller reports it to the UserDO, which
-   *  arms a reconciliation intent, because the child it stranded keeps
-   *  presenting the now-unrecognized token until something retries — and
-   *  nothing else ever did. */
+   *  `missed` counts the subtree pushes that failed. A suppressed push is not
+   *  the end of the story: the caller reports it to the UserDO, which arms a
+   *  reconciliation intent, because the child it stranded keeps presenting the
+   *  now-unrecognized token until something retries — and nothing else does. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true; missed: number }> {
     if (!token) throw new Error('capability token required');
     // A native DO RPC does not route through partyserver, so it can land before
@@ -682,51 +740,13 @@ export abstract class ActorAgent extends Think<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
-    // …then push it down this actor's own subtree. Facets present the PARENT
-    // workspace's identity, so the token travels down rather than being read
-    // back out of a DO — nothing name-addressable ever hands the secret to a
-    // caller. Recursive by construction: each hire re-enters here for its own
-    // hires, so a reissued token reaches the whole tree, not just its first row.
-    let missed = 0;
-    const facet = this.facetClass();
-    for (const entry of this.subordinateRoster.list()) {
-      try {
-        const stub = await this.subAgent(facet, entry.name);
-        await stub.installWorkspaceCapability(token);
-      } catch (err) {
-        missed += 1;
-        diagnostics.failure('capability.subordinate_push_failed', toKinuError({
-          doing: 'pushing the workspace capability token to a subordinate',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { subordinate: entry.name });
-      }
-    }
-    // Exploration facets read the token at SPAWN time, so a reissued token
-    // reaches future spawns for free — but a LONG-RUNNING head or node would
-    // otherwise keep presenting the revoked one until it finished. Push it
-    // down over the SDK's own facet registry; same secret, no second copy.
-    // Subordinates are skipped: they ride the roster push above, and their
-    // owner identity comes from their hire seed rather than this fan-out. The
-    // key tells the families apart, so no roster read decides it per facet.
-    const ownerUserId = this.getOwnerUserId();
-    if (ownerUserId !== null) {
-      for (const entry of this.listSubAgents(facet)) {
-        if (!isExplorationFacetKey(entry.name)) continue;
-        try {
-          const stub = await this.subAgent(facet, entry.name);
-          await stub.setOwner(ownerUserId, token);
-        } catch (err) {
-          missed += 1;
-          diagnostics.failure('capability.exploration_push_failed', toKinuError({
-            doing: 'pushing the workspace capability token to an exploration facet',
-            cause: err,
-            otherwise: 'unavailable',
-          }), { facet: entry.name });
-        }
-      }
-    }
-    return { ok: true, missed };
+    // Hosted actors read the workspace's single capability row through their
+    // runtime, so a reissue takes effect on their next call without
+    // propagating token copies. Per-actor copies would require reconciliation
+    // and could keep presenting revoked tokens; `missed` is always zero
+    // because this design has no such copies, and it is kept in the answer
+    // because callers report it.
+    return { ok: true, missed: 0 };
   }
 
   /** Re-run the subtree push with the token this root already holds. The
@@ -762,25 +782,31 @@ export abstract class ActorAgent extends Think<Env> {
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
+    // ACTOR-SCOPED, and this DDL is the only declaration of it: core declares
+    // no `pending_steers`, so the column is cf's to add. The UNIQUE widens with
+    // it — a bare `id UNIQUE` is a workspace-wide key, so two actors whose
+    // steers happened to share an id would collide on INSERT, and every read
+    // below would return a sibling's chips.
     this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pending_steers (
-      seq     INTEGER PRIMARY KEY AUTOINCREMENT,
-      id      TEXT NOT NULL UNIQUE,
-      turn_id TEXT NOT NULL,
-      mode    TEXT NOT NULL CHECK (mode IN ('plan','build')),
-      text    TEXT NOT NULL
+      seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_id TEXT NOT NULL,
+      id       TEXT NOT NULL,
+      turn_id  TEXT NOT NULL,
+      mode     TEXT NOT NULL CHECK (mode IN ('plan','build')),
+      text     TEXT NOT NULL,
+      UNIQUE (actor_id, id)
     )`);
-    // This survives the reset window between an in-flight turn's eviction and
-    // its fiber recovery. Stop must still identify that turn's device work.
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS active_durable_turn (
-      id      INTEGER PRIMARY KEY CHECK (id = 1),
-      turn_id TEXT NOT NULL
-    )`);
-    // Here for the same reason as the row above it, and one more: the recovery
-    // sweep reads it from `onStart`, which is not guaranteed to follow a root's
+    // The admission ledger records the issued actor, run, execution epoch,
+    // selected program and admitted context; one workspace-wide turn pointer
+    // cannot distinguish concurrent actors or evicted activations. Initialize
+    // it here because onStart recovery can read it before a root's
+    // ensureSchema runs.
+    initActorClaimTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
+    // Here for the same reason as the row above it: the recovery sweep reads
+    // it from `onStart`, which is not guaranteed to follow a root's
     // `ensureSchema`. Idempotent DDL, so a re-activation costs nothing.
     initTerminalEffectTable((ddl: string) => this.ctx.storage.sql.exec(ddl));
   }
-
   /** Every table this root carries, created before any read. Declared here
    *  because `installWorkspaceCapability` — a native DO RPC reachable before
    *  `onStart` — has to be able to demand it. */
@@ -825,15 +851,38 @@ export abstract class ActorAgent extends Think<Env> {
   // decides whether THIS turn may submit into it: an owner-driven additional
   // agent does; a task delegated by its parent keeps the report lane instead.
 
+  private _turnTaskPlan: TaskPlanContext | undefined;
+  private approvedTaskPlan(messageId: string | null): TaskPlan | null {
+    const sql = this.boundSql;
+    if (messageId === null || !tableExists(sql, 'cf_think_submissions')) return null;
+    const rows = sql<{ metadata_json: string | null; idempotency_key: string | null }>
+      `SELECT metadata_json,idempotency_key FROM cf_think_submissions
+       WHERE status='running' AND EXISTS
+         (SELECT 1 FROM json_each(messages_json) WHERE json_extract(value,'$.id')=${messageId})`;
+    for (const row of rows) {
+      if (row.idempotency_key === null) continue;
+      const parsed = v.safeParse(PlanApprovalMetadataSchema, row.metadata_json);
+      if (!parsed.success) continue;
+      const input = parsed.output;
+      const prefix = `plan:${input.planId}:${input.revision}:approve:`;
+      if (!row.idempotency_key.startsWith(prefix) || !/^\d+$/.test(row.idempotency_key.slice(prefix.length))) continue;
+      const plan = this.planReviews.get(input.planId, input.revision);
+      if (plan?.status === 'approved' && plan.sessionId === 'default') {
+        return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
+      }
+    }
+    return null;
+  }
+
   private _planReviews: PlanReviewStore | null = null;
 
   /** One SQL-backed review stream, local to this actor's durable storage. */
   protected get planReviews(): PlanReviewStore {
-    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql);
+    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql, this.actorHandle());
     return this._planReviews;
   }
 
-  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
+  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
     const result = this.planReviews.submit('default', edits);
     if (result.ok) this.broadcastPlanUpdate(result.plan);
     return result;
@@ -966,24 +1015,43 @@ export abstract class ActorAgent extends Think<Env> {
    *  actor answers from durable storage, so an eviction cannot reset it. */
   protected abstract delegationBudget(): DelegationBudget;
 
-  /** The one class every facet of this actor runs as — a hire, a head, a
-   *  swarm node, an MCTS branch; the seed decides the mode. Supplied by each
-   *  concrete actor because the base class must not import its own subclass —
-   *  the TYPE is imported (and erased), the VALUE comes from here. Public
-   *  because it is the `FacetHost` port facet-spawn.ts reads. */
-  abstract facetClass(): SubAgentClass<SubordinateAgent>;
+  /** The workspace's ONE actor host. Every logical actor — a hire, an
+   *  ask-by-role temporary, a head, a node, a rollout branch — is acquired from
+   *  it, over this object's own SQL. Abstract because the host is built from the
+   *  root's workspace, home registry and profile authority, none of which this
+   *  base class holds. */
+  protected abstract actorHost(): ActorHost;
 
-  /** Where this actor's facets get their homes. The owner provisions in its
-   *  own isolate; every facet actor reaches the owner over one hop, because
-   *  the uid table, the uid-0 view and the principal registry are the
-   *  owner's and `confinePrincipal` has no RPC. */
-  abstract facetHomes(): HostedFacetHomes;
+  /** The directory that owns membership of this workspace. Read directly by the
+   *  inspection path and the slate descent, which both resolve an actor by name
+   *  rather than by holding a handle. */
+  protected abstract actorDirectoryStore(): WorkspaceActorDirectory;
 
-  /** The home THIS actor runs as, when it is a facet with one. The workspace
-   *  agent answers none: it is the session user, and the tree is its own. A
-   *  facet actor answers from durable storage, so its runtime is rebuilt as
-   *  itself after every eviction rather than as the origin. */
-  protected facetHome(): HostedNodeHome | undefined { return undefined; }
+  /** What an exploration runner needs of this workspace: the host, the model
+   *  and profile authority, and where a step and a frame go. */
+  protected abstract explorationSeams(): ExplorationHostSeams;
+
+  /** What the subordinate rung needs of this workspace. */
+  protected abstract subordinateSeams(): SubordinateHostSeams;
+
+  /**
+   * A SUBORDINATE IS NEVER TOLD ANYTHING ABOUT ITSELF, and there is no facet
+   * port for it to be told over.
+   *
+   * `confinePrincipal` has no RPC and the uid registry lives only on the object
+   * that owns the workspace, so a child that had to reach that registry would
+   * need a port of its own; a child running as its own Durable Object class
+   * would need that class named; and a child keeping its own storage would have
+   * to re-read its home after every eviction to be rebuilt as itself rather
+   * than as the origin.
+   *
+   * There is no child class to name, no hop to reach the registry across, and
+   * no per-child storage to re-read: the host provisions each actor's home in
+   * this isolate and hands it to that actor's runtime
+   * (`actor-hosting.ts` → `hostedActorAgentName`), and the actor's identity is
+   * its `workspace_actors` row. This actor's OWN home is a property of its
+   * runtime, not of this class.
+   */
 
   /**
    * The roster half of the actor profile — wired only while this actor has room
@@ -1013,7 +1081,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected get subordinateRoster(): SubordinateRosterStore {
     if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql);
+      this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle());
       this._subordinateRoster.ensureSchema();
     }
     return this._subordinateRoster;
@@ -1028,9 +1096,18 @@ export abstract class ActorAgent extends Think<Env> {
     const entry = this.subordinateRoster.get(name);
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
     try {
-      const snapshot = await (await this.subAgent(this.facetClass(), name)).getSubordinateSnapshot();
-      const role = snapshot.role;
-      return { ...entry, displayName: snapshot.displayName, role };
+      // The child's OWN config rows, read through the host's binder rather than
+      // fetched over a stub: `getSubordinateSnapshot` was an RPC because the
+      // display name and the role lived in the child's private database, and
+      // they are `actor_id`-scoped rows in this one now.
+      const child = this.actorHost().bindStores(
+        this.actorDirectoryStore().apply(actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name }).reference,
+      );
+      return {
+        ...entry,
+        displayName: child.stores.config.getDisplayName() ?? entry.name,
+        role: child.stores.config.getRoleSelection(),
+      };
     } catch (error) {
       diagnostics.failure('subordinate.descriptor_unavailable', toKinuError({
         doing: 'reading a subordinate descriptor from its agent config',
@@ -1092,102 +1169,37 @@ export abstract class ActorAgent extends Think<Env> {
     } satisfies SubordinateActivityEvent));
   }
 
-  /** A facet is reachable only while its own roster still lists it. */
-  override async onBeforeSubAgent(
-    request: Request,
-    child: { className: string; name: string },
-  ): Promise<Request | Response | void> {
-    if (child.className !== this.facetClass().name) {
-      return new Response('Not found', { status: 404 });
-    }
-    const rosterEntry = this.subordinateRoster.get(child.name);
-    if (!rosterEntry || rosterEntry.status === 'dismissed'
-      || !this.hasSubAgent(child.className, child.name)) {
-      return new Response('Not found', { status: 404 });
-    }
-    return request;
-  }
-
+  /**
+   * A HOSTED ACTOR IS NOT REACHED OVER THE FACET SPINE.
+   *
+   * There is no child Durable Object and no `/sub/<class>/<key>` hop for an
+   * `onBeforeSubAgent` hook to gate — every actor lives in this one. Admission
+   * happens where the address is resolved: `agent-routing.ts` refuses the `sub`
+   * segment outright on the public transport, and `resolveHostedActorRoute`
+   * checks the logical name against the directory and the roster before the
+   * request reaches an actor.
+   *
+   * Every subordinate verb is likewise a call on this workspace's one
+   * `ActorHost` (`subordinate-hosting.ts`), which validates the same directory
+   * row and holds no facet stub at all.
+   */
   private _subordinateRuntime: SubordinateRuntime | null = null;
 
   /**
    * THE child substrate of this actor: how a subordinate is born, addressed and
    * retired on this platform.
    *
-   * One object, memoized, because two rungs ride it — the durable roster and the
-   * temporary register — and a second copy would be a second `subAgent` path to
-   * the same facets.
+   * One memoized hosted subordinate runtime serves both the durable roster and
+   * the temporary register, so both address the same actors. Actor creation is
+   * owned by `subordinate-hosting.ts` and does not allocate a separately seeded
+   * facet database that could remain charged to the workspace quota after
+   * failed reclamation.
    */
   protected subordinateRuntime(): SubordinateRuntime {
-    if (this._subordinateRuntime) return this._subordinateRuntime;
-    const facet = this.facetClass();
-    this._subordinateRuntime = {
-      spawn: async (input) => {
-        const ownerUserId = this.getOwnerUserId();
-        if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
-        const stub = await this.subAgent(facet, input.name);
-        const capabilityToken = this.workspaceCapabilityToken();
-        try {
-          const identity = {
-            name: input.name,
-            displayName: input.displayName,
-            nameOrigin: input.nameOrigin,
-            role: input.role,
-            mission: input.mission,
-            tier: input.tier,
-            // The child's own copy of the fact its terminal-report policy turns
-            // on, pushed at seed time because only the child sees its turn end.
-            lifetime: input.lifetime,
-            capabilityToken: capabilityToken ?? undefined,
-          };
-          await stub.setSubordinateIdentity(identity);
-        } catch (error) {
-          // A cleanup path that discards its own failure cannot be trusted to
-          // have cleaned up. `deleteSubAgent` is what WIPES the half-seeded
-          // facet's storage, so a swallowed failure here leaves a permanent
-          // database inside this DO charged against the quota every facet
-          // shares — reported with the seeding failure as its cause, never
-          // hidden behind it.
-          try {
-            await this.deleteSubAgent(facet, input.name);
-          } catch (cleanupError) {
-            throw new Error(
-              `Subordinate ${input.name} failed to seed and its storage could not be reclaimed: `
-              + `${renderThrownChain({ cause: cleanupError })}`,
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-      },
-      assign: async (name, input) => {
-        const stub = await this.subAgent(facet, name);
-        const task = {
-          kind: 'task',
-          body: input.body,
-          mode: input.mode,
-          deliverable: input.deliverable,
-          deadlineHint: input.deadlineHint,
-          inheritedContext: input.inheritedContext,
-        } as const;
-        return stub.enqueueSubordinateTask(task);
-      },
-      status: async (name) => (await this.subAgent(facet, name)).getSubordinateStatus(),
-      message: async (name, content, mode) => {
-        return (await this.subAgent(facet, name))
-          .enqueueSubordinateTask({ kind: 'message', body: content, mode });
-      },
-      rename: async (name, displayName, nameOrigin) => {
-        await (await this.subAgent(facet, name)).setSubordinateNaming(displayName, nameOrigin);
-      },
-      // A wipe takes the home with the storage; an archive keeps both, because
-      // an archived subordinate's rows stay readable and so does its tree.
-      dismiss: async (name, keepHistory) => {
-        if (keepHistory) return;
-        await this.deleteSubAgent(facet, name);
-        await this.facetHomes().release('subordinate', name);
-      },
-    };
+    this._subordinateRuntime ??= hostedSubordinateRuntime(
+      this.subordinateSeams(),
+      () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
+    );
     return this._subordinateRuntime;
   }
 
@@ -1208,10 +1220,6 @@ export abstract class ActorAgent extends Think<Env> {
       now: () => Date.now(),
       renderInheritedContext: () => renderSubordinateInheritedContext(this.readInheritedContext()),
       createName: mintSubordinateName,
-      // Existence only. The temporary rung's whole point is that the material
-      // reaches the CHILD's window and not this one, so this side authorizes the
-      // path through the workspace VFS and never reads the bytes.
-      statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,
     });
     return this._temporaryAgentPort;
   }
@@ -1272,32 +1280,35 @@ export abstract class ActorAgent extends Think<Env> {
    * the cap too, so even a stale ToolSet that offered `hire` cannot produce a
    * child past it.
    */
-  async getSubordinateBootstrapIdentity(): Promise<{
+  async getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }): Promise<{
     parentWorkspace: string;
     ownerUserId: string;
     model: string | null;
-    depth: number;
-  }> {
-    // Deliberately carries no capability token: this method is reachable by any
-    // holder of a stub to this workspace, so it must never hand out a secret.
-    // The token reaches subordinates by push (setSubordinateIdentity +
-    // installWorkspaceCapability), never by read-back.
-    this.ensureSchema();
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) throw new Error('Workspace must be owned before creating subordinates.');
-    const own = this.delegationBudget();
-    if (delegationExhausted(own)) {
-      throw new Error(
-        `Delegation depth cap reached: this agent is at depth ${own.depth} of ${DELEGATION_MAX_DEPTH} `
-        + 'and cannot seed a subordinate below it.',
-      );
+    depth: number | null;
+    kind: ActorDirectoryResult['kind'];
+    lifetime: ActorDirectoryResult['lifetime'];
+    name: string;
+    storageKey: string;
+    creationId: string;
+  } | Refusal> {
+    try {
+      this.ensureSchema();
+      const child = await this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference });
+      const ownerUserId = this.getOwnerUserId();
+      if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
+      let depth: number | null = null;
+      if (child.kind === 'subordinate') {
+        const own = this.delegationBudget();
+        if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
+        depth = deriveChildDelegationBudget(own).depth;
+      }
+      return {
+        parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
+        depth, kind: child.kind, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
+      };
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'reading a registered child bootstrap', cause, otherwise: 'io' }));
     }
-    return {
-      parentWorkspace: this.workspaceName(),
-      ownerUserId,
-      model: this.config.getModel(),
-      depth: deriveChildDelegationBudget(own).depth,
-    };
   }
 
   /** Subordinate progress ingress. Worker-side DO RPC only: the method is not
@@ -1332,10 +1343,13 @@ export abstract class ActorAgent extends Think<Env> {
     }, input, Date.now());
   }
 
-
-  private readonly ownedModelServices = new OwnedModelServices({
+  /** Protected, because the workspace root builds every hosted actor's model
+   *  seams from this ONE owner-scoped service rather than each actor holding a
+   *  second registry — which is what a facet did, and what made a head's spend
+   *  resolve against a provider snapshot the turn had never seen. */
+  protected readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
-    agentName: () => this.name,
+    agentName: () => this.actorHandle().name,
     appTitle: 'Kinu',
     ownerRequired: true,
     getOwnerUserId: () => this.getOwnerUserId(),
@@ -1373,62 +1387,6 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // Scoped `pta_…` access tokens reach this DO over ticket-authenticated
-    // websockets, and the REST scope gate never sees websocket frames — so
-    // out-of-scope @callable requests are rejected here, ahead of the
-    // agents-SDK rpc dispatcher (installed as an own-property onMessage
-    // wrapper by the Agent constructor, hence the re-wrap instead of an
-    // onMessage override). Chat frames pass through untouched.
-    //
-    // WHETHER the connection's authority may still act is asked FIRST — its
-    // CLI bearer, or the browser session behind its cookie — because the scope
-    // gate answers a different question: it pins a connection to what its token
-    // was granted, and says nothing about whether that token still exists. The
-    // upgrade verifies each once, so without the check below a revoked CLI token
-    // or a logged-out cookie kept this workspace's whole surface for as long as
-    // it held the socket — across every await, and across hibernation, which
-    // restored the connection from its tags with its scopes intact.
-    const dispatchMessage = this.onMessage;
-    this.onMessage = async (connection, message) => {
-      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
-      const rejection = rejectOutOfScopeRpc(connection.tags, message);
-      if (rejection) {
-        connection.send(rejection);
-        return;
-      }
-      const rpc = parseClientRpcFrame(message);
-      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
-        connection.send(JSON.stringify({
-          type: 'rpc',
-          id: rpc.id,
-          success: false,
-          error: `${rpc.method} is not available from client connections.`,
-        }));
-        return;
-      }
-      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
-      try {
-        return await dispatchMessage.call(this, connection, message);
-      } finally {
-        if (event?.type === 'clear') {
-          this.dynamicLedger.reset();
-          this._pendingDrainReplyTurns.clear();
-          try {
-            await this.compactionState.plans.save(this.name, null);
-          } catch (err) {
-            diagnostics.failure('compaction.reset_failed', toKinuError({
-              doing: 'clearing the persisted compaction plan after clear-history',
-              cause: err,
-              otherwise: 'io',
-            }), { workspace: this.name });
-          }
-        }
-      }
-    };
-    // Constructor body (not a field initializer): boundSql's memo field must
-    // be initialized before the getter caches its closure.
-    this.compactionState = createCompactionStateStore(this.boundSql);
-    this.registerCompactionExtension();
     // The user steer-drain registers BEFORE the orchestrator's signal
     // extension: a signal splice must never shift the indices the user-steer
     // drain replays into durable history (the same ordering the CLI's
@@ -1448,7 +1406,55 @@ export abstract class ActorAgent extends Think<Env> {
       prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
     });
   }
-
+  /** Think installs protocol dispatch before the actor onStart callback. */
+  protected installClientMessageGate(): void {
+    const dispatchMessage = this.onMessage;
+    this.onMessage = async (connection, message) => {
+      if (await this.refuseRevokedSocketAuthority(connection, message)) return;
+      const rejection = rejectOutOfScopeRpc(connection.tags, message);
+      if (rejection) {
+        connection.send(rejection);
+        return;
+      }
+      const rpc = parseClientRpcFrame(message);
+      if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
+        connection.send(JSON.stringify({
+          type: 'rpc',
+          id: rpc.id,
+          success: false,
+          error: `${rpc.method} is not available from client connections.`,
+        }));
+        return;
+      }
+      const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
+      const unavailable = this.actorRuntimeRefusal();
+      const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
+      if (unavailable && !inspection) {
+        if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
+        else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
+          connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
+        } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
+        return;
+      }
+      try {
+        return await dispatchMessage.call(this, connection, message);
+      } finally {
+        if (event?.type === 'clear') {
+          this.dynamicLedger.reset();
+          this._pendingDrainReplyTurns.clear();
+          try {
+            await this.compactionState.plans.save(this.name, null);
+          } catch (err) {
+            diagnostics.failure('compaction.reset_failed', toKinuError({
+              doing: 'clearing the persisted compaction plan after clear-history',
+              cause: err,
+              otherwise: 'io',
+            }), { workspace: this.name });
+          }
+        }
+      }
+    };
+  }
   /** The settled turn's actor-generic front half — every actor's
    *  onChatResponse calls this FIRST (before anything that can throw or
    *  return early). Resolves the drain identity, clears in-flight turn
@@ -1482,10 +1488,29 @@ export abstract class ActorAgent extends Think<Env> {
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
     this._cliCwd = null;
-    const activeTurnId = this._turnCheckpoint?.turnId;
-    if (activeTurnId) {
-      void this.sql`DELETE FROM active_durable_turn WHERE turn_id = ${activeTurnId}`;
+    // The turn's durable claim closes here, named by what the response did.
+    // The claim carries an OUTCOME rather than vanishing, so a later reader can
+    // tell a turn that completed from one an eviction left open — which a
+    // deleted row could not say, and which is what recovery has to know.
+    // THE CONTEXT BOUNDARY, on EVERY ending — completed, aborted and errored
+    // alike, which is why it sits here in the actor-generic front half rather
+    // than in a concrete actor's success path. An edit that landed mid-turn
+    // produced a later revision, and the array Think is still carrying begins
+    // with the pre-edit prefix, because a `prepareStep` override shapes ONE
+    // request and never becomes the next step's input. Adopting the plane's
+    // settled array is what stops that edit being discarded at the boundary;
+    // dropping it on the failure path would discard it for exactly the turns an
+    // owner is most likely to have edited.
+    const claimedTurn = this._turnClaim;
+    if (claimedTurn !== null) {
+      this._adoptedContext = this.contextPlane.endTurn({
+        turnId: claimedTurn.turnId,
+        history: this._lastTurnOpts?.messages ?? [],
+      }).messages;
     }
+    this.settleTurnClaim(result.status === 'completed'
+      ? 'completed'
+      : result.status === 'aborted' ? 'aborted' : 'error');
     // Order matters: the flag is already clear, so the leftover steer enqueues
     // as a turn of its own instead of buffering for a turn that is over.
     this.rerunLeftoverSteers();
@@ -1578,8 +1603,8 @@ export abstract class ActorAgent extends Think<Env> {
     if (this._inFlight) {
       const turnId = this.durableTurnId();
       if (turnId === null) throw new Error('running turn has no durable identity');
-      void this.sql`INSERT INTO pending_steers (id, turn_id, mode, text)
-        VALUES (${id}, ${turnId}, ${mode}, ${body})`;
+      void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+        VALUES (${this.actorHandle().actorId}, ${id}, ${turnId}, ${mode}, ${body})`;
       const outcome = this.userSteer.accept({ id, text: body });
       if (outcome !== 'mid-turn') throw new Error('turn changed while accepting a steer');
       this.broadcastSteerStatus({ status: 'queued', steerId: id, text: body });
@@ -1631,7 +1656,8 @@ export abstract class ActorAgent extends Think<Env> {
       metadata: row.metadata,
     })));
     for (const row of rows) {
-      void this.sql`DELETE FROM pending_steers WHERE id = ${row.id}`;
+      void this.sql`DELETE FROM pending_steers
+        WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
       this.broadcastSteerStatus({ status: 'landed', steerId: row.id, text: row.text, atStep: row.atStep });
     }
   }
@@ -1641,7 +1667,8 @@ export abstract class ActorAgent extends Think<Env> {
    *  step boundary. */
   protected pendingSteerRuns(): InlineSteer[] {
     return this.sql<{ id: string; text: string }>`
-      SELECT id, text FROM pending_steers ORDER BY seq ASC`
+      SELECT id, text FROM pending_steers
+      WHERE actor_id = ${this.actorHandle().actorId} ORDER BY seq ASC`
       .map((row) => ({ ...row, state: 'queued' as const, atStep: null }));
   }
 
@@ -1681,7 +1708,8 @@ export abstract class ActorAgent extends Think<Env> {
             // acknowledged. Keep seq order and mode boundaries; merging a Plan
             // steer with Build would run it on the wrong tool surface.
             const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
-              SELECT id, turn_id, mode, text FROM pending_steers ORDER BY seq ASC`;
+              SELECT id, turn_id, mode, text FROM pending_steers
+      WHERE actor_id = ${this.actorHandle().actorId} ORDER BY seq ASC`;
             steers = rows.length;
             let index = 0;
             while (index < rows.length) {
@@ -1705,7 +1733,10 @@ export abstract class ActorAgent extends Think<Env> {
                   && (queued.durable.status === 'pending' || queued.durable.status === 'running'
                     || queued.durable.status === 'completed');
                 if (queued.status !== 'queued' && !duplicateAdmission) continue;
-                for (const row of group) void this.sql`DELETE FROM pending_steers WHERE id = ${row.id}`;
+                for (const row of group) {
+        void this.sql`DELETE FROM pending_steers
+          WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
+      }
               } finally {
                 this._rerunningSteerKeys.delete(idempotencyKey);
               }
@@ -2046,6 +2077,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected get terminal(): TerminalTransitions {
     if (!this._terminalTransitions) {
       this._terminalTransitions = new TerminalTransitions({
+        actor: this.actorHandle(),
         sql: this.boundSql,
         effects: this.terminalEffectTable(),
         now: () => Date.now() + this._terminalClockSkewMs,
@@ -2072,7 +2104,7 @@ export abstract class ActorAgent extends Think<Env> {
    * `_inFlight` answers only for THIS activation, and the state that matters
    * most is the one it cannot see: an isolate that died while an
    * auto-continuation was executing a claimed tool leaves a FRESH actor with
-   * `_inFlight === false` while `active_durable_turn` still names that turn. So
+   * `_inFlight === false` while its durable turn claim still names that turn. So
    * closing the earlier response released the continuation's tool claims before
    * chat recovery had replayed it, and the external call ran a second time.
    * `durableTurnId` cannot be the witness on its own either — it deliberately
@@ -2258,13 +2290,81 @@ export abstract class ActorAgent extends Think<Env> {
   protected durableTurnId(): string | null {
     const live = this._turnCheckpoint?.turnId;
     if (live !== undefined) return live;
-    // A cold activation has no checkpoint in RAM yet. The one-row handoff
-    // lets a Stop sweep the original turn's device requests before recovery
-    // re-enters beforeTurn and rebuilds the live checkpoint.
-    return this.sql<{ turn_id: string }>`SELECT turn_id FROM active_durable_turn WHERE id = 1`[0]?.turn_id ?? null;
+    // A cold activation has no checkpoint in RAM yet. The claim ledger is the
+    // handoff: the newest claim this ACTOR admitted and never settled is the
+    // turn a Stop sweep must identify, and being actor-scoped it cannot answer
+    // with a sibling actor's turn the way the old single `id = 1` row could.
+    return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
   }
 
+  /** The claim the in-flight turn is issued under. Written in `beforeTurn`
+   *  before Think can start inference, read by `beforeStep` to record the exact
+   *  context each step consumes, and settled once the response is named. */
+  private _turnClaim: ActorTurnClaim | null = null;
 
+  /**
+   * The context this actor's NEXT turn starts from, once a turn has settled one.
+   *
+   * Held rather than written back into Think's message store, because the two
+   * are answers to different questions: the store is the transcript, and this is
+   * the model-visible CONTEXT — which compaction already rewrites per turn
+   * through `transformContext` without touching stored messages. The durable
+   * copy is the plane's own revision in the claim ledger, so an eviction that
+   * loses this field re-reads it there rather than losing the edit.
+   */
+  private _adoptedContext: readonly ModelMessage[] | null = null;
+
+  /**
+   * THE actor's context plane, ONE per activation.
+   *
+   * One object rather than a plane rebuilt per read, because the plane holds
+   * the turn's rebase: an edit that lands mid-turn produces a later revision,
+   * and the array the SDK is still carrying begins with the PRE-edit prefix —
+   * a `prepareStep` override shapes one request and never becomes the next
+   * step's input. A host that kept its own array and shaped requests around it
+   * therefore discarded every mid-turn edit at the turn boundary, silently. So
+   * admission takes `startTurn`'s messages AS the turn's history and the
+   * boundary adopts `endTurn`'s, on every path including failure and interrupt.
+   *
+   * `events` is null in this tree: the plane's recorder port is satisfied by
+   * `RunEventRecorder` the moment the `context_edit` run-event variant exists
+   * beside it, and until then null records nothing rather than claiming an
+   * emission nobody would receive.
+   */
+  private _contextPlane: ActorContextPlane | null = null;
+  private get contextPlane(): ActorContextPlane {
+    // LAZY, and it has to be: field initialisers run in declaration order and
+    // `stores` is declared below this one, so forcing it here read an
+    // uninitialised bundle. Lazy also matches what the rest of this class does
+    // with storage — a Durable Object must not touch SQL while its fields
+    // initialise.
+    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: null });
+    return this._contextPlane;
+  }
+
+  /**
+   * The installed build this host publishes for its BUILTIN loop.
+   *
+   * Cloudflare's own version metadata, which is the only real build identity
+   * reachable from inside a Durable Object. Absent binding — a deployment older
+   * than the binding, or a local `wrangler dev` without it — answers null, and
+   * the claim then records the build as unknown. It is never substituted with
+   * the package version (a placeholder in this repo), a descriptor digest, or
+   * anything else that would read back as a verified build.
+   */
+  private installedBuildIdentity(): string | null {
+    return this.env.CF_VERSION_METADATA?.id ?? null;
+  }
+
+  /** Name the outcome of the in-flight turn's claim. Idempotent per turn: a
+   *  second settle for one claim is refused by the ledger's own guard, so this
+   *  drops the reference first. */
+  private settleTurnClaim(outcome: ClaimOutcome): void {
+    const claim = this._turnClaim;
+    if (claim === null) return;
+    this._turnClaim = null;
+    this.stores.claims.settle(claim, outcome);
+  }
 
   /**
    * The terminal sequence this actor started most recently, resolved once its
@@ -2404,8 +2504,17 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Durable per-session compaction state (plan snapshot + the measured
-   *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema. */
-  protected readonly compactionState: CompactionStateStore;
+   *  prompt-token trigger signal) in DO SQLite. Table created in ensureSchema.
+   *
+   *  LAZY, and the registration below moves with it: both resolve this actor's
+   *  handle, whose directory row does not exist until `ensureSchema` runs.
+   *  Resolving either in the constructor makes construction throw on a fresh
+   *  database — every harness and every cold activation — before anything has
+   *  created the schema. */
+  private _compactionState: CompactionStateStore | null = null;
+  protected get compactionState(): CompactionStateStore {
+    return (this._compactionState ??= createCompactionStateStore(this.boundSql, this.actorHandle()));
+  }
 
   /** Durable-history length (ModelMessage count) at the in-flight turn's
    *  assembly — the length the turn's prompt-token measurement is bound to. */
@@ -2441,10 +2550,12 @@ export abstract class ActorAgent extends Think<Env> {
   /** Better-compact is THE default (and only) compaction path: the staged
    *  pruning ladder runs as a transformContext extension once per turn
    *  assembly, replaying its persisted plan byte-stably until the context
-   *  regrows. Registered unconditionally at construction; every port
-   *  dereferences `this` lazily, so nothing heavy (the CF runtime, the model)
-   *  is built before it is first needed. */
-  private registerCompactionExtension(): void {
+   *  regrows. Registered unconditionally, but from `ensureSchema` rather than
+   *  the constructor: its plan port resolves this actor's handle, which needs
+   *  the directory row `ensureSchema` creates. Every other port dereferences
+   *  `this` lazily, so nothing heavy (the CF runtime, the model) is built
+   *  before it is first needed. */
+  protected registerCompactionExtension(): void {
     this.extensions.register(createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
@@ -2655,7 +2766,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Scoped access-token connections may chat but never write agent state. */
   override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
-    return super.shouldConnectionBeReadonly(connection, ctx)
+    return this.actorRuntimeRefusal() !== null || super.shouldConnectionBeReadonly(connection, ctx)
       || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
   }
 
@@ -2729,6 +2840,7 @@ export abstract class ActorAgent extends Think<Env> {
   private _budget: MissionGovernor | null = null;
   get budget(): MissionGovernor {
     this._budget ??= new MissionGovernor({
+      actor: this.actorHandle(),
       storage: this.rt.storage,
       // Real USD: the catalog rates for whatever model the next turn resolves
       // to. Null until the lookup lands — the ledger then blends, and says so.
@@ -2801,12 +2913,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── The subtree's head journal, over this actor's control plane ──────
   //
-  // A recursive split runs on a facet with its own SQLite, so a journal it
-  // wrote locally would strand its rows one DO away from the head_steps they
-  // must join against — the C2 defect that made a depth-2 head unreadable.
-  // These four are the writes HeadController performs, exposed as the same kind
-  // of cross-DO port missionGuard/missionDebit use: worker-side DO RPC reachable
-  // on a stub and nowhere else, never `@callable`, allowlisted in rpc-surface.ts.
+  // A recursive split runs in this isolate against the workspace's journal, so
+  // its spawn and report rows land where the head_steps they must join against
+  // already are. These four are the writes HeadController performs, exposed as
+  // methods the hosted split port calls locally (orchestrator.ts
+  // `runHostedSplit`): never `@callable`, allowlisted in rpc-surface.ts.
 
   async headJournalRecordSplit(rootId: HeadId, rationale: string, spawnedAt: number): Promise<void> {
     this.headJournal.recordSplit(rootId, rationale, spawnedAt);
@@ -2817,10 +2928,10 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async headJournalRecordReport(report: HeadReport): Promise<void> {
-    // The announcement is the JOURNAL's now, not this method's. It used to
-    // broadcast here, which made a branch's last write — the summary, the status
-    // and the wall clock — live for a recursive split and for nothing else,
-    // because this RPC is only reachable from a facet calling its parent.
+    // The announcement is the JOURNAL's, not this method's: every report
+    // publishes its summary, status and wall clock through that one write,
+    // regardless of which producer records it. This method delegates the
+    // write without adding another broadcast.
     this.headJournal.recordReport(report);
   }
 
@@ -3002,7 +3113,7 @@ export abstract class ActorAgent extends Think<Env> {
     // its own note. Recovery re-drives the fiber this accepted; it does not come
     // back through here. An unkeyed turn has no replay to guard against.
     const laneKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
-    if (laneKey !== null && effectAlreadyDone(this.boundSql, ADVISOR_LANE_SCOPE, laneKey)) {
+    if (laneKey !== null && effectAlreadyDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey)) {
       return Promise.resolve();
     }
     const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
@@ -3035,7 +3146,7 @@ export abstract class ActorAgent extends Think<Env> {
           }
           // Adjacent to the stash: from this instant the lane is recoverable on its
           // own, which is exactly when a second one becomes a duplicate.
-          if (laneKey !== null) recordEffectDone(this.boundSql, ADVISOR_LANE_SCOPE, laneKey);
+          if (laneKey !== null) recordEffectDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey);
           checkpointed.resolve();
           await this.runAdvisorReview(snapshot);
         });
@@ -3215,10 +3326,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  reasoning effort. No step cap here — the scaffold's loop runs exactly as
    *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
    *  comparisons between them measure the scaffold, not a handicap. */
-  protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
+  protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
       tools: () => this.getRawTools(),
+      signal,
       streamOptions: effortFor('scaffold_mutation'),
       // The bridge already opens an operation and reports `totalUsage` once the
       // loop drains — it just needed a seam to report THROUGH.
@@ -3247,13 +3359,13 @@ export abstract class ActorAgent extends Think<Env> {
    * with no scope keeps the ambient turn: nothing re-drives it, so it has
    * nothing to recognise.
    */
-  protected makeScaffoldCallTool(callScope?: string): NonNullable<ScaffoldRunOptions['callTool']> {
-    if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools());
+  protected makeScaffoldCallTool(callScope?: string, signal?: AbortSignal): NonNullable<ScaffoldRunOptions['callTool']> {
+    if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools(), undefined, signal);
     // Built ONCE for the rollout and held: the thunk is asked per dispatch.
     let scoped: ToolSet | undefined;
     return createScaffoldCallTool(
       () => (scoped ??= this.getRawToolsForWorkMode(this.turnWorkMode(), callScope)),
-      callScope,
+      callScope, signal,
     );
   }
 
@@ -3290,23 +3402,24 @@ export abstract class ActorAgent extends Think<Env> {
    * default; a custom scaffold can wrap or replace it.
    */
   protected _transformInferenceResult(result: StreamableResult): StreamableResult {
-    const version = this.sql<{ v: number }>`
-      SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions WHERE status = 'current'`[0]?.v ?? 0;
+    const selected = this._turnProgram;
+    if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
 
-    return scaffoldInferenceTransform({
-      currentVersion: version,
+    return runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
+      program: selected.program,
       result,
       run: {
         rt: this.rt,
         workMode: this.turnWorkMode(),
+        signal: selected.signal,
         // beforeTurn stashed this turn's prepared opts just before streamText
         // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
         task: extractLastUserText(this._lastTurnOpts?.messages ?? []),
-        llmStream: this.makeScaffoldLLMStream(),
-        callTool: this.makeScaffoldCallTool(),
+        llmStream: this.makeScaffoldLLMStream(selected.signal),
+        callTool: this.makeScaffoldCallTool(undefined, selected.signal),
         history: this.makeScaffoldHistory(),
       },
-    });
+    }));
   }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
@@ -3486,7 +3599,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  so a store added there exists for this actor too. Lazy inside: the bundle
    *  never touches `boundSql` until a store is first read, which is what lets
    *  it be built here rather than in the constructor body. */
-  private readonly stores = createAgentStores(() => this.boundSql);
+  private readonly stores = createAgentStores(() => this.boundSql, () => this.actorHandle(), write => this.ctx.storage.transactionSync(write));
 
   private _liveHeadJournal: LiveHeadJournal | null = null;
 
@@ -3505,14 +3618,19 @@ export abstract class ActorAgent extends Think<Env> {
   protected get headJournal(): HeadJournal {
     return (this._liveHeadJournal ??= new LiveHeadJournal(
       this.boundSql,
-      (headId) => this.announceHeadActivity(headId),
+      this.actorHandle(),
+      (headId: HeadId) => this.announceHeadActivity(headId),
     ));
   }
 
   /** Tell every open client that one branch's ledger moved. Ordering and
    *  failure isolation belong to {@link LiveHeadJournal}, which calls this only
-   *  after its write has returned and never lets a throw here reach core. */
-  private announceHeadActivity(headId: string): void {
+   *  after its write has returned and never lets a throw here reach core.
+   *
+   *  Protected because a HOSTED actor's search announces through the same
+   *  listener: the workspace owns the socket, whichever of its actors spawned
+   *  the head whose row moved. */
+  protected announceHeadActivity(headId: string): void {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
     if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
@@ -3536,11 +3654,18 @@ export abstract class ActorAgent extends Think<Env> {
 
   // Durable run-event recorder (Flue-style discriminated union, SSE-resumable).
   // Backed by `agent_log` rows of kind in {step, tool_call, tool_result,
-  // reactor_decision}. The RunEventRecorder shim adapts the existing emit()
-  // API to the unified log so the SSE stream and the events sidebar share
-  // one source of truth.
+  // reactor_decision}. The RunEventRecorder adapts the emit() API to the
+  // unified log so the SSE stream and the events sidebar share one source of
+  // truth.
   protected get eventRecorder(): RunEventRecorder {
     return this.stores.eventRecorder;
+  }
+
+  /** The actor's durable claim ledger — the identity a turn's effects are
+   *  issued under. Exposed at the same visibility as the event log above
+   *  because a subclass settles and recovers claims it did not admit. */
+  protected get claims(): ActorClaimStore {
+    return this.stores.claims;
   }
 
   /**
@@ -3617,7 +3742,14 @@ export abstract class ActorAgent extends Think<Env> {
    * the platform destroyed mid-call; nothing here reads a clock.
    */
   protected readonly modelOperations: ModelOperationSink = recordModelOperations(
-    this.eventRecorder,
+    // The recorder is reached PER EMIT, not once here. A field initializer runs
+    // inside the Durable Object constructor, and the actor-scoped store bundle
+    // resolves the actor handle on first access — which needs the workspace
+    // actor directory, and that does not exist until `onStart`. Forcing the
+    // getter here therefore threw in the constructor of a cold actor. This is
+    // the same rule `state/agent-stores.ts` states for its own laziness: a
+    // Durable Object must not reach storage while field initializers run.
+    { emit: (runId, input) => { this.eventRecorder.emit(runId, input); } },
     () => this._currentRunId || WORKSPACE_RUN_ID,
   );
 
@@ -3631,7 +3763,7 @@ export abstract class ActorAgent extends Think<Env> {
   private _eventLog: EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
-      this._eventLog = new EventLog(this.ctx.storage.sql);
+      this._eventLog = new EventLog(this.ctx.storage.sql, this.actorHandle());
     }
     return this._eventLog;
   }
@@ -3690,10 +3822,10 @@ export abstract class ActorAgent extends Think<Env> {
   /**
    * Push ONE search's tree to every connected client, after each of its MCTS
    * iterations. The one broadcast both producers use — the lifetime evolution
-   * cycle and an agent-initiated `agents` fork (see getAgentsToolDeps). It used
-   * to hang off the orchestrator and be reachable only from the first of those,
-   * so a search an operator started emitted nothing and its tree sat still for
-   * as long as it ran.
+   * cycle and an agent-initiated `agents` fork (see getAgentsToolDeps). It sits
+   * on `ActorAgent`, not on the orchestrator: an orchestrator-only broadcast is
+   * reachable from the first of those alone, so a search an operator started
+   * emits nothing and its tree sits still for as long as it runs.
    *
    * Scoped by the `rootId` the event carries, NOT by "which tree was written to
    * most recently". A workspace runs concurrent searches — two detached
@@ -3713,7 +3845,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   broadcastMctsProgress(rootId: string, phase: string, iteration?: number, budget?: number): void {
     try {
-      const nodes = readSearchTree(this.boundSql, rootId);
+      const nodes = readSearchTree(this.boundSql, this.actorHandle(), rootId);
       const head = this.headJournal.readRun(rootId);
       if (nodes.length === 0 && head === null) return;
       const fingerprint = JSON.stringify([nodes, head]);
@@ -3800,7 +3932,7 @@ export abstract class ActorAgent extends Think<Env> {
         // and a SEARCH does: two completed candidates are a harvestable
         // partial.
         harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
-          { sql: this.boundSql, ledger: this.mctsSearchStore }, kind, input,
+          { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,
         )),
         // The wake for an attempt this activation deliberately did not start.
         // It arms the actor's ONE terminal-retry row (soonest-wins), so a job
@@ -3883,51 +4015,27 @@ export abstract class ActorAgent extends Think<Env> {
    *     ledger and not yet settled, `interrupted` included: an interrupted row
    *     is work a recovery is about to re-drive, not work that has stopped;
    *   • the live turn        — in memory by nature, and the single most likely
-   *     caller of a container tool;
-   *   • the subtree          — a subordinate rides its PARENT's container
-   *     (`workspaceName()` resolves to the parent), so a root that answered only
-   *     for itself would declare the container idle while a hire was building in
-   *     it. Recursive, so depth is bounded by the delegation cap rather than by
-   *     anything here.
+   *     caller of a container tool.
    *
-   * A subordinate that cannot be reached counts as busy: its facet is
-   * registered, so the honest reading of a failed call is "unknown", and unknown
-   * resolves the same way every other ambiguity here does.
+   * No subtree walk: every hosted actor shares this workspace's container, and
+   * `countRunningInWorkspace()` is workspace-wide by contract. Asking that
+   * global question once per child would return the same answer N times, not N
+   * answers.
    */
   async hasSandboxBackgroundWork(): Promise<boolean> {
     if (this._inFlight) return true;
-    if (this.jobs.countRunning() > 0) return true;
+    if (this.jobs.countRunningInWorkspace() > 0) return true;
     const submissions = await this.listSubmissions({ status: ['pending', 'running'] });
     if (submissions.length > 0) return true;
     const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
     if (fibers.length > 0) return true;
-    return await this.subtreeHasSandboxBackgroundWork();
-  }
-
-  /** The recursive half, split out so the local answer above reads as one list
-   *  of sources rather than one list plus a fan-out. */
-  private async subtreeHasSandboxBackgroundWork(): Promise<boolean> {
-    const facet = this.facetClass();
-    for (const entry of this.subordinateRoster.list()) {
-      try {
-        const stub = await this.subAgent(facet, entry.name);
-        if (await stub.hasSandboxBackgroundWork()) return true;
-      } catch (err) {
-        diagnostics.failure('sandbox.subordinate_work_probe_failed', toKinuError({
-          doing: 'asking a subordinate whether it still holds container work',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { subordinate: entry.name });
-        return true;
-      }
-    }
     return false;
   }
   /** Foreground long-tool controllers before they cross the background
    *  threshold. Once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 
-  // Typed accessors over the `agent_config` key/value table — replaces
+  // Typed accessors over the `actor_config` key/value table — replaces
   // scattered raw SQL with a single deep module.
   protected get config(): AgentConfigStore {
     return this.stores.config;
@@ -3941,12 +4049,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
-    // Called directly rather than through the BackendHost seam. That seam is a
-    // TYPES-layer contract, and routing a facet host through it made types/
-    // depend on strategy/ — an inverted edge the layer gate refused, correctly.
-    // Nothing outside this class ever read it, so the indirection bought nothing.
-    const nodeLoopHost = this.getCFNodeHost();
-    const nodeHomeProvisioner = this.hostedNodeHomeProvisioner();
+    // The per-node seat factory, asked PER NODE. Node deps are built once per
+    // search and shallow-copied per child, so a single actor on those deps
+    // would hand a whole wave one claim ledger and one loop pointer — a
+    // cross-actor collision this makes impossible.
+    const seams = this.explorationSeams();
     // Named and annotated rather than nested inline: this is the ONE production
     // construction site of `AgentsForkDeps` on this backend, and a literal buried
     // inside the outer one is a supply no reader — human or gate — can attribute
@@ -3963,14 +4070,33 @@ export abstract class ActorAgent extends Think<Env> {
         spec: this.effectiveModelSpec(),
         pricing: this.modelCatalog.pricing(),
       }),
-      // Hosted nodes use a facet for their loop; local runtimes leave this
-      // absent and execute the same core loop in-process.
-      nodeHost: nodeLoopHost === undefined ? undefined : () => nodeLoopHost,
-      // Every hosted node is provisioned before the engine opens its journal
-      // row or hands a spec to a facet. The canonical Nimbus session is still
-      // the one global filesystem; only the node's HOME, credential and shell
-      // state are private.
-      provisionNodeHome: nodeHomeProvisioner === undefined ? undefined : () => nodeHomeProvisioner,
+      // Each node's OWN actor, run id, profile and live-context plane, asked
+      // when the wave reaches that node rather than captured with the deps.
+      hostNode: (node) => hostNodeSeat(seams, node),
+      /**
+       * The node's private home, REPORTED as well as provisioned.
+       *
+       * The host already provisions this to build the node actor's runtime, and
+       * the loop runs on `seat.actor.runtime`, so the credential was always
+       * real. What was missing was telling the node: absent, `nodeWorkspace`
+       * answers `shared-origin-plane` with `home: '.'`, so every node on this
+       * backend was told it shares one plane with its siblings and should treat
+       * the tree as read-mostly — while owning a private directory at
+       * `/home/node-<key>`. `isolationDisclosure` puts that sentence in the
+       * node's own prompt, so the disclosure was actively false.
+       *
+       * `hostNodeSeat` here is not a second bind: register and acquire are both
+       * idempotent, and `runNodeAgent` acquires the same seat immediately after
+       * for the loop. Going through the seat is what keys the home on the
+       * ACTOR's storage key rather than on the raw node id the search minted.
+       */
+      provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
+      // No `runtimeForNodeWorkspace`, and that absence is the honest one: the
+      // seam exists for a backend that provisions a home but cannot
+      // re-credential its own primitives. Here `runtimeFor` already built the
+      // node actor's runtime over this very home, so `seat.actor.runtime` IS
+      // the home-credentialed runtime and a second builder would rebuild what
+      // the host already bound.
       // An IN-ISOLATE node runs beside this actor's socket, so its transient
       // frames need no wire at all. A HOSTED node's facet publishes over the RPC
       // it already holds, and agents-tool leaves this unread in that case.
@@ -4021,7 +4147,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Resolved active skill set for the current turn. Built in beforeTurn, read
    *  by the per-step dynamic context and the turn-local tail. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
-  /** Lazy SkillsVfs shim around rt.storage.vfs — built once, reused. */
+  /** Lazy SkillsVfs adapter over rt.storage.vfs — built once, reused. */
   private _skillsVfs: SkillsVfs | null = null;
   private getSkillsVfs(): SkillsVfs {
     if (!this._skillsVfs) this._skillsVfs = skillsVfsOver(this.rt.storage.vfs);
@@ -4033,13 +4159,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  unapproved. The owner's decisions and the turn's classification read the
    *  same rows — there is no second authority to drift from. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
-  private _instructionMigration: AsyncTaskOwner | null = null;
   protected _workspaceInstructionApprovals: readonly InstructionApproval[] | null = null;
   private instructionApprovals(): InstructionApprovalStore {
     this._instructionApprovals ??= new InstructionApprovalStore(
       this.rt.storage.sql,
+      this.actorHandle(),
       `cf:${this.workspaceName()}`,
-      (body) => this.ctx.storage.transactionSync(body),
     );
     return this._instructionApprovals;
   }
@@ -4056,56 +4181,12 @@ export abstract class ActorAgent extends Think<Env> {
     return this._instructionTrust;
   }
 
-  protected async refreshInstructionApprovalAuthority(): Promise<void> {
-    await this.ensureInstructionApprovalMigration();
-    this._workspaceInstructionApprovals = null;
-  }
-
-  /**
-   * Snapshot existing instruction files before the first post-upgrade turn.
-   *
-   * The durable marker makes this asynchronous activation boundary the only
-   * place a grandfather row is written. Later agent-created paths have no row
-   * and resolve unverified.
-   */
-  protected ensureInstructionApprovalMigration(): Promise<void> {
-    const existing = this._instructionMigration;
-    if (existing !== null && existing.promise !== null) return existing.promise;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._instructionMigration = owner;
-    const migration = (async () => {
-      try {
-        const limits = {
-          contextWindow: this.sessionContextWindow(),
-          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-        };
-        const agentsMd = await collectWorkspaceAgentsMd(
-          this.rt.storage.vfs,
-          limits,
-          () => 'unverified',
-          this.rt.executionRouter?.getProvider('sandbox'),
-        );
-        const entries = await snapshotExistingInstructions({
-          agentsMd,
-          skillsVfs: this.getSkillsVfs(),
-          admissionTokens: stepContextLimit(limits),
-        });
-        this.instructionApprovals().grandfatherExisting(entries);
-      } catch (cause) {
-        if (this._instructionMigration === owner) this._instructionMigration = null;
-        throw cause;
-      }
-    })();
-    owner.promise = migration;
-    return migration;
-  }
-
 
   /** The workspace root's authoritative approval rows. Facets fetch this before
    * each turn; they never consult their private actor SQL for shared files. */
   @callable()
   async getWorkspaceInstructionApprovals(): Promise<readonly InstructionApproval[]> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     return this.instructionApprovals().list();
   }
   /**
@@ -4118,7 +4199,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   @callable()
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const agentsMd = await this.discoverInstructionSources();
     return listInstructionApprovals({
       ...request,
@@ -4137,7 +4218,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** One row, opened: the bytes of THAT file and nothing else. */
   @callable()
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const clean = path.trim();
     if (clean === '') return null;
     return openInstructionSource({
@@ -4172,7 +4253,7 @@ export abstract class ActorAgent extends Think<Env> {
   async approveInstruction(
     path: string, reviewedDigest: string,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path, reviewedDigest);
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
@@ -4189,7 +4270,7 @@ export abstract class ActorAgent extends Think<Env> {
   async revokeInstruction(
     path: string,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path);
     if (!admitted.ok) return admitted;
     this.instructionApprovals().revoke(admitted.path);
@@ -4295,6 +4376,14 @@ export abstract class ActorAgent extends Think<Env> {
   // in the same onChatResponse, so it cannot be overwritten by a later turn;
   // after a DO restart the shadow falls back to the task-only reconstruction.
   protected _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
+  private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
+  /** The signal of the turn running right now, or undefined between turns.
+   *  Read per call, never captured: a long-lived collaborator built once (the
+   *  release engine) has to see the CURRENT turn's cancellation, not the one
+   *  that happened to be running when it was constructed. */
+  protected currentTurnSignal(): AbortSignal | undefined {
+    return this._turnProgram?.signal;
+  }
 
   getCliCwdForDevice(): string | null {
     return this._cliCwd;
@@ -4362,7 +4451,7 @@ export abstract class ActorAgent extends Think<Env> {
    * the SDK's Agent) so `void` discards a row array, not a promise, and a
    * failing insert — a full database, a table a migration has not reached — is a
    * throw on the caller's own stack. Without this catch it becomes the caller's
-   * failure, and it already did: the sandbox lifecycle seam logs before it
+   * failure, and it has: the sandbox lifecycle seam logs before it
    * answers the container, so one unwritable row turned an announcement the
    * agent had ALREADY been given into a rejected RPC, and the container then
    * retried an incident that was on record forever, being refused by a log line
@@ -4375,8 +4464,8 @@ export abstract class ActorAgent extends Think<Env> {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
     const now = Date.now();
     try {
-      void this.sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
-        VALUES (${event}, ${detail ?? null}, ${elapsed}, ${now})`;
+      void this.sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
+        VALUES (${this.actorHandle().actorId}, ${event}, ${detail ?? null}, ${elapsed}, ${now})`;
     } catch (cause) {
       diagnostics.failure('activity_log.write_failed', toKinuError({
         doing: 'recording an activity-log row',
@@ -4384,6 +4473,60 @@ export abstract class ActorAgent extends Think<Env> {
         otherwise: 'io',
       }), { source: event });
     }
+  }
+
+  /**
+   * What a hosted MCTS branch reasons with: core's two prompts and one bare
+   * model call.
+   *
+   * PURE COMPOSITION, deliberately. `explorePrompt` and `reflectionPrompt` are
+   * core's — the same builders the swarm expansion and the local rollout use,
+   * so a branch on this backend asks the question every substrate asks. What
+   * only the root can supply is the transport: its provider registry, its
+   * effort policy and its operation sink.
+   *
+   * `resolveModelRoute('mcts', …)` happens inside `hostBranch`, against the
+   * profile the TURN resolved, so the spec arriving here is already the tier's
+   * and this must not re-resolve one.
+   *
+   * The operation frame opens BEFORE the request and fails closed, because a
+   * branch killed mid-call has to leave a start row naming the rollout rather
+   * than nothing at all — that absence is exactly what `swarm.node_silent`
+   * could not distinguish. Spend is NOT reported here: the engine files a
+   * branch's cost from the `usage` this returns, so reporting it again would
+   * bill one rollout twice.
+   */
+  private branchRunnerDeps(): BranchRunnerDeps {
+    return {
+      explorePrompt,
+      reflectionPrompt,
+      complete: async ({ spec, effort, system, user }) => {
+        // The ROUTE's effort, carried on the request. `resolveModelRoute('mcts',
+        // …)` resolved the spec and the effort together, so reaching for
+        // `REASONING_EFFORT_FOR_STAGE` here would compute the route's own answer
+        // and then substitute a constant for it.
+        const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(spec, effort);
+        const request: Parameters<typeof generateText>[0] = {
+          model,
+          messages: [{ role: 'user' as const, content: user }],
+        };
+        if (system !== undefined) request.system = system;
+        if (providerOptions) request.providerOptions = providerOptions;
+        const operation = beginModelOperation(
+          { source: 'mcts', operations: this.modelOperations }, 'complete', { spec },
+        );
+        let answer;
+        try {
+          answer = await generateText(request);
+        } catch (cause) {
+          operation.failed({ cause });
+          throw cause;
+        }
+        const usage = normalizeUsage(answer.usage);
+        operation.completed({ usage, modelId: spec });
+        return { text: answer.text.trim(), usage };
+      },
+    };
   }
 
   protected get rt(): CFRuntime {
@@ -4394,12 +4537,21 @@ export abstract class ActorAgent extends Think<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
+        // MCTS rollouts. Both members or neither: `requireBranches` refuses
+        // when the hook is absent, and an absent hook makes every rollout answer
+        // "I cannot" on a kind this backend declares, with `hostBranch` sitting
+        // here as an unreached producer. These two members ARE the wire between
+        // the declared kind and the branch this object hosts.
+        branches: {
+          spawn: (branchId) => hostBranch(this.explorationSeams(), branchId, this.branchRunnerDeps()),
+          abort: (branchId) => abortHostedBranch(this.explorationSeams(), branchId),
+        },
       };
-      // Assigned rather than spread: a runtime with no home must leave the
-      // key ABSENT, because the factory reads presence to decide whose
-      // credential both planes carry.
-      const home = this.facetHome();
-      if (home !== undefined) hooks.workspaceExecution = home;
+      // NO `workspaceExecution`: this is the workspace's MAIN actor, which runs
+      // as the session user because the tree is its own. Every other actor's
+      // runtime is built by the host, which assigns the home it provisioned —
+      // and assigns it rather than spreading it, because the factory reads the
+      // key's PRESENCE to decide whose credential both planes carry.
       // No onToolRegistered hook: the execute_tools sandbox reads
       // craftStore.list() fresh on every call, so mid-turn saves propagate
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
@@ -4413,6 +4565,8 @@ export abstract class ActorAgent extends Think<Env> {
         getCliCwdForDevice: () => this.getCliCwdForDevice(),
         getCheckpointMetaForDevice: () => this.getCheckpointMetaForDevice(),
       }, {
+        actor: this.actorHandle(),
+        rootActor: true,
         ownerUserId: () => this.getOwnerUserId(),
         workspaceName: this.workspaceName(),
         shellId: this.shellId(),
@@ -4446,24 +4600,68 @@ export abstract class ActorAgent extends Think<Env> {
   protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
   /**
-   * The actor a slate acts FOR, minted here and nowhere a client can reach: its
-   * facet path under the workspace root — the SDK-recorded ancestors, then this
-   * facet under the class every actor spawns facets as — and the credential its
-   * own file plane already runs as. The root is the empty path as the session
-   * user; a facet without a provisioned home holds no file authority to lend.
+   * The actor a slate acts FOR, minted here and nowhere a client can reach.
+   *
+   * The MAIN actor, as the session user: this class is the workspace's one
+   * Durable Object, so its own caller is the empty path. A hosted actor's
+   * caller is minted by the host instead, from the directory row that states
+   * its ancestry and the home the host provisioned for it, never a `parentPath`
+   * read off an SDK facet chain with a class name stamped into every hop: a
+   * class name is not an identity.
    */
   protected slateCaller(): SlateCaller {
-    const workMode = currentWorkMode();
-    if (this.parentPath.length === 0) return { path: [], cred: CRED_SESSION_USER, workMode };
-    const home = this.facetHome();
-    if (home === undefined) throw new KinuError('denied', 'This facet has no provisioned home, so it cannot act on a slate');
-    const path: readonly SlateCallerHop[] = [...this.parentPath.slice(1), { className: this.facetClass().name, name: this.name }];
-    return { path, cred: home.cred, workMode };
+    return { path: [], cred: CRED_SESSION_USER, workMode: currentWorkMode() };
   }
 
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
     return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+  }
+
+  /**
+   * Descend one hop of a binding path into the hosted actor it names.
+   *
+   * The actor at the end answers with its OWN surface narrowed by its OWN
+   * current role — the same resolver and narrowing its native tools and its
+   * `execute_tools` sandbox are built from — so a binding never reaches more
+   * than the actor holding it does, and a role change is seen on the next call.
+   * What changed is only where the hop goes: the directory resolves the name
+   * under this actor, and the host runs the rest of the path on that actor's
+   * own runtime inside this object.
+   */
+  private async dispatchHostedSlateBinding(
+    name: string, rest: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode,
+  ): Promise<JsonValue> {
+    if (rest.length > 0) {
+      throw new KinuError('denied', 'A binding path names one hosted actor; a nested path names an actor no directory holds.');
+    }
+    const entry = this.actorDirectoryStore().apply(
+      actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
+    );
+    return await this.actorHost().run(entry.reference, async (actor) => {
+      if (route.kind !== 'namespace') {
+        // A hosted actor connects no MCP servers and holds no slate read model
+        // of its own: those are workspace-level surfaces reached through the
+        // main actor. A true reason, not a narrowing.
+        throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
+      }
+      const providers = providersInWorkMode(mode, hostedActorNamespaces(actor));
+      // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
+      // always promised and what this path did not do: it went straight from the
+      // namespaces to the lookup, so a child restricted to `scribe` still
+      // answered `readFile ok:true` down a binding hop. The role is durable and
+      // per actor, so the only thing missing was asking it.
+      const reach = await this.hostedSlateReach(actor, providers);
+      const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+      if (!provider) throw new KinuError('denied', `${route.namespace} is not within that actor's reach right now`);
+      if (!Object.hasOwn(provider.tools, route.member)) {
+        throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+      }
+      const answered = await provider.tools[route.member]?.execute(...route.args);
+      const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+      if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+      return value.output;
+    });
   }
 
   /**
@@ -4479,12 +4677,15 @@ export abstract class ActorAgent extends Think<Env> {
    * Deliberately NOT `@callable`: reached on the stub transport only.
    */
   async slateBindingDispatch(path: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode): Promise<JsonValue> {
+    // A hop names a hosted ACTOR, resolved through the directory rather than
+    // forwarded down a facet chain one Durable Object at a time. The dispatch
+    // still descends — a binding held by a subordinate must answer with THAT
+    // actor's surface, narrowed by THAT actor's role — but every hop is a call
+    // inside this object, so an unreachable name is a refusal here instead of a
+    // rejected RPC three objects deep.
     const [next, ...rest] = path;
     if (next !== undefined) {
-      if (next.className !== this.facetClass().name) {
-        throw new KinuError('denied', `${next.className} is not a facet class this actor hosts`);
-      }
-      return (await this.subAgent(this.facetClass(), next.name)).slateBindingDispatch(rest, route, mode);
+      return await this.dispatchHostedSlateBinding(next.name, rest, route, mode);
     }
     switch (route.kind) {
       case 'namespace': {
@@ -4552,6 +4753,30 @@ export abstract class ActorAgent extends Think<Env> {
     return narrowToolSurface(profile.allowedTools);
   }
 
+  /**
+   * A HOSTED actor's current tool reach, for a binding call that hopped to it.
+   *
+   * Deliberately not `slateReach`: that one reads `this._inFlight` and
+   * `this._turnProfile`, which are the ROOT's turn, and `this.actorToolDeps()`,
+   * which is the root's surface. Using it for a child answered every binding
+   * hop with the root's unrestricted reach — the defect this exists to close.
+   *
+   * No live-turn shortcut at all. The child's own open turn is not reachable
+   * from here, and the root's is the wrong answer, so the role is resolved NOW
+   * over the child's own nameable surface. That is also what the hop's contract
+   * promises: a role change is seen on the next call.
+   */
+  private async hostedSlateReach(
+    actor: HostedActor, providers: readonly CodemodeProvider[],
+  ): Promise<ToolSurfaceNarrowing> {
+    const { profile } = await this.hostedActorProfile({
+      actor: actor.handle,
+      availableTools: codemodeCapabilitiesFor(providers),
+      workMode: 'build',
+    });
+    return narrowToolSurface(profile.allowedTools);
+  }
+
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator
    *  and subordinate alike), the same way the native `memory` and `tasks`
    *  tools are. Deps read live per provider's own convention (memory's facts/
@@ -4561,7 +4786,7 @@ export abstract class ActorAgent extends Think<Env> {
     return [
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
-        facts: this.facts, sql: this.rt.storage.sql,
+        facts: this.facts, sql: this.rt.storage.sql, actor: this.actorHandle(),
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -4579,8 +4804,26 @@ export abstract class ActorAgent extends Think<Env> {
    * from the type declaration and the dispatcher, while every ordinary
    * executor/provider stays present.
    */
+  /**
+   * The codemode namespaces this turn reaches — and the ONE place they are
+   * listed, which is why `db` belongs here and not in `execute-tools.ts`.
+   *
+   * This method has two readers. The second is
+   * `codemodeCapabilitiesFor(turnCodemodeProviders)`, which is what lets a ROLE
+   * name a codemode-only capability at all: `db` is a declared `TOOL_REACH`
+   * namespace, so a provider registered outside this list can never be named by
+   * a narrowed role — every narrowed role would silently lose the namespace —
+   * and it would bypass `narrowing.narrowProviders` as well.
+   *
+   * `createDbCodemodeProvider` takes the store and NOT the mode, deliberately:
+   * the Plan decision depends on the resolved table SCOPE, which the provider
+   * only knows at invocation (actor-scope writes are Plan-allowed,
+   * workspace-scope writes are refused in Plan, `dropTable` is Build-only), so a
+   * mode captured here would be a staler copy of the same fact. `db` is
+   * therefore NOT in the Plan filter below.
+   */
   protected turnCodemodeProviders(mode: WorkMode): CodemodeProvider[] {
-    return [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()]
+    return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()]
       .filter((provider) => mode !== 'plan' || provider.name !== 'release');
   }
 
@@ -4838,17 +5081,21 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Native owner inspection. Does not initialize the SDK or application tables. */
   async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
+    // SYNCHRONOUS. Core walks `directory.resolveChild` from the caller's own
+    // actor and reads the target's rows in this one database, so there is no
+    // per-hop RPC port to resolve, no stored parent path to check and no
+    // class-name comparison — the last two being values a worker reports about
+    // itself.
     return inspectSubordinateStorage({
       sql: this.boundSql, raw: this.ctx.storage.sql,
-      storedParentPath: () => this.ctx.storage.get<JsonValue>('cf_agents_parent_path'),
-      existing: (name) => this.getExistingSubAgent(this.facetClass(), name),
+      actor: this.actorHandle(), directory: this.actorDirectoryStore(),
     }, request, authority);
   }
 
   @callable()
   async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();
-    return getChatHistoryPage(this.boundSql, request ?? {});
+    return getChatHistoryPage(this.boundSql, this.actorHandle(), request ?? {});
   }
 
   /** The agent's stored model spec. The UI preselects a menu entry with it; the
@@ -4897,7 +5144,7 @@ export abstract class ActorAgent extends Think<Env> {
    * the text as the next ordinary turn itself — atomically with the decision,
    * in its own turn queue. "It went into the running turn" and "it started a
    * new one" are different events for the person who typed it, so the answer
-   * still says which; what no caller does any more is re-send.
+   * still says which, and no caller re-sends.
    *
    * `mode` arrives over the wire, so it is admitted by `isWorkMode` rather
    * than trusted; anything unrecognized runs as ordinary build work, exactly
@@ -4957,6 +5204,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** Think asks for a model before beforeTurn. The prior resolved profile is
    * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
   getModel(): LanguageModel {
+    this.actorHandle();
     const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
     return this.ownedModelServices.resolveModel(spec);
   }
@@ -4976,7 +5224,11 @@ export abstract class ActorAgent extends Think<Env> {
   protected async refreshSoulText(): Promise<void> {
     this._cachedSoulText = await this.loadSoulText();
   }
-  private getSoulText(): string {
+  /** The workspace soul as the last refresh read it. Protected because a
+   *  hosted actor's turn is framed with the same one: its world is this
+   *  workspace, so the document that says what this workspace is for is the
+   *  document it works under too. */
+  protected getSoulText(): string {
     return this._cachedSoulText ?? '';
   }
 
@@ -5033,13 +5285,10 @@ export abstract class ActorAgent extends Think<Env> {
    * a manual rename that claimed the title first still wins.
    */
   protected async applyAutoTitle(mission: string): Promise<string | null> {
-    // Authoritative state FIRST. `titleInputs` is synchronous, so an actor whose
-    // naming lives elsewhere answers it from an activation cache that a cold
-    // start has not filled — and a replayed title would then plan over a title
-    // its own first attempt had already persisted.
+    // Read stored naming state before a cold activation plans a title.
     await this.hydrateTitleInputs();
     const title = await applyWorkspaceTitle({
-      slug: this.name,
+      slug: this.actorHandle().name,
       ...this.titleInputs(),
       mission,
     }, {
@@ -5080,7 +5329,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** The naming state the title policy decides against. The base reads the
    *  actor's own config — which IS the authority for a subordinate's
    *  descriptor — while the workspace root overrides it with its activation
-   *  cache of the ROOT registry row (UserDO), where an agent_config mirror
+   *  cache of the ROOT registry row (UserDO), where an actor_config mirror
    *  would drift against every other writer of that row. */
   protected titleInputs(): WorkspaceTitleInputs {
     return { displayName: this.config.getDisplayName(), nameOrigin: this.config.getNameOrigin() };
@@ -5170,6 +5419,16 @@ export abstract class ActorAgent extends Think<Env> {
    * effective-score filtering depends on recency — without MAX(last_used_at)
    * in the key, the cached ToolSet would keep re-using a stale score-filtered
    * view across turns even as usage shifts.
+   *
+   * UNSCOPED ON PURPOSE, and it must stay that way while the store is. This
+   * key guards a cache of what `craftStore.list()` returned, and that store is
+   * `new CraftStore(sql)` over the workspace's one database — `crafted_tools`
+   * is keyed by `name` alone and carries no `actor_id` column at all. A
+   * `WHERE actor_id = …` here does not narrow the key, it throws `no such
+   * column` on the first turn; and were the column added without narrowing the
+   * store, the key would cover a subset of what the cache holds, which is the
+   * stale-surface bug this key exists to prevent. Per-actor crafted tools are a
+   * change to the TABLE, the store and every reader of it, not to this query.
    */
   private _craftCacheKey(): string {
     const row = this.sql<{ cnt: number; latest: number; lastUsed: number }>`
@@ -5193,6 +5452,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  getTools, which adds the background wrap) and by internal eval side-streams
    *  that must run tools to completion inline (never auto-background). */
   protected getRawTools(): ToolSet {
+    this.actorHandle();
     return this.getRawToolsForWorkMode(this.turnWorkMode());
   }
 
@@ -5227,6 +5487,7 @@ export abstract class ActorAgent extends Think<Env> {
         // supplies its own recoverable identity instead — see
         // {@link makeScaffoldCallTool}.
         effectClaims: {
+          actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: claimScope === undefined
             ? () => this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
@@ -5303,15 +5564,7 @@ export abstract class ActorAgent extends Think<Env> {
       ? { executor: this.rt.executor, explorer: this.rt.llm, judge: this.rt.judgeModel }
       : { executor: this.rt.executor, explorer: this.rt.llm };
     this._cfHeadRuntime = createHeadRuntime({
-      host: this,
-      identity: async () => ({
-        ownerUserId,
-        capabilityToken: this.workspaceCapabilityToken(),
-        // The REGISTERED workspace, never this actor's own DO name — the file
-        // plane is keyed by it, so a self-named head derives a second, empty
-        // filesystem (unit-head-fork.test.ts).
-        sharedParent: this.workspaceName(),
-      }),
+      host: this.explorationSeams(),
       models: this.ownedModelServices,
       // The merge is a JUDGE call, so its model and its effort come from the
       // route table rather than from the actor's stored chat spec at a constant
@@ -5325,132 +5578,28 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Run a tool-using node's loop in a `SubordinateAgent` facet in node mode —
-   * `hostNodeLoop` over this actor's own facet verbs.
+   * A node loop runs in the search's isolate with an arbiter closure over the
+   * live remaining-children budget; its host provisions the home from its
+   * directory row.
    *
-   * Undefined before the agent has an owner, for `getCFHeadRuntime`'s reason: a
-   * facet reaches the owner's credentials as its workspace, so without an owner
-   * there is nothing to attenuate. Undefined is not a failure here — an absent
-   * host runs the same loop in this isolate.
-   *
-   * The arbiter is published under this node's id for the LIFE OF THE RUN and
-   * withdrawn when it settles, because that registration is the only route a
-   * facet has back to a budget that exists solely in this isolate. Withdrawing it
-   * is not tidiness: an entry that outlived its run would answer a later node
-   * against a settled search, and `nodeArbitrate` refuses rather than granting
-   * children nobody would create.
-   *
-   * A facet per node buys a storage boundary and a teardown verb, NOT
-   * parallelism — `do.facet.cpu_shared` is the governing fact, so a wave of
-   * hosted nodes serialises exactly as one isolate's `Promise.allSettled`
-   * already did. No concurrency bound is imposed here because none is needed for
-   * that reason: the width cap the search already enforces bounds how many
-   * facets exist at once, and adding a second limiter would be one policy in two
-   * places.
+   * `hostNodeSeat` (`exploration-hosting.ts`) is requested PER NODE because
+   * search deps are shallow-copied per child, and sharing one seat would give
+   * a whole wave one claim ledger and one loop pointer.
    */
-  protected getCFNodeHost(): NodeLoopHost | undefined {
-    const ownerUserId = this.getOwnerUserId();
-    if (!ownerUserId) return undefined;
-    return hostNodeLoop(this, {
-      identity: () => ({
-        ownerUserId,
-        capabilityToken: this.workspaceCapabilityToken(),
-        // The PARENT's workspace, never this facet's own name: the file plane
-        // is keyed by it, so a self-named node would derive a second, empty
-        // filesystem — the regression unit-head-fork.test.ts pins.
-        sharedParent: this.workspaceName(),
-      }),
-      registerArbiter: (nodeId, arbitrate) => this.registerNodeArbiter(nodeId, arbitrate),
-    });
-  }
-
-  /** The search's node home provisioner: the owner's registry, through the
-   *  same port every facet kind uses. Undefined before the agent has an owner,
-   *  for `getCFNodeHost`'s reason, and then the search reports the shared
-   *  plane rather than inventing a home. */
-  protected hostedNodeHomeProvisioner(): NodeWorkspaceProvisioner | undefined {
-    if (!this.getOwnerUserId()) return undefined;
-    return async (node) => ({ ...await this.facetHomes().provision('node', node.nodeId), isolation: 'private-home' });
-  }
 
   /**
-   * The arbiters of searches running in THIS isolate right now, by node id.
-   *
-   * In memory and not a table, because that is what it is: a verdict is decided
-   * against a live remaining-children count, so an entry outliving its wave would
-   * answer for a budget with no wave behind it. A `Map` rather than a record
-   * because the keys are minted ids and entries are added and deleted as waves
-   * open and settle.
-   */
-  private readonly nodeArbiters = new Map<string, NodeArbiter>();
-
-  /**
-   * Arbitrate a HOSTED node's branch request, on behalf of the search that owns
-   * the budget.
-   *
-   * Why this exists when `recordHeadStep` was reusable and this is not: a step is
-   * a write to a table this actor holds, so any caller can perform it. A verdict
-   * is a decision against a LIVE budget — the remaining-children count of a
-   * search that is running right now, in this isolate — and that budget is not a
-   * row anyone can read. So the arbiter registers itself here for the life of its
-   * wave and this method is the route a facet reaches it by.
-   *
-   * Refuses rather than assumes when no arbiter is registered. A node whose
-   * search has already settled must not be handed a grant nobody will honour: the
-   * children would be reserved against a budget that is gone, and the node would
-   * report having been given work the engine never created.
-   *
-   * TRACED as its own invocation, because that is exactly what it is: an RPC
-   * INTO this object from a facet running elsewhere, and the node is blocked on
-   * the answer. A node that stalls waiting for a verdict and a node that stalls
-   * before asking for one are indistinguishable from the node's side and from
-   * every row either writes.
-   */
-  async nodeArbitrate(nodeId: string, proposal: BranchProposal): Promise<BranchDecision> {
-    return await this.tracing.invocation('rpc', 'swarm.arbitrate', async (_invocation, span) => {
-      span.setAttribute('kinu.node_id', nodeId);
-      const arbiter = this.nodeArbiters.get(nodeId);
-      if (!arbiter) {
-        // `budget-exhausted` rather than a sixth policy value: the vocabulary is
-        // closed on purpose, and this IS that fact — a settled search has no
-        // remaining children, so none can be reserved. The prose carries the
-        // detail, and the prose is what the node reads.
-        span.setAttribute('kinu.arbiter_registered', false);
-        return {
-          kind: 'refused',
-          policy: 'budget-exhausted',
-          error: 'The search that spawned this node is not arbitrating, so no branch can be '
-            + 'reserved. Finish your own task and report.',
-        };
-      }
-      span.setAttribute('kinu.arbiter_registered', true);
-      const decision = await arbiter(proposal);
-      span.setAttribute('kinu.decision', decision.kind);
-      return decision;
-    });
-  }
-
-  /**
-   * Register a hosted node's arbiter for the life of its run, and return the
-   * handle that unregisters it.
-   *
-   * A returned disposer rather than a second `unregister` call, because the two
-   * MUST be paired: an entry that outlived its wave would answer a later node
-   * against a settled budget, which is the exact failure the refusal above
-   * describes and this shape makes hard to cause.
-   */
-  registerNodeArbiter(nodeId: string, arbiter: NodeArbiter): () => void {
-    this.nodeArbiters.set(nodeId, arbiter);
-    return () => { this.nodeArbiters.delete(nodeId); };
-  }
-
-  /**
-   * The parent's recent conversation, handed to each spawned head so it sees
-   * the full context. Capped to the last N messages to bound head LLM context
-   * over long sessions (Think Session already compacts the table at the
+   * ONE actor's recent conversation, handed to each spawned head so it sees the
+   * full context. Capped to the last N messages to bound head LLM context over
+   * long sessions (Think Session already compacts the table at the
    * orchestrator level; this is a second safety net for head spawns).
+   *
+   * WHOSE conversation is an argument, defaulting to this object's own actor.
+   * The transcript table is `actor_id`-scoped, and a HOSTED actor hiring a
+   * child of its own passes what IT has said rather than what the workspace
+   * root has: a hire handed the root's transcript inherits a conversation it
+   * was never party to.
    */
-  protected readInheritedContext(): SerializedMessage[] {
+  protected readInheritedContext(actor: ActorHandle = this.actorHandle()): SerializedMessage[] {
     // The agents SDK's session provider creates assistant_messages on its first
     // append, so an agent that has not run a turn has none. Asked directly:
     // catching instead made "no conversation yet" indistinguishable from a read
@@ -5463,11 +5612,16 @@ export abstract class ActorAgent extends Think<Env> {
       FROM (
         SELECT id, role, content, created_at
         FROM assistant_messages
+        WHERE actor_id = ${actor.actorId}
         ORDER BY created_at DESC
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
       ORDER BY created_at ASC`;
-    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
+    // The SAME predicate on the total: a count over every actor's transcript
+    // beside a page from one actor's would report a fork inheriting context it
+    // was never given, which is the reading this cap exists to bound.
+    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages
+      WHERE actor_id = ${actor.actorId}`[0]?.n ?? rows.length;
     return inheritedContextFromRows(
       rows.map((r) => ({
         id: r.id,
@@ -5563,8 +5717,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  same resolution getModel() applies. Computing the threshold from the raw
    *  stored spec leaves an unset model on the generic context window instead
    *  of the resolved default model's real limit. Falls back to the raw spec
-   *  only pre-claim (no provider registry yet). */
-  private effectiveModelSpec(): string {
+   *  only pre-claim (no provider registry yet).
+   *
+   *  Protected because a hosted actor's search prices its estimate against the
+   *  workspace's own catalog session, which is this resolution. */
+  protected effectiveModelSpec(): string {
     const stored = this._turnProfile?.tier.model ?? this.getStoredModelId();
     try {
       return this.providerRegistry().normalizeSpecSync(stored);
@@ -5601,7 +5758,10 @@ export abstract class ActorAgent extends Think<Env> {
   /** The shared catalog view of the resolved model (core model-catalog):
    *  one cached, non-blocking lookup per spec; static fallbacks (window
    *  table / conservative media policy) answer until it lands. */
-  private readonly modelCatalog = new ModelCatalogSession({
+  /** Protected: the workspace's mission ledger prices every hosted actor's
+   *  spend off this one catalog, so a search's estimate and the ledger that
+   *  debits it read one rate. */
+  protected readonly modelCatalog = new ModelCatalogSession({
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: async (spec) => {
       if (!spec) return null;
@@ -5651,14 +5811,58 @@ export abstract class ActorAgent extends Think<Env> {
       break;
     }
     this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-    void this.sql`INSERT INTO active_durable_turn (id, turn_id) VALUES (1, ${this._turnCheckpoint.turnId})
-      ON CONFLICT(id) DO UPDATE SET turn_id = excluded.turn_id`;
+    // No handoff row is written here. The durable claim written later in
+    // `beforeTurn` IS the handoff, and it carries what a row here could not:
+    // which issued actor owns the turn, which execution epoch owns it, and the
+    // program identity the turn was admitted on.
     const pending = this.sql<{ id: string; text: string }>`
-      SELECT id, text FROM pending_steers WHERE turn_id = ${this._turnCheckpoint.turnId} ORDER BY seq ASC`;
+      SELECT id, text FROM pending_steers
+      WHERE actor_id = ${this.actorHandle().actorId} AND turn_id = ${this._turnCheckpoint.turnId}
+      ORDER BY seq ASC`;
     if (pending.length > 0) this.userSteer.restorePending(pending);
   }
 
+  /**
+   * The turn-local message tail: the unapproved instruction files, then the
+   * volatile turn-local block — the order they ride ahead of the turn in.
+   *
+   * Both are turn-scoped user messages that are absent more often than not,
+   * which is the whole of the branching here: three independent "is there
+   * anything to say" decisions whose only shared answer is this array. The
+   * unapproved half of the two instruction sources the system prompt just
+   * rendered is agent-writable, so it rides one sealed user message instead of
+   * the system plane, and it is null when every discovered file was approved.
+   *
+   * Never persisted: `assembleTurnMessages` appends this after the extension
+   * transformContext seam, so compaction never sees it.
+   */
+  private turnLocalTail(
+    deviceNotice: string | null,
+    agentsMd: AgentsMdSources,
+    activeSkills: ActiveSkillSet | undefined,
+  ): ModelMessage[] {
+    // Provenance rides here, not in the system prompt: it flips whenever a
+    // background job lands mid-session, and at system placement that flip
+    // rewrote the whole cacheable prefix twice — once into the wake and once
+    // back out (core prompting/volatile-context.ts).
+    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = {
+      deviceNotice,
+      provenance: this.turnProvenance(),
+    };
+    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
+    const turnLocal = turnLocalContextMessage(turnLocalOptions);
+    const unverified = unverifiedInstructionsMessage(
+      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
+    );
+    return [
+      ...(unverified ? [unverified] : []),
+      ...(turnLocal ? [turnLocal] : []),
+    ];
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    this._turnProgram = null;
+    ctx.signal?.throwIfAborted();
     // The scaffold and the soul are both files this turn is about to read, and
     // this is the first place with a promise to await them on.
     await this.ensureOwnedScaffold();
@@ -5718,21 +5922,17 @@ export abstract class ActorAgent extends Think<Env> {
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
     this._currentRunId = `run-${nanoid()}`;
-    // A new analytics write window. The platform caps writes per INVOCATION,
-    // which is not a thing this code can observe from inside a Durable Object; a
-    // TURN is, and it is the unit whose row count can actually run away (a turn
-    // with two hundred tool calls writes four hundred rows). Opening it here
-    // makes the cap bound the thing that can exceed it.
+    // Each run opens a new analytics write window.
     openAnalyticsWindow(this.env);
     this.restoreTurnCheckpoint();
     openTurnRun(this.eventRecorder, this._currentRunId, {
-      agentId: this.name,
+      agentId: this.actorHandle().actorId,
       causedBy: 'chat',
       userMessage: extractLastUserText(ctx.messages),
       turnIndex: this.orch.sessionTurnIndex,
     });
 
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     // ── Skills resolution for this turn (core turn-surface) ──────────────
     this._turnActiveSkills = null;
     // The actor's REAL tool surface: deps-gated builtins (report) are
@@ -5868,7 +6068,6 @@ export abstract class ActorAgent extends Think<Env> {
         .map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       workMode,
-      provenance: this.turnProvenance(),
       roleSection: profile.role,
       planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
       model,
@@ -5876,7 +6075,7 @@ export abstract class ActorAgent extends Think<Env> {
       // Prompt sections the evolution loop promoted. Read here, not inside the
       // builder: the builder is the byte-stable cacheable prefix and does no
       // I/O, exactly as with the soul.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql),
+      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
       identity,
     };
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
@@ -5907,16 +6106,7 @@ export abstract class ActorAgent extends Think<Env> {
     // model sees its latest lessons in-turn. Read once here rather than per
     // step: it is the one dynamic-context input that needs an await.
     this._turnMemoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = { deviceNotice };
-    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
-    const turnLocal = turnLocalContextMessage(turnLocalOptions);
-    // The unapproved half of the two instruction sources the system prompt just
-    // rendered. Those bytes are agent-writable, so they ride one sealed user
-    // message ahead of the turn-local tail instead of the system plane; null
-    // when every discovered file was approved.
-    const unverified = unverifiedInstructionsMessage(
-      activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd },
-    );
+    const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
     // The shared turn-context assembly (core orchestrator/turn-context.ts) —
     // the SAME ordering runChat runs on the CLI: attachment sanitize →
     // extension onTurnStart → awaited transformContext (compaction, over the
@@ -5929,10 +6119,7 @@ export abstract class ActorAgent extends Think<Env> {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
       extensions: this.extensions,
-      turnLocal: [
-        ...(unverified ? [unverified] : []),
-        ...(turnLocal ? [turnLocal] : []),
-      ],
+      turnLocal,
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
       trigger: measured.trigger,
@@ -5971,7 +6158,9 @@ export abstract class ActorAgent extends Think<Env> {
     };
     cfg.messages = await assembleTurnMessages(assembly);
 
-    cfg.tools = toolsForInvocation(workMode, { ...modeTools, ...effectiveTools });
+    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
+    this._turnTaskPlan = taskPlan;
+    cfg.tools = withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan);
     cfg.activeTools = effectiveActiveTools;
 
     // Prompt-cache plan for this turn — the same core derivation `runChat`
@@ -6036,7 +6225,38 @@ export abstract class ActorAgent extends Think<Env> {
       activeTools: cfg.activeTools,
     };
     if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
+    const runtime = this.rt;
+    const mode = this.turnWorkMode();
+    const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
     this._lastTurnOpts = lastTurnOpts;
+    this._turnProgram = { program, signal: ctx.signal };
+    // THE DURABLE CLAIM, and this is the last statement before Think starts
+    // inference — everything above it is preparation that has issued nothing.
+    // It persists the issued actor, this activation's run, the turn, the next
+    // execution epoch, the immutable work mode, the SELECTED program's identity
+    // (version + the digest of the source that version retains, or the builtin
+    // loop and the build this host publishes for it) and the exact context the
+    // turn was admitted against. A crash after this leaves a claim a recovery
+    // can verify; a crash before it leaves a turn that provably did nothing.
+    const turnId = this.durableTurnId() ?? this._currentRunId;
+    // The plane rebases before the claim, not after: `admitted.messages` is this
+    // actor's history with any edit staged while the turn was preparing already
+    // applied, and with input delivered since preserved after it exactly once.
+    // The claim records THAT array, so the context a turn was admitted against
+    // and the context its first request carries are one value.
+    const admitted = this.contextPlane.startTurn({
+      turnId,
+      history: this._adoptedContext ?? cfg.messages ?? ctx.messages,
+    });
+    this._turnClaim = this.stores.claims.admit({
+      runId: this._currentRunId,
+      turnId,
+      workMode: mode,
+      program: programIdentityOf(program, this.installedBuildIdentity()),
+      context: admitted.messages,
+      workingRevision: admitted.workingRevision,
+    });
+    cfg.messages = [...admitted.messages];
     // The turn's constants for the per-step context breakdown. Tool schemas
     // ride every request of the turn and are otherwise invisible to anyone
     // asking where the window went.
@@ -6116,6 +6336,10 @@ export abstract class ActorAgent extends Think<Env> {
       budget: this.budget,
       dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
       meter: this.acc.composition,
+      // The claim's context plane: the array this step consumes becomes the
+      // revision it ran on, recorded here — the one place holding the FINAL
+      // composed request — and before the request leaves.
+      context: this._turnClaim === null ? undefined : this.contextPlane.steps(this._turnClaim),
     }, { stepNumber: ctx.stepNumber, messages: ctx.messages, steps: ctx.steps });
   }
 
@@ -6358,6 +6582,52 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
+   * THE SAME AUTHORITY, resolved for ONE hosted actor rather than for the root.
+   *
+   * A hosted turn — a head, a node, a delegated hire, a slate call down the hop
+   * path — resolving `routingProfile()` would read `this.activeRoleLabel()` and
+   * `this.config`: the ROOT's role and the root's tier. A child narrowed to
+   * `scribe` would be answered with the root's unrestricted surface, and the
+   * seams that take an `actor` argument to say whose profile they want would
+   * ignore it — a role restriction that is durable, per actor and enforced
+   * nowhere.
+   *
+   * The child's role comes off its OWN handle: `ActorHandle.config` is bound to
+   * that actor's id and re-validates the binding on every read, so this cannot
+   * name a retired or re-parented actor's rows.
+   *
+   * `profileInputs()` stays the WORKSPACE's — the catalog envelope, the
+   * provider snapshot — which is what makes this a NARROWING. The resolver
+   * intersects the requested role against the roles the workspace actually
+   * offers, so a child whose stored selection names a role this workspace does
+   * not publish narrows to nothing rather than widening to everything. That
+   * intersection is `resolveAgentTurnProfile`'s own rule for a chat turn, which
+   * is exactly why the role is handed to it instead of applied here.
+   *
+   * NOT `resolveRoutingProfile`: that returns the root's LIVE `_turnProfile`
+   * when one exists, which is the root's turn and never this actor's.
+   */
+  protected async hostedActorProfile(input: {
+    readonly actor: ActorHandle;
+    readonly availableTools: readonly string[];
+    readonly workMode: WorkMode;
+  }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
+    const inputs = await this.profileInputs();
+    const config = input.actor.config;
+    return {
+      profile: await resolveAgentTurnProfile({
+        ...inputs,
+        activeRoleId: config.getRoleSelection(),
+        workMode: input.workMode,
+        availableTools: [...input.availableTools],
+        activeSkills: [],
+        explicitTier: config.getAssignedTier() ?? undefined,
+      }),
+      inputs,
+    };
+  }
+
+  /**
    * One producer's resolved model, with the spec that prices it and the provider
    * options for the effort its tier chose.
    *
@@ -6472,7 +6742,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  or cross objects, which is why it lives in the alarm frame and never in
    *  an activation. Idempotent by contract; the base owns none. Answers
    *  whether the pass filled a budget and must continue on the next tick. */
-  protected async maintenanceWork(): Promise<boolean> { return false; }
+  protected async maintenanceWork(): Promise<boolean> {
+    return recoverSubordinateLifecycles(this.subordinateRoster, this.subordinateRuntime());
+  }
 
   /** Detached work this actor owns until its lexical error boundary settles. */
   protected readonly _backgroundTasks = new Set<AsyncTaskOwner>();
@@ -6575,6 +6847,7 @@ export abstract class ActorAgent extends Think<Env> {
    * day; this override only supplies what a fresh activation can re-resolve.
    */
   override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    this.actorHandle();
     return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
   }
 
@@ -6589,6 +6862,7 @@ export abstract class ActorAgent extends Think<Env> {
       hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
       reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
       sql: this.boundSql,
+      actor: this.actorHandle(),
       appendMemory: (path, text) => this.rt.memory.append(path, text),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.signals.deliver(signal),

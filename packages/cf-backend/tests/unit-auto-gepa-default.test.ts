@@ -13,7 +13,7 @@ import { AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS } from '@kinu.run/co
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const storedCadence = (db: Database): string | null =>
-  db.prepare<{ value: string }, [string]>('SELECT value FROM agent_config WHERE key = ?')
+  db.prepare<{ value: string }, [string]>('SELECT value FROM actor_config WHERE key = ?')
     .get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns)?.value ?? null;
 
 const evolutionNotes = (db: Database) =>

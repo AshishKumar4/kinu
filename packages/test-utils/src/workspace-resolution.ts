@@ -46,9 +46,27 @@ function treeRoot(from: string): string {
   }
 }
 
-/** Every workspace package that has an entry point to resolve, name → directory.
- *  A bin-only package (the CLI) has none and is not a resolution target. */
-function workspacePackages(root: string): Map<string, string> {
+/**
+ * Every workspace package that has an entry point to resolve, name → directory.
+ * A bin-only package (the CLI) has none and is not a resolution target.
+ *
+ * Exported because it is THE list of what a tree's `node_modules` workspace
+ * links must point at, and whatever BUILDS those links has to work from the same
+ * list this guard judges them by. `scripts/bench-sandbox.ts` rebuilds them for
+ * every attempt sandbox from THIS list, never from `sources.ts:workspaceScope()`
+ * — the single PRODUCT scope, which by construction cannot name the vendored
+ * `@agent-core` one, so a builder reading that scope leaves the link pointing
+ * into the donor checkout and every sandbox measures the donor's agent-core
+ * while reporting on the copy. A builder reading one list while the guard reads
+ * another is the set-equality defect itself, so there is one list and this is it.
+ *
+ * `setup-worktree.sh` derives the same set with a shell glob because it runs
+ * BEFORE `node_modules` exists, where this module's own imports cannot resolve.
+ * That is not a second answer: the script ends by running the suites that call
+ * {@link assertWorkspaceResolution}, so its result is checked against this
+ * enumeration before it is believed.
+ */
+export function workspacePackages(root: string): Map<string, string> {
   const packages = new Map<string, string>();
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;

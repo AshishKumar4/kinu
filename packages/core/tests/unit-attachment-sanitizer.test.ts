@@ -254,7 +254,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     expect(text.length).toBeLessThan(3_000);
     expect(text).toContain('PASTE-HEAD');
     expect(text).toContain(`${HUGE_PASTE.length} bytes`);
-    expect(text).toContain('as `context_ref` on an agents ask');
+    expect(text).toContain('agents hire so that agent reads it instead of you');
     const path = savedPath(text);
     expect(path).toStartWith('attachments/');
     expect(new TextDecoder().decode(v.parse(v.instance(Uint8Array), await vfs.readFile(path)))).toBe(HUGE_PASTE);

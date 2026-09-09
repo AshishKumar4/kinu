@@ -76,11 +76,11 @@ describe('the resolution a run resolved', () => {
     expect(swarmResolutionOf('ideate')).toMatchObject({ kind: 'preset', settle: 'merge' });
   });
 
-  test('every named preset now resolves, so the undeclared case is gone', () => {
-    // This test used to assert the third case: `redteam` had no tuple to show and the
-    // surface quoted what the table had not stated. Its row is declared now — the
-    // archive's novelty floor is Rainbow Teaming's τ=0.6 converted from a similarity
-    // ceiling to a distance floor — so the surface has a tuple to draw.
+  test('every named preset resolves, so redteam has an archive floor to show', () => {
+    // Every named preset has a declared row, so the surface never quotes what the
+    // table has not stated. `redteam`'s archive novelty floor is Rainbow Teaming's
+    // τ=0.6 converted from a similarity ceiling to a distance floor, which is the
+    // tuple the surface draws.
     const resolution = swarmResolutionOf('redteam');
     expect(resolution?.kind).toBe('preset');
     expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toContainEqual(

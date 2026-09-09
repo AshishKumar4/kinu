@@ -48,7 +48,7 @@ tester.run("anti-slop/no-wait-until-in-durable-object", noWaitUntilInDurableObje
     },
     {
       name: "the pre-2023 spelling of the state handle",
-      code: "class Legacy extends DurableObject { run() { this.state.waitUntil(task()); } }",
+      code: "class StateHandle extends DurableObject { run() { this.state.waitUntil(task()); } }",
       errors: [error],
     },
     {

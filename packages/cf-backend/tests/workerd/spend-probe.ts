@@ -2,14 +2,11 @@
  * The workspace-spend aggregate, run on real Durable Object SQLite.
  *
  * WHY THIS IS A PLATFORM TEST AND NOT A SQL-SHAPE ONE. The totals the Activity
- * panel renders are summed by ONE query (`RunEventRecorder.spendByProducer`)
- * whose whole method is SQLite features the repository had never asked a Durable
- * Object for on a production read path: `WITH` common table expressions and the
- * JSON1 function `json_extract` over the `run_events.payload` column. The
- * recorder's own docstring used to say the opposite — "no production query has
- * ever depended on SQLite's JSON functions being available on both of them" —
- * and every other test of this read runs under `bun test`, i.e. against
- * `bun:sqlite`, whose feature set says nothing whatever about workerd's.
+ * panel renders are summed by ONE query: `RunEventRecorder.spendByProducer`
+ * uses `WITH` common table expressions and the JSON1 function `json_extract`
+ * over `run_events.payload`, so its behavior must be exercised on Durable
+ * Object SQLite. Every other test of this read runs under `bun test`, i.e.
+ * against `bun:sqlite`, and passing there does not establish workerd support.
  *
  * So the question is not whether our SQL is right. It is whether the platform
  * answers it at all. A workerd SQLite built without JSON1 would throw
@@ -24,8 +21,8 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import {
-  initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
-  type SpendSource, type SqlExecutor, type Usage,
+  bindActorHandle, initRunEventTables, RunEventRecorder, WORKSPACE_RUN_ID,
+  type ActorHandle, type SpendSource, type SqlExecutor, type Usage,
 } from '@kinu.run/core';
 
 /** One producer's row, flattened for the RPC boundary — a `Map` is not
@@ -50,9 +47,21 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
     query: TemplateStringsArray, ...values: SqlStorageValue[]
   ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
 
+  /** This probe's own actor. `run_events` is actor-scoped, and the probe writes
+   *  and sums the same rows, so one bound identity serves both halves; there is
+   *  no directory in this worker to resolve one from. */
+  private actor(): ActorHandle {
+    return this._actor ??= bindActorHandle(this.sql, {
+      actorId: 'spend-probe-actor', workspaceId: 'spend-probe-workspace', parentActorId: null,
+      name: 'spend-probe', storageKey: 'agent:spend-probe-actor',
+    }, () => {});
+  }
+
+  private _actor: ActorHandle | undefined;
+
   private recorder(): RunEventRecorder {
     initRunEventTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
-    return new RunEventRecorder(this.sql);
+    return new RunEventRecorder(this.sql, this.actor());
   }
 
   /**
@@ -101,6 +110,8 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
    *  covered every one of them rather than a window's worth. */
   rows(): number {
     return this.ctx.storage.sql
-      .exec<{ n: number }>('SELECT COUNT(*) AS n FROM run_events').one().n;
+      .exec<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ?', this.actor().actorId,
+      ).one().n;
   }
 }

@@ -391,11 +391,10 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
  *
  * THREE THINGS CAN QUALIFY THESE TOTALS and they arrive independently, so they
  * are composed into one caveat line by {@link spendCaveat} rather than stacked as
- * three warnings a reader learns to skip. A fourth used to sit above them — the
- * read having stopped at a row bound with the log running on past it — and it is
- * gone because the producer rows are now summed in SQL over every row. The
- * figure above this block is still the windowed one; these are the whole life of
- * the workspace, and the header says which.
+ * three warnings a reader learns to skip. A row bound is not one of them: the
+ * producer rows are summed in SQL over every row, so no read stops short with
+ * the log running on past it. The figure above this block is still the windowed
+ * one; these are the whole life of the workspace, and the header says which.
  */
 function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   const { producers, total, coverage } = spend;
@@ -583,12 +582,11 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
  * skip. Each clause is pushed by its own condition, so a live qualifier cannot be
  * lost to the composition and an inapplicable one says nothing at all.
  *
- * A fourth clause used to lead the list: the read having stopped at a row bound
- * with the log running on behind it. It is gone because the totals are summed in
- * SQL over every row, so the widest qualifier a reader now faces is a silent
- * producer bounding the tokens, and a missing rate bounding only the dollars.
- * Null when the totals need no qualifying, which is the one case the panel is
- * allowed to state positively.
+ * A row bound is not a fourth clause: the totals are summed in SQL over every
+ * row, so no read stops short with the log running on behind it. The widest
+ * qualifier a reader faces is a silent producer bounding the tokens, and a
+ * missing rate bounding only the dollars. Null when the totals need no
+ * qualifying, which is the one case the panel is allowed to state positively.
  */
 function spendCaveat(spend: WorkspaceSpend): string | null {
   const { total, coverage } = spend;

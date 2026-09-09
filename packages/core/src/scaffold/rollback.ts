@@ -16,9 +16,12 @@ export async function rollbackScaffold(
   rt: AgentRuntime,
   version: number,
 ): Promise<{ ok: boolean; error?: string }> {
+  rt.actor.assertCurrent();
+  const actorId = rt.actor.actorId;
   const sql = rt.storage.sql;
   const row = sql<{ status: string }>`
-    SELECT status FROM scaffold_versions WHERE version = ${version} LIMIT 1`[0];
+    SELECT status FROM scaffold_versions
+    WHERE actor_id = ${actorId} AND version = ${version} LIMIT 1`[0];
   if (!row) {
     return { ok: false, error: `Version ${version} not found in scaffold history` };
   }
@@ -30,8 +33,9 @@ export async function rollbackScaffold(
 
   void sql`UPDATE scaffold_versions
       SET status = CASE WHEN version = ${version} THEN 'current' ELSE 'rolled_back' END
-      WHERE version = ${version}
-         OR (status = 'current' AND version != ${version})`;
+      WHERE actor_id = ${actorId}
+        AND (version = ${version}
+             OR (status = 'current' AND version != ${version}))`;
   await rt.identity.scaffold.write(target);
   return { ok: true };
 }

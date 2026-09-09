@@ -38,11 +38,11 @@
  *      deliberately absent: it is unbounded and possibly sensitive, and a trace
  *      attribute is neither the place to bound it nor the place to redact it. The
  *      chain belongs to `Logger.failure`, which requires a classification and
- *      renders the whole `cause` chain. THIS FILE USED TO RECORD
- *      `kinu.error_message = error.message` — a secret in an upstream error's
- *      message would have been written to the trace stream, where
- *      `ReservedLogField` does not reach, and only on the non-throwing `fail`
- *      path, so a THROWN failure was not marked at all.
+ *      renders the whole `cause` chain. RECORDING `kinu.error_message =
+ *      error.message` HERE would write a secret in an upstream error's message
+ *      to the trace stream, where `ReservedLogField` does not reach — and it
+ *      would land only on the non-throwing `fail` path, so a THROWN failure
+ *      would not be marked at all.
  *   4. THE SPAN STAYS OPEN UNTIL THE PROMISE SETTLES. `enterSpan` does that
  *      itself, by watching the promise the callback returns — so the marker must
  *      be attached to THAT promise, before returning it, or the span closes

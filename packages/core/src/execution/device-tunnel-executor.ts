@@ -488,10 +488,10 @@ export function createDeviceTunnelExecutor(
       description: 'Check if a path exists on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         const path = parseInput(StringSchema, { value: args[0] });
-        // Both answers used to be `false`, which claims the path is absent on the
-        // user's machine. One call was never made and the other could not reach
-        // the device — neither established anything about the path, and the
-        // second one swallowed its error to say so.
+        // NEITHER answer is `false`: `false` claims the path is absent on the
+        // user's machine. A call that was never made and one that could not
+        // reach the device establish nothing about the path, so each refuses
+        // rather than swallowing its error into a verdict.
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop exists: path must be a string'));
         }
@@ -664,10 +664,10 @@ function filesForCall(
  * faithful window, not a lossy rewrite — but only the directory the owner
  * NAMED at `kinu connect` is reachable while the device's Sandbox switch is on.
  *
- * There is deliberately no fallback. The scope used to default to `$HOME`,
- * which holds `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and
- * `~/.aws` — so "inside its connected folder" was the whole home, and reading
- * one file in it escalated what the agent could reach. A device that reported
+ * There is deliberately no fallback. Defaulting the scope to `$HOME` puts
+ * `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and `~/.aws` inside
+ * it — "inside its connected folder" would be the whole home, and reading one
+ * file in it escalates what the agent can reach. A device that reported
  * no root has no scoped file access: the owner re-runs `kinu connect` in the
  * directory they mean, which is the only party that can answer that question.
  *
@@ -710,10 +710,10 @@ export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNative
  *
  * `homeDir` is where the view opens: the consented root, or the machine's own
  * home under the full tier. Both arrive on `HELLO` and sit on the device row,
- * so this view never runs a command to learn a path — it used to `exec`
- * `printf %s "$HOME"`, which is an exec, which needs the FULL tier, so a
- * base-tier workspace could not list a directory without first being pushed
- * through a full-filesystem consent card.
+ * so this view never runs a command to learn a path. `exec`-ing
+ * `printf %s "$HOME"` needs the FULL tier, which would stop a base-tier
+ * workspace from listing a directory until it was pushed through a
+ * full-filesystem consent card.
  */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent, deviceId?: string): DeviceVFS {
   // Every call of this view is FOR one machine. The hub routes on the id; a

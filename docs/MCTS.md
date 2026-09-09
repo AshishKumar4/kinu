@@ -1,7 +1,6 @@
 # MCTS exploration
 
-MCTS explores solution approaches. Cloud branches use isolated Durable Object
-facets; local branches use isolated processes with their own SQLite state.
+MCTS explores solution approaches. Cloud branches run as logical actors on the workspace's one SQLite; local branches run as isolated processes bound to the same workspace database file.
 
 ## No tool reaches this engine
 
@@ -52,7 +51,7 @@ flowchart TD
     Init --> Budget{budget > 0?}
     Budget -->|No| Conv[Convergence check]
     Budget -->|Yes| Select[UCT Selection<br/>Pick best open node]
-    Select --> Expand[Expand: spawn N branches<br/>via subAgent / Facets]
+    Select --> Expand[Expand: spawn N branches<br/>via hosted branch actors]
     Expand --> Sim1[Branch 1: explore]
     Expand --> Sim2[Branch 2: explore]
     Expand --> SimN[Branch N: explore]
@@ -211,14 +210,11 @@ Each MCTS branch runs isolated:
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | `agent.subAgent(SubordinateAgent, explorationFacetKey(branchId))` through `spawnBranchFacet`, Facets | Separate DO with own SQLite. Proven in Lean: `MCTS/StorageIsolation.lean`, `transition_preserves_isolation`. |
+| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`exploration-hosting.ts`) | One workspace SQLite, actor-led keys. (`MCTS/StorageIsolation.lean` still models the old separate-store topology: its invariant is distinct branch storage ids, so it does not prove this row.) |
 | CF Workers (fallback) | Inline LLM calls | No storage access at all. Captures only LLM config, never agent reference. |
-| CLI | `child_process.fork('branch-worker.ts')` | Separate OS process with its own SQLite file in a `branches/` directory beside the workspace database (`createBranchSpawner`) |
+| CLI | `child_process.fork('branch-worker.ts')` over the workspace database file (`createBranchSpawner`) | Separate OS process, same database. A branch binds its own actor row and writes its rollout traces there. |
 
-Both backends score through `evaluation.ts`. Branch mode `SubordinateAgent`
-calls are `explore(priorHistory, craftedTools, languages, mode, siblings)` and
-`generateReflection(task, outcome?)`; `setOwner` / `setSharedParent` bootstrap;
-`mcts/diversity.ts` gives each index a framing angle.
+Both backends score through `evaluation.ts`. A branch handle offers `explore` and `generateReflection(task, outcome?)`; `mcts/diversity.ts` gives each index a framing angle.
 
 ### The observation loop
 
@@ -234,23 +230,18 @@ observation line.
 ### Why branches are toolless, and where the tool-using ones live
 
 MCTS branches are one model call, no `ToolSet`, no runtime. Paired `heads`
-(`core/src/heads/controller.ts`) runs full loops in the same class in head mode,
-scored through `HeadController.scoreHeads` and `evaluation.ts`.
+(`core/src/heads/controller.ts`) run full loops through `runHeadInference`,
+spawned per child by `HeadController.spawnHead` and scored through
+`HeadController.scoreHeads` and `evaluation.ts`.
 
 | | `mcts` | `heads` |
 |---|---|---|
 | Branch | one `generateText`, no tools | multi-step loop, `execute_tools`/`run`/`file`/`web` |
-| Isolation | structural: separate DO/process, no filesystem (`StorageIsolation.lean`) | prompt-level: heads share the canonical workspace and are *asked* to make their own git worktree |
+| Isolation | actor boundary: logical actors on one SQLite (CF) or one process per branch on the same database file (CLI) | prompt-level: heads share the canonical workspace and are *asked* to make their own git worktree |
 | Branches per run | tens (budget × branches, re-expanded by UCT) | a handful, spawned once |
 | Relationship | rivals; most are pruned | collaborators; all are merged |
 
-`runAsHead` would put tens of concurrent heads in one shared workspace, where
-branch changes cannot be graded. The per-branch workspace that fixes this is
-unnecessary here. A swarm node is a full agent, graded on its reported
-candidate, never a tree diff. See "A node is an agent" in
-[EXPLORATION.md](./EXPLORATION.md). `initHead` / `runAsHead` / `abortHead` are
-head-mode `@callable()`s; [ARCHITECTURE.md](./ARCHITECTURE.md) explains the
-separate `ActorAgent` hierarchy.
+Spawning tens of concurrent heads in one shared workspace would leave branch changes ungradeable. A swarm node is a full agent instead, graded on its reported candidate, never a tree diff. See "A node is an agent" in [EXPLORATION.md](./EXPLORATION.md). Heads spawn through `HeadController.spawnHead` into hosted logical actors; [ARCHITECTURE.md](./ARCHITECTURE.md) describes the one actor hierarchy they join.
 
 ## Pruning and convergence
 
@@ -261,7 +252,10 @@ Pruning requires `value < pruneThreshold` (0.25) and
 
 `mcts/convergence.ts` takes the argmax over `terminal` and `open` values.
 Rivals within `takesEpsilon` (0.1) run one shared suite and compare satisfied
-shares; all-pass and all-fail used to fall back to value order.
+shares — the measured share, not the pass bit, so two of four separates from
+none of four. Value order stands when no candidate carries runnable code,
+when nothing measured beats the argmax winner's own share, and always in Plan
+mode, which retains value order without running that suite.
 
 It refuses a winner below `minAcceptableScore` (0.3), or Undifferentiated
 textually distinct approaches with exactly equal values. Then `ORDER BY value
@@ -288,14 +282,14 @@ than shipping an unearned answer.
 | `code_used` | TEXT | Runnable source selected from an exploration proposal |
 | `code_language` | TEXT | Executor language for `code_used`; null when no runnable code was offered |
 | `msg_id` | TEXT | Session message ID for tree navigation |
-| `branch_agent_key` | TEXT | Maps to the Facet agent key |
+| `branch_agent_key` | TEXT | The logical branch actor's key, for aborting its rollout |
 | `evaluation_json` | TEXT | Bounded per-branch evaluation facts as JSON; null for a node that was never evaluated |
 | `created_at` | INTEGER | Epoch milliseconds |
 
 ## Formal properties (Lean 4)
 
-Eleven of the corpus's 485 named declarations live in `lean/Kinu/MCTS/`
-(measured 2026-08-30). The model uses exact scaled-integer arithmetic; SQLite
+Eleven of the corpus's 366 named declarations live in `lean/Kinu/MCTS/`
+(measured 2026-09-09). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
 | Property | File | Theorem | Claim status |

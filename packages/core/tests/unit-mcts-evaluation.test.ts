@@ -398,9 +398,9 @@ describe('grounding follows the executor, not a hardcoded language', () => {
   });
 
   test('an unrunnable branch cannot outrank a sibling whose code actually ran', async () => {
-    // The invariant the whole band table exists for. At the old prose cap a
-    // generously-judged unrunnable branch (0.75) beat a passing branch whose
-    // judge was merely middling (0.6 + 0.4·0.3 = 0.72).
+    // The invariant the whole band table exists for. At a 0.75 prose cap a
+    // generously-judged unrunnable branch beats a passing branch whose judge is
+    // merely middling (0.6 + 0.4·0.3 = 0.72).
     const unrunnable = await evaluateWithMultiModelJudging({
       task: 't', trajectory: '```ruby\nputs 1\n```',
       executor: exec(), judge: createJSONLLM({ score: 1.0 }), explorer: createJSONLLM({ score: 1.0 }),
@@ -643,11 +643,11 @@ describe('isParseFailure', () => {
 });
 
 describe('a judge call carries no elapsed deadline — the evaluator joins it', () => {
-  // The old contract dropped a judge that had not answered inside a wall-clock
-  // envelope, which silently shrank the ensemble on slow providers. Judge
-  // calls now carry NO elapsed bound: each sample is awaited to settlement,
-  // however long the provider takes. What bounds spend is the CALL COUNT
-  // (judgeCallBudget), not the clock.
+  // Judge calls carry NO elapsed bound: each sample is awaited to settlement,
+  // however long the provider takes. Dropping a judge that has not answered
+  // inside a wall-clock envelope silently shrinks the ensemble on slow
+  // providers. What bounds spend is the CALL COUNT (judgeCallBudget), not the
+  // clock.
 
   /** A judge whose completion resolves only when `gate` is released. */
   function gatedJudge(gate: Promise<void>, score: string): LLM & { calls: () => number } {
@@ -709,9 +709,9 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
 
 /**
  * LATS backpropagates `passed_test_count / len(tests)` (programming/mcts.py).
- * Ours used to backpropagate a bit, so every failing branch landed at
- * FAIL_FLOOR + FAIL_SPAN·judge and "almost right" was separated from "nothing
- * works" only by judge noise — the binary reward this repo already measured
+ * Backpropagating a bit instead lands every failing branch at
+ * FAIL_FLOOR + FAIL_SPAN·judge, separating "almost right" from "nothing works"
+ * by judge noise alone — and the binary reward this repo already measured
  * degenerates a search toward best-of-n (test-utils/src/eval-outcome.ts).
  */
 describe('partial credit: the fail band is positioned by MEASURED checks, not the judge', () => {
@@ -760,7 +760,7 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     expect(half.execution?.passedChecks).toBe(2);
     expect(most.execution?.passedChecks).toBe(3);
 
-    // The ordering the old binary verdict could not express.
+    // The ordering a binary verdict cannot express.
     expect(none.score).toBeLessThan(half.score);
     expect(half.score).toBeLessThan(most.score);
     // All still inside the fail band: partial credit never reaches a pass.

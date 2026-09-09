@@ -1,8 +1,8 @@
 /**
- * Judge-model selection — the self-preference fix. An unset review model used
- * to mean the agent graded itself with itself; the policy here prefers a
- * different vendor whenever one is connected and names the same-vendor case
- * for what it is.
+ * Judge-model selection — the self-preference guard. An unset review model
+ * would otherwise mean the agent grades itself with itself; the policy here
+ * prefers a different vendor whenever one is connected and names the
+ * same-vendor case for what it is.
  */
 
 import { describe, test, expect } from 'bun:test';

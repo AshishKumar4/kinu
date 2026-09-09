@@ -4,9 +4,10 @@
  * Every arm here is one an operator meets and a live deployment will not
  * reproduce on demand: a token that never reached the API and came back as an
  * HTML error page, an API refusal carrying no message, and a batch fill that
- * rejects. All three used to reduce to the same two words on a panel — a status
- * code with nothing after it — or, for the third, to a cache entry that served
- * one transient fault for its whole thirty-second life.
+ * rejects. Each names itself, because reduced to a status code with nothing
+ * after it all three read as the same two words on a panel — and the third must
+ * not leave a cache entry serving one transient fault for its whole
+ * thirty-second life.
  *
  * Driven through `runAnalyticsBatch` with `fetch` stubbed, because the reason
  * string IS the contract: it is the only thing the metrics view shows when a
@@ -93,8 +94,8 @@ describe('an error response whose body is not the documented envelope', () => {
   });
 
   test('JSON that parses but is not the envelope is the same answer', async () => {
-    // The arm a schema-tolerant decode hid: valid JSON, wrong shape, which used
-    // to reduce to the identical `{}` an envelope with no message produces.
+    // The arm a schema-tolerant decode hides: valid JSON, wrong shape, which it
+    // reduces to the identical `{}` an envelope with no message produces.
     answering(500, '[1,2,3]');
     expect(await reasonOf()).toContain('not the documented error envelope');
   });

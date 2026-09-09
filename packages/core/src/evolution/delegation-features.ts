@@ -195,7 +195,9 @@ function agentsAction(call: ToolCallRecord): string | null {
 
 /** The persistent rung's actions. */
 const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
-const MESSAGING_ACTIONS = { ask: true, send: true, reply: true } satisfies Record<string, true>;
+/** The addressing action, plus the three verbs it replaced: these tables read
+ *  STORED rows, so a turn recorded before the collapse still classifies. */
+const MESSAGING_ACTIONS = { msg: true, ask: true, send: true, reply: true } satisfies Record<string, true>;
 /** The ephemeral-search rung's action. */
 const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 
@@ -243,12 +245,12 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
 /**
  * What a reader of the evidence above is asked to DO with it.
  *
- * Both readers of {@link renderDelegationFeatures} state this rubric — the turn
- * reflection (evolution/engine.ts) and the GEPA reflector (gepa/mutate.ts) — and
- * they used to state it in two independently-edited sentences that had already
- * drifted into two vocabularies for one ladder: `team`/`think`/`heads` in one and
- * `hire`/`search` in the other, neither of them the words the evidence line above
- * actually prints. One string, printed beside the counts it reads.
+ * ONE string, printed beside the counts it reads, and stated by both readers of
+ * {@link renderDelegationFeatures} — the turn reflection (evolution/engine.ts)
+ * and the GEPA reflector (gepa/mutate.ts). Two independently-edited sentences
+ * drift into two vocabularies for one ladder — `team`/`think`/`heads` against
+ * `hire`/`search` — and neither vocabulary is what the evidence line above
+ * actually prints.
  *
  * One clause per line, because they are three separate rules keyed on three
  * different turn outcomes. Fused into one sentence, a reader looking for the rule

@@ -14,6 +14,7 @@ import type { ContextBudgetSnapshot } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import type { ContextComposition } from '../context-meter';
 import type { FileEditSnapshot } from '../tools/file-ledger';
+import type { DbOpRecord } from '../tools/db-codemode';
 import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
@@ -54,6 +55,8 @@ export type RunEventType =
   | 'scaffold_promotion'
   | 'scaffold_rollback'
   | 'memory_write'
+  | 'db_op'
+  | 'context_edit'
   | 'context_budget'
   | 'file_edit'
   | 'turn_steering'
@@ -68,6 +71,23 @@ export type RunEventType =
   | 'error'
   | 'turn_end'
   | 'run_end';
+
+/**
+ * The three closed vocabularies of a `context_edit`, as constants rather than
+ * bare literal unions: the durable schema in `events/recorder.ts` builds its
+ * picklists from these, so the parser and the type cannot disagree about which
+ * words are admissible.
+ */
+/** Which surface authored the edit. `owner` is a human editing through the UI,
+ *  which is a different authority from the agent editing its own history. */
+export const CONTEXT_EDIT_VIA = ['file', 'session', 'owner'] as const;
+export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
+/** Accepted and numbered, or actually consumed by a boundary. */
+export const CONTEXT_EDIT_STATUSES = ['staged', 'activated'] as const;
+export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
+/** Which boundary takes it: the next step of the live turn, or the next turn. */
+export const CONTEXT_EDIT_BOUNDARIES = ['step', 'turn'] as const;
+export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
 export interface RunEventBase {
   /** Unique within a single run; monotonically increasing. */
@@ -147,11 +167,11 @@ export type RunEvent =
    *  `usage` is ALWAYS written, `{}` when the provider reported nothing,
    *  because the honest reading of a silent call is unmeasured spend, not free
    *  spend, and the workspace total's coverage fraction is built out of exactly
-   *  these. It stays OPTIONAL on the type only so rows written before that rule
-   *  still read back; every producer goes through `buildModelCallEvent`, which
-   *  is what makes the field present in practice. One backend used to omit it
-   *  instead, which left a reader unable to tell "unmeasured" from "not
-   *  recorded" — the one distinction this row exists to carry.
+   *  these. It stays OPTIONAL on the type only so rows written without it still
+   *  read back; every producer goes through `buildModelCallEvent`, which is what
+   *  makes the field present in practice. A producer that omitted it instead
+   *  would leave a reader unable to tell "unmeasured" from "not recorded" — the
+   *  one distinction this row exists to carry.
    *
    *  `usd` is that report at the CALL'S OWN model's catalog rate, absent
    *  when unpriced; a judge deliberately runs on a different model from the
@@ -235,6 +255,33 @@ export type RunEvent =
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
+  /** One committed `db` operation: which table, whose rows, and how many of
+   *  them changed.
+   *
+   *  Written INSIDE the mutation's own transaction (tools/db-codemode.ts), so a
+   *  batch that rolled back leaves none of these rows and a row that exists
+   *  proves the write it describes committed. `batch` is what tells one
+   *  transaction from several: every operation of one `db.batch` records the
+   *  same batch size, and a single operation records null. */
+  | (RunEventBase & { type: 'db_op' } & DbOpRecord)
+  /** A working-context edit: the revision it produced, the revision it was
+   *  authored against, and who authored it.
+   *
+   *  TWO of these per landed edit, and they are not redundant: `staged` when
+   *  the edit is accepted and numbered (`effectiveAt` says which boundary will
+   *  take it, `stepIndex` is null because none has), `activated` when a
+   *  boundary actually consumes it (`turnId`/`stepIndex` name that boundary).
+   *  A refused edit writes neither, so an activation row is never a claim about
+   *  an edit that never landed.
+   *
+   *  `revision` is numbered PER ACTOR and not per turn: the raw working history
+   *  and a turn's rendered requests are different coordinate spaces, and an
+   *  edit authored between turns — or before the actor's first turn — has no
+   *  turn at all, which is why `turnId` is nullable. */
+  | (RunEventBase & { type: 'context_edit'; revision: number; baseRevision: number;
+      messageCount: number; author: string;
+      via: ContextEditVia; status: ContextEditStatus; effectiveAt: ContextEditBoundary;
+      turnId: string | null; stepIndex: number | null })
   /** The turn's bulk-ingestion ledger — how much tool output the root actually
    *  admitted, what every producer spilled instead, and whether the agent read
    *  any of it back. Written once per turn by the settle spine (M1 trip
@@ -401,13 +448,12 @@ export type RunEventInput = {
  * What a call that failed WITHOUT saying why records as.
  *
  * An empty `error` is no error to every reader — the one predicate they share
- * is `error != null && error !== ''` — and the producer used to manufacture
- * exactly that from a tool reporting `success: false` with a nullish error
- * (`String(c.error ?? '')`). So the worst calls in a turn were the ones that
- * vanished from it: a tool failing on a missing runtime method reported failure
- * with nothing to report, and the ledger scored it as a clean call. The
- * accumulator KNEW — it flips `hadError` on the same branch — and discarded it
- * at the event boundary.
+ * is `error != null && error !== ''`. So a tool reporting `success: false` with
+ * a nullish error must not be rendered as `String(c.error ?? '')`: that makes
+ * the worst calls in a turn the ones that vanish from it, a tool failing on a
+ * missing runtime method reporting failure with nothing to report while the
+ * ledger scores it as a clean call. The accumulator KNOWS — it flips `hadError`
+ * on the same branch — and would lose it at the event boundary.
  *
  * A sentinel and not prose because both the producer and the failure census
  * name it, and a reader that has to match prose is a reader that will drift

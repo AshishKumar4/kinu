@@ -66,7 +66,7 @@ export {
   type HeadJournalPort,
 } from './controller';
 export {
-  extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
+  extractFinalText, synthesizeHeadSummary, headProducedFindings,
 } from './head-summary';
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,

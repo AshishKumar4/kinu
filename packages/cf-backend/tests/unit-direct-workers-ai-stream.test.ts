@@ -1,9 +1,8 @@
 // The direct Workers AI binding transport (src/providers/direct-workers-ai-fetch.ts).
 //
-// This adapter used to run every call non-streaming and replay the finished
-// completion as one synthetic SSE frame, so a streamed turn produced no byte
-// until the answer was complete. The suite below pins the streaming contract
-// that replaced it, and the three properties the synthetic frame was hiding:
+// The suite below pins the streaming contract and the three properties a
+// non-streaming call replayed as one synthetic SSE frame would hide — starting
+// with a streamed turn producing no byte until the answer is complete:
 //
 //   * bytes leave for the caller while the upstream stream is still open;
 //   * two turns in flight on ONE binding instance do not read each other's
@@ -11,7 +10,7 @@
 //     the binding and re-reads them after awaiting, so the shape a call gets
 //     back is decided by whichever call wrote last);
 //   * a model that will not stream is refused by name instead of being served
-//     from a buffer, which is the failure the buffering hid.
+//     from a buffer.
 import { describe, test, expect, afterEach } from 'bun:test';
 import { generateText, streamText, tool, jsonSchema, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
@@ -25,7 +24,7 @@ const MODEL = '@cf/moonshotai/kimi-k2.6';
 const ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
 const PROMPT = 'the exact words the person typed';
 /** Model output a refusal must not replay back to the caller. */
-const WITHHELD = 'the completion the buffering used to replay';
+const WITHHELD = 'the completion a buffered replay would hand back';
 const DONE = 'data: [DONE]\n\n';
 
 /** Everything workerd's `Ai.run` can hand back, which is what the adapter has
@@ -677,15 +676,15 @@ describe('direct Workers AI binding — refusals', () => {
     const message = v.parse(MessageErrorSchema, JSON.parse(await response.text())).error.message;
     expect(message).toContain(MODEL);
     expect(message).toContain('did not stream over the direct binding');
-    // refusal that leaked the completion would be the buffering again by
-    // another route.
+    // A refusal that leaked the completion would serve the model's output from
+    // a buffer by another route.
     expect(message).not.toContain(WITHHELD);
     expect(logger.emitted.map((line) => line.event)).toContain('workers_ai.direct_stream_unsupported');
   });
 
   test('an upstream failure keeps its status and carries its own message', async () => {
-    // A 502, because a 429 is no longer a failure this adapter surfaces: it is
-    // waited out (see the rate-limit case above).
+    // A 502, because a 429 is not a failure this adapter surfaces: it is waited
+    // out (see the rate-limit case above).
     const { fetch: direct } = directFetch(() => new Response(
       JSON.stringify({ errors: [{ code: 3040, message: 'Upstream unavailable' }] }),
       { status: 502, headers: { 'content-type': 'application/json' } },
@@ -902,8 +901,8 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
   test('a tool result pairs back to its own call across two responses in one turn', async () => {
     // The id is a PAIRING KEY: a tool result travels as `{ toolCallId, output }`
     // and the transcript finds the call it answers by that string. Two steps of
-    // one turn that both open with an unnamed tool call used to mint the same
-    // `call-1`, so the second step's result resolved against the first's call.
+    // one turn that both open with an unnamed tool call must not mint the same
+    // `call-1`, or the second step's result resolves against the first's call.
     const commands = [{ cmd: 'ls' }, { cmd: 'pwd' }];
     let step = 0;
     const { fetch: direct } = directFetch(() => eventStreamOf([

@@ -24,7 +24,6 @@ import {
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
-  isOverlayMounted,
   metadataObjectKey,
   publishCommand,
   shouldRebase,
@@ -42,17 +41,16 @@ import {
 /**
  * THE STRATEGY'S PATHS ARE OBSERVED, NEVER RESTATED.
  *
- * This block used to hold the mirrors of the strategy's private layer
- * vocabulary — the delta layer's mount point, a reimplementation of its
- * `/proc/mounts` probe, the visibility-probe ceiling, and the store mount
- * point — under a comment saying "drift fails these tests, which is the
- * point". It is not the point. A mirror agrees with the module by
- * construction. Both sides read the test's copy, so the only thing it can
- * catch is the strategy MOVING a path, and the thing it cannot catch is the
- * strategy looking somewhere other than where it mounted — which is the defect
- * that costs a workspace.
+ * This block holds no mirror of the strategy's private layer vocabulary — not
+ * the delta layer's mount point, not a reimplementation of its `/proc/mounts`
+ * probe, not the visibility-probe ceiling, not the store mount point. "Drift
+ * fails these tests, which is the point" is not a reason to keep one: a mirror
+ * agrees with the module by construction. Both sides would read the test's
+ * copy, so the only thing it can catch is the strategy MOVING a path, and the
+ * thing it cannot catch is the strategy looking somewhere other than where it
+ * mounted — which is the defect that costs a workspace.
  *
- * Every path is now read off a call the strategy really made. The host is
+ * Every path is read off a call the strategy really made. The host is
  * handed each mount point as an ARGUMENT — `mountStore(at)`,
  * `squashfuse <archive> <point>`, `fuse-overlayfs -o lowerdir=…` — so the
  * fake receives the strategy's own choice and the assertions read it back.
@@ -298,8 +296,8 @@ function shellLabel(
       stdout: '',
     };
   }
-  // NO ARM FOR A SEEDING COPY, deliberately. The strategy no longer has one —
-  // the delta is a layer — so a `cp -a` reaching this fake would fall through to
+  // NO ARM FOR A SEEDING COPY, deliberately. The strategy has none — the delta
+  // is a layer — so a `cp -a` reaching this fake would fall through to
   // `exec:cp` and show up in the recorded calls, which is what the assertions
   // below check for by name.
   const squash = /mksquashfs '(?<source>[^']+)'/.exec(command)?.groups?.source;
@@ -455,10 +453,10 @@ function harness(overrides: {
   /**
    * The container's publication, as the container performs it.
    *
-   * THE ONLY WAY AN OBJECT GETS INTO THIS STORE. There is no port that carries
-   * a payload byte any more, so a test that sees an object appear is watching
-   * the container write it through the mount — and one that sees none is
-   * watching a checkpoint that never published.
+   * THE ONLY WAY AN OBJECT GETS INTO THIS STORE. No port carries a payload
+   * byte, so a test that sees an object appear is watching the container write
+   * it through the mount — and one that sees none is watching a checkpoint
+   * that never published.
    */
   const publish = (mountedPath: string) => {
     const mount = table.mounted;
@@ -1020,7 +1018,7 @@ describe('attach — the mount must be observed to have landed', () => {
       // Nothing was mounted over the work directory, so the next attach starts
       // from scratch rather than early-returning over half a composition.
       expect(record.calls.filter(call => call.startsWith('overlayAttach'))).toEqual([]);
-      expect(isOverlayMounted(mountsAfterAttach(calls)(), DEVBOX_WORKDIR)).toBe(false);
+      expect(mountsAfterAttach(calls)()).toBe(NOT_MOUNTED);
 
       // And the retry, on the same container, completes the whole restoration.
       const retry = await snapshotChainStorage(record.ports).attach();
@@ -1069,9 +1067,55 @@ describe('attach — the mount must be observed to have landed', () => {
       expect(record.calls.filter(call => call.startsWith('mountLayer'))).toEqual([]);
     });
 
+  test('DEPLOYED DEFECT: a kernel overlay with dir options reads as attached too', async () => {
+    // A deployed container answered "produced an overlay whose upper directory
+    // (unnamed) does not exist" because an earlier version parsed `upperdir`
+    // out of the mount line and fuse-overlayfs never publishes it. The mount
+    // fact is the MECHANISM: both overlay families read as attached, and a
+    // mountpoint with an octal-escaped space still resolves to its path.
+    const kernelOverlay = [
+      'sysfs /sys sysfs rw,relatime 0 0',
+      `overlay ${DEVBOX_WORKDIR.replace(/ /g, '\\040')} overlay rw,lowerdir=/a:/b,upperdir=/c,workdir=/d 0 0`,
+    ].join('\n');
+    const record = harness({ state: chainState(), mounts: kernelOverlay });
+    expect((await attachOf(record)).kind).toBe('already-attached');
+    // A plain FUSE mount at the same path is a real filesystem and NOT an
+    // overlay: reading it as one would archive a directory that has no upper.
+    const fuseOnly = harness({
+      state: chainState(),
+      mounts: `sysfs /sys sysfs rw,relatime 0 0\ns3fs ${DEVBOX_WORKDIR} fuse.s3fs rw 0 0`,
+    });
+    await expect(attachOf(fuseOnly)).rejects.toThrow(/is not an overlay mount/);
+  });
+
+  test('a tick inside the minimum interval is skipped; on the boundary it commits', async () => {
+    // The interval gate applies to ticks only: an unchanged tick never
+    // archives however long it has been, a changed tick waits out the
+    // interval, and a quiesce ignores the clock.
+    const early = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + INTERVAL_MS - 1,
+    });
+    const waited = await checkpointOf(early, 'tick');
+    expect(waited.kind).toBe('skipped');
+    expect(waited.reason).toContain('within the minimum checkpoint interval');
+
+    const due = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + INTERVAL_MS,
+    });
+    expect((await checkpointOf(due, 'tick')).kind).toBe('committed');
+
+    const quiesced = harness({
+      state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
+      now: 1_000 + 1,
+    });
+    expect((await checkpointOf(quiesced, 'quiesce')).kind).toBe('committed');
+  });
+
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
-      // Adopted from overlay-cas after it drew the distinction I had missed: my
+      // Adopted from a review that drew the distinction I had missed: my
       // skips reported `undefined`, which conflates "moved nothing" with
       // "cannot say". A skip KNOWS it moved nothing — no PUT was attempted —
       // and that is measurable. A failure cannot know: a checkpoint that threw
@@ -1128,17 +1172,17 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('RUN abc-4: a delta whose recorded size went stale is ADOPTED, not refused',
     async () => {
-      // This test used to pin the opposite, and the opposite was a terminal
-      // brick. Measured across two deployed runs: `archive 506834944, state
-      // declares 506494976`, and twice more, every difference an exact multiple
-      // of 4096 — the padding every squashfs archive carries, so the signature
-      // of two DIFFERENT archives rather than one archive measured twice. The
-      // cause is a crash between the atomic PUT and the state write, which this
-      // file's header already says an attach should ADOPT because the mount is
-      // the validator. The probe refused on the byte count before the mount
-      // could validate anything, and the object never shrinks back to the
-      // declared number, so every later operation failed for the rest of the
-      // run. One occurrence cost an arm fourteen of its twenty segments.
+      // Pinning the opposite is a terminal brick. Measured across two deployed
+      // runs: `archive 506834944, state declares 506494976`, and twice more,
+      // every difference an exact multiple of 4096 — the padding every squashfs
+      // archive carries, so the signature of two DIFFERENT archives rather than
+      // one archive measured twice. The cause is a crash between the atomic PUT
+      // and the state write, which this file's header already says an attach
+      // should ADOPT because the mount is the validator. A probe that refuses
+      // on the byte count refuses before the mount can validate anything, and
+      // the object never shrinks back to the declared number, so every later
+      // operation fails for the rest of the run. One occurrence cost an arm
+      // fourteen of its twenty segments.
       const calls: string[] = [];
       const drifted = DELTA_BYTES + 4096;
       const record = harness({
@@ -1265,14 +1309,15 @@ describe('attach — the mount must be observed to have landed', () => {
 //
 //   ContainerStartOverrun: Devbox.attach exceeded its 300000ms budget
 //
-// on the wake after a stop, while the COLD attach of the same box passed. The
-// difference between the two used to be a COPY: a cold box has no delta, and a
-// woken one had the whole cumulative changed set copied into a fresh upper —
-// read through squashfuse over the mounted store, the only full read of an
-// archive anywhere on this path. The header's claim that "an attach moves NO
-// bytes" was true of everything except the one step that moved all of them.
+// on the wake after a stop, while the COLD attach of the same box passed.
+// Copying the cumulative changed set into a fresh upper would distinguish a wake
+// from a cold attach and require a full archive read through squashfuse over the
+// store mount — the only full read of an archive anywhere on this path. That work
+// violates the no-payload-copy attach contract the header states as "an attach
+// moves NO bytes"; the measured wake overrun of 300000 ms is the evidence for
+// composing the delta as a layer.
 //
-// So the delta is a LAYER now, and there are exactly two shapes. A stop does not
+// So the delta is a LAYER, and there are exactly two shapes. A stop does not
 // necessarily take the container with it: when the same instance comes back its
 // upper already holds what the last publication archived, the stamp proves it,
 // and the base alone is mounted under it. When the instance CHANGED — a blank
@@ -1389,13 +1434,13 @@ describe('a wake whose container instance changed', () => {
   });
 
   test('the layer path names its own generation, so a later commit can see it', async () => {
-    // OBSERVED, AND ASSERTED AS PROPERTIES. This case used to build a
-    // `/proc/mounts` line from a test-local copy of the strategy's layer path
-    // and hand it to a test-local copy of the strategy's own probe — both sides
-    // reading the test's copy, so nothing the strategy did could turn it red.
+    // OBSERVED, AND ASSERTED AS PROPERTIES. Building a `/proc/mounts` line from
+    // a test-local copy of the strategy's layer path and handing it to a
+    // test-local copy of the strategy's own probe has both sides reading the
+    // test's copy, so nothing the strategy did could turn it red.
     //
-    // The paths are now the ones a real attach mounted at, and what they have to
-    // satisfy is: inside the box's own runtime directory, so nothing a caller
+    // The paths here are the ones a real attach mounted at, and what they have
+    // to satisfy is: inside the box's own runtime directory, so nothing a caller
     // writes can reach them, and scoped by the generation, so two generations
     // cannot share one mount point.
     expect(CHOSEN.delta.startsWith(`${DEVBOX_RUNTIME_DIR}/`)).toBe(true);
@@ -1563,10 +1608,10 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
 
 // ── waits that end ──────────────────────────────────────────────────────────
 //
-// Both of these used to be unbounded loops, and an unbounded loop on the attach
-// path spends the whole container-start budget and reports nothing: the
-// restoration is abandoned mid-mount, the box records an overrun, and nobody
-// learns which step never finished.
+// Both of these are BOUNDED, because an unbounded loop on the attach path
+// spends the whole container-start budget and reports nothing: the restoration
+// is abandoned mid-mount, the box records an overrun, and nobody learns which
+// step never finished.
 
 describe('an attach that cannot see or cannot release says so', () => {
   test('a store subtree that never exposes the base refuses by count, naming what it holds',
@@ -1741,9 +1786,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(base.kind).toBe('committed');
       expect(record.state?.mode).toBe('chain');
 
-      // The tick that used to fail. The caller wrote between the two calls,
-      // which the changed set reflects — a tick over an untouched upper would
-      // now correctly skip, and did while this line was missing.
+      // The tick this case turns on. The caller wrote between the two calls,
+      // which the changed set reflects — without this mark the upper is
+      // untouched and the tick correctly skips, proving nothing.
       record.upperMark = '9:8192:1700000900';
       record.state = { ...record.state!, at: 0 };
       const tick = await storage.checkpoint('tick');
@@ -1797,12 +1842,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a superseded generation is RETAINED as the restore fallback, not deleted',
     async () => {
-      // KINU-015: the rebase's own sweep used to delete the outgoing generation
-      // in the SAME commit, so from that moment the box held exactly one copy of
-      // itself — and a base object that went missing bricked every later attach
-      // with nothing left to try. The outgoing generation is now the fallback a
-      // restore falls back to, and it goes only once a newer generation has been
-      // proven by an attach.
+      // KINU-015: a rebase sweep that deleted the outgoing generation in the
+      // SAME commit would leave the box holding exactly one copy of itself from
+      // that moment — and a base object that went missing bricks every later
+      // attach with nothing left to try. The outgoing generation is the
+      // fallback a restore falls back to, and it goes only once a newer
+      // generation has been proven by an attach.
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
@@ -1876,9 +1921,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
   test('a sweep that fails AFTER publication never restores the superseded pointer',
     async () => {
       // Every step after the record's write deletes bytes the new record no
-      // longer names, and a failure there used to travel to the checkpoint's
-      // catch — which stamped it on the PRE-COMMIT record and wrote that over
-      // the committed pointer. After a rebase that is a record naming the
+      // longer names, and a failure there travelling to the checkpoint's catch
+      // would stamp it on the PRE-COMMIT record and write that over the
+      // committed pointer. After a rebase that is a record naming the
       // generation the sweep was in the middle of deleting, so every later
       // attach refuses on a base the store no longer holds; and the generation
       // this commit had just written loses the only name it ever had, which in
@@ -2087,8 +2132,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.kind).toBe('committed');
       // ONE MEANING FOR `bytes`: what this box durably holds after the commit,
       // which is base plus delta. The delta's own size is not the same
-      // quantity, and reporting it here made this field mean layer-size on this
-      // strategy and corpus-size on r2fs — two measurements under one name.
+      // quantity, and reporting it here made this field mean layer-size where
+      // the caller compares held bytes — two measurements under one name.
       expect(outcome.bytes).toBe(BASE_BYTES + DELTA_BYTES);
       // The changed set, not the tree — under the SAME excludes as the base.
       // See the commit path: applying them to one side only delivered no saving
@@ -2102,13 +2147,14 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   // ── the byte plane ────────────────────────────────────────────────────────
   //
-  // MEASURED DEFECT THESE HOLD. The archive used to leave the container as
-  // base64 SSE frames, cross the owning Durable Object's isolate, and go back
-  // out to the store through the Workers R2 binding. On a live container against
-  // a real store that relay moved 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB,
-  // against 23.22 and 39.00 for the same bytes moved by the container itself —
-  // and it was the ONLY arm that got slower as the archive grew, which is what
-  // says the cost is the isolate rather than a constant overhead.
+  // MEASURED DEFECT THESE HOLD. An archive that leaves the container as base64
+  // SSE frames, crosses the owning Durable Object's isolate, and goes back out
+  // to the store through the Workers R2 binding is the defect. On a live
+  // container against a real store that relay moved 3.34 MiB/s at 64 MiB and
+  // 3.64 at 256 MiB, against 23.22 and 39.00 for the same bytes moved by the
+  // container itself — and it was the ONLY arm that got slower as the archive
+  // grew, which is what says the cost is the isolate rather than a constant
+  // overhead.
   //
   // THE PORT SURFACE IS THE PROOF. `SnapshotChainPorts` has no entry that can
   // carry a payload byte in either direction: no stream out, no object in. The
@@ -2147,10 +2193,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       // ONE MOUNT, ONE SETTING, ONE MOUNT POINT: the chain's subtree, at
       // /backups, held writable for the container's life — which is what the
-      // publication writes through. The old design mounted a second path
-      // writable for one publication, and the SDK refuses one binding mounted
-      // twice under different settings: measured live, the second checkpoint
-      // after a wake (runs e2e20260902032038, e2e20260902032318).
+      // publication writes through. A second path mounted writable for one
+      // publication cannot work: the SDK refuses one binding mounted twice
+      // under different settings, measured live on the second checkpoint after
+      // a wake (runs e2e20260902032038, e2e20260902032318).
       expect(record.calls).toContain(`mountStore:${storeMountOf(record.calls)}`);
       // The archive went in through that mount, under the key the record names.
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
@@ -2166,9 +2212,9 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // cannot flush, so bytes still held by s3fs would be gone while the record
       // already named them. The flush is therefore part of the copy command —
       // `conv=fsync` — and the mount it flushes through is the one the box
-      // HOLDS, so there is no release window at all any more: the mount cannot
-      // be released while squashfuse reads layer files through it, which is why
-      // the one-mount design exists.
+      // HOLDS, so there is no release window at all: the mount cannot be
+      // released while squashfuse reads layer files through it, which is why the
+      // one-mount design exists.
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
@@ -2349,7 +2395,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(record.calls.filter(call => call.startsWith('makeSquashfs'))).toEqual([]);
   });
 
-  test('RUN abc-3: a workspace that CHANGED can no longer read as unchanged',
+  test('RUN abc-3: a workspace that CHANGED never reads as unchanged',
     async () => {
       // THE DATA-LOSS WINDOW, verbatim from the deployed A/B/C. Five consecutive
       // chain ticks answered `skipped (work directory is unchanged)` while npm
@@ -3069,9 +3115,9 @@ describe('the real archiver applies the policy this file claims', () => {
   });
 
   test('the extraction options and the direct command are one policy', () => {
-    // Two modes, one question. `chainBackupOptions` used to spell the policy
-    // itself while the chain path asked the box for it, so a box that replaced
-    // the policy was obeyed in one mode and ignored in the other.
+    // Two modes, one question. `chainBackupOptions` spelling the policy itself
+    // while the chain path asks the box for it would obey a box that replaced
+    // the policy in one mode and ignore it in the other.
     const dir = fixtureTree('devbox-archive-parity');
     try {
       const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
@@ -3145,7 +3191,9 @@ describe('the binding has ONE mount for the container\'s life', () => {
 
       // The stop, then the wake: a fresh isolate on the SAME container, so the
       // registry still holds whatever the first checkpoint left. The wake's
-      // attach is the moment the old design's read mount is taken.
+      // attach is where a read-only mount of the same binding would enter the
+      // registry under a two-setting design; here it takes the same writable
+      // store mount the publication uses.
       const wakeCalls: string[] = [];
       const woken = harness({
         state: first.state, mounts: mountsAfterAttach(wakeCalls), calls: wakeCalls,
@@ -3571,11 +3619,11 @@ describe('a restore that refuses the newest generation recovers from the older o
 
 describe('a restore stays inside the tree it is restoring', () => {
   test('nothing is copied out of an archive at all, and the upper is emptied first', async () => {
-    // WHAT USED TO CARRY THIS PROPERTY, and what carries it now. The restore's
-    // only write into the workspace was `cp -a` out of a mounted squashfs, so
-    // the containment argument was about that copy: `-a` recreates symlinks
-    // instead of following them, and the reset in the same attach guaranteed no
-    // symlink was already sitting at a path the copy walked.
+    // WHAT CARRIES THIS PROPERTY: the absence of a copy, not a careful copy. A
+    // restore whose only write into the workspace is `cp -a` out of a mounted
+    // squashfs has to argue containment about that copy — `-a` recreates
+    // symlinks instead of following them, and the reset in the same attach has
+    // to guarantee no symlink is already sitting at a path the copy walks.
     //
     // A composed attach writes NO archive content anywhere. An archive is
     // reachable only through its own mount point, which is inside this

@@ -106,11 +106,11 @@ const CONDITIONAL_WRITE_UNSUPPORTED =
  * Byte bound for the file viewer's text preview — past this the content is
  * carried truncated.
  *
- * A `response` bound in the platform catalog's terms, and now the READ bound as
+ * A `response` bound in the platform catalog's terms, and the READ bound as
  * well: `readExecutorFile` asks the plane for this many bytes and decodes only
- * those. It used to be applied after the whole file was already a resident
- * JavaScript string, so previewing a large file cost the file plus a clipped
- * copy of it, and this number protected only the wire.
+ * those. Applied after the whole file is already a resident JavaScript string,
+ * it would protect only the wire — previewing a large file would cost the file
+ * plus a clipped copy of it.
  */
 const MAX_VIEWABLE_BYTES = 512 * 1024;
 
@@ -348,10 +348,10 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
  * for "wherever this environment starts". A bare MOUNT POINT means the same
  * thing for the machine behind it, so it resolves to that plane's own start
  * (`mountLanding`). Either way the answer carries the ABSOLUTE directory that
- * was listed, so the browser never has to invent one: the shape this replaced
- * returned entries for a literal `'.'` reported as every environment's working
- * directory, and "go up one level" computed from that token landed on the
- * filesystem root instead of the directory above.
+ * was listed, so the browser never has to invent one. A literal `'.'` reported
+ * as every environment's working directory would leave "go up one level"
+ * computed from that token landing on the filesystem root instead of the
+ * directory above.
  */
 export async function getExecutorFiles(
   router: ExecutorFileLookup,
@@ -367,10 +367,9 @@ export async function getExecutorFiles(
       : await mountLanding(router, normalizeDir(path));
     const listed = await listWithVfsOps(vfs, dir);
     // `stat` answers null for an entry that is gone, or that this plane could
-    // not stat — one child, not the directory. The shape this replaced statted
-    // every child one after another and let any single throw fail the whole
-    // listing, so one file disappearing mid-read told the reader their folder
-    // was unreachable.
+    // not stat — one child, not the directory. Statting every child one after
+    // another and letting any single throw fail the whole listing would tell a
+    // reader their folder was unreachable because one file vanished mid-read.
     const entries: DirEntry[] = listed.map(({ name, stat }) => ({
       name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
@@ -438,10 +437,11 @@ export async function readExecutorFile(
  * Write one uploaded file into an executor — binary-safe through the same raw
  * handle the reads use.
  *
- * Raw bytes, and no size cap. Uploads arrive over a transport with no frame
- * ceiling and need no encoding, and the workspace VFS chunks what it stores —
- * so there is nothing left for an app-level limit to protect, and the one that
- * used to be here sat ABOVE the transport's real ceiling anyway.
+ * Raw bytes, and no size cap at this layer. The transfer envelope bounds what
+ * reaches here — `ExecutorFileUpload` refuses an over-limit chunk and an
+ * over-limit total before it ever assembles — so a second cap on the
+ * assembled write would protect nothing the envelope does not already refuse
+ * earlier.
  */
 export async function writeExecutorFileOp(
   router: ExecutorFileLookup,

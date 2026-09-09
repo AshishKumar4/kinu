@@ -106,7 +106,7 @@ import { createUserUiMessage, type AgentTurnResult } from '../../packages/cli/sr
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
   compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
-  infraBoundary, resolveEvalBackend, scoreTrajectory, workerSession,
+  infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
   EVAL_BACKEND_ENV,
   type EvalScoreRow,
 } from '@kinu.run/test-utils';
@@ -552,12 +552,17 @@ export function scorePublicLedger(events: readonly RunEvent[]): EvalScoreRow[] {
   const store = createTestSql();
   try {
     initRunEventTables(store.execRaw);
+    // `run_events` is actor-scoped, and these rows come off the wire from a
+    // deployment whose actor id is not this process's business: one local
+    // identity is minted for the replay store, written on every row, and read
+    // back by the scorers. The comparison is between the SAME rows either way.
+    const actor = testActorHandle(store.sql);
     for (const event of events) {
-      void store.sql`INSERT OR REPLACE INTO run_events (run_id, event_index, type, payload, ts)
-        VALUES (${event.runId}, ${event.eventIndex}, ${event.type},
+      void store.sql`INSERT OR REPLACE INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+        VALUES (${actor.actorId}, ${event.runId}, ${event.eventIndex}, ${event.type},
                 ${JSON.stringify(event)}, ${event.timestamp})`;
     }
-    return scoreTrajectory(store.sql);
+    return scoreTrajectory(store.sql, actor);
   } finally {
     store.close();
   }
@@ -637,6 +642,7 @@ const SlateSummarySchema = v.object({
   id: v.string(),
   title: v.string(),
   bindings: v.array(v.string()),
+  port: v.optional(v.number()),
 });
 const SlateListingSchema = v.object({
   slates: v.array(SlateSummarySchema),
@@ -950,6 +956,15 @@ export class KinuPublicSession {
       () => this.rpc('previewSlate', [id]),
     );
     return v.parse(SlatePreviewSchema, answer);
+  }
+
+  /** Read existing preview endpoints without starting the app under test. */
+  async exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]> {
+    const answer = await infraBoundary(
+      'getExposedPorts(' + executor + ') on ' + this.input.origin + '/' + this.workspace,
+      () => this.rpc('getExposedPorts', [executor]),
+    );
+    return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
   }
 
   /** The durable transcript the web pane is seeded from. */

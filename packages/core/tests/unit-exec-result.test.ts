@@ -1,8 +1,8 @@
 // What a shell command's outcome looks like to the model.
 //
-// The regression these tests pin: a non-zero exit used to return stderr alone,
-// so a failing `pytest`/`make` — which writes its diagnostics to stdout —
-// reached the model as an exit code and nothing else. Asserted through the
+// The regression these tests pin: a non-zero exit that returns stderr alone
+// sends a failing `pytest`/`make` — which writes its diagnostics to stdout —
+// to the model as an exit code and nothing else. Asserted through the
 // PUBLIC surfaces the model actually reads (the `run` tool, codemode
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';

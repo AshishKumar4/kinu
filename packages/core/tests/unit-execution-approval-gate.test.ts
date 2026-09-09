@@ -1,19 +1,19 @@
 /**
- * Regression coverage for the executor-seam approval gate — the fix for the
- * bypass where `run { command: "rm -rf /x" }` was gated but the identical
- * command reached through codemode (`nimbus.exec(...)`, `sandbox.exec(...)`,
- * `laptop.exec(...)`) was not, because the gate lived inside the `run` TOOL's
- * own executor instead of at the boundary every path actually shares.
+ * Regression coverage for the executor-seam approval gate. The bypass it
+ * closes: `run { command: "rm -rf /x" }` gated while the identical command
+ * reached through codemode (`nimbus.exec(...)`, `sandbox.exec(...)`,
+ * `laptop.exec(...)`) went ungated — which is what a gate living inside the
+ * `run` TOOL's own executor buys, instead of one at the boundary every path
+ * actually shares.
  *
  * These tests exercise `gateProviderExec` and `DefaultExecutionRouter`
- * directly — the ACTUAL new seam — independent of any tool/backend wiring,
- * so they fail immediately if `ExecutionRouter.register()` stops gating (the
- * bypass reopens) regardless of how `run`/`execute_tools` are built on top.
+ * directly — the seam itself — independent of any tool/backend wiring, so they
+ * fail immediately if `ExecutionRouter.register()` stops gating (the bypass
+ * reopens) regardless of how `run`/`execute_tools` are built on top.
  *
- * Revert-proof: temporarily reverting `register()` to
- * `this.providers.set(provider.name, provider)` (dropping the
- * `gateProviderExec` call) turns every "closes the bypass" test below red —
- * verified by hand while writing this file.
+ * Revert-proof: dropping the `gateProviderExec` call from `register()` so it is
+ * just `this.providers.set(provider.name, provider)` turns every "closes the
+ * bypass" test below red — verified by hand while writing this file.
  */
 import { describe, test, expect } from 'bun:test';
 import { DefaultExecutionRouter } from '../src/execution/router';

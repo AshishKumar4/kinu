@@ -11,10 +11,10 @@
  *
  * Backend-neutral on purpose. The Durable Object and the CLI answer the same
  * question — "what did this response still owe when the process went away?" —
- * and they used to answer it differently: the DO claimed and swept, the CLI
- * released its claims as soon as the transcript was persisted and had no
- * recovery at all. One state machine over one table is what makes an interrupted
- * laptop turn and an evicted isolate the same problem with the same answer.
+ * and one state machine over one table is what makes an interrupted laptop turn
+ * and an evicted isolate the same problem with the same answer. Two
+ * implementations of it drift: a claim-and-sweep on one side against a release
+ * at persist time with no recovery at all on the other.
  *
  * What a backend still supplies is only the two things it genuinely owns: the
  * effect IMPLEMENTATIONS, and the WAKE that brings a process back for an owed
@@ -24,6 +24,7 @@ import { claimToolEffect, settleToolEffect, type ToolEffectKey } from '../tools/
 import { argumentDigest } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
   TerminalEffectLedger,
@@ -79,6 +80,10 @@ export type TerminalDisposition = 'first' | 'resumed' | 'done' | 'unclaimed';
 
 export interface TerminalTransitionDeps {
   readonly sql: SqlExecutor;
+  /** Whose turn is settling. Every row this transition claims, releases or
+   *  prunes — the effect ledger's and the tool-effect claims' — is that actor's,
+   *  and an id alone is not authority over a sibling's suffix. */
+  readonly actor: ActorHandle;
   /** What this actor can actually run. A row naming an effect absent here is
    *  blocked by the ledger rather than silently skipped. */
   readonly effects: TerminalEffectTable;
@@ -141,6 +146,7 @@ export class TerminalTransitions {
   constructor(private readonly deps: TerminalTransitionDeps) {
     const ledgerDeps = {
       sql: deps.sql,
+      actor: deps.actor,
       effects: deps.effects,
       now: deps.now,
       scheduleRetry: deps.scheduleRetry,
@@ -174,7 +180,7 @@ export class TerminalTransitions {
   /** Claim this transition before any of its effects run. */
   begin(transition: TerminalTransition | null): TerminalDisposition {
     if (transition === null) return 'unclaimed';
-    const claim = claimToolEffect(this.deps.sql, this.key(transition));
+    const claim = claimToolEffect(this.deps.sql, this.deps.actor, this.key(transition));
     switch (claim.kind) {
       case 'claimed': return 'first';
       case 'indeterminate': return 'resumed';
@@ -208,11 +214,11 @@ export class TerminalTransitions {
   /**
    * Drive ONE settled response, end to end.
    *
-   * The whole state machine, in one place, because every ordering in it was a
-   * defect before it was written down: the roster built before anything durable
-   * exists, the in-process guard before the durable claim, the claim and the
-   * whole roster committed as one unit, and the close only once the detached tail
-   * has reported.
+   * The whole state machine, in one place, because every ordering in it is a
+   * correctness constraint and not a style choice: the roster built before
+   * anything durable exists, the in-process guard before the durable claim, the
+   * claim and the whole roster committed as one unit, and the close only once
+   * the detached tail has reported.
    *
    * A RESUMED response does not re-declare. Its roster is frozen at what the
    * first attempt claimed: a second declaration reads live state that has moved
@@ -357,7 +363,7 @@ export class TerminalTransitions {
     // Disposition first, release second. Between the two the turn's answer is
     // already durable and its effects have already happened, so the only reader
     // that can arrive in between is a recovery — and it reads a settled row.
-    settleToolEffect(this.deps.sql, this.key(transition), TERMINAL_TRANSITION_SETTLED);
+    settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED);
     // The tool claims are released only once NO response of this durable turn
     // can still be settling. Transitions are per response and the close is
     // detached, so an auto-continuation's next response can already have claimed
@@ -368,7 +374,7 @@ export class TerminalTransitions {
     // using the turn.
     const openResponses = this.deps.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM tool_effect_claims
-      WHERE turn_id = ${transition.turnId}
+      WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
         AND normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
         AND result_json IS NULL`[0]?.n ?? 0;
     // A live turn may still be MID-CONTINUATION: the next response can already
@@ -377,7 +383,7 @@ export class TerminalTransitions {
     // mean nobody is using the turn.
     if (openResponses === 0 && !(this.deps.turnIsLive?.(transition.turnId) ?? false)) {
       void this.deps.sql`DELETE FROM tool_effect_claims
-        WHERE turn_id = ${transition.turnId}
+        WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
           AND normalized_call_id NOT LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`;
     }
     this.ledger.prune(sequenceId);
@@ -395,7 +401,8 @@ export class TerminalTransitions {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
     return this.deps.sql<{ turn_id: string; normalized_call_id: string }>`
       SELECT DISTINCT turn_id, normalized_call_id FROM tool_effect_claims
-      WHERE normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL
+      WHERE actor_id = ${this.deps.actor.actorId}
+        AND normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL
     `.map((row) => ({
       turnId: row.turn_id,
       messageId: row.normalized_call_id.slice(prefix.length),
@@ -408,7 +415,8 @@ export class TerminalTransitions {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
     return this.deps.sql<{ present: number }>`
       SELECT 1 AS present FROM tool_effect_claims
-      WHERE normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL LIMIT 1
+      WHERE actor_id = ${this.deps.actor.actorId}
+        AND normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL LIMIT 1
     `.length > 0;
   }
 

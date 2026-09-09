@@ -18,12 +18,14 @@ describe('tool call summaries — the unified agents tool', () => {
     expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');
     expect(summarizeToolCall('agents', { action: 'hire', scope: 'workspace', mission: 'summarize papers' }))
       .toBe('hire workspace — "summarize papers"');
-    expect(summarizeToolCall('agents', { action: 'ask', agent: 'scout', message: 'Audit the CLI surface' }))
-      .toBe('ask scout — "Audit the CLI surface"');
-    expect(summarizeToolCall('agents', { action: 'send', agent: 'scout', topic: 'fyi' }))
-      .toBe('send scout — "fyi"');
-    expect(summarizeToolCall('agents', { action: 'reply', message: 'here you go' }))
-      .toBe('reply — "here you go"');
+    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }))
+      .toBe('hire scout — "Audit the CLI surface"');
+    expect(summarizeToolCall('agents', { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }))
+      .toBe('hire (task) auditor');
+    expect(summarizeToolCall('agents', { action: 'msg', agent: 'scout', topic: 'fyi' }))
+      .toBe('msg scout — "fyi"');
+    expect(summarizeToolCall('agents', { action: 'msg', event_id: 'ev-1', message: 'here you go' }))
+      .toBe('msg — "here you go"');
     expect(summarizeToolCall('agents', { action: 'dismiss', agent: 'arch-auditor' })).toBe('dismiss arch-auditor');
     expect(summarizeToolCall('agents', { action: 'list' })).toBe('list');
   });
@@ -129,7 +131,7 @@ describe('tool call summaries — builtins', () => {
     expect(describeToolCall('run', { command: 'bun test packages/core' })).toBe('Ran tests');
     expect(describeToolCall('web', { action: 'fetch', url: 'https://example.com' })).toBe('Fetched a page');
     expect(describeToolCall('memory', { action: 'search', query: 'deployment' })).toBe('Searched memory');
-    expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
+    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
   });
 
   test('release distinguishes its thirteen actions', () => {
@@ -147,9 +149,9 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('retired tool names still render, so stored transcripts do not degrade', () => {
-    // Every name here was once live. A transcript recorded under the old name
-    // must keep summarizing after the rename — the alternative is a wall of
-    // `summarizeUnknownTool` in history the owner cannot re-record.
+    // Persisted transcripts carry calls under these names. Each one must keep
+    // summarizing — the alternative is a wall of `summarizeUnknownTool` in history
+    // the owner cannot re-record.
     expect(summarizeToolCall('product_change', { action: 'create', userPrompt: 'dark mode toggle' }))
       .toBe('create — "dark mode toggle"');
     expect(summarizeToolCall('think', { task: 'compare the two designs' })).not.toBe('');
@@ -190,7 +192,7 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('tasks', { action: 'update', id: 't3', status: 'done' })).toBe('mutate');
     expect(toolCallEffect('memory', { action: 'remember', key: 'deploy.target' })).toBe('mutate');
     expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
-    // `mode` with a role durably mutates agent_config via changeActiveRole.
+    // `mode` with a role durably mutates actor_config via changeActiveRole.
     expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
     expect(toolCallEffect('tasks', { action: 'mode' })).toBe('observe');
 

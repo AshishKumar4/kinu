@@ -99,58 +99,9 @@ import {
   type RecoveryRow,
   type RecoveryStage,
   type SupervisedProcessSpec,
-  findMount, withContainerStartDeadline, openStartBudget, awaitListenerCommand,
+  openStartBudget, awaitListenerCommand,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
 } from './lifecycle';
-import { r2fsStorage, type R2fsPorts } from './r2fs';
-import { deletePrefix, prefixInventory } from './object-store';
-import {
-  CAS_RUNNER_PATH,
-  CAS_STORE_MOUNT,
-  CAS_TREE_MOUNT,
-  CAS_UPPER_DIR,
-  CAS_WORK_DIR,
-  casStoreUrl,
-  normalizeOverlayCasState,
-  overlayCasStorage,
-  type OverlayCasPorts,
-} from './overlay-cas';
-import {
-  CANDIDATE_JOURNAL_BINARY,
-  CANDIDATE_JOURNAL_MOUNT,
-  CANDIDATE_JOURNAL_ROOT,
-  CANDIDATE_JOURNAL_SOCKET,
-  CANDIDATE_JOURNAL_STATE,
-  CANDIDATE_RUNNER_RESULT_DIR,
-  CANDIDATE_STORE_MOUNT,
-  candidateCheckpointRunnerPaths,
-  candidateContainerStorage,
-  candidatePayloadUrl,
-  candidateStorePaths,
-  type CandidateContainerFormat,
-  type CandidateContainerPorts,
-} from './candidates/container';
-import {
-  JOURNAL_READY_WAIT_SECONDS,
-  journalDaemonArgv,
-  journalReadyCommand,
-  readJournalReady,
-} from './capture/journal/command';
-import {
-  beginCandidateOperation,
-  finalizeCandidateOperation,
-  redriveCandidateOperation,
-  settleCandidateNoChange,
-  settleCandidateOperation,
-  type CandidateControlStore,
-  type CandidateEnvelopeStore,
-} from './candidates/control';
-import { envelopeBytes, parseEnvelopeBytes } from './candidates/publication';
-import {
-  CandidateControlStateV1Schema,
-  type CandidateControlStateV1,
-  type ImmutableObjectRef,
-} from './durability/contracts';
 import {
   deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
   type IncidentRow,
@@ -159,7 +110,6 @@ import {
   CHAIN_EXCLUDES,
   ChainRecordAdvanced,
   chainStoreRoot,
-  isOverlayMounted,
   normalizeChainState,
   snapshotChainStorage,
   type ChainState,
@@ -179,20 +129,6 @@ import {
   type StoredValue,
 } from './storage';
 
-const CANDIDATE_CONTROL_PREFIX = 'devbox:candidate-control:';
-/**
- * The one spelling of the candidate control key. The publish path and the
- * wake path both derive it here, so a key the write uses and a key the read
- * uses cannot drift apart unnoticed.
- */
-function candidateControlKey(strategy: CandidateContainerFormat): string {
-  return `${CANDIDATE_CONTROL_PREFIX}${strategy}`;
-}
-
-/** Runner status is polled instead of opening Sandbox's long-lived log SSE.
- *  Separate from cli-backend's LOCK_POLL_MS: same round number, unrelated
- *  decisions — this paces a container process poll, that one a config lock. */
-const RUNNER_EXIT_POLL_INTERVAL_MS = 50;
 /** How long a container gets to REPORT itself stopped after it acknowledged the
  *  signal, as a count times an interval.
  *
@@ -211,27 +147,6 @@ const CONTAINER_STOP_INTERVAL_MS = 100;
  *  divisor spelled twice is a divisor that drifts. */
 const ADMISSION_POLL_INTERVAL_MS = 100;
 
-/** The durable control record for one candidate arm; an absent row is no history. */
-function readCandidateControl(stored: StoredValue | undefined): CandidateControlStateV1 {
-  return stored === undefined
-    ? { version: 1, head: null, operation: null }
-    : v.parse(CandidateControlStateV1Schema, stored);
-}
-/**
- * The raw candidate control fact, for diagnosis, never for serving. `found`
- * tells an absent row apart from a row that holds a null head. `key` and
- * `boxId` travel so a dump taken at publish and a dump taken at wake compare
- * byte for byte. Read-only: reporting it changes no stored row.
- */
-export interface CandidateControlDump {
-  readonly strategy: DevboxStrategyName;
-  readonly boxId: string;
-  readonly key: string | null;
-  readonly found: boolean;
-  readonly head: string | null;
-  readonly operation: string | null;
-}
-
 /**
  * One filed failure, as the ledger holds it. `delivered` tells a failure the
  * host already saw apart from one it never did. Read-only reporting shape.
@@ -247,20 +162,10 @@ export interface IncidentReasonRow {
 /** Durable keys. One namespace, so a host's own keys cannot collide with these
  *  and a reader can tell at a glance which rows belong to the box machinery. */
 const STORAGE_KEY = 'devbox:storage-state';
-/** The overlay-cas record. Deliberately NOT `STORAGE_KEY`: a box must never
- *  read a snapshot-chain record as a CAS record, and a distinct key makes
- *  that unrepresentable rather than merely unlikely. */
-const OVERLAY_CAS_STATE_KEY = 'devbox:overlay-cas-state';
 const LAST_INTERACTION_KEY = 'devbox:last-interaction';
 const QUIET_SINCE_KEY = 'devbox:quiet-since';
 const PROC_SPEC_PREFIX = 'devbox:proc:';
 const PORT_SPEC_PREFIX = 'devbox:port:';
-const MULTIPART_UPLOAD_PREFIX = 'devbox:multipart-upload:';
-const MultipartUploadSchema = v.object({
-  key: v.string(),
-  uploadId: v.string(),
-});
-
 const LAST_ATTACH_KEY = 'devbox:last-attach';
 /** How far this box has gone recovering one container identity from a failed
  *  attach. Written only by the recovery ladder, deleted by the first attach that
@@ -714,15 +619,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return DEFAULT_DEVBOX_STRATEGY;
   }
 
-  /**
-   * The fixture bundles the candidate runner from package source into the
-   * container. Production has no implicit fallback: a candidate box without a
-   * bundled runner refuses instead of measuring another strategy under its name.
-   */
-  protected get candidateRunnerPath(): string | undefined {
-    return undefined;
-  }
-
   /** The timings this box runs on. */
   protected get policy(): DevboxPolicy {
     return DEFAULT_DEVBOX_POLICY;
@@ -1045,14 +941,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * anyone — measured at roughly once per workload phase under churn. Every
    * operation between that replacement and the next heartbeat (up to
    * `heartbeatSeconds`) therefore runs on a fresh container with NO mount, and
-   * its writes land in the bare `/workspace` directory. Both deployed control
-   * arms died of it on 2026-08-31, in the two shapes their strategies give it:
-   *
-   *   `r2fs` — s3fs refuses a non-empty mountpoint, and the refusal is
-   *     terminal, so the box never attached again.
-   *   `overlay-cas` — the next attach mounted the overlay OVER those bytes,
-   *     the upper it scans was therefore empty, nothing was ever journalled,
-   *     and the wake reported `empty` for a box that had been written to.
+   * its writes land in the bare `/workspace` directory. Deployed boxes died of
+   * it on 2026-08-31 in both shapes it takes: a mount the fresh container
+   * refuses because the directory it must cover is no longer empty, and an
+   * attach that lays a fresh overlay OVER those bytes, so the wake reports
+   * `empty` for a box that had been written to.
    *
    * A COMMIT IS THE RIGHT PLACE TO ASK. It is the moment this box claims bytes
    * are durable, it happens at checkpoint cadence rather than per operation, and
@@ -1082,14 +975,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null || true`, DEVBOX_RUNTIME_DIR);
     const value = read.stdout.trim();
     return value.length > 0 ? value : undefined;
-  }
-
-  /** True only when durable and container-local identity prove this instance
-   * already has an attached workspace after an isolate reconstruction. */
-  async #hasAttachedContainer(generation: number): Promise<boolean> {
-    const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-    if (expected === undefined || !this.#owns(generation)) return false;
-    return this.#owns(generation) && (await this.#readBootId()) === expected;
   }
 
   /**
@@ -1242,12 +1127,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * It is what `devboxState` reports as `lastAttach`, what `attachNow` answers
    * with, and what the bench driver judges a startup by the moment the phase
    * says `attached` (`scripts/bench-devbox-strategies.ts`,
-   * `startupPollVerdict`). So it is written by EVERY drive that reaches
-   * `attached`: the full restoration, and the same-container repair a wake
-   * takes when the instance survived. The repair used to settle without it,
-   * and the deployed merkle-pack wake of run 20260902154130 was refused as
-   * `wake restored empty, expected attached` on a row the cold attach had
-   * written — against a head three quiesces had published since.
+   * `startupPollVerdict`). So it is written by every drive that reaches
+   * `attached` THROUGH AN ATTACH, and by no other: a drive that only re-runs
+   * the service half writes none, because the record its own attach wrote for
+   * this generation still describes what the box serves.
    *
    * Fenced by the caller: every writer asks `#owns` after its last await and
    * before this put, as every other durable write a restoration makes does.
@@ -1402,14 +1285,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       this.#invalidateGeneration();
       generation = this.#generation;
     }
-    // Only candidates can prove and repair their live mount graph. Every other
-    // strategy takes the ordinary attach path instead of treating a boot marker
-    // as a durable attachment fact.
-    const storage = this.#requireStorage();
-    if (storage.repairAttached !== undefined && await this.#hasAttachedContainer(generation)) {
-      await this.#repairAttached(generation);
-      return;
-    }
     const pending = this.#startup;
     // JOIN ONLY THIS GENERATION'S ATTEMPT. An entry from a superseded one is
     // work whose result is already discarded, so joining it would hand the
@@ -1541,9 +1416,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       if (active !== undefined && active.generation === generation) return await active.run;
       const retryBootStamp = this.#restoration.phase === 'repair'
         && this.#restoration.incomplete.includes('the boot id stamp failed');
-      if (this.#requireStorage().repairAttached !== undefined) {
-        this.#restoration = { phase: 'unstarted' };
-      }
       const run = (async () => {
         const claim = await this.#claimRecovery();
         if (!claim.admit || !this.#owns(generation)) {
@@ -1567,17 +1439,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
-   * The same-container half of a drive: prove the instance is the one this
-   * box stamped, let the storage re-establish what it serves, and settle.
+   * The same-container half of a drive: prove the instance is the one this box
+   * stamped, then re-run the service half alone.
    *
-   * THE STORAGE'S ANSWER IS WRITTEN DOWN, the way the full attach's is. This
-   * is the path a wake takes whenever the instance survived the stop with its
-   * boot marker (`src/snapshot-chain.ts` records that the platform does bring
-   * one back), and it used to settle `attached` with no attach record of its
-   * own — so the durable row still described the COLD attach, and the driver,
-   * which reads that row the moment the phase says `attached`, refused the
-   * deployed merkle-pack wake of run 20260902154130 as `wake restored empty,
-   * expected attached` against a head three quiesces had published.
+   * NO ATTACH RECORD IS WRITTEN HERE, and that is a claim about what this path
+   * did. The attach is what establishes what a box serves, and this path does
+   * not re-run it: the record the full attach wrote for this same generation
+   * still describes the workspace, so overwriting it from a path that
+   * re-established nothing would describe the box by what it did not do.
    */
   async #repairAttachedAttempt(generation: number, retryBootStamp: boolean): Promise<void> {
     const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
@@ -1589,33 +1458,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       await this.#drive('request');
       return;
     }
-    const budget = openStartBudget(this.policy.attachBudgetMs);
-    const repair = this.#requireStorage().repairAttached;
-    const served = repair === undefined
-      ? undefined
-      : await withContainerStartDeadline(
-        'Devbox.repairAttached',
-        budget,
-        repair,
-        (failure) => {
-          console.error(
-            `[devbox] attached-container repair overran its budget; abandoned work settled with: `
-            + describe({ cause: failure.cause }),
-          );
-        },
-      );
-    if (!this.#owns(generation)) return;
-    if (expected !== undefined && (await this.#readBootId()) !== expected) {
-      this.#invalidateGeneration();
-      await this.#drive('request');
-      return;
-    }
-    if (!this.#owns(generation)) return;
-    // Only a storage that repaired its attachment has a fresh answer. A
-    // strategy without a repair re-runs the service half alone, and the record
-    // its full attach wrote for this same generation still stands.
-    if (served !== undefined) await this.#recordAttach(served);
-    const steps = racedRestoreSteps(budget);
+    const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs));
     const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;
     const stamped = expected === undefined && retryBootStamp
@@ -2275,10 +2118,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
-   * The one serialization point for every strategy checkpoint this instance
-   * can be asked to run: `checkpointNow`, the scheduled tick, the quiesce and
+   * The one serialization point for every checkpoint this instance can be
+   * asked to run: `checkpointNow`, the scheduled tick, the quiesce and
    * activity expiry. See {@link createCheckpointLane} for why two overlapping
-   * runs must never interleave inside a strategy.
+   * runs must never interleave inside the storage.
    */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
@@ -2289,11 +2132,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // MEASURED DEFECT THIS REPAIRS. This was `await pending.run` — no
         // bound at all — inside both the checkpoint lane and the
         // storage-mutation FIFO, so one long restoration held every later
-        // checkpoint behind it. Run 20260903140046's overlay-cas arm is the
-        // shape: its first decisive `npm` checkpoint never settled inside the
-        // driver's 1,500,000 ms operation deadline, and every segment after it
-        // was answered `a restoration has been running in the request for N
-        // ms; a startup is armed, so ask again` — the armed operation row
+        // checkpoint behind it. Run 20260903140046 is the shape: its first
+        // decisive `npm` checkpoint never settled inside the driver's
+        // 1,500,000 ms operation deadline, and every segment after it was
+        // answered `a restoration has been running in the request for N ms; a
+        // startup is armed, so ask again` — the armed operation row
         // still `pending`, the lane still held, until the runner died.
         //
         // The same law `#awaitAttempt` holds a request door to: join the one
@@ -2338,9 +2181,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * then stop.
    *
    * MEASURED DEFECT THIS REPAIRS. This method used to call
-   * `storage.detach()` BEFORE `this.stop('SIGTERM')`, and the r2fs detach
-   * unmounts through the SDK's `unmountBucket` — which refuses with EBUSY
-   * while any process holds an fd on the s3fs mount. The refusal landed
+   * `storage.detach()` BEFORE `this.stop('SIGTERM')`, and a detach releases
+   * the work directory through the SDK's `unmountBucket` — which refuses with
+   * EBUSY while any process holds an fd under the mount. The refusal landed
    * BEFORE `this.stop()` was ever reached, so a box with one open writer was
    * UNSTOPPABLE and UNTEARDOWNABLE: every later stop died the same way, and
    * no teardown could clean the box up.
@@ -2367,8 +2210,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * SESSION the unmount travels through, which the SDK creates with
    * `cwd: "/workspace"`. A shell standing on a mount holds it. So a stop can
    * signal every holder there is and still be refused, which is why the release
-   * below is necessary but not sufficient and the r2fs detach parks the session
-   * before it asks. See {@link R2fsPorts.parkSession}.
+   * below is necessary but not sufficient, and why a refusal that still lands
+   * names the holders it found rather than the SDK's bare EBUSY.
    */
   async quiesce(): Promise<CheckpointOutcome> {
     // NO CONTAINER, NOTHING TO COMMIT, AND NOTHING TO ASK: a container call
@@ -2391,9 +2234,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // as failed admitted no caller (`ensureReady` refuses on `unattached`) and
     // restarted no process, so the container holds no work of this box's to
     // lose, and a final checkpoint would run against no work directory. The
-    // deployed merkle-pack release of run 20260905075659 hung there: the
-    // attach the budget abandoned was still restoring inside the container,
-    // the stop's checkpoint waited on that container, and the driver's
+    // deployed release of run 20260905075659 hung there: the attach the budget
+    // abandoned was still restoring inside the container, the stop's
+    // checkpoint waited on that container, and the driver's
     // 120 s release deadline passed with the stop still pending. The stop is
     // the one cancellation abandoned work has, so it goes straight to it.
     const held = this.#restoration;
@@ -2499,44 +2342,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  holds, so a restoration still in flight is restoring bytes that are
    *  about to be gone: it must write nothing durable and publish no readiness
    *  once this begins, which is what a superseded attempt already guarantees.
-   *  The strategy's own discard then skips the container half when no
-   *  container runs — see `candidateContainerStorage` — so a discard on a
-   *  stopped box never starts an instance to clean a disk that died with the
-   *  last one (run 20260906072721, 2026-09-06, the teardown that did). */
+   *  The chain's own discard touches no container at all — R2 objects and the
+   *  durable row, nothing else — so a discard on a stopped box never starts an
+   *  instance to clean a disk that died with the last one (run 20260906072721,
+   *  2026-09-06, the teardown that did). */
   async discardState(): Promise<void> {
     this.#invalidateGeneration();
     await this.#requireStorage().discard();
     // The attach evidence describes bytes that no longer exist, so it goes with
     // them rather than outliving them as a claim about nothing.
     await this.ctx.storage.delete(LAST_ATTACH_KEY);
-  }
-  /**
-   * The raw candidate control fact this box holds, for diagnosis. A wake that
-   * finds no head can come from three places: the row is absent, the row
-   * holds a null head, or the read looked where the write never wrote. This
-   * answers which one by reporting the key it read, the identity it ran
-   * against, and whether the row was there. Read-only.
-   */
-  async candidateControlState(): Promise<CandidateControlDump> {
-    const strategy = this.strategy;
-    const boxId = this.ctx.id.toString();
-    if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') {
-      return { strategy, boxId, key: null, found: false, head: null, operation: null };
-    }
-    const key = candidateControlKey(strategy);
-    const stored = await this.ctx.storage.get<StoredValue>(key);
-    if (stored === undefined) {
-      return { strategy, boxId, key, found: false, head: null, operation: null };
-    }
-    const parsed = readCandidateControl(stored);
-    return {
-      strategy,
-      boxId,
-      key,
-      found: true,
-      head: parsed.head?.rootEnvelopeId ?? null,
-      operation: parsed.operation?.phase ?? null,
-    };
   }
   /**
    * Every incident reason this box holds, oldest first, for diagnosis. Totals
@@ -3111,14 +2926,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // length of a wake the durable row names the instance the stop took down
       // and the fresh instance carries no marker: exactly the mismatch this
       // detector reads as a replacement. MEASURED, run 20260906072721
-      // (2026-09-06, merkle-pack, 07:30:14-16Z): the post-ladder wake was
-      // mounting its store when this beat fired, read the mismatch, turned the
-      // generation over under the wake's own attempt and drove a second
-      // restoration beside it — two `mkdir -p /var/tmp/devbox`, two boot-id
-      // reads, two mount reads inside one second, and two attempts free to
-      // stop and start one journal daemon over one mount, the one hazard the
-      // daemon's own contract forbids. An attempt in flight owns the identity
-      // it is establishing; the beat asks the question only of a box that has
+      // (2026-09-06, 07:30:14-16Z): the post-ladder wake was mounting its store
+      // when this beat fired, read the mismatch, turned the generation over
+      // under the wake's own attempt and drove a second restoration beside it —
+      // two `mkdir -p /var/tmp/devbox`, two boot-id reads and two mount reads
+      // inside one second, and two attempts free to lay one overlay over one
+      // work directory twice. An attempt in flight owns the identity it is
+      // establishing; the beat asks the question only of a box that has
       // settled on an instance and may have lost it since.
       const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
       if (settled && await this.#containerWasReplaced()) {
@@ -3330,9 +3144,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   }
 
   /**
-   * Build the strategy from the class's own hooks.
+   * Build the storage from the class's own hooks.
    *
-   * An ephemeral box — no store — gets a strategy that says so on every call
+   * An ephemeral box — no store — gets a storage that says so on every call
    * rather than a null that every caller has to check. `attach` reports `empty`,
    * `checkpoint` reports `skipped` with the reason, and `discard` has nothing to
    * do. All three are true statements about a box with nowhere to put bytes.
@@ -3349,23 +3163,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         discard: () => Promise.resolve(),
       };
     }
-    // EXHAUSTIVE, AND IT REFUSES. The last arm used to be `snapshot-chain` by
-    // fallthrough, which meant a strategy nobody had wired here still produced
-    // a working box — the CHAIN, wearing the other strategy's name. A bench arm
-    // in that state reports a full column of numbers that are the chain
-    // measured twice, and nothing anywhere looks wrong. A box that refuses to
-    // build says which name it did not recognise and stops.
-    if (this.strategy === 'r2fs') return r2fsStorage(this.#r2fsPorts(store));
-    if (this.strategy === 'overlay-cas') return overlayCasStorage(this.#overlayCasPorts(store));
-    if (this.strategy === 'snapshot-chain') return snapshotChainStorage(this.#chainPorts(store));
-    if (this.strategy === 'bounded-layers' || this.strategy === 'merkle-pack') {
-      return candidateContainerStorage(this.#candidatePorts(store, this.strategy));
-    }
-    throw new Error(
-      `this devbox is configured for the "${String(this.strategy)}" durability strategy, which `
-      + 'nothing here builds. Refusing to serve a box with a storage strategy other than the '
-      + 'one it was asked for.',
-    );
+    return snapshotChainStorage(this.#chainPorts(store));
   }
 
   /** This box's own key prefix in the store. The Durable Object's id is the
@@ -3375,544 +3173,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   #boxPrefix(): string {
     return `boxes/${this.ctx.id.toString()}`;
   }
-  /** Abort multipart uploads whose initiating isolate did not survive. The
-   * upload id is durable before the first part, then removed after complete or
-   * abort. A stale row is safe to retry and is always consumed. */
-  async #abortPendingMultipartUploads(store: DevboxStore): Promise<void> {
-    const rows = await this.ctx.storage.list<unknown>({ prefix: MULTIPART_UPLOAD_PREFIX });
-    for (const [storageKey, raw] of rows) {
-      const parsed = v.safeParse(MultipartUploadSchema, raw);
-      if (!parsed.success) {
-        console.error(`[devbox] unreadable multipart upload row ${storageKey} removed`);
-        await this.ctx.storage.delete(storageKey);
-        continue;
-      }
-      try {
-        await store.bucket
-          .resumeMultipartUpload(parsed.output.key, parsed.output.uploadId)
-          .abort();
-      } catch (error) {
-        console.log(
-          `[devbox] multipart ${parsed.output.uploadId} was already settled or could not abort: `
-          + describe({ cause: error }),
-        );
-      } finally {
-        await this.ctx.storage.delete(storageKey);
-      }
-    }
-  }
 
-  #r2fsPorts(store: DevboxStore): R2fsPorts {
-    const prefix = this.#boxPrefix();
-    return {
-      containerRunning: () => this.ctx.container?.running === true,
-      // BOTH OF THESE RUN FROM THE RUNTIME DIRECTORY, NOT THE WORK DIRECTORY,
-      // for the reason `quarantineMountpoint` below already does: `#rawExec`
-      // defaults its cwd to `DEVBOX_WORKDIR`, and these are the two commands
-      // the detach issues immediately before releasing that very mount. Reading
-      // `/proc/mounts` and flushing a path do not require standing in it, and
-      // standing in it is what refuses the unmount that follows.
-      readMounts: async () => (await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR)).stdout,
-      exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
-      pathExists: async (path) => await this.#pathExists(path),
-      mount: async (s3fsOptions) => {
-        await this.mountBucket(store.binding, DEVBOX_WORKDIR, {
-          prefix: `/${prefix}`,
-          readOnly: false,
-          s3fsOptions: [...s3fsOptions],
-        });
-      },
-      unmount: async () => {
-        await this.unmountBucket(DEVBOX_WORKDIR);
-      },
-      // BOTH DELEGATE TO THE ONE SEAM, `#parkSessionOutside` / `#lazyUnmount`,
-      // because every strategy that mounts at the work directory needs exactly
-      // this and a second copy would eventually disagree with the first.
-      parkSession: async () => await this.#parkSessionOutside(DEVBOX_WORKDIR),
-      lazyUnmount: async () => await this.#lazyUnmount(DEVBOX_WORKDIR),
-      // ONE COMMAND, so a container replaced between two RPCs cannot leave the
-      // residue directory made and the move undone. `find -exec … +` runs
-      // nothing when the mountpoint is already empty, which is the ordinary
-      // case, and the count is read from the residue directory the move filled.
-      quarantineMountpoint: async () => {
-        const residue = `${DEVBOX_RUNTIME_DIR}/r2fs-mountpoint-residue`;
-        const swept = await this.#rawExec(
-          `d='${residue}/'$(date +%s%N) && mkdir -p "$d" && `
-          + `find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 -exec mv -t "$d" -- {} + && `
-          + `find "$d" -mindepth 1 -maxdepth 1 | wc -l`,
-          DEVBOX_RUNTIME_DIR,
-        );
-        if (swept.exitCode !== 0) {
-          throw new Error(
-            `${DEVBOX_WORKDIR} could not be emptied for a mount: `
-            + `${swept.stderr.trim() || swept.stdout.trim() || `exit ${swept.exitCode}`}`,
-          );
-        }
-        const moved = Number.parseInt(swept.stdout.trim(), 10);
-        return Number.isSafeInteger(moved) && moved >= 0 ? moved : 0;
-      },
-      inventory: async () => await prefixInventory(store.bucket, `${prefix}/`),
-      clearPrefix: async () => await deletePrefix(store.bucket, `${prefix}/`),
-      log: (message) => {
-        console.log(`[devbox] ${message}`);
-      },
-    };
-  }
-
-  /**
-   * The overlay-cas ports.
-   *
-   * Mounts, one runner invocation, and the durable row. Every byte this
-   * strategy moves is moved by the runner beside the mounted prefix, so there
-   * are no command templates here to keep correct and no chunk ever crosses
-   * this isolate. What a receipt means belongs to the strategy that acts on it,
-   * which is why `invokeRunner` hands back exactly what the runner printed.
-   */
-  #overlayCasPorts(store: DevboxStore): OverlayCasPorts {
-    const prefix = this.#boxPrefix();
-    return {
-      containerRunning: () => this.ctx.container?.running === true,
-      mountStore: async () => {
-        // The exit code is CHECKED. It used to be discarded, so a failed setup
-        // ran on to the mount and surfaced two RPCs later as "cas-upper does
-        // not exist" — a refusal naming the symptom while the container's own
-        // words about the cause were thrown away.
-        const prepared = await this.#rawExec(
-          `mkdir -p '${CAS_STORE_MOUNT}' '${CAS_UPPER_DIR}' '${CAS_WORK_DIR}' '${DEVBOX_WORKDIR}'`,
-        );
-        if (prepared.exitCode !== 0) {
-          throw new Error(
-            `overlay-cas could not create its runtime directories under ${DEVBOX_RUNTIME_DIR}: `
-            + `${prepared.stderr.trim() || prepared.stdout.trim() || `exit ${prepared.exitCode}`}`,
-          );
-        }
-        await this.#abortPendingMultipartUploads(store);
-        await this.mountBucket(store.binding, CAS_STORE_MOUNT, {
-          prefix: `/${prefix}`, readOnly: false,
-        });
-        // The overlay's lower has to exist before fuse-overlayfs is handed it,
-        // and on a fresh prefix nothing has folded yet.
-        const lower = await this.#rawExec(`mkdir -p '${CAS_TREE_MOUNT}'`);
-        if (lower.exitCode !== 0) {
-          throw new Error(
-            `overlay-cas tree/ could not be created at ${CAS_TREE_MOUNT}: `
-            + `${lower.stderr.trim() || lower.stdout.trim() || `exit ${lower.exitCode}`}`,
-          );
-        }
-      },
-      unmountStore: async () => {
-        try {
-          await this.unmountBucket(CAS_STORE_MOUNT);
-        } catch (error) {
-          // Not mounted is the ordinary case on a fresh container, and the SDK
-          // says so by throwing. Released THROUGH the SDK: see the port's doc.
-          console.log(`[devbox] cas store mount was not released: ${describe({ cause: error })}`);
-        }
-      },
-      storeMounted: async () => findMount(
-        (await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR)).stdout, CAS_STORE_MOUNT,
-      )?.fstype.includes('s3fs') === true,
-      mountOverlay: async () => {
-        const mounted = await this.#rawExec(
-          `/usr/bin/fuse-overlayfs -o lowerdir='${CAS_TREE_MOUNT}'`
-          + `,upperdir='${CAS_UPPER_DIR}',workdir='${CAS_WORK_DIR}' '${DEVBOX_WORKDIR}'`,
-        );
-        if (mounted.exitCode !== 0) {
-          throw new Error(
-            `fuse-overlayfs attach of ${DEVBOX_WORKDIR} failed: `
-            + `${mounted.stderr.trim() || mounted.stdout.trim() || `exit ${mounted.exitCode}`}`,
-          );
-        }
-      },
-      // THROUGH THE ONE SEAM, which is the same defect measured on the r2fs arm
-      // with only the mount differing: this used to ask a shell standing in
-      // `/workspace` (the `#rawExec` default) to unmount `/workspace`, refused
-      // EBUSY by the very session issuing it, and `|| true` then hid the
-      // refusal.
-      //
-      // A SWALLOWED EBUSY HERE IS NOT COSMETIC. `detach` goes on to release the
-      // store mount while fuse-overlayfs still holds its read-only lower, and
-      // `attach` early-returns `already-attached` whenever the overlay is
-      // mounted, deliberately WITHOUT replaying the journal, on the premise that
-      // a mounted overlay means the replay finished. A silently-failed unmount
-      // is exactly the state that falsifies that premise: the next attach
-      // reports success over a workspace missing its journalled changes. So the
-      // release now really happens (parked, and lazily if it must), and a
-      // refusal that still lands is spoken aloud rather than dropped.
-      unmountOverlay: async () =>
-        await this.#releaseFuseMount(DEVBOX_WORKDIR, 'the workspace overlay'),
-      // ONE COMMAND, so a container replaced between two RPCs cannot leave the
-      // move half done. `cp -a src/. dst` MERGES into the directories the replay
-      // already wrote and preserves symlinks rather than following them, which
-      // is what keeps a hostile tree inside the upper; the copy runs before the
-      // delete so a failure loses nothing. `find … -exec … +` runs nothing when
-      // the work directory is empty, which is the ordinary case.
-      salvageWorkdirResidue: async () => {
-        const salvaged = await this.#rawExec(
-          `n=$(find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 | wc -l) && `
-          + `if [ "$n" -gt 0 ]; then mkdir -p '${CAS_UPPER_DIR}' && `
-          + `cp -a '${DEVBOX_WORKDIR}/.' '${CAS_UPPER_DIR}/' && `
-          + `find '${DEVBOX_WORKDIR}' -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; fi && `
-          + 'printf %s "$n"',
-          DEVBOX_RUNTIME_DIR,
-        );
-        if (salvaged.exitCode !== 0) {
-          throw new Error(
-            `${DEVBOX_WORKDIR} held entries written with no overlay mounted and they could not `
-            + `be moved into ${CAS_UPPER_DIR}: `
-            + `${salvaged.stderr.trim() || salvaged.stdout.trim() || `exit ${salvaged.exitCode}`}`,
-          );
-        }
-        const moved = Number.parseInt(salvaged.stdout.trim(), 10);
-        return Number.isSafeInteger(moved) && moved >= 0 ? moved : 0;
-      },
-      overlayMounted: async () =>
-        isOverlayMounted((await this.#rawExec('cat /proc/mounts')).stdout, DEVBOX_WORKDIR),
-      invokeRunner: async (operation) => await this.#rawExec(
-        `bun '${CAS_RUNNER_PATH}' --operation '${operation}' --upper '${CAS_UPPER_DIR}' `
-        + `--store '${casStoreUrl(store.binding)}'`,
-      ),
-      inventory: async () => await prefixInventory(store.bucket, `${prefix}/`),
-      clearPrefix: async () => {
-        await this.#abortPendingMultipartUploads(store);
-        return await deletePrefix(store.bucket, `${prefix}/`);
-      },
-      // PARSED, never cast. A durable row was written by some release of this
-      // package and the reader has to establish what it is: a row this code did
-      // not write reads as ABSENT, which makes a fresh box, rather than as a
-      // state the box would attach from having never written it.
-      readState: async () =>
-        normalizeOverlayCasState(await this.ctx.storage.get<StoredValue>(OVERLAY_CAS_STATE_KEY)),
-
-      writeState: async (next) => {
-        await this.ctx.storage.put(OVERLAY_CAS_STATE_KEY, next);
-      },
-      clearState: async () => {
-        await this.ctx.storage.delete(OVERLAY_CAS_STATE_KEY);
-      },
-      checkpointIntervalMs: () => this.policy.checkpointIntervalMs,
-      now: () => Date.now(),
-      log: (message) => {
-        console.log(`[devbox] ${message}`);
-      },
-    };
-  }
-
-  #candidatePorts(store: DevboxStore, strategy: CandidateContainerFormat): CandidateContainerPorts {
-    const runnerPath = this.candidateRunnerPath;
-    if (runnerPath === undefined) {
-      throw new Error(`candidate ${strategy} requires a bundled container runner`);
-    }
-    const paths = candidateStorePaths(this.#boxPrefix(), strategy);
-    const controlKey = candidateControlKey(strategy);
-    const envelopeKey = (rootEnvelopeId: string): string => `${paths.envelopePrefix}/${rootEnvelopeId}.json`;
-    const control: CandidateControlStore = {
-      read: async () => readCandidateControl(await this.ctx.storage.get<StoredValue>(controlKey)),
-      update: async (apply) => await this.ctx.storage.transaction(async (transaction) => {
-        const update = apply(readCandidateControl(await transaction.get<StoredValue>(controlKey)));
-        if (update.next !== null) {
-          await transaction.put(controlKey, v.parse(CandidateControlStateV1Schema, update.next));
-        }
-        return update.result;
-      }),
-      clear: async () => {
-        await this.ctx.storage.delete(controlKey);
-      },
-    };
-    const envelopes: CandidateEnvelopeStore = {
-      write: async (envelope, rootEnvelopeId) => {
-        const key = envelopeKey(rootEnvelopeId);
-        const existing = await store.bucket.get(key);
-        if (existing !== null) {
-          parseEnvelopeBytes(new Uint8Array(await existing.arrayBuffer()), rootEnvelopeId);
-          return;
-        }
-        await store.bucket.put(key, envelopeBytes(envelope));
-        const committed = await store.bucket.get(key);
-        if (committed === null) throw new Error(`candidate envelope write did not verify: ${rootEnvelopeId}`);
-        parseEnvelopeBytes(new Uint8Array(await committed.arrayBuffer()), rootEnvelopeId);
-      },
-      read: async (rootEnvelopeId) => {
-        const object = await store.bucket.get(envelopeKey(rootEnvelopeId));
-        if (object === null) throw new Error(`candidate envelope is absent: ${rootEnvelopeId}`);
-        return parseEnvelopeBytes(new Uint8Array(await object.arrayBuffer()), rootEnvelopeId);
-      },
-    };
-    const verifyObject = async (ref: ImmutableObjectRef) => {
-      const key = `${paths.payloadPrefix}/${ref.key}`;
-      const object = await store.bucket.head(key);
-      if (object === null) throw new Error(`candidate object is absent: ${ref.key}`);
-      const sha256 = object.checksums.sha256;
-      const checksum = sha256 === undefined
-        ? undefined
-        : [...new Uint8Array(sha256)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-      if (
-        object.key !== key
-        || String(object.size) !== ref.byteLength
-        || (checksum !== undefined && checksum !== ref.sha256)
-        || object.version.length === 0
-      ) {
-        throw new Error(`candidate object metadata does not match immutable ref: ${ref.key}`);
-      }
-    };
-    return {
-      format: strategy,
-      runnerPath,
-      containerRunning: () => this.ctx.container?.running === true,
-      payloadUrl: candidatePayloadUrl(store.binding),
-      mountStore: async () => {
-        // The runner slots' directory too: a fresh container's first runner
-        // start reads its control file from there before anything else runs.
-        await this.#rawExec(`mkdir -p '${CANDIDATE_STORE_MOUNT}' '${CANDIDATE_RUNNER_RESULT_DIR}'`, DEVBOX_RUNTIME_DIR);
-        const before = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
-        if (findMount(before.stdout, CANDIDATE_STORE_MOUNT) !== undefined) {
-          await this.unmountBucket(CANDIDATE_STORE_MOUNT);
-        }
-        await this.mountBucket(store.binding, CANDIDATE_STORE_MOUNT, {
-          prefix: paths.mountPrefix,
-          readOnly: false,
-        });
-        const after = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
-        const mount = findMount(after.stdout, CANDIDATE_STORE_MOUNT);
-        if (mount === undefined || !mount.fstype.includes('s3fs')) {
-          throw new Error(
-            `candidate store is not an R2 mount at ${CANDIDATE_STORE_MOUNT} for prefix ${paths.payloadPrefix}`,
-          );
-        }
-      },
-      unmountStore: async () => {
-        try {
-          await this.unmountBucket(CANDIDATE_STORE_MOUNT);
-        } catch (error) {
-          console.log(`[devbox] candidate store mount was not released: ${describe({ cause: error })}`);
-        }
-      },
-      clearStore: async () => {
-        await Promise.all([
-          deletePrefix(store.bucket, `${paths.payloadPrefix}/`),
-          deletePrefix(store.bucket, `${paths.envelopePrefix}/`),
-        ]);
-      },
-      attachmentHealth: async () => {
-        const [mounts, storeAccess, socket, processes] = await Promise.all([
-          this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR),
-          this.#rawExec(`stat -c %d:%i '${CANDIDATE_STORE_MOUNT}' >/dev/null`, DEVBOX_RUNTIME_DIR),
-          this.#rawExec(`test -S '${CANDIDATE_JOURNAL_SOCKET}' && echo yes || echo no`, DEVBOX_RUNTIME_DIR),
-          this.listProcesses(),
-        ]);
-        const storeMount = findMount(mounts.stdout, CANDIDATE_STORE_MOUNT);
-        const journalMount = findMount(mounts.stdout, CANDIDATE_JOURNAL_MOUNT);
-        return {
-          storeMounted: storeMount?.fstype.includes('s3fs') === true,
-          storeAccessible: storeAccess.exitCode === 0,
-          journalProcess: processes.some(
-            (process) => process.command.includes(CANDIDATE_JOURNAL_BINARY) && isProcessLive(process.status),
-          ),
-          // THE WORDS, NOT THE EXIT: the probe ends in `|| echo no`, so the
-          // exit is 0 with the socket absent too, and an exit-code read calls
-          // a lost socket healthy for ever. The store probe above has no echo
-          // and means its exit; this one speaks on stdout.
-          journalSocket: socket.stdout.trim() === 'yes',
-          journalMounted: journalMount?.fstype.includes('fuse') === true,
-        };
-      },
-      begin: async (kind) => {
-        const bootId = await this.ctx.storage.get<string>(BOOT_ID_KEY);
-        if (bootId === undefined) throw new Error('candidate checkpoint requires a stamped container boot id');
-        return await beginCandidateOperation({
-          kind: kind === 'tick' ? 'tick' : 'barrier',
-          bootId,
-          store: control,
-          envelopes,
-          verifyObject,
-        });
-      },
-      finalize: async (draft) => await finalizeCandidateOperation({
-        draft,
-        boxId: this.ctx.id.toString(),
-        store: control,
-        envelopes,
-        verifyObject,
-      }),
-      settleNoChange: async (run) => {
-        const active = run.operation;
-        if (active?.phase !== 'transferring') {
-          throw new Error('candidate no-change reply has no transferring operation to settle');
-        }
-        return await settleCandidateNoChange({ active, store: control });
-      },
-      restoreState: async () => await settleCandidateOperation({ store: control, envelopes, verifyObject }),
-      bootId: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
-      redrive: async (run) => {
-        const active = run.operation;
-        if (active?.phase !== 'transferring') {
-          throw new Error('candidate runner failure has no transferring operation to redrive');
-        }
-        return await redriveCandidateOperation({ active, store: control, envelopes });
-      },
-      clearControl: control.clear,
-      clearRunnerResults: async () => {
-        await this.#rawExec(`rm -rf '${CANDIDATE_RUNNER_RESULT_DIR}'`, DEVBOX_RUNTIME_DIR);
-      },
-      clearRunnerAttempt: async (resultPath) => {
-        await this.#rawExec(`rm -f '${resultPath}'`, DEVBOX_RUNTIME_DIR);
-      },
-      startJournal: async () => {
-        await this.#rawExec(
-          `mkdir -p '${CANDIDATE_JOURNAL_ROOT}' '${CANDIDATE_JOURNAL_STATE}'`,
-          DEVBOX_RUNTIME_DIR,
-        );
-        const command = journalDaemonArgv({
-          binary: CANDIDATE_JOURNAL_BINARY,
-          root: CANDIDATE_JOURNAL_ROOT,
-          mount: CANDIDATE_JOURNAL_MOUNT,
-          state: CANDIDATE_JOURNAL_STATE,
-          socket: CANDIDATE_JOURNAL_SOCKET,
-        }).map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(' ');
-        const started = await this.startProcess(command, {
-          cwd: DEVBOX_RUNTIME_DIR,
-          processId: 'candidate-journal',
-          autoCleanup: false,
-        });
-        // ONE HOP. The wait lives in the container — see `journalReadyCommand`
-        // for the forty round trips it replaces and the deployed attach that
-        // never returned through them.
-        const probe = await this.#rawExec(
-          journalReadyCommand({
-            mount: CANDIDATE_JOURNAL_MOUNT,
-            socket: CANDIDATE_JOURNAL_SOCKET,
-          }),
-          DEVBOX_RUNTIME_DIR,
-        );
-        const reading = readJournalReady(probe.stdout);
-        if (reading?.socket === true && reading.mount === true) return;
-        const logs = await this.getProcessLogs(started.id);
-        await this.killProcess(started.id);
-        throw new Error(
-          `candidate journal daemon did not serve ${CANDIDATE_JOURNAL_MOUNT} within `
-          + `${String(JOURNAL_READY_WAIT_SECONDS)}s (`
-          + `${reading === undefined
-            ? `the readiness probe answered ${JSON.stringify(probe.stdout.trim() || probe.stderr.trim())}`
-            : `control socket ${reading.socket ? 'present' : 'absent'}, `
-              + `mount ${reading.mount ? 'present' : 'absent'}`}): `
-          + `${logs.stderr.trim() || logs.stdout.trim() || 'no daemon output'}`,
-        );
-      },
-      // THROUGH THE ONE SEAM, because `CANDIDATE_JOURNAL_MOUNT` IS
-      // `DEVBOX_WORKDIR`: this releases a FUSE mount at the very directory the
-      // shared session is created in, so it has the same disease the r2fs arm
-      // was measured with. The explicit `DEVBOX_RUNTIME_DIR` here was already
-      // right, but `2>/dev/null || true` meant a refusal was unobservable — and
-      // an unreleased journal mount is how a wake starts a SECOND daemon over a
-      // mount the first still owns, which is the one hazard this daemon's own
-      // comments say must never happen. Now it is parked, taken lazily if it
-      // must be, and said aloud if it still refuses.
-      stopJournal: async () => {
-        for (const row of await this.listProcesses()) {
-          if (!row.command.includes(CANDIDATE_JOURNAL_BINARY)) continue;
-          // ABSENCE IS TOLERATED HERE, FOR THE REASON THE SIBLING STATES.
-          //
-          // MEASURED DEFECT THIS REPAIRS, and the ORDER is what produces it.
-          // `#releaseWorkdirHolders` kills every LIVE supervised process
-          // seconds earlier on this same stop — the journal daemon included —
-          // under its own rule that a stop must not be held hostage by one id
-          // the container cannot kill. This then re-kills the daemon row it
-          // still finds listed, and the SDK's kill contract ERRORS on an id
-          // the container no longer holds. So the tolerant kill is what makes
-          // the row stale for this one, and whether the table is a beat behind
-          // or the process died between the list and the kill, the caller is
-          // at fault rather than the table.
-          //
-          // The liveness filter is the sibling's, and only ABSENCE is
-          // tolerated past it: `PROCESS_NOT_FOUND` is the SDK's own
-          // classification, read as a CODE the way `#stopSupervised` reads it,
-          // never as prose. Every other failure travels — a live daemon this
-          // container cannot kill still owns the mount below, and a stop that
-          // swallowed that would hand the next wake a second daemon over a
-          // mount the first still holds, which is the one hazard this
-          // daemon's own comments say must never happen.
-          if (!isProcessLive(row.status)) continue;
-          let thrown: { readonly cause: unknown } | undefined;
-          try {
-            await this.killProcess(row.id);
-          } catch (error) {
-            thrown = { cause: error };
-          }
-          if (thrown === undefined) continue;
-          if (!v.is(ProcessAbsentSchema, thrown.cause)) throw thrown.cause;
-          console.error(
-            `[devbox] the journal daemon ${row.id} was already gone when the stop re-killed it: `
-            + describe(thrown),
-          );
-        }
-        // Only when there is something to release: this runs on paths where no
-        // daemon ever mounted, and a refusal reported for an absent mount would
-        // be noise that trains a reader to ignore the real one.
-        const mounts = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
-        if (findMount(mounts.stdout, CANDIDATE_JOURNAL_MOUNT) === undefined) return;
-        await this.#releaseFuseMount(CANDIDATE_JOURNAL_MOUNT, 'the candidate journal mount');
-      },
-      getRunnerProcess: async (processId) => await super.getProcess(processId),
-      waitForRunnerExit: async (processId) => {
-        for (;;) {
-          const process = await super.getProcess(processId);
-          if (process === null) throw new Error(`candidate runner ${processId} disappeared before it exited`);
-          if (!isProcessLive(process.status)) {
-            if (process.exitCode === undefined) {
-              throw new Error(`candidate runner ${processId} exited without an exit code`);
-            }
-            return { exitCode: process.exitCode };
-          }
-          // A RUNNER CANNOT OUTLIVE ITS CONTAINER, and this loop is the one
-          // place that used to believe it could. The process table is answered
-          // from THIS side, so an instance the platform reclaimed leaves its
-          // rows saying `running` with nothing left to ever move them — and a
-          // poll whose only exits are "gone" and "exited" then waits for an
-          // event that has no reporter.
-          //
-          // Asked AFTER the status, so a process that really exited is still
-          // reported by its exit code even if the container went afterwards:
-          // the contradiction being caught here is a LIVE record with no
-          // container behind it, which is never a fact about the runner.
-          //
-          // MEASURED. This is the whole distance between a slow attach and an
-          // unattachable box: `#storage` is built once per isolate and
-          // `attach()` parks its in-flight promise in `attaching`, released
-          // only when that promise settles — so one wait that never ends is
-          // handed to every later attach in the isolate. In
-          // `e2ecal0901002202`, run against a 900,000 ms wall, `bounded-layers`
-          // cold-attach and `merkle-pack` wake-attach each recorded 900,001 ms
-          // — the wall, not a duration — and the platform's own sentence for
-          // the arms beside them was "The sandbox container stopped while the
-          // operation was pending".
-          if (this.ctx.container?.running !== true) {
-            throw new Error(`candidate runner ${processId} lost its container before it exited`);
-          }
-          await scheduler.wait(RUNNER_EXIT_POLL_INTERVAL_MS);
-        }
-      },
-      activeCheckpoint: async () => {
-        const operation = (await control.read()).operation;
-        if (operation?.phase !== 'transferring') return null;
-        const paths = candidateCheckpointRunnerPaths();
-        const process = await super.getProcess(paths.processId);
-        return process !== null && isProcessLive(process.status) ? process : null;
-      },
-      writeRunnerControl: async (path, content) => {
-        await super.writeFile(path, content);
-      },
-      startRunnerProcess: async (command, processId) => await super.startProcess(command, {
-        cwd: DEVBOX_RUNTIME_DIR,
-        processId,
-        autoCleanup: false,
-      }),
-      readRunnerResult: async (path) => (await super.readFile(path)).content,
-      boxId: () => this.ctx.id.toString(),
-      recordFailure: async (reason) => {
-        await this.#record('checkpoint', reason);
-      },
-    };
-  }
   #chainPorts(store: DevboxStore): SnapshotChainPorts {
     return {
       containerRunning: () => this.ctx.container?.running === true,
@@ -4048,14 +3309,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // every `mkdir -p` that would have created it is issued FROM that same
     // directory, so a box in that state can never dig itself out.
     //
-    // MEASURED. The deployed r2fs arm died of exactly this on both launches of
+    // MEASURED. A deployed box died of exactly this on both launches of
     // 2026-09-03: `create failed: cold attach refused: /workspace could not be
     // emptied for a mount: Failed to change directory to '/var/tmp/devbox'`.
-    // Every arm gets its own worker and container, so no sibling strategy's
-    // mountStore had ever created the directory there. The candidate arms
-    // carry the same latent defect — their `mountStore` reads `/proc/mounts`
-    // from the runtime directory too — which is why the repair belongs to this
-    // seam rather than to one strategy's ports.
+    // Nothing had created the runtime directory on that container, and every
+    // command that would have was issued FROM it — which is why the repair
+    // belongs to this seam rather than to the storage's ports.
     //
     // One command per container per runtime-directory cwd, and idempotent:
     // `mkdir -p` from the work directory, which always exists.
@@ -4074,161 +3333,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  container it is talking to. Reset with the generation, because a
    *  replacement is a fresh container whose disk holds none of ours. */
   #runtimeDirReady = false;
-
-  // ── the one seam every container mount is released through ────────────────
-  //
-  // MEASURED DEFECT THIS REPAIRS, AND WHY IT IS A SEAM RATHER THAN A PATCH.
-  // `#rawExec` above defaults its cwd to `DEVBOX_WORKDIR`, and the SDK creates
-  // its default session with `cwd: "/workspace"` too — so unless a caller says
-  // otherwise, the shared session shell is standing ON the work directory. A
-  // shell standing on a mount holds a reference to that mount, so a
-  // `fusermount -u` issued from it is refused EBUSY by the session issuing it,
-  // no matter how many holders were killed first.
-  //
-  // Proven by controlled experiment on a live deployed container
-  // (probe `hp0901171035`, `scripts/devbox-holder-probe.ts`): the SAME
-  // `fusermount -u /workspace`, adjacent in time, against the same live mount,
-  // with zero fd holders in either arm —
-  //
-  //   session cwd INSIDE the mount   -> rc=1, "Device or resource busy"
-  //   session cwd parked OUTSIDE it  -> rc=0, mount released
-  //
-  // EVERY strategy that mounts at the work directory has this disease, which is
-  // why the repair lives here and not in one strategy: r2fs mounts s3fs there,
-  // overlay-cas mounts fuse-overlayfs there, and the candidate arms mount the
-  // journal daemon there (`CANDIDATE_JOURNAL_MOUNT` IS `DEVBOX_WORKDIR`). A
-  // per-strategy fix leaves the next mount point to rediscover it deployed.
-
-  /**
-   * Move the shared session shell OUT of `mountPath`, and answer where it
-   * stands now.
-   *
-   * The runtime directory normally, `/` when the mount CONTAINS the runtime
-   * directory — parking inside the very mount being released would be the bug
-   * this method exists to prevent, so the choice is computed rather than
-   * assumed. `pwd` travels back so a caller reports where it parked instead of
-   * asserting that it worked.
-   */
-  async #parkSessionOutside(mountPath: string): Promise<string> {
-    const outside = DEVBOX_RUNTIME_DIR === mountPath
-      || DEVBOX_RUNTIME_DIR.startsWith(`${mountPath}/`)
-      ? '/'
-      : DEVBOX_RUNTIME_DIR;
-    const parked = await this.#rawExec('cd . && pwd', outside);
-    return parked.stdout.trim() || outside;
-  }
-
-  /** `fusermount -z` IS `MNT_DETACH`. Tried under both binary names the image
-   *  may carry, then answered from `/proc/mounts` rather than from an exit code:
-   *  the question is whether the mount is gone, and only the mount table can
-   *  answer that. */
-  async #lazyUnmount(mountPath: string): Promise<boolean> {
-    await this.#rawExec(
-      `fusermount -uz '${mountPath}' 2>/dev/null `
-      + `|| fusermount3 -uz '${mountPath}' 2>/dev/null || true`,
-      await this.#parkSessionOutside(mountPath),
-    );
-    const mounts = await this.#rawExec('cat /proc/mounts', DEVBOX_RUNTIME_DIR);
-    return findMount(mounts.stdout, mountPath) === undefined;
-  }
-
-  /**
-   * Release one container mount: park the session outside it, ask, and fall back
-   * to a lazy detach if it still refuses.
-   *
-   * THE LAZY FALLBACK IS THE LAST RESORT, and it is what makes a box stoppable
-   * at all. A reference this class may not revoke — an ancestor of the holder
-   * scan's own shell, or one of the container server's own children sitting at
-   * `cwd=/workspace` — leaves an ordinary unmount permanently refused, and a box
-   * that can never release its mount can never stop and can never attach again.
-   * `MNT_DETACH` removes the mount from the namespace immediately and lets the
-   * kernel free it when the last reference drops.
-   *
-   * IT IS NOT A WAY TO SKIP A FLUSH, and this is a PRECONDITION ON THE CALLER,
-   * not a detail of one strategy. `MNT_DETACH` returns as soon as the mount
-   * leaves the namespace; it does not wait for anything and cannot flush. Bytes
-   * an open writer left in the page cache reach the store only through the
-   * caller's own `sync`, so a caller releasing a mount it may have WRITTEN to
-   * must flush and check that flush BEFORE calling this. r2fs's detach does
-   * exactly that, and says so.
-   *
-   * WHICH MOUNTS THAT BINDS TODAY. Of the callers that come through here, only
-   * r2fs's work directory is writable, and it flushes. The overlay and the
-   * candidate journal are released on teardown paths whose bytes are already
-   * published elsewhere.
-   *
-   * THE CHAIN'S PUBLICATION MOUNT IS WRITABLE AND DOES NOT COME THROUGH HERE,
-   * and it owes the same precondition where it does run. A chain archive used
-   * to cross this isolate as base64 frames and go back out through the R2
-   * binding; the instrument measured that relay at 3.34 MiB/s against 23.22
-   * container-direct at 64 MiB, and 3.64 against 39.00 at 256 MiB (2026-09-01).
-   * The container now writes the archive onto its own writable, prefix-scoped
-   * mount at a SEPARATE path, and `snapshot-chain.ts` pays the precondition in
-   * the command that writes it: `conv=fsync` inside the copy whose exit code is
-   * checked, the final key written directly — a write-temp-then-rename on s3fs
-   * is a server-side COPY that scales with the object — and the release through
-   * the SDK afterwards. So no lazy detach can beat that flush, and losing the
-   * tail of an archive the record already names is unrepresentable rather than
-   * remembered.
-   */
-  async #releaseMount(
-    mountPath: string,
-    unmount: () => Promise<void>,
-  ): Promise<{ readonly lazily: boolean; readonly parkedAt: string }> {
-    const parkedAt = await this.#parkSessionOutside(mountPath);
-    try {
-      await unmount();
-      return { lazily: false, parkedAt };
-    } catch (cause) {
-      if (!(await this.#lazyUnmount(mountPath))) throw cause;
-      console.error(
-        `[devbox] ${mountPath} refused an ordinary unmount with the session parked at `
-        + `${parkedAt}, so it was detached lazily (MNT_DETACH): ${describe({ cause })}`,
-      );
-      return { lazily: true, parkedAt };
-    }
-  }
-
-  /**
-   * Release a `fusermount3` mount this class made, and report a refusal that
-   * still lands WITHOUT throwing.
-   *
-   * The two callers — the workspace overlay and the candidate journal daemon —
-   * both sit at `DEVBOX_WORKDIR` and both must keep their existing
-   * non-throwing contract: `unmountOverlay` runs inside a detach that goes on to
-   * release the store mount, and `stopJournal` runs on teardown paths that must
-   * not be blocked by one mount. What they may NOT keep is silence. `|| true`
-   * used to make a refusal here unobservable, and both silences are load
-   * bearing: an unreleased overlay makes the next `attach` report
-   * `already-attached` without replaying the journal, and an unreleased journal
-   * mount lets a wake start a SECOND daemon over a mount the first still owns.
-   *
-   * ONE BODY, because the duplication gate is right that two copies of it are
-   * two things to keep in agreement; `what` is the only thing that differed.
-   */
-  async #releaseFuseMount(mountPath: string, what: string): Promise<void> {
-    try {
-      await this.#releaseMount(mountPath, async () => {
-        const released = await this.#rawExec(
-          `fusermount3 -u '${mountPath}'`,
-          await this.#parkSessionOutside(mountPath),
-        );
-        if (released.exitCode !== 0) {
-          throw new Error(
-            released.stderr.trim() || released.stdout.trim() || `exit ${released.exitCode}`,
-          );
-        }
-      });
-    } catch (error) {
-      console.error(
-        `[devbox] ${what} at ${mountPath} was NOT released: ${describe({ cause: error })}`,
-      );
-    }
-  }
-
-  async #pathExists(path: string): Promise<boolean> {
-    return (await this.#rawExec(`test -e '${path}' && echo yes || echo no`)).stdout.trim() === 'yes';
-  }
 
   /** One reader for the durable spec tables; the two names below are the
    *  domain concepts seven call sites use in lockstep. */

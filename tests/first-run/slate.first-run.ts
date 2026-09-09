@@ -15,11 +15,11 @@ const SUITE = 'First-run · slate';
 const CASE = 'slate';
 const ID = 'hello';
 const ASK = 'Use the file tool to create a slate at /home/user/slates/hello/. '
-  + 'Write package.json with main "server.ts" and slate {"title":"Hello","bindings":{}}. '
+  + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
   + 'Write server.ts as a TypeScript module whose default export has fetch(request, env). '
   + 'The request is an ordinary Request. For GET /ping, respond with JSON '
   + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname}. '
-  + 'Return HTTP 404 for other paths. Reply with pong on its own line when the files are ready.';
+  + 'Return HTTP 404 for other paths. Start its preview yourself and verify GET /ping. Reply with pong on its own line and the working preview URL.';
 const ExpectedResponse = v.strictObject({
   message: v.literal('pong'),
   method: v.literal('GET'),
@@ -41,14 +41,17 @@ describe(SUITE, () => {
       purpose: 'A precise engineer who builds small TypeScript HTTP apps.',
       async run({ session }) {
         const before = await session.listSlates();
+        const beforePorts = await session.exposedPorts('workspace');
         const turn = await session.prompt(ASK);
         const listing = await session.listSlates();
         const row = listing.slates.find((slate) => slate.id === ID);
-        const preview = row === undefined ? null : await session.previewSlate(ID);
+        // Inspect only: the harness must not start the preview the agent was asked to start.
+        const ports = await session.exposedPorts('workspace');
+        const preview = row?.port === 8787 ? ports.find((port) => port.port === row.port) : undefined;
         let answered = false;
         let responseDetail = 'No HTTP request was made because the preview did not start.';
-        if (preview?.ok) {
-          const url = new URL(preview.value.url);
+        if (preview !== undefined) {
+          const url = new URL(preview.url);
           url.pathname = url.pathname.replace(/\/$/, '') + '/ping';
           try {
             const response = await fetch(url);
@@ -72,8 +75,8 @@ describe(SUITE, () => {
           },
           {
             what: 'previewed',
-            reached: preview?.ok === true,
-            detail: preview === null ? 'The slate was not listed.' : JSON.stringify(preview),
+            reached: preview !== undefined && !beforePorts.some((port) => port.port === 8787),
+            detail: preview === undefined ? 'The named slate owns no current live preview on the requested port.' : JSON.stringify(preview),
           },
           {
             what: 'answered',
@@ -82,7 +85,7 @@ describe(SUITE, () => {
           },
           {
             what: 'replied',
-            reached: /^pong$/m.test(reply),
+            reached: /^pong$/m.test(reply) && preview !== undefined && reply.includes(preview.url),
             detail: `Stored reply: ${JSON.stringify(reply).slice(0, 200)}`,
           },
         ];

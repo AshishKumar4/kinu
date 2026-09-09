@@ -363,10 +363,10 @@ real `sqlite_master`. Read the manifest first. This page narrates over it.
 `initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every composition root calls it: the
 orchestrator DO `ensureSchema()`, the subordinate DO, `openWorkspaceCLI`,
-the local session constructor, and `kinu create`. It used to be four
-disagreeing lists, and the disagreements were real bugs. `craft_scores` was
-never created except by `kinu create`. Every EMA read on a workspace
-opened any other way silently no-opped.
+the local session constructor, and `kinu create`. One list, because parallel
+lists disagree and each disagreement is a real bug: a `craft_scores` created
+only by `kinu create` makes every EMA read on a workspace opened any other way
+silently no-op.
 
 The pass runs in this order:
 
@@ -382,8 +382,7 @@ Then each root adds what only it carries. The orchestrator DO also runs
 call is gated by an in-memory flag so it runs once per activation. No
 persistent schema version is tracked because a cold activation always re-runs.
 
-Each table has exactly one owning module. The duplicate copies that
-`identity/schema.ts` used to carry are gone. A second definition of
+Each table has exactly one owning module. A second definition of
 `search_nodes` is how `code_language` went missing on a live workspace. A
 second `scaffold_versions` is how `status` and `parent_version` did.
 

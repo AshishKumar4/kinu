@@ -302,9 +302,9 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
   });
 
   test('MCP and extension tool calls are not crafted-tool use', () => {
-    // The defect this replaced: "any tool call whose name is not built in" is a
-    // set crafted tools are never in — they are codemode-only — so it selected
-    // exactly the MCP/extension names and wrote craft scores against them.
+    // "Any tool call whose name is not built in" is a set crafted tools are
+    // never in — they are codemode-only — so it selects exactly the
+    // MCP/extension names and writes craft scores against them.
     expect(turnUsage(fakeLedger(['sum']), [
       { toolName: 'mcp__github__create_issue' },
       { toolName: 'some_extension_tool' },

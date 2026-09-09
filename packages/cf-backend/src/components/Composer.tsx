@@ -2,11 +2,10 @@
  * The composer — the one place a user acts on a conversation.
  *
  * One component for all three chat surfaces (workspace chat, subordinate chat,
- * and the design gallery). It used to be three hand-copied blocks, and they had
- * already drifted apart in the way that matters most: the gallery's copy — the
- * surface the product is screenshotted from — had no mode control, no
- * attachments and no status row, so it photographed a composer that did not
- * exist.
+ * and the design gallery). Hand-copied blocks drift in the way that matters
+ * most: a gallery copy missing the mode control, the attachments and the
+ * status row photographs a composer that does not exist, and the gallery is
+ * the surface the product is screenshotted from.
  *
  * Layout follows the arrangement the owner uses in his own agent workspace
  * (OpenSeal's session composer): the draft on top, then ONE toolbar inside the
@@ -20,10 +19,9 @@
  *
  * While a turn runs the right-hand group is THREE actions, not one: Stop
  * abandons the turn, Branch answers the draft beside it, and Steer hands the
- * draft to the turn already running. Before this the only mid-stream action was
- * Stop and a bare Branch glyph — Enter called a send that early-returned while
- * streaming, so typing to a working agent did nothing at all and said nothing
- * about it.
+ * draft to the turn already running. Enter is never a no-op mid-stream: a send
+ * that early-returns while streaming leaves someone typing at a working agent
+ * with nothing happening and nothing said about it.
  */
 import { useRef, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
@@ -147,7 +145,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
  * A clipboard source can expose the SAME File through repeated item flavors, and
  * attaching it twice claims the user pasted two. File metadata is NOT identity:
  * two receipts can share a name, byte length, MIME type and timestamp while
- * holding different bytes, so the old metadata key silently dropped one.
+ * holding different bytes, so a metadata key silently drops one.
  */
 function pastedFiles(data: DataTransfer): FileList {
   const { files, items } = data;

@@ -349,9 +349,17 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   if (parts.length <= 8) {
     for (const part of parts) collapsedIds.add(part.toolCallId);
   } else {
+    // A call that put a running app on screen is the artifact of the turn —
+    // the reader scrolls back for that frame, not for the row above it. It is
+    // therefore never folded, and it does not spend the consequential budget:
+    // a preview is not a change, and a run that exposes two ports must not
+    // lose a failure to make room for them.
+    for (const part of parts) if (extractPreviewUrl(partOutput(part)) !== null) collapsedIds.add(part.toolCallId);
+    let budget = 6;
     for (const part of parts) {
-      if (collapsedIds.size >= 6) break;
-      if (partFailed(part) || partEffect(part) === 'mutate') collapsedIds.add(part.toolCallId);
+      if (budget === 0) break;
+      if (collapsedIds.has(part.toolCallId)) continue;
+      if (partFailed(part) || partEffect(part) === 'mutate') { collapsedIds.add(part.toolCallId); budget -= 1; }
     }
     const first = parts[0];
     const last = parts.at(-1);
@@ -548,8 +556,8 @@ function WorkspaceCreatedCard({ state }: { state: CardState }) {
  *
  * Collapsed, because the words are the harness talking to the model and the
  * owner needs to know one happened far more often than they need to read it.
- * Never a bubble: this row is exactly the population that used to arrive in the
- * owner's own, four lines above things they had actually typed.
+ * Never a bubble: rendering this population in the owner's own would put the
+ * harness's words four lines above things they had actually typed.
  */
 function SystemEventCard({ event, text, state }: {
   event: string; text: string; state: CardState;

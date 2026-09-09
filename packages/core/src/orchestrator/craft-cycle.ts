@@ -47,9 +47,9 @@ const EXECUTE_TOOLS: BuiltinToolName = 'execute_tools';
  * block, so a crafted tool never appears as a tool-call name — and a consumer
  * that infers the answer from the turn's tool-call list instead ("every name
  * that is not built in") selects MCP and extension tools and nothing else.
- * Both consumers that used to do exactly that — the turn's craft EMA and the
- * durable turn↔craft usage row behind the thumbs re-score — now read the
- * accumulator, so there is one definition.
+ * Both consumers — the turn's craft EMA and the durable turn↔craft usage row
+ * behind the thumbs re-score — read the accumulator instead, so there is one
+ * definition.
  */
 export interface CraftUsageSink {
   noteCraftedToolUse(names: readonly string[]): void;

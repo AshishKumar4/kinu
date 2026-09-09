@@ -61,7 +61,7 @@ function createTestExecBuilder(
 
 /** An actor surface over `rt` whose sandbox is `executeTools`. */
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'executeTools'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' }, ...deps });
+  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' }, ...deps });
 }
 
 function requiredCraftedTool(tools: CraftedToolSet, name: string) {

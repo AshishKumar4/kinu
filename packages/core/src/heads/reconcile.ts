@@ -171,11 +171,10 @@ export const FORK_INTERRUPTED_SIGNAL = 'fork_interrupted';
  * distinguish an operator cancel from a process exit from a DO eviction — this
  * file's own header names all three — and it must not pick one.
  *
- * It previously read "settled at start of life, having outlived the activation
- * that spawned it", which named a mechanism: a head that ran past its owner.
- * That is false for the operator cancel, and the phrasing reads as a thrown
- * runtime error rather than what it is — a bookkeeping entry, written by the
- * routine that retires stale rows. It was reported as a crash on that basis.
+ * The message describes bookkeeping, not a runtime crash, and must not imply
+ * that the head outlived its owner: an operator cancellation is also
+ * consistent with these rows. Naming a specific mechanism or using
+ * error-shaped wording would misrepresent what reconciliation knows.
  */
 export const FORK_INTERRUPTED_REASON =
   'no executor: spawned, never reported, and retired when a later activation '
@@ -222,37 +221,35 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
  *  1. MARK. Every stale row becomes `interrupted` (`HeadJournal.markInterrupted`).
  *     That is a non-terminal state: the roster stops asserting the fork is in
  *     flight, which is what this reconciliation exists for, and the run stays
- *     re-enterable, which is what it used to destroy.
+ *     re-enterable, which a terminal state would destroy.
  *  2. OFFER. The roots just marked go to the resume gate, which re-drives whatever
  *     durable work can continue them and returns the ones it CLAIMED.
  *  3. RETIRE THE REST. Every unfinished run the gate did not claim is settled
  *     `aborted`, and only those runs reach the agent as a card.
  *
- * STEP 3 IS DRIVEN BY THE GATE'S ANSWER AND NOTHING ELSE. It used to be gated on
- * step 1 having marked something — `if (interrupted.length === 0) return []` — which
- * is a different question and left a hole the moment a swarm's re-entry stopped
- * writing terminal rows of its own. A run marked `interrupted` by an EARLIER
- * activation is not marked again by this one, so on the activation whose gate finally
- * refuses it, step 1 finds nothing, the early return fires, and the rows stay
- * `interrupted` for the life of the workspace: no report, no card, no terminal state.
- * The ledger row beside them was already being closed on the gate's answer alone, so
- * the two halves of one sweep disagreed about which activation was allowed to settle.
+ * STEP 3 IS DRIVEN BY THE GATE'S ANSWER AND NOTHING ELSE. Gating it on step 1 having
+ * marked something — `if (interrupted.length === 0) return []` — asks a different
+ * question and leaves a hole wherever a swarm's re-entry writes no terminal rows of
+ * its own. A run marked `interrupted` by an EARLIER activation is not marked again by
+ * this one, so on the activation whose gate finally refuses it, step 1 finds nothing,
+ * the early return fires, and the rows stay `interrupted` for the life of the
+ * workspace: no report, no card, no terminal state. The ledger row beside them closes
+ * on the gate's answer alone, so the two halves of one sweep would disagree about
+ * which activation is allowed to settle.
  *
  * A GATE THAT COULD NOT ANSWER PROTECTS EVERYTHING, stated once here instead of as a
  * spare-list per caller: retiring on an unknown would destroy work a later activation
  * could have continued.
  *
- * WHY IT IS NOT ONE STEP ANY MORE. It used to retire everything, unconditionally,
- * as the first thing an activation did — and it argued that a resume needed no
- * ordering because the sweep was bounded to rows spawned before `now`. That bound
- * protects a resume's OWN fresh heads and nothing else. It does not protect the
- * rows a re-entry re-expands FROM, which are by definition the dead activation's.
- * So on the owner's workspace five heads of a live search were retired with "no
- * executor: ... nothing left that could run it" while the durable job that could
- * re-enter them was still re-drivable, and the agent, told its work was gone,
- * re-forked by hand. The sweep was unconditional and the re-drive was conditional,
- * so the sweep won every eviction. The order is now this function's, not the
- * platform's.
+ * WHY THE OFFER STEP EARNS ITS PLACE. Retiring everything unconditionally as the
+ * first thing an activation does is bounded only to rows spawned before `now`, and
+ * that bound protects a resume's OWN fresh heads and nothing else. It does not
+ * protect the rows a re-entry re-expands FROM, which are by definition the dead
+ * activation's. On the owner's workspace five heads of a live search were retired
+ * with "no executor: ... nothing left that could run it" while the durable job that
+ * could re-enter them was still re-drivable, and the agent, told its work was gone,
+ * re-forked by hand. An unconditional sweep beside a conditional re-drive wins every
+ * eviction, so the order is this function's, not the platform's.
  *
  * Returns the runs it RETIRED — the ones the gate refused. A claimed run is left
  * `interrupted` for the re-entry to take over, and if that re-entry never lands,

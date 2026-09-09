@@ -35,9 +35,9 @@ describe('liveTail', () => {
   });
 
   test('a turn whose prose is finished and whose calls are done is thinking, not writing', () => {
-    // The reported misplacement: the caret used to render after the last TEXT
-    // part, which is above the tool rows that followed it. There is no text
-    // being written here at all — the model is between steps.
+    // The reported misplacement: a caret rendered after the last TEXT part sits
+    // above the tool rows that followed it. There is no text being written here
+    // at all — the model is between steps.
     const parts: Part[] = [
       text('Reading the handler.', 'done'),
       tool('a', 'output-available'),

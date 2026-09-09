@@ -39,6 +39,7 @@ import type { LLM, Executor } from '../types/primitives';
 import type { WorkMode } from '../prompting/surface';
 import { addUsage, usageTotal, type Usage } from '../usage';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { defaultLoopOrigin } from '../scaffold/loop-origin';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -102,10 +103,10 @@ export interface HeadJournalPort {
  * because a recursive split always carries a `parentHeadId` and so never resolves a
  * top-level run. `HeadJournal` satisfies this structurally.
  *
- * ONE CAPABILITY, not two. `abandonRunning` used to be here as well, because
- * reclaiming a run also retired its heads. A re-drive now RE-OPENS them instead, and
- * the transition that does it is `insertSpawn`, which this port already carries — so
- * the terminal writer is no longer any of this controller's business.
+ * ONE CAPABILITY, not two. A re-drive RE-OPENS a run's heads rather than retiring
+ * them, and the transition that does it is `insertSpawn`, which this port already
+ * carries — so the terminal writer is none of this controller's business and
+ * `HeadJournal.abandonRunning` is deliberately absent from this port.
  */
 export interface HeadRootJournal extends HeadJournalPort {
   findResumableRun(task: string): HeadId | null;
@@ -153,21 +154,13 @@ export type SplitPhaseEvent =
       blindSpots: MergeResult['blindSpots'] };
 
 /**
- * NOTHING IS WRITTEN ON A BRANCH A RE-DRIVE TAKES OVER, and the absence is the fix.
- *
- * There used to be a `RECLAIMED_RUN_REASON` here — "Interrupted before it reported.
- * This fork was restarted, and the branches below it are the retry." — stamped onto
- * every unreported row of the reclaimed run by {@link HeadController.resolveTopLevelRun}
- * and rendered verbatim on the Exploration surface. It was the fork twin of the swarm's
- * own defect and it multiplied the same way: the run id was reclaimed, its rows were
- * retired, and then the split minted a FRESH id per head, so one request accumulated
- * `heads.length` aborted rows per re-drive. The owner read that as
- * `Systemfork interrupted` over a pile of failed branches.
- *
- * A head that was spawned and never reported is UNFINISHED WORK. A re-drive re-runs
- * it under its OWN id, so the row is RE-OPENED rather than retired — the shared
- * transition is `HeadJournal.insertSpawn`, which both this controller and the swarm's
- * re-entry reach, and it is the only place either of them resets a head row.
+ * Re-entry reopens unfinished heads under their existing IDs through
+ * `HeadJournal.insertSpawn`; it does not terminalize them. Retiring and
+ * recreating those rows would add `heads.length` aborted rows per re-drive
+ * and make the Exploration surface portray retried work as additional failed
+ * branches. The shared transition is `HeadJournal.insertSpawn`, which both
+ * this controller and the swarm's re-entry reach, and it is the only place
+ * either of them resets a head row.
  *
  * The one caller that may still retire a head is the start-of-life reconciliation, for
  * a root whose durable job the resume gate could not re-drive (`heads/reconcile.ts`) —
@@ -293,6 +286,10 @@ export class HeadController {
         model: h.model ?? opts.model,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
+        // A fork explores under the loop it is forking FROM. Named through the
+        // per-kind default rather than written out, so the one decision about
+        // which kind inherits lives in one place.
+        loop: defaultLoopOrigin('head'),
       };
       if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       // Same as recordSplit above: a local journal writes the row before this
@@ -505,9 +502,9 @@ export class HeadController {
    * With a grounding seam this is a k-sample median ensemble (mergeSamples
    * independent synthesis samples, each scored by the grounded judge; the
    * median-scored one is kept — parse-failed samples are dropped, never a 0).
-   * Without one it is the legacy n=1 call. Either way the prompt carries each
-   * head's FULL evidence + artifacts (no 6×200-char clipping) so no finding is
-   * lost on the way into the merge.
+   * Without one it is a single synthesis call, no ensemble. Either way the prompt
+   * carries each head's FULL evidence + artifacts (no 6×200-char clipping) so no
+   * finding is lost on the way into the merge.
    */
   async merge(
     reports: readonly HeadReport[],

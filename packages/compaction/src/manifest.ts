@@ -110,8 +110,9 @@ export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
   return [
     '## Compaction Archive',
     'Ranges folded out of this conversation, archived verbatim. To recover exact prior wording or ' +
-      'raw tool output, read the range\'s file with workspace.readFile inside execute_tools — or hand ' +
-      'its path to a temporary agent as `context_ref` on an agents ask when it is large. Each file ' +
+      'raw tool output, read the range\'s file with workspace.readFile inside execute_tools — or name ' +
+      'its path in the message of a lifetime:"task" agents hire when it is large, so that agent reads ' +
+      'it instead of you. Each file ' +
       'holds the whole conversation up to ' +
       'its range end, so the file cited on a range is the smallest archive containing it.',
     ...(elided > 0

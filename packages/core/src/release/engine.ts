@@ -55,7 +55,19 @@ import {
  *  (cf-backend) so pass/fail is grounded in real exit codes, not the lossy
  *  LLM-facing tool strings. */
 export interface ReleaseExec {
-  exec(command: string, opts?: { cwd?: string; timeout?: number }): Promise<{
+  /**
+   * No wall clock, and a signal instead. A release command ends when its
+   * process ends, when the transport fails, or when the engine's owner cancels
+   * it — {@link ReleaseEngineOptions.signal} reaches the container through
+   * `SandboxHandle.exec`, which kills the process it started and waits for it
+   * to be gone.
+   *
+   * A per-step deadline here would kill a running command and record `failed`
+   * with no exit code, which a reader cannot tell apart from a check that ran
+   * and found a real defect. And nothing measures what such a figure should be
+   * for apply, clone, check or deploy, so there is no bound to pick.
+   */
+  exec(command: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<{
     stdout: string;
     stderr: string;
     exitCode: number;
@@ -103,6 +115,14 @@ export interface ReleaseEngineOptions {
   /** Root for per-change working copies. Lives under /workspace so the
    *  existing R2 workspace backup covers it. */
   workRoot?: string;
+  /**
+   * The cancellation the engine's owner holds, read PER COMMAND rather than
+   * captured, because an engine is built once and a turn is not. Every command
+   * this engine runs carries whatever this answers at the moment it starts, so
+   * cancelling the turn kills the container process instead of leaving a hung
+   * check pinning the change.
+   */
+  signal?: () => AbortSignal | undefined;
 }
 
 // ── Results (discriminated so the agent tool can relay them verbatim) ──────
@@ -151,30 +171,6 @@ const NOT_CONFIGURED =
 const DEFAULT_WORK_ROOT = '/workspace/releases';
 const GIT = `git -c user.name=Kinu -c user.email=kinu@agent -c core.hooksPath=/dev/null`;
 const OUTPUT_CAP = 20_000;
-const APPLY_TIMEOUT_MS = 120_000;
-const CLONE_TIMEOUT_MS = 300_000;
-/**
- * `runChecks` runs whatever command the caller named, so this bound is only
- * honest if it clears the longest check this repository itself declares. That is
- * `scripts/bench-corpus.ts`'s `lean-verify` at 900_000 ms; its `core-tests` and
- * `core-typecheck` entries declare 180_000. It was 300_000, under the first of
- * those, and a check killed by this bound is recorded `failed` with no exit code
- * — indistinguishable from a check that ran and found a real defect, which is a
- * release gate reporting a fault it never observed.
- *
- * What those checks actually cost, measured here on a warm tree: `bun run check`
- * 11.1 s, `bun run test` 46 s, `bash scripts/verify-lean.sh` 5.5 s. So the
- * declaration this derives from is loose by orders of magnitude on a warm run,
- * and the case it covers is a COLD one — `lake build` from an empty
- * `.lake`, and a container clone that has none of it. That figure is PENDING
- * MEASUREMENT: nothing in the tree records a cold Lean build, and it is the only
- * thing that would turn this bound from generous into exact. Until then the bound
- * is deliberately on the generous side of a declaration rather than the tight side
- * of a warm measurement, because the two failure modes are not symmetric — too
- * generous costs a stuck check its wall clock, too tight fabricates a defect.
- */
-const CHECK_TIMEOUT_MS = 900_000;
-const DEPLOY_TIMEOUT_MS = 600_000;
 const MAX_CHECKS_PER_RUN = 8;
 
 function cap(text: string): string {
@@ -212,7 +208,15 @@ export class ReleaseEngine {
   private readonly workRoot: string;
 
   constructor(opts: ReleaseEngineOptions) {
-    this.exec = opts.exec;
+    const source = opts.exec;
+    const signal = opts.signal;
+    // Wrapped once so the cancellation cannot be forgotten at one of the twenty
+    // call sites below, and read per command so a cached engine still sees the
+    // turn that is running now.
+    this.exec = source === null || signal === undefined ? source : {
+      ...source,
+      exec: (command, execOpts) => source.exec(command, { ...execOpts, signal: signal() }),
+    };
     this.ledger = opts.ledger;
     this.gitHubAuth = opts.gitHubAuth;
     this.workRoot = opts.workRoot ?? DEFAULT_WORK_ROOT;
@@ -232,21 +236,13 @@ export class ReleaseEngine {
     return { ok: true, detail, exec: this.exec };
   }
 
-  private async run(
-    exec: ReleaseExec,
-    command: string,
-    opts?: { cwd?: string; timeout?: number },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return exec.exec(command, { timeout: APPLY_TIMEOUT_MS, ...opts });
-  }
-
   private async pathExists(exec: ReleaseExec, path: string): Promise<boolean> {
-    const res = await this.run(exec, `test -e ${shellQuote(path)} && echo yes || echo no`);
+    const res = await exec.exec(`test -e ${shellQuote(path)} && echo yes || echo no`);
     return res.stdout.includes('yes');
   }
 
   private async headSha(exec: ReleaseExec, workdir: string): Promise<string | null> {
-    const res = await this.run(exec, `${GIT} rev-parse HEAD`, { cwd: workdir });
+    const res = await exec.exec(`${GIT} rev-parse HEAD`, { cwd: workdir });
     if (res.exitCode !== 0) return null;
     const sha = res.stdout.trim();
     return /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
@@ -270,16 +266,14 @@ export class ReleaseEngine {
     const netGit = auth ? `GIT_CONFIG_GLOBAL=${shellQuote(authFile)} ${GIT}` : GIT;
     if (auth) {
       await exec.writeFile(authFile, `[http]\n\textraheader = AUTHORIZATION: ${auth}\n`);
-      await this.run(exec, `chmod 600 ${shellQuote(authFile)}`);
+      await exec.exec(`chmod 600 ${shellQuote(authFile)}`);
     }
     try {
       const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
       if (!hasRepo) {
-        await this.run(exec, `rm -rf ${shellQuote(workdir)} && mkdir -p ${shellQuote(this.workRoot)}`);
-        const clone = await this.run(
-          exec,
+        await exec.exec(`rm -rf ${shellQuote(workdir)} && mkdir -p ${shellQuote(this.workRoot)}`);
+        const clone = await exec.exec(
           `${netGit} clone --depth 50 --branch ${shellQuote(branch)} ${shellQuote(binding.repoUrl)} ${shellQuote(workdir)}`,
-          { timeout: CLONE_TIMEOUT_MS },
         );
         if (clone.exitCode !== 0) {
           const out = combinedOutput(clone);
@@ -298,24 +292,22 @@ export class ReleaseEngine {
         // so a re-apply never builds on a stale clone. The explicit refspec
         // keeps a hostile branch value from parsing as a fetch flag:
         // `refs/heads/<branch>` never starts with a dash.
-        const fetched = await this.run(
-          exec,
+        const fetched = await exec.exec(
           `${netGit} fetch origin ${shellQuote(`refs/heads/${branch}`)}`,
-          { cwd: workdir, timeout: CLONE_TIMEOUT_MS },
+          { cwd: workdir },
         );
         if (fetched.exitCode !== 0) return `git fetch failed (exit ${fetched.exitCode}):\n${cap(combinedOutput(fetched))}`;
       }
       // Pristine base for every (re-)apply: drop local drift, rebuild the
       // change branch from the fetched default branch tip.
-      const checkout = await this.run(
-        exec,
+      const checkout = await exec.exec(
         `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`kinu/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
         { cwd: workdir },
       );
       if (checkout.exitCode !== 0) return `git checkout failed (exit ${checkout.exitCode}):\n${cap(combinedOutput(checkout))}`;
       return null;
     } finally {
-      if (auth) await this.run(exec, `rm -f ${shellQuote(authFile)}`);
+      if (auth) await exec.exec(`rm -f ${shellQuote(authFile)}`);
     }
   }
 
@@ -326,17 +318,16 @@ export class ReleaseEngine {
   private async ensureLocalWorkdir(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
     if (!hasRepo) {
-      const init = await this.run(
-        exec,
+      const init = await exec.exec(
         `mkdir -p ${shellQuote(workdir)} && cd ${shellQuote(workdir)} && ${GIT} init -b main && ${GIT} add -A && ${GIT} commit --allow-empty -m 'base snapshot'`,
       );
       if (init.exitCode !== 0) return `git init failed (exit ${init.exitCode}):\n${cap(combinedOutput(init))}`;
       return null;
     }
-    const base = await this.run(exec, `${GIT} rev-list --max-parents=0 HEAD`, { cwd: workdir });
+    const base = await exec.exec(`${GIT} rev-list --max-parents=0 HEAD`, { cwd: workdir });
     const baseSha = base.stdout.trim().split('\n').pop()?.trim();
     if (base.exitCode !== 0 || !baseSha) return `could not resolve base commit:\n${cap(combinedOutput(base))}`;
-    const reset = await this.run(exec, `${GIT} reset --hard ${shellQuote(baseSha)} && ${GIT} clean -fd`, { cwd: workdir });
+    const reset = await exec.exec(`${GIT} reset --hard ${shellQuote(baseSha)} && ${GIT} clean -fd`, { cwd: workdir });
     if (reset.exitCode !== 0) return `git reset to base failed (exit ${reset.exitCode}):\n${cap(combinedOutput(reset))}`;
     return null;
   }
@@ -397,7 +388,7 @@ export class ReleaseEngine {
     await exec.writeFile(patchPath, patchText);
 
     const started = Date.now();
-    const applied = await this.run(exec, `${GIT} apply --whitespace=nowarn ${shellQuote(patchPath)}`, { cwd: workdir });
+    const applied = await exec.exec(`${GIT} apply --whitespace=nowarn ${shellQuote(patchPath)}`, { cwd: workdir });
     if (applied.exitCode !== 0) {
       await this.ledger.recordCheck(changeId, {
         name: 'apply patch',
@@ -414,8 +405,7 @@ export class ReleaseEngine {
       };
     }
 
-    const commit = await this.run(
-      exec,
+    const commit = await exec.exec(
       `${GIT} add -A && ${GIT} commit -m ${shellQuote(`release change ${changeId}`)}`,
       { cwd: workdir },
     );
@@ -467,7 +457,7 @@ export class ReleaseEngine {
     const results: CheckRunResult[] = [];
     for (const check of cleaned) {
       const started = Date.now();
-      const res = await this.run(exec, check.command, { cwd: workdir, timeout: CHECK_TIMEOUT_MS });
+      const res = await exec.exec(check.command, { cwd: workdir });
       const durationMs = Date.now() - started;
       const status = res.exitCode === 0 ? 'passed' as const : 'failed' as const;
       await this.ledger.recordCheck(changeId, {
@@ -506,8 +496,7 @@ export class ReleaseEngine {
         return { ok: false, error: `working copy ${workdir} is gone — re-run apply first` };
       }
       const log = `/tmp/${changeId}-srv.log`;
-      const started = await this.run(
-        exec,
+      const started = await exec.exec(
         `nohup sh -c ${shellQuote(opts.startCommand.trim())} > ${shellQuote(log)} 2>&1 & echo started`,
         { cwd: workdir },
       );
@@ -605,7 +594,7 @@ export class ReleaseEngine {
         return { ok: false, error: `working copy ${workdir} is gone — re-run apply, checks, and approval flow` };
       }
       const started = Date.now();
-      const res = await this.run(exec, command, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
+      const res = await exec.exec(command, { cwd: workdir });
       const output = combinedOutput(res);
       await this.ledger.recordCheck(changeId, {
         name: `deploy (${environment})`,
@@ -633,7 +622,7 @@ export class ReleaseEngine {
     }
 
     const rollbackTarget = priorVersion ?? (await (async () => {
-      const res = await this.run(exec, `${GIT} rev-parse HEAD~1`, { cwd: workdir });
+      const res = await exec.exec(`${GIT} rev-parse HEAD~1`, { cwd: workdir });
       const sha = res.stdout.trim();
       return res.exitCode === 0 && /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
     })());
@@ -677,12 +666,12 @@ export class ReleaseEngine {
     }
 
     // Digest-bound approval, the same rule `deploy()` already enforces. Without
-    // it `hasApproved` was the whole gate: any approved rollback could be spent
-    // on whatever `opts.command` the caller passed, and the model's release tool
-    // is one of the callers. `platformCommand` is null for a commit target,
-    // which is the same "no command — restore this target with git" the approval
-    // recorded, so a git rollback needs no new ceremony and a platform rollback
-    // must have had ITS command approved.
+    // it `hasApproved` would be the whole gate: any approved rollback could be
+    // spent on whatever `opts.command` the caller passed, and the model's
+    // release tool is one of the callers. `platformCommand` is null for a commit
+    // target, which is the same "no command — restore this target with git" the
+    // approval recorded, so a git rollback needs no new ceremony and a platform
+    // rollback must have had ITS command approved.
     const expectedDigest = deployApprovalDigest({
       approvalType: 'rollback',
       patch: change.patch,
@@ -721,7 +710,7 @@ export class ReleaseEngine {
     // Platform-version-id target: the explicit command IS the rollback —
     // there is nothing for git to restore, so no git reset runs at all.
     if (platformCommand) {
-      const res = await this.run(exec, platformCommand, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
+      const res = await exec.exec(platformCommand, { cwd: workdir });
       await this.ledger.recordCheck(changeId, {
         name: 'rollback',
         status: res.exitCode === 0 ? 'passed' : 'failed',
@@ -742,7 +731,7 @@ export class ReleaseEngine {
       return { ok: true, restored: target, verified: true, status: updated.status };
     }
 
-    const reset = await this.run(exec, `${GIT} reset --hard ${shellQuote(target)} && ${GIT} clean -fd`, { cwd: workdir });
+    const reset = await exec.exec(`${GIT} reset --hard ${shellQuote(target)} && ${GIT} clean -fd`, { cwd: workdir });
     if (reset.exitCode !== 0) {
       return {
         ok: false,
@@ -766,7 +755,7 @@ export class ReleaseEngine {
     const command = explicitCommand ?? deployTargetAsCommand(binding?.deployTarget ?? null);
     let redeployNote = 'preview workdir restored in place';
     if (command) {
-      const res = await this.run(exec, command, { cwd: workdir, timeout: DEPLOY_TIMEOUT_MS });
+      const res = await exec.exec(command, { cwd: workdir });
       if (res.exitCode !== 0) {
         await this.ledger.recordCheck(changeId, {
           name: 'rollback',

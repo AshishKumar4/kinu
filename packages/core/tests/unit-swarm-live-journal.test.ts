@@ -35,6 +35,7 @@ import { describe, expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { runSwarm, type SwarmRunDeps } from '../src/strategy/swarm-run';
 import { resolveSwarm, swarmValidity } from '../src/strategy/swarm';
@@ -124,11 +125,16 @@ interface Announcement {
 }
 
 async function run(announce?: AnnounceHeadActivity) {
-  const { rt } = createTestRuntime();
-  const reader = new HeadJournal(rt.storage.sql);
+  const { rt, db } = createTestRuntime();
+  const reader = new HeadJournal(rt.storage.sql, rt.actor);
   const seen: Announcement[] = [];
   const deps: SwarmRunDeps = {
     rt,
+    // A REAL seat per node, over this runtime's own database: `unit:'answer'`
+    // is an agent node, so the run acquires one — and the journal it announces
+    // is read back through `rt.actor` below, so both halves have to be the one
+    // workspace or every read would come back empty.
+    hostNode: hostedSeatsOver({ rt, db }).hostNode,
     model: reportingNode(),
     mode: 'build',
     logger: createRecordingLogger(),

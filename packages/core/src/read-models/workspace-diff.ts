@@ -26,9 +26,10 @@ import { KinuError, renderThrownChain } from '../obs/index';
  * review surface, not a backup.
  *
  * Both numbers bound the RESPONSE, not peak resident bytes: their product is
- * 104,857,600 bytes — 100.0 MiB, or 104.9 MB, which the comment here used to give
- * as 102.4 MiB by dividing a KiB count by 1000. That leaves 23 MB under
- * `worker.isolate.memory`'s published 128 MB, not a margin worth relying on, and
+ * 104,857,600 bytes — 100.0 MiB, or 104.9 MB. Both units, because the 128 MB
+ * ceiling below is decimal and dividing a KiB count by 1000 mis-states the
+ * product as 102.4 MiB. That leaves 23 MB under `worker.isolate.memory`'s
+ * published 128 MB, not a margin worth relying on, and
  * `do.isolate.reset_silent` — a retained working set past roughly 200 MiB
  * resetting the object with nothing thrown or logged — would present as an
  * unexplained disappearance rather than as a truncated diff. What bounds residency
@@ -53,12 +54,18 @@ const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
 
 export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (
+    actor_id   TEXT NOT NULL,
     generation TEXT NOT NULL,
     path       TEXT NOT NULL,
     content    TEXT NOT NULL,
     active     INTEGER NOT NULL CHECK (active IN (0, 1)),
-    PRIMARY KEY (generation, path)
+    PRIMARY KEY (actor_id, generation, path)
   )`);
+  // "Which generation is active" is asked per owner: a subordinate working in
+  // its own tree re-baselines on its own schedule, and a table-wide flip would
+  // reset the root's change-set with it.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_vfs_baseline_active
+    ON vfs_baseline(actor_id, active)`);
 }
 
 export interface WorkspaceDiffResult {
@@ -78,7 +85,7 @@ export interface ExecutorDiffResult {
  * Visit every workspace text file the change-set considers, one body at a time.
  *
  * The visitor shape is the whole point. A 400-file workspace of 256 KiB files
- * is 102 MiB, and the previous code held that map, the materialized baseline
+ * is 100 MiB, and materializing that map holds it, the materialized baseline
  * and the diff output live at once — three copies, in an isolate whose
  * silent-reset wall is `PLATFORM_CATALOG['do.isolate.reset_silent']` and whose
  * breach throws and logs nothing. Exactly one body is live here.
@@ -140,16 +147,20 @@ export async function walkWorkspaceTextFiles(
 /** The generation the change-set reads. Pinned once so the per-path content
  *  reads below cannot straddle a concurrent re-baseline. */
 function activeBaselineGeneration(rt: AgentRuntime): string | null {
+  rt.actor.assertCurrent();
   return rt.storage.sql<{ generation: string }>`
-    SELECT generation FROM vfs_baseline WHERE active = 1 LIMIT 1`[0]?.generation ?? null;
+    SELECT generation FROM vfs_baseline
+    WHERE actor_id = ${rt.actor.actorId} AND active = 1 LIMIT 1`[0]?.generation ?? null;
 }
 
 /** One baseline body, by primary key. Reading these one at a time is what
  *  keeps the whole baseline out of the isolate. */
 function baselineContent(rt: AgentRuntime, generation: string, path: string): string {
+  rt.actor.assertCurrent();
   const row = rt.storage.sql<{ content: string }>`
     SELECT content FROM vfs_baseline
-    WHERE generation = ${generation} AND path = ${path} LIMIT 1`[0];
+    WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation}
+      AND path = ${path} LIMIT 1`[0];
   // The generation was pinned from the active row, so a missing body means a
   // re-baseline landed mid-read. Saying so lets the caller read again; assuming
   // an empty baseline would report the whole file as newly added.
@@ -175,7 +186,8 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
       ? []
       : rt.storage.sql<{ path: string }>`
           SELECT path FROM vfs_baseline
-          WHERE generation = ${generation} AND path <> ''`.map((r) => r.path),
+          WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation}
+            AND path <> ''`.map((r) => r.path),
   );
 
   const files: FileDiff[] = [];
@@ -219,26 +231,29 @@ export async function getWorkspaceDiff(rt: AgentRuntime): Promise<WorkspaceDiffR
  * reason the inactive generation exists — nothing reads it until the flip.
  */
 export async function resetWorkspaceBaseline(rt: AgentRuntime): Promise<{ ok: true; files: number }> {
+  rt.actor.assertCurrent();
+  const actorId = rt.actor.actorId;
   const generation = nanoid();
   let files = 0;
   try {
     // The marker makes an intentionally empty snapshot representable.
-    void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
-      VALUES (${generation}, ${''}, ${''}, ${0})`;
+    void rt.storage.sql`INSERT INTO vfs_baseline (actor_id, generation, path, content, active)
+      VALUES (${actorId}, ${generation}, ${''}, ${''}, ${0})`;
     await walkWorkspaceTextFiles(rt, (path, content) => {
-      void rt.storage.sql`INSERT INTO vfs_baseline (generation, path, content, active)
-        VALUES (${generation}, ${path}, ${content}, ${0})`;
+      void rt.storage.sql`INSERT INTO vfs_baseline (actor_id, generation, path, content, active)
+        VALUES (${actorId}, ${generation}, ${path}, ${content}, ${0})`;
       files++;
     });
     void rt.storage.sql`UPDATE vfs_baseline
-      SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END`;
+      SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
+      WHERE actor_id = ${actorId}`;
   } finally {
     // One sweep for both outcomes, and the reason there is no catch here: after
     // a successful flip the only inactive rows are the generations this one
     // replaced, and after a failure they are this one's own partial write, which
     // no read can see and nothing will ever finish. Deleting them cannot change
     // what the caller is told, so the original error propagates untouched.
-    void rt.storage.sql`DELETE FROM vfs_baseline WHERE active = 0`;
+    void rt.storage.sql`DELETE FROM vfs_baseline WHERE actor_id = ${actorId} AND active = 0`;
   }
   return { ok: true, files };
 }

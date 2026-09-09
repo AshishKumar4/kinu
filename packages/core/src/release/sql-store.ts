@@ -538,14 +538,14 @@ export class ReleaseStore {
     // and rollback both recompute this and reject a mismatch, so an approval
     // can't be redirected to a mutated patch or an injected command.
     //
-    // A ROLLBACK binds its OWN command. Both used to hash
-    // `deployCommandForChange`, which is the command a DEPLOY runs — so the
-    // digest a rollback approval carried described something the rollback would
-    // never execute, and `rollback()` (unlike `deploy()`) never checked it
-    // anyway. An approved rollback could then be spent on any command the caller
-    // passed, and the model's release tool is a caller. `null` here means "the
-    // git restore this target implies", which is what a commit-target rollback
-    // runs and what `rollback()` recomputes for one.
+    // A rollback approval binds the ROLLBACK command, not
+    // `deployCommandForChange` — that is the command a DEPLOY runs — and
+    // `rollback()` recomputes that digest before execution. Hashing the deploy
+    // command describes the wrong operation; accepting an approval without
+    // comparing its digest permits the caller to substitute another command.
+    // The model's release tool is a caller. `null` here means "the git restore
+    // this target implies", which is what a commit-target rollback runs and
+    // what `rollback()` recomputes for one.
     const digest = deployApprovalDigest({
       approvalType,
       patch: existing.patch,

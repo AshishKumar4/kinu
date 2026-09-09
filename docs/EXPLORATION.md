@@ -324,11 +324,12 @@ left still finishes its own work; its tool surface excludes further splitting.
 
 A node ends when the model stops calling tools and it holds nothing, the search
 aborts it, its mission governor declines the next request, or an opt-in
-`maxWallClockMs` deadline passes. Shipped dispatch declares none. In-isolate,
-the last three are read between steps, so none interrupts one. A hosted node
-is aborted by evicting its facet (`getCFNodeHost`), which ends the step in
-flight; the search records it `aborted` under the cancel reason, reclaims its
-storage, and boots no facet for a search already cancelled.
+`maxWallClockMs` deadline passes. Shipped dispatch declares none. The last three
+are read between steps, so none interrupts one: a node runs in the isolate that
+ran the search, as its own logical actor of the one workspace, and the search
+records the cut on the node's own report under the cancel reason. There is no
+node facet and no node-loop host — the loop runs in one place, so the cut is
+observed in one place.
 
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 22 / 25 / 26 steps when a 1,200,000 ms abort fired. Their mean steps were
@@ -412,10 +413,9 @@ spec is refused as `bad_input` naming it before any node runs, and the list is
 mutually exclusive with `tier` (run-level routing). Omitted, every node runs the
 one model the call resolved to. That is the unchanged default. The spec list is
 digested into the record's `configDigest`, so two runs differing only in
-routing never collide in the store. Both transports honor the assignment: an
-in-isolate node runs the resolved model directly, and a hosted node carries its
-slot's spec across the facet RPC on `HeadInput.model`, where the facet resolves
-it through the owner's registry.
+routing never collide in the store. A node runs the resolved model directly; the
+slot's own spec travels beside it on `HeadInput.model`, which is the field a
+head resolved out of process is bound from.
 
 A node receives exactly one brief. When a caller or a parent `propose_branch`
 wrote it, that brief occupies the angle slot and the engine sends no angle of its

@@ -1249,7 +1249,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { name: 'agents', args: { action: 'hire' }, result: null },
             { name: 'agents', args: { action: 'dismiss' }, result: null },
             { name: 'agents', args: { action: 'swarm' }, result: null },
-            { name: 'agents', args: { action: 'ask' }, result: null },
+            { name: 'agents', args: { action: 'msg' }, result: null },
             { name: 'execute_tools', args: {}, result: null },
             { name: 'run', args: {}, result: null },
           ],

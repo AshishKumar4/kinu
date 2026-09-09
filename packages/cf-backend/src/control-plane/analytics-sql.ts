@@ -170,12 +170,12 @@ async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<Analy
 /**
  * What an error response's body turned out to be.
  *
- * Two arms rather than one tolerant envelope. The absent-message envelope and a
- * body that is not an envelope AT ALL used to reduce to the same `{}`, so a
- * response from an edge the API never saw — HTML, or a proxy's own error page —
- * rendered as a bare status code indistinguishable from a clean API refusal
- * carrying no message. They are different faults with different fixes: one is a
- * query or a token, the other is the route to Cloudflare.
+ * Two arms rather than one tolerant envelope. One tolerant envelope reduces the
+ * absent-message envelope and a body that is not an envelope AT ALL to the same
+ * `{}`, so a response from an edge the API never saw — HTML, or a proxy's own
+ * error page — renders as a bare status code indistinguishable from a clean API
+ * refusal carrying no message. They are different faults with different fixes:
+ * one is a query or a token, the other is the route to Cloudflare.
  */
 type ErrorBody =
   | { readonly status: 'envelope'; readonly envelope: SqlErrorEnvelope }

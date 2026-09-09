@@ -1,8 +1,8 @@
 /**
- * The icon-only copy action. Every one of these used to be a bare
- * `onClick={() => navigator.clipboard.writeText(x)}` with no feedback at all —
- * including the webhook secret, which is shown exactly once, where a rejected
- * write leaves the user with nothing and no way to know.
+ * The icon-only copy action, with feedback. A bare
+ * `onClick={() => navigator.clipboard.writeText(x)}` reports nothing —
+ * including for the webhook secret, which is shown exactly once, where a
+ * rejected write leaves the user with nothing and no way to know.
  */
 import { CheckIcon, CopyIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useCopy } from "@/hooks/use-copy";

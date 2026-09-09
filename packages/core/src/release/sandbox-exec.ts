@@ -18,10 +18,11 @@ export function createSandboxReleaseExec(
 ): ReleaseExec {
   return {
     async exec(command, opts) {
-      const res = await withSandboxRetry(() => handle.exec(command, {
-        cwd: opts?.cwd,
-        timeout: opts?.timeout,
-      }));
+      // No `timeout`: an absent one is how `SandboxHandle.exec` spells "this
+      // call carries no work deadline". `signal` is what ends it early, and the
+      // adapter contract says it kills the container process and waits for it
+      // to be gone, so a cancelled release command is a stopped one.
+      const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd, signal: opts?.signal }));
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',

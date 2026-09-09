@@ -15,7 +15,7 @@
  * before an object exists. `proxyToSandbox` resolves the sandbox id into a
  * Durable Object stub — the act that creates one — and only then hands the
  * token to that object to validate. This host is step 1 of the route table,
- * ahead of authentication, so an anonymous GET to a guessed hostname used to
+ * ahead of authentication, so an anonymous GET to a guessed hostname would
  * instantiate a container object and its SQLite, once per guess. So the label
  * is proven against the exposures this deployment published
  * (lib/preview-exposures.ts) BEFORE the SDK is handed the request. That record

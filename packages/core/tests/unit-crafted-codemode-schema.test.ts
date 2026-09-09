@@ -67,7 +67,13 @@ function captureExecuteTool(): CapturedExecuteTool {
 }
 
 function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'executeTools'>) {
-  return buildActorTools({ rt, effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' }, ...deps });
+  // The runtime's OWN actor: a claim is keyed by its owner, and a second
+  // handle here would let this actor's tool call replay under nobody's turn.
+  return buildActorTools({
+    rt,
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
+    ...deps,
+  });
 }
 
 describe('Phase D — crafted tools reach the execute_tools builder under tools.*', () => {

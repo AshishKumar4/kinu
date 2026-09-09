@@ -15,7 +15,6 @@
  * the execution wrapper that makes a session act as one facet.
  */
 
-import { headAgentName, nodeAgentName, subordinateAgentName } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
@@ -34,32 +33,13 @@ export interface HostedNodeHome {
 }
 
 /**
- * The facet kinds an owner provisions homes for. A branch is not one: an MCTS
- * rollout is toolless and acquires no plane at all.
+ * The actor-home kind vocabulary, the name namespace it maps onto, and the
+ * provisioner all live in `actor-hosting.ts`, as `HostedActorHomeKind`,
+ * `hostedActorAgentName` and `provisionHostedActorHome`. The host provisions
+ * each actor's home locally from the workspace's home host and directory, so
+ * the kind vocabulary and the provisioner each have one owner rather than a
+ * second copy of each here that nothing would call.
  */
-export type HostedFacetKind = 'node' | 'head' | 'subordinate';
-
-/** The one home namespace, by kind: `node-<id>`, `head-<id>`, `sub-<slug>`.
- *  Derived on the owner from the kind and the id it is handed, so a facet
- *  names what it IS and never the directory it wants. */
-export function hostedFacetAgentName(kind: HostedFacetKind, id: string): string {
-  switch (kind) {
-    case 'node': return nodeAgentName(id);
-    case 'head': return headAgentName(id);
-    case 'subordinate': return subordinateAgentName(id);
-  }
-}
-
-/**
- * Where an actor's facets get their homes: the owner's registry, reached
- * directly by the owner and over one hop by every facet. Provision is
- * idempotent — a facet that comes back finds the home it already had — and
- * release reclaims the bytes and the `/tmp` rewrite while the uid row stays.
- */
-export interface HostedFacetHomes {
-  provision(kind: HostedFacetKind, id: string): Promise<HostedNodeHome>;
-  release(kind: HostedFacetKind, id: string): Promise<void>;
-}
 
 /**
  * The session, addressed as one facet: commands run as its uid, from its home,

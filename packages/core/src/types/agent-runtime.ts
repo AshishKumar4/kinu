@@ -23,6 +23,7 @@ import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
 import type { WorkMode } from '../prompting/surface';
 import type { TurnFileLedger } from '../tools/file-ledger';
+import type { ActorHandle } from '../state/actor-handle';
 
 /** A live channel a surface that owns a user (ACP's `session/request_permission`)
  *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */
@@ -93,6 +94,8 @@ export interface BranchHandle {
    * would put a claim nobody observed into MEMORY.md.
    */
   generateReflection(task: string, outcome?: string): Promise<BranchReflection>;
+  /** Release this creation after its final reflection. Never resolve a new actor by name. */
+  release(): Promise<void>;
 }
 
 /** Factory for creating isolated branch agents — injected by the backend */
@@ -104,22 +107,9 @@ export type SpawnBranch = (branchId: string) => Promise<BranchHandle>;
  * short — so it must not destroy state.
  */
 export type AbortBranch = (branchId: string, reason?: string) => Promise<void>;
-/**
- * TERMINAL release of a branch agent: it will never be read again, so the
- * backend gives its resources back (CF wipes the facet's SQLite; the CLI reaps
- * the child process).
- *
- * Deliberately separate from {@link AbortBranch}. A branch's recorded traces are
- * wanted right up to the end of its iteration, because that is where
- * `generateReflection` reads them, so the only safe release point is the
- * expansion's `finally` — after exploring, scoring and reflecting are all done.
- * Collapsing the two verbs destroys a branch that is still being reflected on in
- * one direction and leaks its storage forever in the other; the CF backend did
- * the latter for every branch of every search.
- */
-export type ReleaseBranch = (branchId: string) => Promise<void>;
 
 export interface AgentRuntime {
+  readonly actor: ActorHandle;
   storage: Storage;
   /**
    * Where this agent's own state lives, when that is not the same tree as
@@ -170,7 +160,6 @@ export interface AgentRuntime {
   /** Platform-specific branch spawning — injected by CF or CLI backend */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
-  releaseBranch: ReleaseBranch;
   /**
    * Multi-executor routing. Manages named executor providers (workspace,
    * nimbus, sandbox, laptop) for the codemode sandbox. Optional — core

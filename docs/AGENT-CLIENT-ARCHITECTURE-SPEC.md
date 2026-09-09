@@ -239,8 +239,8 @@ not conversations to reopen. The canonical cloud read is still
 
 `fork` names two live features: conversation walk-back and cloud workspace
 fork. The delegation action of that name was deleted: `AGENTS_TOOL_ACTIONS`
-(`packages/core/src/tools/registry.ts:323`) is `swarm`, `hire`, `ask`, `send`,
-`reply`, `list`, `dismiss`; parallel work is `swarm`. See
+(`packages/core/src/tools/registry.ts`) is `swarm`, `hire`, `msg`, `list`,
+`dismiss`; parallel work is `swarm`. See
 [EXPLORATION.md](EXPLORATION.md).
 
 `/fork [n]` restarts the conversation just before an earlier user message.
@@ -273,8 +273,9 @@ expect(server).not.toContain('registerWorkspace(agentName');
 ```
 
 No source file names any of them; under `packages` that test is the sole
-occurrence. The prepare, tool and commit routes, the `/turn` route and matching
-Durable Object callables were deleted, not deprecated. An unregistered
+occurrence. The prepare, tool and commit routes, the `/turn` route and the
+matching Durable Object callables exist in no form — no alias, no refusing
+stub. An unregistered
 workspace answers 404, never created on first touch: creation must go through
 the explicit create APIs so probes cannot register workspaces
 (`claimOwnedWorkspace`, `user/workspace-ownership.ts:60-66`, via

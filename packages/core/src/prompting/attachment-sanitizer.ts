@@ -209,7 +209,7 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
   });
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
-    `oversize: hand ${path} to a temporary agent as \`context_ref\` on an agents ask). The first ${head.length} chars follow.]\n\n${head}`;
+    `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
 }
 
 /** True when a natively-acceptable document is large enough that carrying it
@@ -294,9 +294,9 @@ async function storeAndReference(
  *  The address is a cryptographic digest of the bytes, and reuse of an existing
  *  object VERIFIES it: the path is a claim about content, and "the file exists"
  *  is not that claim. A truncated write, a file the agent put there itself, or
- *  (under the 64-bit non-cryptographic hash this used to address by) a genuine
- *  collision all present as an existing path — and reusing one substitutes
- *  somebody else's bytes for the attachment the model is being pointed at. */
+ *  (under a 64-bit non-cryptographic address) a genuine collision all present as
+ *  an existing path — and reusing one substitutes somebody else's bytes for the
+ *  attachment the model is being pointed at. */
 async function storeContentAddressed(
   bytes: Uint8Array,
   mediaType: string,

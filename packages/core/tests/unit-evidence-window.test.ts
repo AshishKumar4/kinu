@@ -1,9 +1,10 @@
 // The evolution loop's evidence budget: one policy, applied at every reader.
 //
 // The behaviour under test is not "text gets shorter" — it is that the END of a
-// long turn reaches the judge. Every one of these readers used to keep only the
-// first n characters, which made a win that lands at step 9 of 12 invisible to
-// the thing that is supposed to select for it.
+// long turn reaches the judge. A reader that keeps only the first n characters
+// makes a win that lands at step 9 of 12 invisible to the thing that is
+// supposed to select for it.
+import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -18,6 +19,7 @@ import type { GepaCandidate } from '../src/evolution/gepa/types';
 import { initReplayTables, runReplayEval } from '../src/evolution/replay';
 import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 /** A seed candidate carrying `source` — the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
@@ -79,10 +81,10 @@ describe('the readers can see the end of a long turn', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
@@ -96,7 +98,7 @@ describe('the readers can see the end of a long turn', () => {
       task: trajectory(20_000, `ASK-${ending}`),
       currentOutput: trajectory(40_000, `CURRENT-${ending}`),
       judge,
-      llmStream: async function* () { yield ''; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       random: () => 0,
     });
 
@@ -109,23 +111,24 @@ describe('the readers can see the end of a long turn', () => {
     // One window, judged and recorded: the row is the evidence the verdict was
     // formed on, not a differently-truncated view of it.
     const row = rt.storage.sql<{ task: string; current_output: string }>`
-      SELECT task, current_output FROM scaffold_evaluations LIMIT 1`[0]!;
+      SELECT task, current_output FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0]!;
     expect(row.task).toBe(evidenceWindow(trajectory(20_000, `ASK-${ending}`), EVIDENCE_BUDGETS.shadowTask));
     expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
 
-  // The budget is applied in ONE place. It used to be applied twice — the
-  // orchestration clamped, then the judge clamped what was already clamped —
-  // and windowing a window reports the SECOND pass's omission count, so the
-  // number the judge was shown was wrong by four orders of magnitude.
+  // The budget is applied in ONE place. Applying it twice — the orchestration
+  // clamps, then the judge clamps what is already clamped — makes windowing a
+  // window report the SECOND pass's omission count, and the number the judge
+  // sees is wrong by four orders of magnitude.
   test('the orchestrated path windows once, so the omission count is the true one', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-      VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
@@ -139,7 +142,7 @@ describe('the readers can see the end of a long turn', () => {
         getGepaEvalBudget: () => 1,
       },
       surface: () => ({
-        llmStream: async function* () { yield ''; },
+        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
         callTool: async () => ({}),
         history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
         defaultInference: async function* () { yield { value: '' }; },
@@ -180,7 +183,11 @@ describe('the readers can see the end of a long turn', () => {
     const sql = makeSql(db);
     initTurnOutcomeTables(makeExecRaw(db));
     initReplayTables(makeExecRaw(db));
-    recordTurnOutcome(sql, {
+    // One actor for the seed and the pass: `turn_outcomes` is that actor's, so
+    // a replay under a second handle would sample an empty ledger and score
+    // nothing while reporting success.
+    const actor = createTestActors(sql, makeExecRaw(db)).main;
+    recordTurnOutcome(sql, actor, {
       turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: trajectory(20_000, `ASK-${ending}`),
       assistantResponse: trajectory(40_000, `REFERENCE-${ending}`),
@@ -190,6 +197,7 @@ describe('the readers can see the end of a long turn', () => {
     const prompts: string[] = [];
     await runReplayEval({
       sql,
+      actor,
       judge: {
         async *stream() { yield '{"score": 1.0, "note": "ok"}'; },
         complete: async (prompt: string) => { prompts.push(prompt); return '{"score": 1.0, "note": "ok"}'; },

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * WHICH reference refuses the r2fs detach — measured on a real container.
+ * WHICH reference refuses the work-directory detach — measured on a real container.
  *
  * Live run probe09011530 reported `the work directory could not be detached
  * while these processes were still holding it: 258 (bun)` with a chained
@@ -128,7 +128,7 @@ async function post<TSchema extends v.GenericSchema>(
       authorization: `Bearer ${fixture.token}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ ...body, strategy: 'r2fs' }),
+    body: JSON.stringify({ ...body, strategy: 'snapshot-chain' }),
     signal: AbortSignal.timeout(timeoutMs),
   });
   return v.parse(schema, await response.json());
@@ -168,12 +168,12 @@ async function main(): Promise<number> {
   }
 
   const workloadSource = readFileSync(WORKLOAD_SOURCE, 'utf8');
-  const fixtures = await createFixtureResources(runId, ['r2fs']);
+  const fixtures = createFixtureResources(runId, ['snapshot-chain']);
   const arm = fixtures.arms[0];
-  if (arm === undefined) throw new Error('no r2fs arm was generated');
+  if (arm === undefined) throw new Error('no arm was generated');
   // `ab-<strategy>-…`, because `addressArmRequest` infers the arm from exactly
   // that shape and every driver helper below goes through it.
-  const box = `ab-r2fs-${runId}`;
+  const box = `ab-snapshot-chain-${runId}`;
   let live: Fixture | null = null;
   let stopWorker: (() => readonly string[]) | null = null;
 

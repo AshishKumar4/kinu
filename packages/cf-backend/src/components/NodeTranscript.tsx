@@ -134,9 +134,9 @@ function SearchPath({ view, onSelect }: {
       {view.path.map((crumb, index) => {
         const here = index === view.path.length - 1 || onSelect === undefined;
         // Every crumb is named by the read model, the first one by the RUN's own
-        // name (`read-models/node-transcript.ts`). This used to print the literal
-        // `root` whenever the first crumb's label was empty, which for an MCTS
-        // search is always.
+        // name (`read-models/node-transcript.ts`). An empty first-crumb label —
+        // which for an MCTS search is always — falls back to its depth rather
+        // than printing the literal `root`.
         const label = cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
         return (
           <span key={crumb.id} className="flex items-center gap-1 shrink-0">
@@ -160,13 +160,13 @@ function SearchPath({ view, onSelect }: {
  * The branch's own outcome, held apart from the steps that produced it.
  *
  * Above the trace rather than at the end of it: a reader who opens a settled
- * branch wants its finding first, and burying it under forty steps is what made
- * the old panel a metadata card. The steps stay below, because "how" is the
+ * branch wants its finding first, and burying it under forty steps turns the
+ * panel into a metadata card. The steps stay below, because "how" is the
  * second question, never the first.
  *
  * A failure and a report are separate bands, not a choice: a head that errored
- * after banking a partial finding has both, and the old panel showed the error
- * in a section far below the summary as if they were unrelated.
+ * after banking a partial finding has both, and putting the error in a section
+ * far below the summary reads as if they were unrelated.
  */
 function Outcome({ view }: { view: NodeTranscriptView }) {
   return (
@@ -209,10 +209,10 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
 /**
  * Everything a reader can be looking at when the trace is empty, said apart.
  *
- * Four different facts used to render as one blank pane, which is the same
- * defect class as the blank canvas: a live branch, a branch that recorded
- * nothing before it died, a rollout that has no trace by construction, and a
- * read that failed all looked like lost data.
+ * Four facts collapsed into one blank pane are the same defect class as the
+ * blank canvas: a live branch, a branch that recorded nothing before it died,
+ * a rollout that has no trace by construction, and a read that failed would
+ * all look like lost data.
  */
 function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   if (view.origin === "rollout") {
@@ -270,9 +270,9 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   pending?: HeadDelta;
 }) {
   const live = view.status === "running";
-  // Memoised on the two page identities, never rebuilt per render. The spread
-  // used to hand the memo below a fresh array every render, so every step
-  // re-folded and every MessageView re-rendered on any parent update.
+  // Memoised on the two page identities, never rebuilt per render: a fresh
+  // array per render re-folds every step and re-renders every MessageView on
+  // any parent update.
   const olderSteps = older?.steps;
   const viewSteps = view.steps.items;
   const allSteps = useMemo(

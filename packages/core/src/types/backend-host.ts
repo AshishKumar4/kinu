@@ -128,10 +128,15 @@ export interface BackendHost {
    * wake for (triggers, outbox retries, pending reactions), so a caller that
    * passed a time could only disagree with it.
    *
-   * OMITTED — not stubbed — by a host whose next wake is its own next start.
-   * The CLI is that host: a `kinu` process has no alarm to arm, and its
-   * recovery is the startup drain of the same durable rows. An absent key says
-   * that; a no-op implementation would claim a guarantee it has not made.
+   * OMITTED — not stubbed — by a host that RE-DERIVES its next wake instead of
+   * arming one. The CLI is that host, and the difference is a ticking process:
+   * `agent-host/host.ts`'s `runPass` recomputes `nextTriggerAt(db)` from the
+   * same durable rows on every pass, so there is nothing for a session to arm
+   * and no moment at which the fold is stale. A Durable Object has no such
+   * process, which is why the cf host arms explicitly (`durableWakeOwner`).
+   * An absent key says that; a no-op implementation would claim a guarantee it
+   * has not made, and `capability-parity`'s lock records the asymmetry rather
+   * than letting a reader assume the capability was forgotten.
    */
   reconcileDurableWake?(): void;
 

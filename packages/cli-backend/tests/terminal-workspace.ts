@@ -9,13 +9,14 @@
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  captureAlternateTakes, createAgentConfigStore, initAgentConfigTable,
+  captureAlternateTakes, initAgentConfigTable,
   initAlternateTakesTable, initScaffoldTables, initSearchTables,
   INITIAL_SCAFFOLD_SOURCE,
   type LLMProviderConfig,
 } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
-import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -32,10 +33,10 @@ const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
  */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   initSearchTables(rt.storage.execRaw);
   initAlternateTakesTable(rt.storage.execRaw);
@@ -48,21 +49,21 @@ export function openTerminalWorkspace(dbPath: string) {
  *  a shadow trial at all. */
 export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
   await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-  void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
-    VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
-  void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
-  createAgentConfigStore(rt.storage.sql).setShadowSampleRate(1);
+  void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
+  void rt.storage.sql`INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, ${'candidate'}, ${'pending'})`;
+  rt.actor.config.setShadowSampleRate(1);
 }
 
 /** One competing take set, captured mid-turn the way a real search converge
  *  captures it, waiting to be claimed by whatever turn is credited. */
 export function captureTakes(rt: CLIRuntime, rootId: string, at: number): void {
-  void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
-  void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
-    VALUES (${rootId}, ${`${rootId}-alt`}, ${'pick a strategy'}, ${'B'}, ${'go with B'}, 0.85, 3, 1, 'open')`;
-  captureAlternateTakes(rt.storage.sql, {
+  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+    VALUES (${rt.actor.actorId}, ${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
+  void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
+    VALUES (${rt.actor.actorId}, ${rootId}, ${`${rootId}-alt`}, ${'pick a strategy'}, ${'B'}, ${'go with B'}, 0.85, 3, 1, 'open')`;
+  captureAlternateTakes(rt.storage.sql, rt.actor, {
     rootId, task: 'pick a strategy', winnerId: rootId, epsilon: 0.1, now: at,
   });
 }

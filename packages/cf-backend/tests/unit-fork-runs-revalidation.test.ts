@@ -202,12 +202,12 @@ describe('fork revalidation policy', () => {
       join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
     );
     // The third pane is the RUN, and a branch opens INSIDE it. Two defects are
-    // pinned here at once. The older: the branch used to REPLACE the canvas
-    // — `opened ? <ForkBranchView …> : <ForkCanvas …>` — which answered "what did
-    // this branch do" by taking away the tree that gave the answer its place. The
-    // newer: the pane rendered nothing at all until a node was clicked and then
-    // described that one node, so the owner's *"does it only show the node? WHY?
-    // It should show everything about a particular run"* had no answer.
+    // pinned here at once. A branch that REPLACES the canvas
+    // — `opened ? <ForkBranchView …> : <ForkCanvas …>` — answers "what did this
+    // branch do" by taking away the tree that gave the answer its place. A pane
+    // that renders nothing until a node is clicked and then describes that one
+    // node leaves the owner's *"does it only show the node? WHY? It should show
+    // everything about a particular run"* with no answer.
     expect(embedded).toContain('<RunDetailView');
     expect(embedded).toContain('<ForkCanvas');
     expect(embedded).not.toContain(': <ForkCanvas');
@@ -322,9 +322,9 @@ describe('a merge is a tree of depth 1', () => {
 });
 
 // The invisible spend ceiling (2026-08-18): `judgeSamples` is a REQUEST, capped
-// by the per-evaluation call budget it shares with check generation. This strip
-// used to render the request alone, so a search that asked for 20 judges and ran
-// 3 read as a search that ran 20.
+// by the per-evaluation call budget it shares with check generation. A strip
+// that renders the request alone makes a search that asked for 20 judges and
+// ran 3 read as a search that ran 20.
 describe('the judges row names what the search actually ran', () => {
   function searched(over: Partial<SearchRunParams> = {}): ForkRunParams {
     return {

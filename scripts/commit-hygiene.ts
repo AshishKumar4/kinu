@@ -53,18 +53,28 @@
  * files already — every one of them in a COMMENT, because the same habit writes
  * agent names into docstrings.
  *
- * That last fact is the derivation. A name is allowed when some tracked source
- * file declares or uses it as an IDENTIFIER, read from the AST so a mention in
- * a comment or a string cannot produce one. Measured over all 1,898 commits,
- * that single test separates the two populations cleanly: 22 CamelCase
- * possessives survive it, 14 are subagent names, 5 are external proper nouns
+ * That last fact is the derivation. A name is allowed when some source file
+ * declares or uses it as an IDENTIFIER, read from the AST so a mention in a
+ * comment or a string cannot produce one. Measured over all 1,898 commits, that
+ * single test separates the two populations cleanly: 22 CamelCase possessives
+ * survive it, 14 are subagent names, 5 are external proper nouns
  * (`NAMES_WITHOUT_CODE` below), and 3 are identifiers the tree no longer holds.
  * Nothing about the derivation is a list of agents, so it does not rot.
+ *
+ * WHICH TREE ANSWERS IT is the other half, and getting it wrong rots the gate a
+ * different way. Those "3 identifiers the tree no longer holds" are not a
+ * residue to be listed — they are what a completed cutover does to every message
+ * that ever cited the deleted type. So the corpus is chosen per message:
+ * `commit-msg` asks the WORKING tree, because the message being written
+ * describes the tree being committed, and the ladder asks each governed commit's
+ * OWN tree and the tree it changed, because that message is immutable and its
+ * citations are claims about the code that commit was about. Same corpus rule,
+ * same AST test, applied where the message points.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { assertMeasured, finding } from './gate-ratchet';
+import { assertMeasured, finding, type Finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
 import { identifierText, parse, walk } from './syntax';
 
@@ -110,6 +120,15 @@ export const ALLOWED_PREFIXES: readonly string[] = [
  * rule anyone disabled.
  */
 export const SUBJECT_CEILING = 80;
+
+/**
+ * Non-blank lines a whole message may carry: the subject and at most four more.
+ * The evidence for a change lives in the tree and in the review report; a body
+ * that restates it is written once and read by nobody. Governed from the commit
+ * that introduced the rule (`sizeRuleBoundary`), because the bodies before it
+ * are history and a walk that flagged them would be a gate somebody disabled.
+ */
+export const MESSAGE_LINE_CEILING = 5;
 
 /** Subjects git writes, not a person: a merge, a revert, and the three autosquash
  *  forms. Exempt from the prefix and length rules ONLY — a hand-written merge
@@ -167,23 +186,28 @@ const ATTRIBUTIONS: readonly RegExp[] = [
 export const ROSTER: readonly string[] = ['Main'];
 
 /**
- * Names that are legitimate in a commit message and that no tracked source file
- * holds an identifier for. Hand-maintained BECAUSE it has no derivable source:
- * these are external proper nouns, and the repository has no register of the
- * languages, platforms and papers it is allowed to name. Every entry is a
- * checkable fact rather than a session artefact, which is what keeps the list
- * short — it grew five entries over four months of history.
+ * Names that are legitimate in a commit message and that NO tree of this
+ * repository has ever held an identifier for. Hand-maintained BECAUSE it has no
+ * derivable source: these are external proper nouns, and the repository has no
+ * register of the languages, platforms and papers it is allowed to name. Every
+ * entry is a checkable fact rather than a session artefact, which is what keeps
+ * the list short — it grew five entries over four months of history.
  *
  * The five are exactly the non-subagent survivors measured across 1,898
  * commits. `AshishKumar4` is the repository owner's GitHub handle, which appears
  * in `by AshishKumar4` clone URLs.
  *
- * This is also where an identifier the tree no longer holds belongs, if one ever
- * bites: 3 of 1,898 historical commits used the possessive of a class that has
- * since been deleted (`SqliteFS`, `HeadAgent`, `TriggersTab`). Each was correct
- * when written and each is invisible at `commit-msg` time, where the class is
- * still in the tree being committed. None is seeded here, because none is
- * inside the governed range.
+ * A DELETED IDENTIFIER DOES NOT BELONG HERE, and two used to. `FacetIdentity`
+ * (`76936034ba` line 21) and `NodeLoopHost` (`9078d528c8` line 3) were both
+ * declared by the tree their own commit shipped and deleted by a later cutover,
+ * and each was added here to stop the gate reading a shipped type as a
+ * colleague. That was the wrong remedy for the right defect: this list
+ * short-circuits BEFORE the identifier test, so a row added for one commit
+ * exempts the name in every other commit too — including one where it really
+ * was a person — and the list grows once per deletion, forever, at the
+ * repository's cutover rate. `committedIdentifierTest` resolves both from the
+ * trees that cite them, so both rows are gone and neither name is exempt
+ * anywhere it was not code.
  */
 export const NAMES_WITHOUT_CODE: readonly string[] = [
   'TypeScript', 'JavaScript', 'GitHub', 'AlphaEvolve', 'FunSearch', 'AshishKumar4',
@@ -300,7 +324,7 @@ export const NARRATION: readonly Narration[] = [
   },
 ];
 
-export type Rule = 'subject-prefix' | 'subject-length' | 'named-actor' | 'narration';
+export type Rule = 'subject-prefix' | 'subject-length' | 'message-size' | 'named-actor' | 'narration';
 
 export interface Violation {
   readonly rule: Rule;
@@ -359,15 +383,26 @@ export function proseOnly(text: string): string {
   }).join('\n');
 }
 
+/** Whether this one source uses `name` as an identifier. The AST question both
+ *  corpora ask, spelled once: a name in a comment or a string does not count,
+ *  which is the whole discrimination, since every subagent name already in this
+ *  tree is in a comment. */
+function declaresIdentifier(file: string, text: string, name: string): boolean {
+  let found = false;
+  walk(parse(file, text).root, (node) => {
+    if (identifierText(node) === name) found = true;
+  });
+  return found;
+}
+
 /**
- * Whether some tracked source file uses `name` as an identifier.
+ * Whether some tracked source file uses `name` as an identifier, in the WORKING
+ * TREE. This is the corpus the `commit-msg` hook asks, and the right one there:
+ * the message being written describes the tree being committed.
  *
- * Two properties matter. It reads the AST, so the same name in a comment or a
- * string does not count — which is the whole discrimination, since every
- * subagent name already in this tree is in a comment. And it parses only the
- * files whose text contains the name at all, so a clean message costs one
- * enumeration and no parse: the corpus is materialised once through
- * `sources.ts`, and a message naming nothing never opens a file.
+ * It parses only the files whose text contains the name at all, so a clean
+ * message costs one enumeration and no parse: the corpus is materialised once
+ * through `sources.ts`, and a message naming nothing never opens a file.
  */
 export function codeIdentifierTest(corpus: ReadonlyMap<string, string>): (name: string) => boolean {
   const answered = new Map<string, boolean>();
@@ -377,10 +412,10 @@ export function codeIdentifierTest(corpus: ReadonlyMap<string, string>): (name: 
     let found = false;
     for (const [file, text] of corpus) {
       if (!text.includes(name)) continue;
-      walk(parse(file, text).root, (node) => {
-        if (identifierText(node) === name) found = true;
-      });
-      if (found) break;
+      if (declaresIdentifier(file, text, name)) {
+        found = true;
+        break;
+      }
     }
     answered.set(name, found);
     return found;
@@ -546,6 +581,25 @@ export function inspect(message: string, isCode: (name: string) => boolean): Vio
 }
 
 /**
+ * The size rule, apart from `inspect` because it has its own boundary: `inspect`
+ * governs every commit since the convention landed, this governs every commit
+ * since the rule landed. The hook applies both to the message being written.
+ */
+export function sizeViolations(message: string): Violation[] {
+  const lines = message.trim().split('\n').filter((line) => line.trim().length > 0);
+  if (lines.length <= MESSAGE_LINE_CEILING) return [];
+  return [{
+    rule: 'message-size',
+    line: MESSAGE_LINE_CEILING + 1,
+    quote: lines[MESSAGE_LINE_CEILING] ?? '',
+    invariant: `a message is at most ${String(MESSAGE_LINE_CEILING)} non-blank lines: the subject and up to four more`,
+    silently: `${String(lines.length)} lines. The measurements, the rejected alternative and the proof `
+      + 'are already in the tree and the review; a body that restates them is written once and read by nobody.',
+    fix: 'keep the what and the why in four lines; put the evidence in the review report.',
+  }];
+}
+
+/**
  * A `commit-msg` file as git will store it: comment lines dropped, and
  * everything from the `--verbose` scissors line cut. The hook runs BEFORE git's
  * own cleanup, so a message read raw carries the entire commit template and the
@@ -558,17 +612,170 @@ export function cleanMessage(raw: string): string {
   return kept.split('\n').filter((line) => !line.startsWith('#')).join('\n').trim();
 }
 
-/** `git` against THIS checkout with the ambient git environment removed. A
- *  `commit-msg` hook exports `GIT_DIR`, `GIT_INDEX_FILE` and friends, and every
- *  one of them outranks `cwd` — so a gate that trusted `cwd` would answer about
- *  whatever the hook pointed at rather than about the repository it lives in. */
+/** The ambient git environment, removed. A `commit-msg` hook exports `GIT_DIR`,
+ *  `GIT_INDEX_FILE` and friends, and every one of them outranks both `cwd` and
+ *  `-C` — so a gate that trusted either would answer about whatever the hook
+ *  pointed at rather than about the repository it was asked about. */
+const scrubbedEnv = (): NodeJS.ProcessEnv => Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+);
+
+/** `git` against THIS checkout, with that environment. */
 function git(...args: readonly string[]): string {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
-  );
   return execFileSync('git', ['-C', root, ...args], {
-    encoding: 'utf8', env, maxBuffer: 1 << 26,
+    encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
   });
+}
+
+/**
+ * Paths in one TREE whose bytes contain `name` at all: the tree-side spelling of
+ * `codeIdentifierTest`'s `text.includes(name)` pre-filter, run by git over the
+ * object database so no blob is read for a name nothing mentions.
+ *
+ * `git grep` exits 1 for "matched nothing", which is an ANSWER. Anything above
+ * that is a broken repository or an unreachable commit, and reading it as "no
+ * match" would turn a citation red for a reason that has nothing to do with the
+ * citation — the exact defect this whole path exists to remove.
+ */
+function treePathsContaining(repo: string, tree: string, name: string): readonly string[] {
+  const grep = spawnSync(
+    'git',
+    ['-C', repo, 'grep', '--files-with-matches', '-z', '--fixed-strings', '-e', name, tree, '--'],
+    { encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26 },
+  );
+  if (grep.status === 1) return [];
+  if (grep.status !== 0) {
+    throw new Error(
+      `commit-hygiene: could not search ${tree} for \`${name}\` `
+      + `(git grep exit ${String(grep.status)}): ${grep.stderr.trim()}`,
+    );
+  }
+  // `<tree-ish>:<path>\0` per match, the tree-ish echoed exactly as passed. A
+  // path may hold a colon, so the prefix is stripped by length rather than by
+  // splitting — and asserted, because a mis-stripped path fails `isParseable`,
+  // takes the name out of the corpus and produces a named-actor finding about a
+  // real type. Wrong quietly is the failure mode this whole path removes.
+  const prefix = `${tree}:`;
+  return grep.stdout.split('\0')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      if (!line.startsWith(prefix)) {
+        throw new Error(`commit-hygiene: git grep answered about ${line}, not about ${tree}`);
+      }
+      return line.slice(prefix.length);
+    });
+}
+
+/** Whether that one tree declares `name`. */
+function treeDeclares(repo: string, tree: string, name: string): boolean {
+  for (const path of treePathsContaining(repo, tree, name)) {
+    if (!isParseable(path)) continue;
+    const text = execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${tree}:${path}`], {
+      encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
+    });
+    // A blob frozen months ago cannot be re-parsed by whoever reads this, so the
+    // live wording ("someone is mid-edit, re-run") would send them after a file
+    // that no longer exists. Name the tree instead.
+    try {
+      if (declaresIdentifier(path, text, name)) return true;
+    } catch (cause) {
+      throw new Error(
+        `commit-hygiene: ${path} at ${tree} does not parse under this parser, so the identifier `
+        + 'test cannot read that tree',
+        { cause },
+      );
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether some source file in the trees `commit` SPANS uses `name` as an
+ * identifier — the commit's own tree, then the tree of each parent it changed.
+ *
+ * WHY NOT THE WORKING TREE. A commit message is immutable and its citations are
+ * claims about the code that commit was about. Judging them against the live
+ * tree lets every later cutover rewrite history's verdict: `c64acf7554` cites
+ * `DeltaManifestV2['metadataOps'][number]`, a type
+ * `packages/devbox/src/candidates/merkle-pack/delta.ts` declared at that commit,
+ * and deleting that file turns the citation into a colleague being credited by
+ * name. The gate then demands either a rewrite of history somebody already
+ * pushed or one permanent allowlist row per deletion, forever, growing at the
+ * repository's cutover rate.
+ *
+ * WHY THE PARENTS TOO, AND NOT ONLY THE RESULT. A change is a delta, and a
+ * message may legitimately name what the change REMOVES: `f9c0b3847`'s body
+ * discusses `FacetIdentity`, the type that same commit deletes, so its own tree
+ * no longer holds it while the tree it started from does. Post-state alone is
+ * the same error as the live tree, one commit narrower. Every parent is asked
+ * because a merge body may discuss either side. What this does NOT admit is a
+ * name that was never code anywhere near the commit, which is every subagent
+ * name: those are identifiers in no tree at all.
+ *
+ * The corpus RULE is unchanged — `isParseable`, the same predicate
+ * `readMatching` filters the live enumeration with. What moves is the tree it
+ * is applied to.
+ */
+export function committedIdentifierTest(repo: string, commit: string): (name: string) => boolean {
+  const answered = new Map<string, boolean>();
+  // Resolved on the first name a message actually asks about, so a clean range
+  // spawns no git at all: 1,449 governed commits raise 14 questions between them.
+  let spanned: readonly string[] | undefined;
+  const trees = (): readonly string[] => {
+    spanned ??= [commit, ...execFileSync('git', ['-C', repo, 'log', '-1', '--format=%P', commit], {
+      encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
+    }).trim().split(/\s+/u).filter((sha) => sha.length > 0)];
+    return spanned;
+  };
+  return (name: string): boolean => {
+    const cached = answered.get(name);
+    if (cached !== undefined) return cached;
+    const found = trees().some((tree) => treeDeclares(repo, tree, name));
+    answered.set(name, found);
+    return found;
+  };
+}
+
+/**
+ * The refusal history mode owes a clone that cannot answer it, or undefined when
+ * the clone can.
+ *
+ * A DEPTH-1 CHECKOUT IS THE DEFAULT, and it makes every question this mode asks
+ * unanswerable while looking like an answer. `conventionBoundary()` runs
+ * `git log --diff-filter=A --follow` over a one-commit history and reports HEAD
+ * as the commit that ADDED this file, so the governed range collapses to
+ * `HEAD..HEAD`; `commitsFrom` then asks for `HEAD^..HEAD` and git answers
+ * `fatal: ambiguous argument … unknown revision`. Measured on
+ * `git clone --depth 1`: the gate dies on a raw git error, and the one edit that
+ * makes the error go away — treating a missing parent as an empty range — turns
+ * it into a green badge over zero commits. Both are worse than saying so.
+ *
+ * Stated as a finding rather than thrown, because it is the same kind of fact as
+ * a violation: something the gate needs is absent, and the reader needs the one
+ * command that supplies it. `--is-shallow-repository` is git's own name for the
+ * condition, so this cannot drift from what git means by it.
+ *
+ * NOT the empty range. `boundary..HEAD` is legitimately empty on a full clone
+ * right after this gate lands, and on a branch that predates the convention.
+ * Truncation is the thing being refused, not emptiness.
+ */
+export function truncatedHistoryRefusal(repo: string): Finding | undefined {
+  const shallow = execFileSync('git', ['-C', repo, 'rev-parse', '--is-shallow-repository'], {
+    encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
+  }).trim();
+  if (shallow !== 'true') return undefined;
+  return {
+    at: `${repo} — git rev-parse --is-shallow-repository says true`,
+    invariant: 'history mode reads every commit since the convention landed, from this clone',
+    found: 'the clone is shallow, so the commits this mode governs are not in it',
+    silently: 'the governed range collapses to nothing and the gate reports a clean history it '
+      + 'never read — a green badge over zero commits, which is the corpus-narrowing failure the '
+      + 'whole gate ladder exists to refuse.',
+    fix: 'supply the history: `git fetch --unshallow` here, or `fetch-depth: 0` on the '
+      + 'actions/checkout step of the job that runs this gate — .github/workflows/'
+      + 'security-scan.yml states the same reason for the same setting. The `commit-msg` hook '
+      + 'needs no history and is unaffected.',
+  };
 }
 
 /** The commit that added this file, in HEAD's ancestry: the point from which the
@@ -578,6 +785,32 @@ function git(...args: readonly string[]): string {
 export function conventionBoundary(): string | undefined {
   const log = git('log', 'HEAD', '--diff-filter=A', '--format=%H', '--follow', '--', GATE_PROGRAM);
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
+}
+
+/** The commit that introduced the size rule, in HEAD's ancestry: the oldest one
+ *  whose diff to this file added the rule's name. Undefined before it is
+ *  committed and on a branch without it, both meaning "no commit is sized here". */
+export function sizeRuleBoundary(): string | undefined {
+  const log = git('log', 'HEAD', '--format=%H', "-S'message-size'", '--', GATE_PROGRAM);
+  return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
+}
+
+/**
+ * Short SHAs of every commit WRITTEN under the size rule: reachable from HEAD
+ * past `boundary`, and authored no earlier than the boundary commit itself.
+ * Topology alone is not authorship: a lane commit written before the rule and
+ * merged after it sits inside `boundary^..HEAD`, and sizing it would demand a
+ * rewrite of history somebody else wrote. Author date survives rebase and
+ * cherry-pick, which is why it is the date compared rather than the committer's.
+ */
+export function commitsFrom(boundary: string): ReadonlySet<string> {
+  const since = Number(git('log', '-1', '--format=%at', boundary).trim());
+  const log = git('log', '--format=%H%x1f%at', `${boundary}^..HEAD`);
+  return new Set(log.trim().split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => line.split('\u001f'))
+    .filter(([, authored]) => Number(authored) >= since)
+    .map(([sha]) => (sha ?? '').slice(0, 10)));
 }
 
 export interface GovernedCommit {
@@ -651,7 +884,7 @@ export const BLIND_SPOTS: readonly string[] = [
 if (import.meta.main) {
   const gate = 'commit-hygiene';
   const corpus = readMatching(isParseable);
-  const isCode = codeIdentifierTest(corpus);
+  const working = codeIdentifierTest(corpus);
 
   // The RULE SETS are what must never silently become zero — a gate whose
   // vocabulary or phrase table emptied would pass every message. The count of
@@ -659,7 +892,7 @@ if (import.meta.main) {
   // `boundary..HEAD` is legitimately empty, and that is a real state rather than
   // a narrowed corpus. It is reported instead.
   const measured = assertMeasured(gate, [
-    ['files enumerated for the identifier allowlist', corpus.size],
+    ['working-tree file(s) the identifier corpus rule enumerates', corpus.size],
     ['allowed prefixes', ALLOWED_PREFIXES.length],
     ['narration patterns', NARRATION.length],
     ['attribution shapes', ATTRIBUTIONS.length],
@@ -672,13 +905,37 @@ if (import.meta.main) {
   // is stopped rather than reported. No argument is the ladder tier, over every
   // commit made since the convention landed.
   const messageFile = process.argv[2];
+
+  // Before any question is asked of the history, whether this clone HAS one.
+  // Only history mode: the hook reads the working tree and the message file, and
+  // nothing below this point, so a shallow checkout commits normally.
+  const refusal = messageFile === undefined ? truncatedHistoryRefusal(root) : undefined;
+  if (refusal !== undefined) {
+    console.error(`${gate}: this clone cannot answer history mode\n`);
+    console.error(finding(refusal));
+    process.exit(1);
+  }
   const boundary = messageFile === undefined ? conventionBoundary() : undefined;
   const governed: readonly GovernedCommit[] = messageFile === undefined
     ? (boundary === undefined ? [] : governedCommits(boundary))
     : [{ sha: messageFile, message: cleanMessage(readFileSync(messageFile, 'utf8')) }];
 
-  const violations = governed.flatMap((commit) =>
-    inspect(commit.message, isCode).map((violation) => ({ commit, violation })));
+  // The size rule dates from its own commit: in the ladder it reads only the
+  // commits written under it; in the hook it reads the message being written.
+  const sizeBoundary = messageFile === undefined ? sizeRuleBoundary() : undefined;
+  const sized: ReadonlySet<string> = sizeBoundary === undefined ? new Set() : commitsFrom(sizeBoundary);
+  // WHICH TREE ANSWERS "is this name code". The hook is judging a message about
+  // the tree on disk, so the working corpus is the tree it describes. A governed
+  // commit is judging a message about the tree that commit shipped, so its own
+  // tree answers — otherwise deleting a cited type rewrites the verdict on
+  // history nobody may rewrite back.
+  const violations = governed.flatMap((commit) => [
+    ...inspect(
+      commit.message,
+      messageFile === undefined ? committedIdentifierTest(root, commit.sha) : working,
+    ),
+    ...(messageFile !== undefined || sized.has(commit.sha) ? sizeViolations(commit.message) : []),
+  ].map((violation) => ({ commit, violation })));
 
   if (violations.length === 0) {
     const scope = messageFile === undefined

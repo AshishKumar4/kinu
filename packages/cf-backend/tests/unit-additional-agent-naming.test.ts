@@ -1,101 +1,51 @@
 /**
- * How an agent the owner ADDED gets its name, end to end through real actors.
+ * How an agent the owner ADDED gets its name, through hosted actors.
  *
  * The owner adds an agent to a workspace and says nothing about it: no name, no
- * mission, no role. It inherits the workspace's mission, and it has no honest
- * title until the owner speaks to it — so the shared first-interaction title
- * policy (`identity/naming.ts`) names it from that first message, once.
+ * mission, no role. It is hired with a blank display name, and a rename sets
+ * the name the roster shows and the config keeps — on both sides, once.
  *
- * Both halves run as production code here: a real `SubordinateAgent` seeded
- * through the real `setSubordinateIdentity`, hanging off a real
- * `OrchestratorAgent` whose roster is the row every roster reader shows. The
- * facet itself is workerd-only, so what is substituted is model CONSTRUCTION
- * and nothing above it.
+ * There is no first-message auto-title race to pin. Auto-titling is a terminal
+ * effect of a chat turn — it fires a naming model and races the owner's own
+ * rename — and hosted children hold no chat session: there is no turn to fire
+ * it from and no second writer to race. A hire keeps the display name it was
+ * hired with until the owner renames it, which is what these tests pin.
  */
 
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
-import {
-  BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
-} from '@kinu.run/core';
-import { hiredSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
-
-const TINY_MODEL = 'fake-a/m1';
-
-/** A profile whose `tiny` tier — where `MODEL_ROUTE_POLICY.fast` routes — is a
- *  scripted model, so the naming pass resolves through the production route. */
-function namingProfile() {
-  const catalog = {
-    ...BUILTIN_PROFILE_CATALOG,
-    tiers: {
-      default: { model: 'fake-chat/m1' },
-      tiny: { model: TINY_MODEL, reasoningEffort: 'low' as const },
-      deep: { model: 'fake-deep/m1' },
-    },
-  };
-  return resolveTurnProfile({
-    envelope: {
-      authority: { kind: 'account', accountId: 'acct-1' },
-      version: 1,
-      digest: profileCatalogDigest(catalog),
-      catalog,
-    },
-    provider: { revision: 'rev-1', availableModels: ['fake-chat/m1', TINY_MODEL, 'fake-deep/m1'] },
-    roleId: 'general',
-    workMode: 'build',
-    availableTools: [],
-    activeSkills: [],
-  });
-}
-
-function titleModel(title: string) {
-  return new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text: JSON.stringify({ title }) }],
-      finishReason: { unified: 'stop' as const, raw: undefined },
-      usage: {
-        inputTokens: { total: 30, noCache: 30, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 5, text: 5, reasoning: undefined },
-      },
-      warnings: [],
-    }),
-  });
-}
+import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
 const WORKSPACE_MISSION = 'Keep the release train moving.';
 
 /**
- * A parent workspace with one agent added to it, and a count of how many times
- * the naming model was asked for a title.
- *
- * The roster row is written through the production store, which is what
- * `provision` writes on the create path; only the facet birth it wraps needs
- * workerd. `suggested` is the assertion with teeth for "once": a policy that
- * re-fires spends another model call, and that is visible here even when the
- * stored title happens to look right.
+ * A parent workspace with one agent added to it, through the production hire.
+ * The roster row is the one every reader shows; the config is what the actor
+ * itself answers.
  */
 async function addedAgent(seed: {
   name?: string;
   displayName: string;
   nameOrigin: 'user' | 'auto';
-  role: string;
   roleId?: string;
   mission?: string;
-  title?: string;
 }) {
   const parent = orchestratorHarness();
   const name = seed.name ?? 'quiet-harbor-1a4e20';
-  const identity: Parameters<typeof hiredSubordinateHarness>[1] = {
+  const child = await hostedSubordinateHarness(parent, {
     name,
     displayName: seed.displayName,
     nameOrigin: seed.nameOrigin,
-    role: seed.role,
     mission: seed.mission ?? WORKSPACE_MISSION,
-  };
-  if (seed.roleId) identity.roleId = seed.roleId;
-  const child = await hiredSubordinateHarness(parent, identity);
+    roleId: seed.roleId ?? 'general',
+  });
+  // The roster LINK row: hiring binds stores and runtime, but the roster is
+  // the reader-facing listing — without the link the child exists and nobody
+  // lists it, which is exactly what the rename path below refuses.
   parent.agent.harnessRoster().create({
     name,
+    actorReference: { ...child.actor.reference },
+    birth: null,
+    deleteRequested: false,
     createdBy: 'user',
     status: 'idle',
     currentTask: null,
@@ -104,177 +54,64 @@ async function addedAgent(seed: {
     lifetime: 'durable',
     taskEventId: null,
   });
-  const suggested: string[] = [];
-  const model = titleModel(seed.title ?? 'Release Train');
-  Object.assign(child.agent, {
-    routingProfile: async () => namingProfile(),
-    ownedModelServices: {
-      resolveModelWithEffort: (spec: string | null | undefined) => {
-        suggested.push(String(spec));
-        return { model, providerOptions: undefined };
-      },
-    },
-  });
-  return { parent, child, name, suggested };
-}
-interface ParentRosterReader {
-  readonly agent: {
-    listSubordinates(): Promise<Array<{ name: string; displayName: string }>>;
-  };
+  return { parent, child, name };
 }
 
-async function displayedName(parent: ParentRosterReader, name: string): Promise<string> {
+async function displayedName(
+  parent: Awaited<ReturnType<typeof addedAgent>>['parent'], name: string,
+): Promise<string> {
   return (await parent.agent.listSubordinates()).find((entry) => entry.name === name)?.displayName
     ?? '';
 }
 
-
 describe('an agent the owner added without naming it', () => {
-  test('is born with no title, the general role and the workspace mission', async () => {
-    const { child } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
+  test('is born with no title', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: '', nameOrigin: 'auto',
     });
 
-    expect(child.agent.observeNaming()).toEqual({ displayName: '', nameOrigin: 'auto' });
-    // It knows what the workspace is for, which is what it inherited.
-    const soul = await child.agent.observeIdentitySoul();
-    expect(soul).toContain(WORKSPACE_MISSION);
-    expect(soul).toContain('Role: general');
-    // With no title it opens under the PRODUCT, never under the slug it is
-    // addressed by. That slug is a Durable Object name, and heading an identity
-    // document with one is what told a workspace's own model it was called
-    // `handwrought-walnut-4166c321`.
-    expect(soul).toStartWith('# Kinu');
-    expect(soul).not.toContain('quiet-harbor-1a4e20');
-  });
-
-  test('is named by the first thing its owner says to it, once, on both sides', async () => {
-    const { parent, child, name, suggested } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
-      title: 'Callback Audit',
-    });
-
-    await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
-
-    expect(child.agent.observeNaming()).toEqual({
-      displayName: 'Callback Audit', nameOrigin: 'auto',
-    });
-    // The roster row is the one every reader shows, so a title only the facet
+    expect(child.actor.stores.config.getDisplayName()).toBe('');
+    // The roster row is the one every reader shows, so a title only the actor
     // knows about is a title nobody can see.
-    expect(await displayedName(parent, name)).toBe('Callback Audit');
-    expect(suggested).toEqual([TINY_MODEL]);
-
-    // A second owner message is not a second naming pass: persisting the title
-    // left `name_origin` set over a name that is no longer a placeholder, so
-    // the shared policy stops matching.
-    await child.agent.titleFromFirstMessage('Now check the refresh path');
-    expect(child.agent.observeNaming().displayName).toBe('Callback Audit');
-    expect(suggested).toEqual([TINY_MODEL]);
+    expect(await displayedName(parent, name)).toBe('');
   });
 
-  test('keeps the name its owner typed, and never asks a model for another', async () => {
-    const { parent, child, name, suggested } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
+  test('a rename wins on both sides, and a second rename wins again', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: '', nameOrigin: 'auto',
     });
 
     await parent.agent.renameSubordinateAgent(name, 'Jarvis');
 
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
+    expect(child.actor.stores.config.getDisplayName()).toBe('Jarvis');
     expect(await displayedName(parent, name)).toBe('Jarvis');
 
-    await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
+    await parent.agent.renameSubordinateAgent(name, 'Just Jarvis');
 
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(await displayedName(parent, name)).toBe('Jarvis');
-    // Not merely "the title survived": the model was never asked, so the
-    // refusal happened before the spend rather than after it.
-    expect(suggested).toEqual([]);
+    expect(child.actor.stores.config.getDisplayName()).toBe('Just Jarvis');
+    expect(await displayedName(parent, name)).toBe('Just Jarvis');
   });
 
-  test('a rename after an auto title still wins, and closes the door behind it', async () => {
-    const { parent, child, name, suggested } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
-      title: 'Callback Audit',
+  test('keeps the name its owner typed', async () => {
+    const { child, parent, name } = await addedAgent({
+      displayName: 'Jarvis', nameOrigin: 'user',
     });
 
-    await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
-    await parent.agent.renameSubordinateAgent(name, 'Jarvis');
-    await child.agent.titleFromFirstMessage('Something else entirely');
-
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(await displayedName(parent, name)).toBe('Jarvis');
-    expect(suggested).toEqual([TINY_MODEL]);
-  });
-
-  test('a rename that lands while the child is carrying its auto title to the parent wins on both sides', async () => {
-    const { parent, child, name } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
-      title: 'Callback Audit',
-    });
-    const reachedParent = Promise.withResolvers<void>();
-    const releaseParent = Promise.withResolvers<void>();
-    const recordTitle = parent.agent.recordSubordinateTitle.bind(parent.agent);
-    Object.defineProperty(parent.agent, 'recordSubordinateTitle', {
-      configurable: true,
-      value: async (agentName: string, displayName: string) => {
-        reachedParent.resolve();
-        await releaseParent.promise;
-        return recordTitle(agentName, displayName);
-      },
-    });
-
-    const titling = child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
-    await reachedParent.promise;
-    await parent.agent.renameSubordinateAgent(name, 'Jarvis');
-    releaseParent.resolve();
-    await titling;
-
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
-    expect(await displayedName(parent, name)).toBe('Jarvis');
-  });
-
-  test('a rename waiting on the child also blocks an auto title from reclaiming the parent row', async () => {
-    const { parent, child, name } = await addedAgent({
-      displayName: '', nameOrigin: 'auto', role: 'general', roleId: 'general',
-      title: 'Callback Audit',
-    });
-    const reachedChild = Promise.withResolvers<void>();
-    const releaseChild = Promise.withResolvers<void>();
-    const setNaming = child.agent.setSubordinateNaming.bind(child.agent);
-    Object.defineProperty(child.agent, 'setSubordinateNaming', {
-      configurable: true,
-      value: async (displayName: string, origin: 'user' | 'auto') => {
-        reachedChild.resolve();
-        await releaseChild.promise;
-        return setNaming(displayName, origin);
-      },
-    });
-
-    const renaming = parent.agent.renameSubordinateAgent(name, 'Jarvis');
-    await reachedChild.promise;
-    await child.agent.titleFromFirstMessage('Audit the OAuth callback flow');
-    releaseChild.resolve();
-    await renaming;
-
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Jarvis', nameOrigin: 'user' });
+    expect(child.actor.stores.config.getDisplayName()).toBe('Jarvis');
     expect(await displayedName(parent, name)).toBe('Jarvis');
   });
 });
 
-describe('an agent the model hired', () => {
-  // The hire rung is unchanged: it states a role, and the name derived from
-  // that role is a real name. Retitling it would replace a choice its parent
-  // made with one nobody asked for.
-  test('keeps the name derived from the role it was hired for', async () => {
-    const { parent, child, name, suggested } = await addedAgent({
+describe('an agent hired with a name', () => {
+  // The hire states the name, and it stands as hired: there is no titler to
+  // replace a choice its parent made with one nobody asked for.
+  test('keeps the name it was hired with', async () => {
+    const { child, parent, name } = await addedAgent({
       name: 'auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto',
-      role: 'auditor', roleId: 'auditor', mission: 'Audit the billing path.',
+      roleId: 'auditor', mission: 'Audit the billing path.',
     });
 
-    await child.agent.titleFromFirstMessage('What did you find?');
-
-    expect(child.agent.observeNaming()).toEqual({ displayName: 'Auditor', nameOrigin: 'auto' });
+    expect(child.actor.stores.config.getDisplayName()).toBe('Auditor');
     expect(await displayedName(parent, name)).toBe('Auditor');
-    expect(suggested).toEqual([]);
   });
 });

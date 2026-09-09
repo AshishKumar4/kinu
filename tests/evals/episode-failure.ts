@@ -1,11 +1,12 @@
 /**
  * WHAT a failed episode was, and WHETHER a restart still owes it.
  *
- * One concept in one file, because it used to be three answers in three places
- * that had to agree: the observation's outcome, the durable phase, and the
- * INFRA marker the tier's ratchet counts. A run that lost four of thirty-four
- * cases to an upstream 500 reported "17 behavioural, 0 infrastructure" because
- * those three answers were derived separately at the call site.
+ * One concept in one file: the observation's outcome, the durable phase, and the
+ * INFRA marker the tier's ratchet counts share one classification, so they
+ * cannot disagree. The recorded counterexample is a run with four of thirty-four
+ * cases lost to an upstream 500 but a report of "17 behavioural, 0
+ * infrastructure", demonstrating the consequence of deriving those answers
+ * separately.
  *
  * The distinction this file exists to keep is between:
  *
@@ -13,10 +14,10 @@
  *   THE HARNESS or the code failed          — `errored`, terminal.
  *   THE ENVIRONMENT killed the turn         — no verdict, RESUMABLE.
  *
- * The third is the one that had no home. It looks identical to the first from
- * the ledger — one closed turn, zero tool calls, zero model steps — so it was
- * filed as the agent being lazy, and once filed it was settled, which made a
- * transient outage a permanent verdict.
+ * The third is the one with nowhere else to go. It looks identical to the first
+ * from the ledger — one closed turn, zero tool calls, zero model steps — so
+ * filing it as the agent being lazy settles it, and that makes a transient
+ * outage a permanent verdict.
  *
  * The guard errors for a broken RUNTIME (`DegenerateRuntimeError`,
  * `UnsandboxedRuntimeError`) stay in `harness.ts` beside the checks that throw

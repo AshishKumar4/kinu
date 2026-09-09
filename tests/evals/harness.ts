@@ -53,13 +53,13 @@ import * as v from 'valibot';
 import type {
   AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
   EvalCase, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
-  ProviderCatalogSnapshot, SessionMessage, SessionWriter, Shell, ToolCallRecord, ToolOutcome,
+  ProviderCatalogSnapshot, RunEvent, SessionMessage, SessionWriter, Shell, ToolCallRecord, ToolOutcome,
 } from '../../packages/core/src/index';
 import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
-  buildSystemPromptSync, createAgentConfigStore, createFactsStore,
+  buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, JsonObjectSchema,
+  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, isVfsError, JsonObjectSchema,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
   WORKSPACE_RUN_ID,
@@ -69,6 +69,7 @@ import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
@@ -77,10 +78,12 @@ import {
 import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
-  hardTaskFor, ledgerTotalsFromEvents, projectRunEventProvenance, recordLiveModelEpisode,
-  scoreTrajectory, seedHardTask, verifyHardTask, walkRunEvents,
+  budgetRow, hardTaskFor, ledgerTotalsFromEvents, measuredToolErrorRate,
+  outputCapRow, projectRunEventProvenance, recordLiveModelEpisode, scratchDir,
+  scoreTrajectory, seedHardTask, stepBoundEvidence, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
+import { probeFor, seedProbe, verifyProbe, type BehaviourProbe } from './behaviour-probes';
 import { DegenerateRunError } from './episode-failure';
 
 export type { LedgerTotals };
@@ -92,24 +95,23 @@ export type { LedgerTotals };
  * `LocalAgentSession` — the evolution proof, which needs a turn boundary it
  * controls so it can fire `reviewTurn` per challenge, and the exploration eval,
  * which measures whether the model REACHES for delegation. Both therefore build
- * the surface themselves, and both used to build a DIFFERENT one from the
- * product:
+ * the surface themselves, and a surface assembled by hand diverges from the
+ * product in three ways that each corrupt a score silently:
  *
- *   - the tools came from `buildBuiltinTools`, which by construction cannot
- *     hold `agents` (tools/actor-tools.ts: the delegation tool's implementation
- *     IS the search engine, so the factory that emits a node's own surface
- *     cannot register it). The product's actor root is `buildActorTools`. So
- *     every eval that asked "did the model delegate?" asked a model that had no
- *     delegation tool, and a zero was unreadable: model declined, or nothing to
- *     decline?
- *   - the prompt came from a hand-assembled `buildSystemPromptSync` option set.
- *     `agentsActions` was never passed and `agents` was never on
- *     `availableTools`, so `renderAgentStateSection` (prompt.ts:236) skipped the
- *     whole delegation ladder. The model was not shown the surface it was being
- *     scored on reaching for.
- *   - the codemode namespaces production wires as `extraProviders` (`agents.*`,
- *     `web.*`, `memory.*`, `tasks.*`) were absent, so `execute_tools` code the
- *     prompt teaches threw `not a function` inside the eval only.
+ *   - `buildBuiltinTools` by construction cannot hold `agents`
+ *     (tools/actor-tools.ts: the delegation tool's implementation IS the search
+ *     engine, so the factory that emits a node's own surface cannot register
+ *     it). The product's actor root is `buildActorTools`. Ask "did the model
+ *     delegate?" of a model that has no delegation tool and the zero is
+ *     unreadable: model declined, or nothing to decline?
+ *   - a hand-assembled `buildSystemPromptSync` option set that passes no
+ *     `agentsActions` and leaves `agents` off `availableTools` makes
+ *     `renderAgentStateSection` (prompt.ts:236) skip the whole delegation
+ *     ladder. The model is then not shown the surface it is being scored on
+ *     reaching for.
+ *   - without the codemode namespaces production wires as `extraProviders`
+ *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `execute_tools` code the
+ *     prompt teaches throws `not a function` inside the eval only.
  *
  * This builds BOTH from the roots `rebuildModelBoundState`
  * (cli-backend/src/local-session.ts:2822) and the turn assembly
@@ -167,11 +169,26 @@ export interface EvalAgentSurface {
 export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurface {
   const { rt, model, llm } = deps;
   const sql = rt.storage.sql;
-  const facts = createFactsStore(sql);
-  const taskList = new TaskListStore(sql);
-  const config = createAgentConfigStore(sql);
+  const facts = createFactsStore(sql, rt.actor);
+  const taskList = new TaskListStore(sql, rt.actor, rt.storage.transactionSync);
+  const config = rt.actor.config;
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
-  const fork: AgentsForkDeps = { rt, model };
+  // This builds a TOOL SURFACE — the tools, the action enum and the system
+  // prompt — for arms that assert their shape. It holds no session, and local
+  // node hosting is session-bound by design (`LocalAgentSession.hostNode`: the
+  // session is a node's client fan-out and turn queue). So the seat REFUSES
+  // rather than returning something. An arm that means to drive the swarm rung
+  // has a target and passes `target.hostNode` (see `swarm.eval.ts`); one that
+  // reaches it through this surface would otherwise run every node on the
+  // caller's own actor, which is the failure this refusal prevents.
+  const fork: AgentsForkDeps = {
+    rt,
+    model,
+    hostNode: () => Promise.reject(new Error(
+      'this eval surface builds tools without a session, so it cannot seat a swarm node; '
+      + 'drive the rung through a target that implements hostNode',
+    )),
+  };
   const agents: AgentsToolDeps = { mode: 'build', fork };
   const tools = buildActorTools({
     rt,
@@ -180,12 +197,12 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         createWebCodemodeProvider(webSearch),
-        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql })),
+        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor })),
         createTasksCodemodeProvider(taskList, config),
       ],
     }),
     agents,
-    effectClaims: { sql, turnId: () => WORKSPACE_RUN_ID },
+    effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     facts,
     webSearch,
   });
@@ -208,7 +225,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       planSubmissionAvailable: false,
       model: { id: llm.model },
       currentDate: currentDateForPrompt(),
-      sectionOverrides: activePromptSectionOverrides(sql),
+      sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
     }),
   };
 }
@@ -300,8 +317,8 @@ export function makeSessionWriter(): SessionWriter {
  * applied every filter and serialised the schemas. That is a different fact from
  * `Object.keys(tools)` at the call site: the call site is what the harness
  * INTENDED to offer, this is what the model WAS offered. A run reporting zero
- * delegation calls now carries the evidence that separates "declined" from "was
- * never asked", and the two stop being the same observation.
+ * delegation calls carries the evidence that separates "declined" from "was
+ * never asked", so the two are not one observation.
  */
 export interface RequestSurfaceEvidence {
   /** Provider calls observed. Zero means the episode never reached the model,
@@ -504,12 +521,12 @@ export interface BehaviourOutput {
  * Project the persisted rows onto the wire shape. Fresh literals, so the
  * index-signature target is satisfied without a cast.
  *
- * `measured` IS carried, and that is not cosmetic. This projection originally
- * dropped it, so the raw counts behind every ratio — the reference the candidate
- * was divided by, the target, the floor — reached the run record only inside the
- * `detail` STRING. The first live pilot's numbers had to be recovered by parsing
- * English out of a sentence. A ratio whose baseline does not survive beside it is
- * a ratio nobody can re-derive, which is the whole reason `measured` exists.
+ * `measured` IS carried, and that is not cosmetic. Without it the raw counts
+ * behind every ratio — the reference the candidate was divided by, the target,
+ * the floor — reach the run record only inside the `detail` STRING, and the
+ * numbers have to be recovered by parsing English out of a sentence. A ratio
+ * whose baseline does not survive beside it is a ratio nobody can re-derive,
+ * which is the whole reason `measured` exists.
  */
 function toScoreJson(rows: readonly EvalScoreRow[]): BehaviourScoreJson[] {
   return rows.map((row) => {
@@ -563,30 +580,40 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
 /**
  * What one episode's ledger says it did, off a LOCAL store.
  *
- * ONE REDUCER AND ONE WALK, both the seam's. This function used to declare its
- * own `LedgerTotals` interface and its own field-for-field copy of
- * `walkRunEvents` + `ledgerTotalsFromEvents` — two reducers feeding every
- * denominator in the corpus, which is exactly the drift the seam was written to
- * remove, and the copies had already diverged in their commentary. The
- * store-to-events step is the only thing that was ever local, so it is the only
- * thing left here.
+ * ONE REDUCER AND ONE WALK, both the seam's: `LedgerTotals`, `walkRunEvents` and
+ * `ledgerTotalsFromEvents` come from the seam, and only the store-to-events step
+ * is local. Duplicate reducers create denominator drift risk across the corpus,
+ * and the recorded example is disagreement between their comments.
  *
  * `LedgerTotals` is re-exported rather than redeclared because the research and
  * optimization families import it from this module.
  */
 export function readLedgerTotals(db: Database): LedgerTotals {
-  return ledgerTotalsFromEvents(walkRunEvents(new RunEventRecorder(makeSql(db))));
+  return ledgerTotalsFromEvents(readRunEvents(db));
 }
+
+/**
+ * The episode's raw run-event trail off a LOCAL store, in time order.
+ *
+ * Split out of {@link readLedgerTotals} so the probe verifiers can read the
+ * same rows the totals are reduced from: a verifier that re-walked the store
+ * itself would be a second reader of one log, and the two would drift the way
+ * the two reducers this module used to carry did.
+ */
+export function readRunEvents(db: Database): RunEvent[] {
+  const sql = makeSql(db);
+  return walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql)));
+}
+
 
 /**
  * The episode's raw run-event trail off a LOCAL store, as the wire shape a judge
  * receives.
  *
- * WHY AT ALL. The published observation used to carry aggregates only — counts
- * with no order, no tool names beyond the flat list, no failure classes — so a
- * reader of the record asking "what did this attempt actually DO" had to reopen
- * the SQLite store named in `transcripts`, and after any retention sweep could
- * not answer at all.
+ * WHY AT ALL. Aggregates alone — counts with no order, no tool names beyond the
+ * flat list, no failure classes — leave a reader of the record asking "what did
+ * this attempt actually DO" to reopen the SQLite store named in `transcripts`,
+ * and after any retention sweep unable to answer at all.
  *
  * The projection itself — what is kept, what is dropped, the bound — is
  * `projectRunEventProvenance`, shared with the public-plane families; this is
@@ -595,8 +622,9 @@ export function readLedgerTotals(db: Database): LedgerTotals {
  * projection: every field is the shared one's.
  */
 export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
+  const sql = makeSql(db);
   const { totalEvents, bound, events } = projectRunEventProvenance(
-    walkRunEvents(new RunEventRecorder(makeSql(db))),
+    walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql))),
   );
   return {
     totalEvents,
@@ -741,8 +769,8 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * 395-420). A runtime with no profile and no resolver leaves all three lanes
  * undefined and throws on the fourth.
  *
- * THAT HOLE IS NOW CLOSED IN THE PRODUCT, and this function is no longer what
- * keeps a lane alive. `createCLIRuntime` installs its own authority
+ * THE PRODUCT CLOSES THAT HOLE ITSELF, so this function is not what keeps a
+ * lane alive. `createCLIRuntime` installs its own authority
  * (cli-backend/src/profile-authority.ts, wired at runtime.ts:405-426), so every
  * runtime from `openWorkspaceCLI` routes by default and `setProfileResolver` has
  * ZERO callers in the product — it survives on `CLIRuntime` as this override.
@@ -750,7 +778,7 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * WHY THE OVERRIDE SURVIVES ANYWAY: the cost basis has to be the model the run
  * NAMED. Each live suite announces exactly one model through `liveModelTarget`
  * and prints it as what the run is billed as. The runtime's own default derives
- * its tier from the workspace's `agent_config` — which `createWorkspace` does not
+ * its tier from the workspace's `actor_config` — which `createWorkspace` does not
  * seed — and normalizes the spec through the local resolver, so it spells the
  * same model differently (`workers-ai/@cf/...` rather than `@cf/...`). This pin
  * makes the announced string the tier's string, and makes substitution impossible
@@ -789,7 +817,7 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     revision: `eval-pinned:${llm.model}`,
     availableModels: [llm.model],
   };
-  const config = createAgentConfigStore(rt.storage.sql);
+  const config = rt.actor.config;
   const role = config.getRoleSelection();
   if (!rt.setProfileResolver) {
     throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '
@@ -865,8 +893,19 @@ export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
 export async function runBehaviourTask(
   task: EvalCase, opts: BehaviourHarnessOptions,
 ): Promise<BehaviourOutput> {
-  const workDir = join(opts.dir, task.id);
-  mkdirSync(workDir, { recursive: true });
+  // A workspace PER EPISODE, never one per task id. `createWorkspace` below
+  // writes a `workspace_identity` row and issues the workspace's main actor
+  // against it, so a second episode of the same task over the same file lands a
+  // SECOND identity row and the actor directory then refuses the workspace
+  // outright ('Workspace ownership does not match the actor directory
+  // authority'). The shared path was already wrong for a quieter reason:
+  // `readLedgerTotals` below would read the previous episode's turns and tool
+  // calls as this one's.
+  mkdirSync(opts.dir, { recursive: true });
+  // Through `scratchDir`, not a hand-rolled mkdtemp under `opts.dir`: the
+  // preload releases every directory minted this way even on a run that threw,
+  // and `gate:scratch-ownership` refuses a mint site that owns no removal.
+  const workDir = scratchDir(`behaviour-${task.id}`);
 
   const dbPath = join(workDir, 'agent.db');
   const db = new Database(dbPath);
@@ -894,8 +933,13 @@ export async function runBehaviourTask(
   // Seeded through the OPENED runtime's filesystem: the workspace the agent
   // reads is the one this runtime owns, not the inline VFS birth returned.
   const hard: HardTask | undefined = hardTaskFor(task);
+  // A case belongs to at most one ground-truth family: `env` names it, and the
+  // two lookups below key on different env values, so both undefined is a
+  // mechanism-only corpus row and both defined is impossible by construction.
+  const probe: BehaviourProbe | undefined = probeFor(task);
   const shell = hard === undefined ? undefined : requireVerifierShell(task.id, rt);
   if (hard !== undefined) await seedHardTask(hard, rt.storage.vfs);
+  if (probe !== undefined) await seedProbe(probe, rt.storage.vfs);
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
   const session = new LocalAgentSession({
@@ -905,8 +949,14 @@ export async function runBehaviourTask(
     noAutoEvolve: !opts.arm.evolution,
     oneShot: true,
   });
+  // The episode's wall clock, send to settled. The verifier below runs commands
+  // through `rt.shell`, so the clock stops BEFORE grading: a slow verifier is
+  // the instrument's cost, not the agent's, and charging it to the episode
+  // would make the budget a property of the machine it ran on.
+  const episodeStartedAt = Date.now();
   await session.send(task.task);
   await session.settleBackgroundWork();
+  const episodeWallMs = Date.now() - episodeStartedAt;
 
   // WHAT THIS EPISODE COST, registered BEFORE the degenerate check below, because
   // a trajectory that produced nothing gradable still burned the tokens it took
@@ -914,11 +964,17 @@ export async function runBehaviourTask(
   // the same lie in a smaller font. This suite drives a session rather than
   // calling `generateText`, so the store is the only place its usage exists —
   // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
-  // why the behavioural tier no longer reports `0 model call(s)` over an episode
-  // that spent hundreds of thousands of neurons.
-  recordLiveModelEpisode(makeSql(db));
+  // what keeps the behavioural tier from reporting `0 model call(s)` over an
+  // episode that spent hundreds of thousands of neurons.
+  recordLiveModelEpisode(makeSql(db), rt.actor);
 
-  const totals = readLedgerTotals(db);
+  // ONE walk of the log, reduced three ways. The totals, the step-bound
+  // evidence and the probe verifiers all read the same rows, and this file
+  // already says why `readRunEvents` is split out at all: a second reader of
+  // one log is two readers that drift.
+  const events = readRunEvents(db);
+  const totals = ledgerTotalsFromEvents(events);
+  const bound = stepBoundEvidence(events);
 
   // DESIGN C — upstream of both `task.meta.eval` writers, because it throws
   // before `run(...)` returns. A degenerate trajectory is `inert`, never a zero.
@@ -936,18 +992,57 @@ export async function runBehaviourTask(
   // through `rt.shell`, and reading the ledger first keeps the turn and tool-call
   // counts a property of the agent's episode rather than of its grading.
   const outcome: EvalScoreRow[] = hard === undefined || shell === undefined
-    ? []
+    ? probe === undefined
+      ? []
+      : [await verifyProbe(probe, {
+        files: {
+          readText: async (path) => {
+            let content: string | Uint8Array;
+            try {
+              content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+            } catch (error) {
+              // Absence is the probe's miss, not the harness failing: only the
+              // missing-file errno becomes null, everything else rethrows.
+              if (isVfsError(error) && error.code === 'ENOENT') return null;
+              throw error;
+            }
+            // A file whose bytes are not text cannot be the exact text the
+            // probe asked for — also a miss, measured rather than thrown.
+            const text = v.safeParse(v.string(), content);
+            return text.success ? text.output : null;
+          },
+        },
+        events,
+      })]
     : [await verifyHardTask(hard, {
       vfs: rt.storage.vfs,
       exec: (command) => shell.exec(command),
     })];
+  // THE COST, beside the outcome and the mechanisms. Measured, never enforced:
+  // nothing above changes what the agent may do, and an over-budget episode
+  // still reports whether it solved the task. Steps and tokens come off the
+  // ledger the degenerate check just read; the error rate is the one the
+  // `tool_outcomes` scorer in the array below already measured, read off its
+  // row rather than recomputed, so the two can never disagree.
+  const mechanisms = scoreTrajectory(makeSql(db), rt.actor);
+  // WHETHER THE PROVIDER CUT THE ANSWER, beside the cost. An attempt the output
+  // limit ended is graded over the part the request allowed rather than the part
+  // the model had, so it fails — and it says so under its own name, because a
+  // truncated reply and a wrong reply send a reader to different places.
+  const cap = outputCapRow(bound.lastStepReason);
+  const budget = budgetRow(task.budget ?? {}, {
+    steps: totals.steps,
+    tokens: totals.tokensIn + totals.tokensOut,
+    toolErrorRate: measuredToolErrorRate(mechanisms),
+    wallMs: episodeWallMs,
+  });
 
   return {
     taskId: task.id,
     turns: totals.turns,
     toolCalls: totals.toolCalls,
     toolNames: totals.toolNames,
-    scores: toScoreJson([...outcome, ...scoreTrajectory(makeSql(db))]),
+    scores: toScoreJson([...outcome, ...mechanisms, cap, budget]),
     tokensIn: totals.tokensIn,
     tokensOut: totals.tokensOut,
     reasoningOut: totals.reasoningOut,

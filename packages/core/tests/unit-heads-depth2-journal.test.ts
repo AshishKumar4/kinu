@@ -1,22 +1,22 @@
 // C2 — a depth-2 head's journal rows and its step rows must live in ONE store,
 // so the surface can read them.
 //
-// The defect: a recursive split ran its HeadController with a journal built over
-// the INTERMEDIATE facet's own SQLite. A depth-1 head therefore wrote its
-// children's spawn/report rows into its own Durable Object, while the root held
+// The defect: a recursive split that runs its HeadController with a journal
+// built over the INTERMEDIATE facet's own SQLite. A depth-1 head then writes its
+// children's spawn/report rows into its own Durable Object while the root holds
 // the step rows — and `HeadJournal.assembleRun` reads head_journal on the ROOT
 // and joins head_steps to it by head_id. With the two halves one DO apart the
-// join could never match, so a depth-2 head was unreadable from anywhere: the
-// root had steps with no head row, the facet had a head row nobody queried, and
-// the run rendered with the child heads missing.
+// join can never match, so a depth-2 head is unreadable from anywhere: the root
+// has steps with no head row, the facet has a head row nobody queries, and the
+// run renders with the child heads missing.
 //
-// The fix is `HeadJournalPort`: the controller no longer owns a journal, it is
-// handed one, and the CF facet hands it an RPC-backed port aimed at the root.
-// These tests assert the property that fix exists for, and the last one asserts
-// the defect itself so the others cannot pass vacuously.
+// `HeadJournalPort` is why that cannot happen: the controller does not own a
+// journal, it is handed one, and the CF facet hands it an RPC-backed port aimed
+// at the root. These tests assert the property that buys, and the last one
+// asserts the defect itself so the others cannot pass vacuously.
 
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';
 import {
   HeadController,
   HeadJournal,
@@ -61,7 +61,10 @@ function report(id: string, stepCount: number): HeadReport {
 function freshStore() {
   const { db, sql } = createTestSql();
   initHeadsTables((ddl) => db.exec(ddl));
-  return { sql };
+  // Each store is a SEPARATE database, so each gets its OWN actors — the
+  // directory a handle validates against lives in the database that issued it,
+  // and the last test here turns on the two stores being genuinely apart.
+  return { sql, actor: createTestActorsOver(db).main };
 }
 
 /**
@@ -147,8 +150,8 @@ async function runSplitWithNestedSplit(opts: {
 
 describe('C2 — a depth-2 head is readable from the root', () => {
   test('a nested synthesis keeps the root live and preserves its original task', async () => {
-    const { sql } = freshStore();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = freshStore();
+    const journal = new HeadJournal(sql, actor);
     const observed: Array<{ status?: string; rationale?: string; merged: boolean; parentStatus?: string }> = [];
     await runSplitWithNestedSplit({
       rootJournal: journal,
@@ -169,8 +172,8 @@ describe('C2 — a depth-2 head is readable from the root', () => {
   });
 
   test("a depth-2 head's steps are readable, and sit beside its own journal row", async () => {
-    const { sql } = freshStore();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = freshStore();
+    const journal = new HeadJournal(sql, actor);
 
     const { depth2Ids } = await runSplitWithNestedSplit({
       rootJournal: journal,
@@ -195,8 +198,8 @@ describe('C2 — a depth-2 head is readable from the root', () => {
   });
 
   test('the assembled run contains the depth-2 head, with a live last_step_at', async () => {
-    const { sql } = freshStore();
-    const journal = new HeadJournal(sql);
+    const { sql, actor } = freshStore();
+    const journal = new HeadJournal(sql, actor);
 
     const { depth2Ids } = await runSplitWithNestedSplit({
       rootJournal: journal,
@@ -231,11 +234,11 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // the two above could pass for reasons unrelated to where the rows land.
     const root = freshStore();
     const intermediateFacet = freshStore();
-    const rootJournal = new HeadJournal(root.sql);
+    const rootJournal = new HeadJournal(root.sql, root.actor);
 
     const { depth2Ids } = await runSplitWithNestedSplit({
       rootJournal,
-      nestedJournal: new HeadJournal(intermediateFacet.sql),
+      nestedJournal: new HeadJournal(intermediateFacet.sql, intermediateFacet.actor),
       stepSink: (id, seq, step) => rootJournal.appendStep(id, seq, step),
     });
     const depth2Id = depth2Ids[0]!;
@@ -252,6 +255,6 @@ describe('C2 — a depth-2 head is readable from the root', () => {
 
     // And the head row is not lost either, merely stranded one store away —
     // which is why this never surfaced as an error.
-    expect(new HeadJournal(intermediateFacet.sql).readHead(depth2Id)).not.toBeNull();
+    expect(new HeadJournal(intermediateFacet.sql, intermediateFacet.actor).readHead(depth2Id)).not.toBeNull();
   });
 });

@@ -92,19 +92,22 @@ ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
    *  side effects cannot be safely re-run. Script quick fan-out here; call the
    *  top-level \`agents\` tool for one long search that must survive an
    *  eviction, which resumes from its search checkpoint. */`,
-  hire: `  /** Create a persistent named helper that keeps its own context across turns.
-   *  It starts FRESH — it did not see this conversation — so the mission is its
-   *  whole brief. \`role\` is a catalog role id (the ids are listed on the
-   *  native agents tool's role fields); \`tier\` optionally overrides that
-   *  role's default inference tier. Default scope:"subordinate" hires into
-   *  THIS workspace; scope:"workspace" creates a specialist workspace of its
-   *  own, sends it \`message\`, and awaits the result. */`,
-  ask: `  /** Hand an agent work and expect the answer back. A subordinate's report
-   *  arrives later as an event that wakes you — it does NOT resolve here; a
-   *  peer workspace agent's reply is awaited until it arrives, however long
-   *  the peer's work takes. */`,
-  send: `  /** Fire-and-forget message to any agent by name (no reply awaited). */`,
-  reply: `  /** Answer an incoming agent message event by the event_id you were given. */`,
+  hire: `  /** Put ONE workstream in front of ONE agent. With \`role\` it CREATES the
+   *  agent — it starts FRESH, it did not see this conversation, so \`mission\`
+   *  is its whole brief — and \`agent\` is then the optional name to create it
+   *  under. \`role\` is a catalog role id (the ids are listed on the native
+   *  agents tool's role fields); \`tier\` optionally overrides that role's
+   *  default inference tier. WITHOUT \`role\`, \`agent\` names one that already
+   *  exists and \`message\` is the work: a subordinate's report arrives later as
+   *  an event that wakes you — it does NOT resolve here — and a peer workspace
+   *  agent's reply is awaited until it arrives, however long the peer's work
+   *  takes. Default scope:"subordinate" hires into THIS workspace;
+   *  scope:"workspace" creates a specialist workspace of its own, sends it
+   *  \`message\`, and awaits the result. */`,
+  msg: `  /** Say something to an agent WITHOUT handing it a workstream: \`agent\`
+   *  names one by name (no reply awaited), or \`event_id\` answers an incoming
+   *  agent message event instead. Exactly one of the two; naming both is
+   *  refused. */`,
   list: `  /** The unified roster: subordinates here plus the owner's other workspace
    *  agents. Pass \`agent\` for one subordinate's live status instead. */`,
   dismiss: `  /** Retire a subordinate. Archived by default (its context is kept); pass
@@ -116,9 +119,7 @@ ${SWARM_PRESET_DOCTRINE.map((line) => `   *    ${line}`).join('\n')}
 const AGENTS_CODEMODE_RETURNS = {
   swarm: 'Promise<{ preset: string; config: unknown; caps: unknown; report: unknown; publication: unknown; best: unknown; candidates: unknown[] } | { reason: string; error: string }>',
   hire: 'Promise<unknown>',
-  ask: 'Promise<unknown>',
-  send: 'Promise<unknown>',
-  reply: 'Promise<unknown>',
+  msg: 'Promise<unknown>',
   list: 'Promise<unknown>',
   dismiss: 'Promise<unknown>',
 } satisfies Record<AgentsToolAction, string>;
@@ -148,27 +149,28 @@ function renderInputVariant(
 }
 
 /**
- * The `ask` doc's SECOND HALF, rendered only where the temporary port is wired.
+ * The `hire` doc's SECOND HALF, rendered only where the port that runs a
+ * `lifetime:'task'` hire is wired.
  *
  * Split from the literal above rather than folded into it, because this is the
- * one member whose TARGETS are deps-gated: an actor with no child substrate has
- * `role` and `context_ref` in neither its variant list nor its schema, and a
- * docstring describing them anyway would be the only place on this surface that
- * advertised a target the call refuses.
+ * one member whose LIFETIME is deps-gated: an actor with no child substrate has
+ * `lifetime` in neither its variant list nor its schema, and a docstring
+ * describing it anyway would be the only place on this surface that advertised
+ * a shape the call refuses.
  */
-const AGENTS_CODEMODE_TEMPORARY_ASK_DOC = `  /** Or hand the work to a role instead of an agent: \`role\` creates a
-   *  TEMPORARY full agent for this one question — its own context window, its
-   *  own tool loop — and THIS call resolves with its finished answer, after
-   *  which it is released and only its transcript remains. Exactly one of
-   *  \`agent\` and \`role\`; naming both is refused. \`context_ref\` names
-   *  workspace paths that agent reads itself, so bulk material never enters
-   *  your own window. */`;
+const AGENTS_CODEMODE_TASK_LIFETIME_DOC = `  /** \`lifetime\` decides how long a created helper lives. "durable" (the
+   *  default) stays in your roster across turns. "task" creates a full agent
+   *  for this ONE question — its own context window, its own tool loop — and
+   *  THIS call resolves with its finished answer, after which the row is
+   *  archived and only its transcript remains. There is no follow-up, so put
+   *  the whole question in \`mission\` and name bulk material by workspace path
+   *  so that agent reads it itself. */`;
 
 function memberDoc(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const base = AGENTS_CODEMODE_MEMBER_DOCS[action];
-  return action === 'ask' && deps.team?.temporary
+  return action === 'hire' && deps.team?.temporary
     ? `${base}
-${AGENTS_CODEMODE_TEMPORARY_ASK_DOC}`
+${AGENTS_CODEMODE_TASK_LIFETIME_DOC}`
     : base;
 }
 
@@ -184,37 +186,35 @@ function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string
 /** One-line member descriptions for the provider record. */
 const AGENTS_CODEMODE_DESCRIPTIONS = {
   swarm: 'Run a configured search over ephemeral nodes of yourself whose candidates are measured by your own verifier rather than judged: name the shape with preset and what counts with objective. Refuses an illegal composition by naming the axis, and a shape no engine runs faithfully rather than substituting one. Not resumable from inside the sandbox.',
-  hire: 'Create a persistent named helper that starts with a blank context: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
-  ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',
-  send: 'Fire-and-forget message to any agent by name.',
-  reply: 'Answer an incoming agent message event by its event_id.',
-  list: 'The unified roster: subordinates, peer workspace agents, and the temporary agents running right now.',
+  hire: 'Put one workstream in front of one agent: `role` creates a helper that starts with a blank context, and without `role` an `agent` that already exists is handed the work (a subordinate reports later as an event; a peer reply is awaited). scope:"workspace" creates a specialist workspace of its own.',
+  msg: 'Say something to an agent without handing it a workstream: `agent` by name, or `event_id` to answer an incoming agent message event.',
+  list: 'The unified roster: subordinates, peer workspace agents, and the task-lifetime agents running right now.',
   dismiss: 'Retire a subordinate (archived by default — its context is kept).',
 } satisfies Record<AgentsToolAction, string>;
 
 /**
- * `ask`'s RETURN and one-line DESCRIPTION, gated from the same fact its
- * docstring is.
+ * `hire`'s RETURN and one-line DESCRIPTION at the `task` lifetime, gated from
+ * the same fact its docstring is.
  *
- * Ungated they advertised a `lifetime:"task"` outcome on an actor whose `ask`
+ * Ungated they advertised a `lifetime:"task"` outcome on an actor whose `hire`
  * cannot produce one — the same overclaim the docstring gate exists to prevent,
  * two lines below it. Three projections of one capability, one condition.
  */
-const AGENTS_CODEMODE_TEMPORARY_ASK_RETURN =
+const AGENTS_CODEMODE_TASK_LIFETIME_RETURN =
   'Promise<{ status: "completed" | "failed"; agent: string; lifetime: "task"; role: string;'
   + ' answer: string; transcript: "kept"; elapsed_ms: number; reason?: string } | unknown>';
 
 function memberReturn(action: AgentsToolAction, deps: AgentsToolDeps): string {
-  return action === 'ask' && deps.team?.temporary
-    ? AGENTS_CODEMODE_TEMPORARY_ASK_RETURN
+  return action === 'hire' && deps.team?.temporary
+    ? AGENTS_CODEMODE_TASK_LIFETIME_RETURN
     : AGENTS_CODEMODE_RETURNS[action];
 }
 
 function memberDescription(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const base = AGENTS_CODEMODE_DESCRIPTIONS[action];
-  return action === 'ask' && deps.team?.temporary
-    ? `${base} Or pass \`role\` instead of \`agent\` for a temporary full agent created for that`
-      + ' one question, which resolves with its finished answer and is then released.'
+  return action === 'hire' && deps.team?.temporary
+    ? `${base} Pass lifetime:"task" for an agent created for that`
+      + ' one question, which resolves with its finished answer and is then archived.'
     : base;
 }
 

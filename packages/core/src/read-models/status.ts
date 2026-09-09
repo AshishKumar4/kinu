@@ -10,6 +10,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
+import type { ActorHandle } from '../state/actor-handle';
 import { conversationCount, conversationPageRows, type ConversationPageRow } from '../identity/conversation-store';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';
@@ -82,6 +83,9 @@ export interface ToolListEntry {
  *  `workspace_identity` has no row yet. */
 export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
+  /** Whose workspace this is. The scaffold pointer is per-actor, so the version
+   *  a status reports has to be the one this actor runs. */
+  readonly actor: ActorHandle;
   /** The workspace filesystem — SOUL.md is a file in it. */
   readonly vfs: VFS;
   readonly config: AgentConfigStore;
@@ -99,17 +103,20 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
  *  workspace and says so — answering with a fabricated identity and zeroed
  *  counts would make it indistinguishable from a brand-new agent. */
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
-  const { sql, config, vfs } = deps;
+  const { sql, actor, config, vfs } = deps;
+  actor.assertCurrent();
   const soul = (await readSoul(vfs)) ?? '';
   const purpose = summarizeSoul(soul);
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
   const scaffoldVersion = sql<{ v: number }>`
-    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
+    SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
+    WHERE actor_id = ${actor.actorId}`;
   // Message count reflects the canonical conversation store — the workspace's
   // default-chat authority, whichever table owns it.
-  const messageCount = conversationCount(sql);
-  const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
+  const messageCount = conversationCount(sql, actor);
+  const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
+    WHERE actor_id = ${actor.actorId}`;
   const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
   return {
     name: identity[0]?.name ?? deps.name,
@@ -146,9 +153,10 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
  */
 export function getChatHistoryPage(
   sql: SqlExecutor,
+  actor: ActorHandle,
   request: PageRequest = {},
 ): Page<ChatHistoryEntry> {
-  return mapPage(conversationPageRows(sql, request), (rows) => rows.flatMap((row) => {
+  return mapPage(conversationPageRows(sql, actor, request), (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
     if (!role) return [];
     const { text, metadata } = projectStoredRow(row);

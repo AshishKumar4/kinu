@@ -4,9 +4,9 @@
  * A prompt, a skill, or a saved craft that names an MCP tool has to resolve to
  * the same tool whether the agent runs in a Durable Object or a local process.
  * That only works if the key is derived from something the user actually chose:
- * the server's name. (cf used to key on the random `nanoid(8)` registration id,
- * so the same server produced a different tool name for every user — and a
- * different one again after a re-add.)
+ * the server's name. Key it on the random `nanoid(8)` registration id instead
+ * and the same server produces a different tool name for every user — and a
+ * different one again after a re-add.
  *
  * Server names are unique per agent by construction on the CLI (the config is a
  * `mcpServers` object) and enforced unique on cf, so `<server>/<tool>` is an

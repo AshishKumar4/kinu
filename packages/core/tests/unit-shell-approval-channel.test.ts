@@ -1,9 +1,9 @@
-// The `run` tool's 'gate' decision used to be a dead end: under 'strict' it
-// always returned an explanatory message because no approval channel existed.
-// These tests pin the wired channel — who gets asked, what the answer does,
-// and that the old message still stands when nobody is listening.
+// The `run` tool's 'gate' decision is wired to a real approval channel. These
+// tests pin it — who gets asked, what the answer does, and that with no
+// channel wired 'strict' still keeps its explanatory refusal rather than
+// running the command unasked.
 //
-// The gate itself now lives at the execution seam (withApprovalGatedShell —
+// The gate itself lives at the execution seam (withApprovalGatedShell —
 // see execution/approval.ts), not inside `run`'s own executor, so the
 // harness wraps a mock `Shell` with the policy under test and hands it to
 // `rt.shell`, exactly as a backend's runtime.ts does at construction.

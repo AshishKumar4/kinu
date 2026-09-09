@@ -39,6 +39,7 @@
  */
 import { diagnostics, toKinuError } from '../obs';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { HeadJournal } from './journal';
 import type {
   Evidence, HeadId, HeadInput, HeadReport, HeadStep, MergeResult, MergeStrategy,
@@ -48,8 +49,8 @@ import type {
 export type AnnounceHeadActivity = (headId: HeadId) => void;
 
 export class LiveHeadJournal extends HeadJournal {
-  constructor(sql: SqlExecutor, private readonly listener: AnnounceHeadActivity) {
-    super(sql);
+  constructor(sql: SqlExecutor, actor: ActorHandle, private readonly listener: AnnounceHeadActivity) {
+    super(sql, actor);
   }
 
   /** The run itself, seeded. For a swarm this is the row that makes the search

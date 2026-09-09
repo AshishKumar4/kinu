@@ -60,9 +60,9 @@ describe('the budget is the only thing that moves the budget', () => {
     expect(budget.take(2)).toBe(2);
     expect(budget.remaining).toBe(2);
     // A wave wider than what remains runs NARROWER rather than creating children nothing
-    // paid for. The `let childBudget` this replaced ran the full width and went negative,
-    // which was sound only because the loop then stopped — and the loop no longer can,
-    // since a granted level may still be owed after the budget empties.
+    // paid for. A width counter that ran the full width and went negative would be sound
+    // only if the loop stopped there, and it cannot: a granted level may still be owed
+    // after the budget empties.
     expect(budget.take(5)).toBe(2);
     expect(budget.remaining).toBe(0);
     expect(budget.take(3)).toBe(0);
@@ -134,8 +134,8 @@ describe('the budget is the only thing that moves the budget', () => {
 describe('THE RACE: two nodes proposing at once cannot both be paid from one budget', () => {
   test('concurrent grants SUM to no more than the budget', async () => {
     // Three children of room, four nodes each asking for two. Exactly one can be paid.
-    // The shape this replaced — read the number, await something, subtract — would grant
-    // several, and each grant would look legal on its own because each saw 3 >= 2.
+    // Read the number, await something, subtract, and several are granted — each
+    // grant legal on its own because each saw 3 >= 2.
     const budget = new SwarmBudget(3);
     const ask = async (atDepth: number) => {
       // The await is the point: it puts a real suspension between the callers, which is

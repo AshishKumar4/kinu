@@ -22,7 +22,7 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
-import type { AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
+import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import {
   createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
   renderExecuteToolsDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
@@ -40,7 +40,7 @@ export interface ExecuteToolsFactoryOptions {
   egress: Fetcher | null;
   /** The actor's runtime: craftStore (crafted source) and executionRouter
    *  (the `workspace` / `sandbox` / `laptop` namespaces). */
-  rt: { craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
+  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
   /** The actor's bound SQL — craft-score lookups and the `state` store. */
   sql: SqlExecutor;
   /** The registered workspace name the prelude reports as `env.workspace`. */
@@ -99,7 +99,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   const { loader, rt, sql, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
 
-  const stateProvider = createStateCodemodeProvider(sql);
+  const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   // `agents.*` — the delegation tool projected into the sandbox, so a workflow
   // is a crafted tool scripting agents/workspace rather than a new engine.
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;

@@ -358,7 +358,7 @@ describe('the workflows that publish and measure this product', () => {
     }
     // Non-vacuity: a secret-bearing job really is reachable from a pull request,
     // which is the whole reason this assertion exists.
-    expect(checked, 'no secret-bearing job is triggered by a pull request any more')
+    expect(checked, 'no secret-bearing job is triggered by a pull request')
       .toBeGreaterThan(0);
   });
 
@@ -387,7 +387,7 @@ describe('the workflows that publish and measure this product', () => {
       expect(step.run, `${file}#${job} pipes a download into a shell`)
         .not.toMatch(/(?:curl|wget)[^\n]*\|\s*(?:ba)?sh\b/u);
     }
-    expect(bodies, 'no workflow runs a shell body any more').toBeGreaterThan(0);
+    expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);
   });
 
   test('the Lean toolchain is checksum-verified before it executes', () => {
@@ -464,6 +464,6 @@ describe('the workflows that publish and measure this product', () => {
       expect(commit.test(ref), `${file}#${job} uses ${uses} from outside a pinned commit`)
         .toBe(true);
     }
-    expect(pinned, 'no workflow uses an action any more').toBeGreaterThan(0);
+    expect(pinned, 'no workflow uses an action').toBeGreaterThan(0);
   });
 });

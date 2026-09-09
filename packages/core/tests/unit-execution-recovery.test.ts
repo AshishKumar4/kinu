@@ -33,6 +33,7 @@ import { EventLog } from '../src/events/hub/log';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import type { RunEventInput } from '../src/events/types';
 import { createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 
 function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   return {
@@ -45,63 +46,94 @@ function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   };
 }
 
+/**
+ * The lessons ledger, and the actor it belongs to.
+ *
+ * `lessons` is keyed by actor now, so a finding written under one handle and
+ * listed under another comes back as an EMPTY injection window — which is
+ * exactly what "no findings yet" looks like, and would pass most of the
+ * assertions below. One actor, threaded through both halves, is what makes
+ * that impossible; the cross-actor case is pinned at the end of the describe.
+ */
 function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db));
-  return { sql, db };
+  const execRaw = makeExecRaw(db);
+  initTurnOutcomeTables(execRaw);
+  const actors = createTestActors(sql, execRaw);
+  return { sql, db, actor: actors.main, sibling: actors.sibling };
 }
 
 describe('the ledger', () => {
   test('a finding lands as a provisional lesson bound to no turn, and reads back newest first', () => {
-    const { sql } = ledgerDb();
-    expect(recordRecoveryFinding(sql, finding(), 1_000)).toBe(true);
-    expect(recordRecoveryFinding(sql, finding({ tool: 'web_fetch', failedSignature: 'web_fetch d4' }), 2_000)).toBe(true);
+    const { sql, actor } = ledgerDb();
+    expect(recordRecoveryFinding(sql, actor, finding(), 1_000)).toBe(true);
+    expect(recordRecoveryFinding(sql, actor, finding({ tool: 'web_fetch', failedSignature: 'web_fetch d4' }), 2_000)).toBe(true);
 
-    expect(listRecoveryFindings(sql)).toEqual([
+    expect(listRecoveryFindings(sql, actor)).toEqual([
       recoveryFindingText(finding({ tool: 'web_fetch', failedSignature: 'web_fetch d4' })),
       recoveryFindingText(finding()),
     ]);
-    const rows = listLessons(sql, { source: 'execution_recovery' });
+    const rows = listLessons(sql, actor, { source: 'execution_recovery' });
     expect(rows.every((r) => r.status === 'provisional' && r.turnIds.length === 0)).toBe(true);
   });
 
   test('a finding already inside the injection window is not recorded twice', () => {
-    const { sql } = ledgerDb();
-    expect(recordRecoveryFinding(sql, finding())).toBe(true);
-    expect(recordRecoveryFinding(sql, finding())).toBe(false);
-    expect(listLessons(sql, { source: 'execution_recovery' })).toHaveLength(1);
+    const { sql, actor } = ledgerDb();
+    expect(recordRecoveryFinding(sql, actor, finding())).toBe(true);
+    expect(recordRecoveryFinding(sql, actor, finding())).toBe(false);
+    expect(listLessons(sql, actor, { source: 'execution_recovery' })).toHaveLength(1);
   });
 
   test('a finding that recurred after falling out of the window records again — the recurrence is signal', () => {
-    const { sql } = ledgerDb();
-    expect(recordRecoveryFinding(sql, finding(), 1_000)).toBe(true);
+    const { sql, actor } = ledgerDb();
+    expect(recordRecoveryFinding(sql, actor, finding(), 1_000)).toBe(true);
     for (let i = 0; i < MAX_RECOVERY_FINDINGS; i++) {
-      expect(recordRecoveryFinding(sql, finding({ tool: `tool_${i}` }), 2_000 + i)).toBe(true);
+      expect(recordRecoveryFinding(sql, actor, finding({ tool: `tool_${i}` }), 2_000 + i)).toBe(true);
     }
-    expect(listRecoveryFindings(sql)).not.toContain(recoveryFindingText(finding()));
-    expect(recordRecoveryFinding(sql, finding(), 9_000)).toBe(true);
-    expect(listRecoveryFindings(sql)[0]).toBe(recoveryFindingText(finding()));
+    expect(listRecoveryFindings(sql, actor)).not.toContain(recoveryFindingText(finding()));
+    expect(recordRecoveryFinding(sql, actor, finding(), 9_000)).toBe(true);
+    expect(listRecoveryFindings(sql, actor)[0]).toBe(recoveryFindingText(finding()));
   });
 
   test('the injection window is bounded at MAX_RECOVERY_FINDINGS', () => {
-    const { sql } = ledgerDb();
+    const { sql, actor } = ledgerDb();
     for (let i = 0; i < MAX_RECOVERY_FINDINGS + 3; i++) {
-      recordRecoveryFinding(sql, finding({ tool: `tool_${i}` }), 1_000 + i);
+      recordRecoveryFinding(sql, actor, finding({ tool: `tool_${i}` }), 1_000 + i);
     }
-    expect(listRecoveryFindings(sql)).toHaveLength(MAX_RECOVERY_FINDINGS);
+    expect(listRecoveryFindings(sql, actor)).toHaveLength(MAX_RECOVERY_FINDINGS);
   });
 
   test('corroboration can never touch a finding: bound to no turn, it stays provisional forever', () => {
-    const { sql } = ledgerDb();
-    recordRecoveryFinding(sql, finding());
-    expect(corroborateLessonsForTurn(sql, 'turn-1')).toEqual([]);
-    expect(listLessons(sql, { source: 'execution_recovery' })[0]!.status).toBe('provisional');
+    const { sql, actor } = ledgerDb();
+    recordRecoveryFinding(sql, actor, finding());
+    expect(corroborateLessonsForTurn(sql, actor, 'turn-1')).toEqual([]);
+    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0]!.status).toBe('provisional');
   });
 
   test('an empty ledger reads as empty, never as a throw', () => {
-    const { sql } = ledgerDb();
-    expect(listRecoveryFindings(sql)).toEqual([]);
+    const { sql, actor } = ledgerDb();
+    expect(listRecoveryFindings(sql, actor)).toEqual([]);
+  });
+
+  test("a sibling actor's window is EMPTY, and its own finding does not widen ours", () => {
+    // The ledger is per actor, and every other test here would pass just as well
+    // under a mismatched handle — an empty window is indistinguishable from "no
+    // recoveries observed yet". This is the assertion that tells them apart: the
+    // same database, two real actors, and neither one's finding is injectable
+    // into the other's next step.
+    const { sql, actor, sibling } = ledgerDb();
+    const other = sibling('peer');
+    expect(recordRecoveryFinding(sql, actor, finding(), 1_000)).toBe(true);
+
+    expect(listRecoveryFindings(sql, actor)).toEqual([recoveryFindingText(finding())]);
+    expect(listRecoveryFindings(sql, other)).toEqual([]);
+
+    // …and because the sibling cannot see ours, the SAME finding is new to it —
+    // the dedupe window is per actor too, not a shared one.
+    expect(recordRecoveryFinding(sql, other, finding(), 2_000)).toBe(true);
+    expect(listRecoveryFindings(sql, actor)).toHaveLength(1);
+    expect(listRecoveryFindings(sql, other)).toHaveLength(1);
   });
 });
 
@@ -114,10 +146,19 @@ const host: BackendHost = {
   setTimer: () => {},
 };
 
+/**
+ * The orchestrator's event log, bound to the ONE actor whose turn it is.
+ *
+ * Its own database, because nothing here reads an event back — the log is the
+ * seam the orchestrator requires, not a subject. The handle is real all the
+ * same: the log captures `actorId` once and stamps every published row with it,
+ * so a literal would be a fixture that cannot fail the binding.
+ */
 function eventLog(): EventLog {
-  const sql = makeSqlExec(new Database(':memory:'));
-  initEventsHubTables(sql);
-  return new EventLog(sql);
+  const db = new Database(':memory:');
+  const exec = makeSqlExec(db);
+  initEventsHubTables(exec);
+  return new EventLog(exec, createTestActors(makeSql(db), makeExecRaw(db)).main);
 }
 
 /** Distinct failing calls, then one CHANGED call that runs clean — the shape
@@ -149,7 +190,7 @@ describe('the loop, through the production seams', () => {
     await grindThenRecover(orch);
 
     // Durable at the moment of observation — no turn boundary was crossed.
-    const injectable = listRecoveryFindings(rt.storage.sql);
+    const injectable = listRecoveryFindings(rt.storage.sql, rt.actor);
     expect(injectable).toHaveLength(1);
     expect(injectable[0]).toContain('`run` failed 3x in a row');
     expect(injectable[0]).toContain('npm test');
@@ -194,7 +235,7 @@ describe('the loop, through the production seams', () => {
         snapshot: () => agentDynamicContext({
           factsBlock: undefined,
           memoryTail: undefined,
-          recoveryFindings: listRecoveryFindings(rt.storage.sql),
+          recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
           executors: [],
           runningJobs: { items: [], total: 0 },
           openTasks: { items: [], total: 0 },
@@ -225,7 +266,7 @@ describe('the loop, through the production seams', () => {
     // orchestrator, so the second grind must start after the first recovered.
     await grindThenRecover(orch);
     await grindThenRecover(orch);
-    expect(listRecoveryFindings(rt.storage.sql)).toHaveLength(1);
+    expect(listRecoveryFindings(rt.storage.sql, rt.actor)).toHaveLength(1);
     // Both observations are real streaks; the run event counts both.
     expect(orch.recoverySnapshot()?.recoveries).toHaveLength(2);
   });
@@ -237,7 +278,7 @@ describe('the loop, through the production seams', () => {
 
     orch.beginTurn(Date.now());
     await grindThenRecover(orch);
-    expect(listRecoveryFindings(rt.storage.sql)).toEqual([]);
+    expect(listRecoveryFindings(rt.storage.sql, rt.actor)).toEqual([]);
     expect(orch.recoverySnapshot()).toBeNull();
   });
 
@@ -250,7 +291,7 @@ describe('the loop, through the production seams', () => {
     await grindThenRecover(orch);
     orch.beginTurn(Date.now());
     expect(orch.recoverySnapshot()).toBeNull();
-    expect(listRecoveryFindings(rt.storage.sql)).toHaveLength(1);
+    expect(listRecoveryFindings(rt.storage.sql, rt.actor)).toHaveLength(1);
   });
 });
 

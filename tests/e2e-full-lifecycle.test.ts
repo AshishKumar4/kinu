@@ -18,6 +18,7 @@ import {
   BUILTIN_TOOLS,
   collectStepText,
   createFactsStore,
+  openWorkspaceMainActor,
   readSoul,
   type AgentRuntime,
   type LLMProviderConfig,
@@ -77,7 +78,12 @@ const MEMORY_FACT = 'the project uses bun:sqlite for its database layer';
  */
 function storedMemoryFact(db: Database, memoryFile: string | null): string | null {
   if (memoryFile?.includes(MEMORY_FACT)) return 'memory/MEMORY.md';
-  const fact = createFactsStore(makeSql(db)).all()
+  // The workspace is reopened from disk here, so the actor whose facts these
+  // are has to be named the way an operator names it: the workspace's MAIN
+  // actor, issued through the production directory. That is the actor the
+  // session above drove.
+  const sql = makeSql(db);
+  const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
     .find((row) => JSON.stringify(row.value).includes(MEMORY_FACT));
   return fact ? `agent_facts[${fact.key}]` : null;
 }
@@ -114,8 +120,10 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+    VALUES (${rt.actor.actorId}, ${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
     userMessage,
@@ -291,11 +299,10 @@ describe('E2E Full Lifecycle', () => {
 
     const db2 = new Database(DB_PATH);
     const { rt: rt2, info } = await openWorkspaceCLI(db2, DB_PATH, { llm: LLM_CONFIG, hostRoot: null });
-    // Handed over BEFORE the assertions below, not after them. `db` is already
-    // closed, so a failing assertion used to leave every later step holding a
-    // dead handle: step 7 reported `bun:sqlite` prepare errors that had nothing
-    // to do with what it asserts, and the run showed three failures for one
-    // cause.
+    // Hand over the reopened database and runtime before any assertion can
+    // throw. Otherwise, an assertion failure leaves later steps holding the
+    // closed database: step 7 reports unrelated `bun:sqlite` prepare errors,
+    // making one cause appear as three failures.
     db = db2;
     rt = rt2;
 

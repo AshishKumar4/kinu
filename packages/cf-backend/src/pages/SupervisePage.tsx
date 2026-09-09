@@ -71,11 +71,10 @@ export interface SupervisePageProps {
 }
 
 /**
- * The background-jobs digest that used to close this page is gone. It was a
- * third rendering of one list — six rows and a "Manage in Jobs →" cross-link,
- * kept because the data was handy and because Jobs was hard to find. Jobs are
- * one glance in the RUN altitude's Work tab now, running beside the plan and
- * settled in the journal, so the crutch has nothing left to hold up.
+ * No background-jobs digest on this page: jobs are one glance in the RUN
+ * altitude's Work tab, running beside the plan and settled in the journal. A
+ * digest here would be a third rendering of one list — six rows and a "Manage
+ * in Jobs →" cross-link, handy data propping up a tab that is not hard to find.
  */
 export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
   return (

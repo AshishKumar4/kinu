@@ -12,7 +12,7 @@
  * WHOLE section is one string, and nine of Kinu's are conditional — plan mode,
  * the model family, whether `hire` is wired. Building those with `lines.push` put
  * the prose back in the bundle and left GEPA a fragment to optimise. So the
- * conditional is here, and the objection it used to carry ("an untyped string
+ * conditional is here, and the standing objection to one ("an untyped string
  * lookup that renders empty when it misses — the failure mode that already left
  * two mode overlays dead in the live prompt") is answered rather than avoided:
  * `{{#if flag}}` DECLARES a boolean slot exactly as `{{slot}}` declares a string

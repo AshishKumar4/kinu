@@ -20,17 +20,17 @@
  *   (the DO seam must cancel, because `streamText` fires eagerly).
  *
  * Envelope discipline: this transform owns the turn's single `done` event. The
- * delegated stream's `done` is absorbed — its `responseMessages` are what the
- * caller must persist — and text the scaffold produced itself (via
- * `host.llmStream`, outside any delegation) is carried back as one trailing
- * assistant message, so the durable history never loses the reply the user saw.
+ * default and custom model streams retain their actual SDK responseMessages.
+ * Extra scaffold-authored text is carried as a trailing assistant message;
+ * model text is not reconstructed into a second, lossy conversation.
  */
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { ChatEvent } from '../chat';
+import type { ActorTurnProgram } from '../orchestrator/actor-program';
 import { currentWorkMode } from '../execution/work-mode';
-import { JsonObjectSchema, projectJsonValue } from '../utils/json';
+import { JsonObjectSchema } from '../utils/json';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { renderToolResult } from '../prompts/evidence-window';
 import { FAILURE_WITHOUT_ERROR } from '../events/types';
@@ -49,6 +49,7 @@ const ModelMessagesSchema = v.custom<ModelMessage[]>((input) =>
 
 const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
   v.object({ type: v.literal('text-delta'), delta: v.string() }),
+  v.object({ type: v.literal('reasoning-delta'), delta: v.string() }),
   v.object({
     type: v.literal('tool-call'),
     toolName: v.string(),
@@ -81,14 +82,14 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
  * `defaultInference`, which this seam owns.
  */
 export function scaffoldChatTransform(opts: {
-  /** The agent's current scaffold version; <= 0 means un-evolved (bootstrap). */
-  currentVersion: number;
+  /** Prepared by the shared selected-source policy before this synchronous seam. */
+  program: ActorTurnProgram;
   /** The default turn the caller assembled — not yet started. */
   chat: AsyncIterable<ChatEvent>;
-  run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>;
+  run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
 }): AsyncIterable<ChatEvent> {
-  if (opts.currentVersion <= 0 || opts.run.workMode === 'plan' || currentWorkMode() === 'plan') return opts.chat;
-  return scaffoldTurn(opts.chat, opts.run);
+  if (opts.program.kind === 'builtin' || (opts.run.workMode ?? currentWorkMode()) === 'plan') return opts.chat;
+  return scaffoldTurn(opts.chat, { ...opts.run, scaffoldCodeOverride: opts.program.source });
 }
 
 async function* scaffoldTurn(
@@ -101,7 +102,7 @@ async function* scaffoldTurn(
   const toolNames = new Map<string, string>();
   let text = '';
   let nativeText = '';
-  let delegated: ModelMessage[] = [];
+  const responses: ModelMessage[] = [];
 
   for (;;) {
     const next = await pump.next();
@@ -113,14 +114,29 @@ async function* scaffoldTurn(
     }
     const ev = next.value;
     switch (ev.type) {
+      case 'model_chunk':
+      case 'chat_chunk': {
+        const inner = ev.chunk;
+        // Custom model calls retain their own onStep/spend owner; do not price
+        // their steps again as default-turn step_finish records.
+        if (ev.type === 'model_chunk' && inner.type === 'step-finish') break;
+        if (inner.type === 'done') {
+          responses.push(...inner.responseMessages);
+          if (!text.trim()) text = inner.text;
+        } else {
+          if (inner.type === 'text-delta') text += inner.delta;
+          yield inner;
+        }
+        break;
+      }
       case 'ui_chunk': {
-        // The delegated `runChat` stream, verbatim — except its `done`, whose
-        // response messages become ours (this seam owns the envelope).
+        // Authored JSON UI chunks retain the wire schema boundary; native
+        // default/model events above never pass through this codec.
         const parsed = v.safeParse(ChatEventSchema, ev.chunk);
         if (!parsed.success) break;
         const inner = parsed.output;
         if (inner.type === 'done') {
-          delegated = inner.responseMessages;
+          responses.push(...inner.responseMessages);
           if (!text.trim()) text = inner.text;
           break;
         }
@@ -168,13 +184,13 @@ async function* scaffoldTurn(
     type: 'done',
     text,
     responseMessages: nativeText.trim()
-      ? [...delegated, { role: 'assistant', content: nativeText }]
-      : delegated,
+      ? [...responses, { role: 'assistant', content: nativeText }]
+      : responses,
   };
 }
 
 async function* wrapDefaultChat(
   chat: AsyncIterable<ChatEvent>,
 ): AsyncGenerator<ScaffoldDefaultInferenceChunk> {
-  for await (const event of chat) yield { value: projectJsonValue({ value: event }) };
+  for await (const event of chat) yield { event };
 }

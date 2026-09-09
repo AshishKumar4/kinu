@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -226,8 +227,8 @@ describe('CLI cloud agent registry sync', () => {
       cwd: project,
       workspaceId: 'shop-floor',
     });
-    // So the scheduler's roster still holds it, which is what the mode flip
-    // used to destroy: placedRef requires mode 'local'.
+    // So the scheduler's roster still holds it, which a mode flip would
+    // destroy: `placedRef` requires mode 'local'.
     expect(parsed.placed.map((ref) => `${ref.name}@${ref.workspaceId}`)).toEqual(['shopbot@shop-floor']);
     expect(parsed.config.aliases).toEqual({ shop: 'shopbot' });
     // And the clash is reported rather than resolved by overwriting.
@@ -248,7 +249,7 @@ describe('virtual workspace grouping', () => {
     ...over,
   });
 
-  test('peers group by their {cwd, workspaceId} pair; legacy and cloud rows keep their own buckets', () => {
+  test('peers group by their {cwd, workspaceId} pair; unplaced and cloud rows keep their own buckets', () => {
     const grouped = groupAgentWorkspaces([
       row({ name: 'lead', mode: 'local', cwd: ROOT, workspaceId: 'shop' }),
       row({ name: 'writer', mode: 'local', cwd: ROOT, workspaceId: 'docs' }),
@@ -277,7 +278,7 @@ describe('virtual workspace grouping', () => {
 });
 
 describe('the sidebar roster for one directory', () => {
-  test('lists this project, unplaced legacy agents, and cloud refs — never another project, and never merged duplicates', () => {
+  test('lists this project, unplaced agents, and cloud refs — never another project, and never merged duplicates', () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
     const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-proj-')));
     const otherDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-other-')));
@@ -294,8 +295,7 @@ describe('the sidebar roster for one directory', () => {
     // source for a local agent. The other fixtures carry no title row, so
     // they list under their directory names.
     const oldbotDb = new Database(join(home, 'oldbot', 'agent.db'));
-    oldbotDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-    oldbotDb.exec(`INSERT INTO agent_config VALUES ('display_name', 'Old Bot')`);
+    createCLIRuntime(oldbotDb, { dbPath: oldbotDb.filename, llm: null, hostRoot: null, agentName: 'oldbot' }).actor.config.setDisplayName('Old Bot');
     oldbotDb.close();
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: {
@@ -347,7 +347,7 @@ describe('the sidebar roster for one directory', () => {
     expect(parsed.agents.map((agent) => `${agent.mode}:${agent.name}`)).toEqual([
       // This project's placed agents, ordered by workspace then name…
       'local:writer', 'local:fixer', 'local:lead',
-      // …then unplaced legacy workspaces (a cloud name collision stays separate)…
+      // …then unplaced workspaces (a cloud name collision stays separate)…
       'local:audit', 'local:oldbot', 'local:stray',
       // …then the account's cloud workspaces. `faraway` belongs to another project.
       'cloud:audit', 'cloud:jarvis',

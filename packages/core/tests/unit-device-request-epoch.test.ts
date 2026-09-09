@@ -2,12 +2,12 @@
  * KINU-N004: a device RPC id belongs to one isolate lifetime, not to a counter.
  *
  * The hub keeps one reverse socket per device, wrapped in one `DeviceTunnel`,
- * and the tunnel correlates a response purely by the id it carries. The id used
- * to be a bare instance-local counter — so a hub that was evicted and woken
- * rebuilt its tunnel with that counter back at zero WHILE a command it had
- * already given up waiting for was still running on the user's machine. When
- * that command finally answered, its id matched a pending call of the new
- * life, and one workspace read another's result.
+ * and the tunnel correlates a response purely by the id it carries. A bare
+ * instance-local counter cannot carry that correlation: a hub that is evicted
+ * and woken rebuilds its tunnel with the counter back at zero WHILE a command
+ * it had already given up waiting for is still running on the user's machine.
+ * When that command finally answers, its id matches a pending call of the new
+ * life, and one workspace reads another's result.
  *
  * `nextDeviceRequestId` therefore mints `rpc-<epoch>-<n>`, where the epoch is a
  * random value the woken isolate cannot reproduce. This file is the guard for

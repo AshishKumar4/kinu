@@ -39,8 +39,8 @@ describe('createHostShell', () => {
   test('returns when the COMMAND finishes, not when a backgrounded child does', async () => {
     // `sleep 20 &` inherits the stdout pipe this shell reads. The command
     // itself is over in milliseconds — `echo` runs, `sh` exits — so that is
-    // when the tool call has to come back. Measured before the fix: 20.3s for
-    // a command whose own work took ~5ms.
+    // when the tool call has to come back. Waiting on the inherited pipe
+    // instead measures 20.3s for a command whose own work took ~5ms.
     const shell = createHostShell(process.cwd());
     const started = Date.now();
     const result = await shell.exec('sleep 20 & echo started');
@@ -75,7 +75,7 @@ describe('createHostShell', () => {
   }, 40_000);
 
   test('output written before the command exits is not truncated by the early return', async () => {
-    // The failure mode the fix must not introduce: returning on `exit` instead
+    // The failure mode this must not introduce: returning on `exit` instead
     // of `close` is only correct if everything the command itself wrote is
     // still collected. A large write goes through the pipe in several chunks,
     // so this is where a naive early return loses bytes.

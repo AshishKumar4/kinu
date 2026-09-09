@@ -134,12 +134,12 @@ describe('a cloud workspace name the hub refuses', () => {
 });
 
 // Local workspace creation touches three planes — a directory, a database
-// carrying identity/schema/config/role, and the visible ref — and a failure
-// between them used to leave an `agent.db` nothing had a ref for, which the
-// duplicate-name check then refused to create again. These pin the one
-// authority that replaced that: `agent.db` exists if and only if the workspace
-// was published, so every earlier await boundary either publishes or leaves
-// nothing behind.
+// carrying identity/schema/config/role, and the visible ref — so a failure
+// between them could leave an `agent.db` nothing has a ref for, and the
+// duplicate-name check would then refuse to create that name again. These pin
+// the ONE authority that makes it impossible: `agent.db` exists if and only if
+// the workspace was published, so every earlier await boundary either
+// publishes or leaves nothing behind.
 const CreateStateSchema = v.object({
   db: v.boolean(),
   partial: v.boolean(),
@@ -262,7 +262,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       });
       const db = new Database(agentDbPath('published-ws'), { readonly: true });
       const identity = db.query('SELECT name FROM workspace_identity LIMIT 1').get();
-      const model = db.query("SELECT value FROM agent_config WHERE key = 'model'").get();
+      const model = db.query("SELECT value FROM actor_config WHERE key = 'model'").get();
       db.close();
       console.log(JSON.stringify({ identity: identity?.name, model: Boolean(model?.value) }));
       report('published-ws');
@@ -272,8 +272,8 @@ describe('local workspace creation publishes or leaves nothing', () => {
       result.stdout, v.object({ identity: v.string(), model: v.boolean() }),
     );
     // `workspace_identity.name` is the ADDRESS, so it is the slug and not the
-    // title beside it. It used to be whichever of the two was non-empty, which
-    // made `agentName()` answer with a title on every named workspace.
+    // title beside it. Take whichever of the two is non-empty and `agentName()`
+    // answers with a title on every named workspace.
     expect(contents).toEqual({ identity: 'published-ws', model: true });
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });

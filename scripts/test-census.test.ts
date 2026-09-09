@@ -268,7 +268,8 @@ describe('internal_mock versus external_seam_mock', () => {
   });
 
   test('SILENT: a spy at a platform global or a node builtin', () => {
-    // The 4-row false-positive class: the target used to be read off the callee.
+    // The 4-row false-positive class: a spy target read off the callee rather
+    // than off its first argument.
     const measured = measureFile(PROBE, `
       import { spyOn } from 'bun:test';
       import * as fs from 'node:fs';
@@ -429,8 +430,8 @@ describe('public_surface_entry', () => {
 
 describe('kind and test counting', () => {
   test('a table-driven suite counts its own test call sites, not its rows', () => {
-    // The `test.each` factory used to be counted as a test of its own, which
-    // made every table-driven suite read as assertion-free.
+    // Counting the `test.each` factory as a test of its own makes every
+    // table-driven suite read as assertion-free.
     const measured = measureFile(PROBE, `
       test.each([['a', 1], ['b', 2]])('%s maps to %d', (name, value) => {
         expect(map(name)).toBe(value);
@@ -587,21 +588,17 @@ describe('this repository', () => {
   });
 
   /**
-   * The never-run set, now EMPTY, and the fixture that used to hold one entry
-   * did exactly what its own note said it would.
+   * The never-run set, EMPTY.
    *
-   * It read `['scripts/test-census.test.ts']` — this census's own suite, which
-   * nothing in the ladder or in deploy.sh ran — and it recorded that wiring the
-   * census in was a decision for the review rather than for the commit that
-   * built it. That decision landed: `scripts/test-census.test.ts` is in the
-   * push tier's gate-tests row, in `deploy.sh`'s "Gate self-tests" line and in
-   * `deploy.test.ts`'s order pin, so its entry stopped reproducing and the
-   * fixture failed with the list to delete named in the diff.
+   * `scripts/test-census.test.ts` — this census's own suite — is claimed by the
+   * push tier's gate-tests row and `deploy.sh`'s "Gate self-tests" command,
+   * whose execution `deploy.test.ts` checks by set equality, so no suite in the
+   * corpus goes unclaimed.
    *
-   * The surviving assertion is red in the direction that matters: a suite that
-   * STOPS being executed appears here and fails by name. The other half of the
-   * old fixture — an entry that becomes claimed — has nothing left to describe,
-   * because an empty list cannot go stale.
+   * The assertion is red in the direction that matters: a suite that STOPS
+   * being executed appears here and fails by name. The reverse direction — an
+   * entry that becomes claimed — has nothing to describe, because an empty list
+   * cannot go stale.
    */
   const NEVER_RUN_TODAY: readonly string[] = [];
 

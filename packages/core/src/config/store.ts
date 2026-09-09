@@ -1,6 +1,6 @@
-// AgentConfigStore — typed accessors over the `agent_config` key/value table.
+// AgentConfigStore — typed accessors over the `actor_config` key/value table.
 //
-// Before this, 23 raw `SELECT ... FROM agent_config` / `INSERT OR REPLACE ...`
+// Before this, 23 raw `SELECT ... FROM actor_config` / `INSERT OR REPLACE ...`
 // sites were scattered across orchestrator.ts, runtime.ts, head-runtime.ts,
 // fork.ts. Adding a new tunable meant editing schema + 5 different files.
 //
@@ -106,12 +106,12 @@ export const AGENT_CONFIG_KEYS = {
 } as const;
 
 /**
- * The `agent_config` rows the shell-approval gate reads as live AUTHORIZATION
+ * The `actor_config` rows the shell-approval gate reads as live AUTHORIZATION
  * rather than as preference — `ShellApprovalPolicy.mode()` and `.granted()`
  * consult exactly these before deciding whether to ask the owner.
  *
  * Named as a set because one caller has to treat them as a class rather than as
- * two keys: a fork copies `agent_config` wholesale, and a remembered "always"
+ * two keys: a fork copies `actor_config` wholesale, and a remembered "always"
  * was granted against ONE workspace's history and one owner's reading of it.
  * The mode belongs in the same set — inheriting `allow_all` inherits the same
  * authority with the grants left implicit. A new key the gate learns to read
@@ -278,20 +278,26 @@ function unitInterval(key: string, value: number): number {
 }
 
 export function initAgentConfigTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
-    key TEXT PRIMARY KEY, value TEXT NOT NULL
+  execRaw(`CREATE TABLE IF NOT EXISTS actor_config (
+    actor_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (actor_id, key)
   )`);
 }
 
-export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
+export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {
   const get = (key: string): string | null => {
+    authorize();
     const rows = sql<{ value: string }>`
-      SELECT value FROM agent_config WHERE key = ${key} LIMIT 1`;
+      SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`;
     return rows[0]?.value ?? null;
   };
   const set = (key: string, value: string): void => {
-    void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+    authorize();
+    void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
+        ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
+  };
+  const remove = (key: string): void => {
+    authorize();
+    void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
   };
   /**
    * The role id lives in ONE `role_selection` row as the bare id.
@@ -313,10 +319,11 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
    *  counter means.
    */
   const increment = (key: string): number => {
+    authorize();
     const rows = sql<{ value: string }>`
-      INSERT INTO agent_config (key, value) VALUES (${key}, ${'1'})
-      ON CONFLICT(key) DO UPDATE SET value = CASE
-        WHEN CAST(agent_config.value AS REAL) > 0 THEN CAST(CAST(agent_config.value AS REAL) AS INTEGER) + 1
+      INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${'1'})
+      ON CONFLICT(actor_id, key) DO UPDATE SET value = CASE
+        WHEN CAST(actor_config.value AS REAL) > 0 THEN CAST(CAST(actor_config.value AS REAL) AS INTEGER) + 1
         ELSE 1 END
       RETURNING value`;
     return Number(rows[0]?.value ?? 1);
@@ -330,15 +337,16 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
   };
   const writeGrants = (grants: readonly ApprovalGrant[]): void => {
     const value = [...new Set(grants.map(formatApprovalGrant))].join(',');
-    if (value.length === 0) void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.shellApprovalGrants}`;
+    if (value.length === 0) remove(AGENT_CONFIG_KEYS.shellApprovalGrants);
     else set(AGENT_CONFIG_KEYS.shellApprovalGrants, value);
   };
   return {
     get,
     set,
-    delete(key) { void sql`DELETE FROM agent_config WHERE key = ${key}`; },
+    delete: remove,
     all() {
-      const rows = sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`;
+      authorize();
+      const rows = sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`;
       const out: Record<string, string> = {};
       for (const r of rows) out[r.key] = r.value;
       return out;
@@ -366,18 +374,17 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
+      authorize();
       void sql`
-        INSERT INTO agent_config (key, value) VALUES
-          (${AGENT_CONFIG_KEYS.displayName}, ${name}),
-          (${AGENT_CONFIG_KEYS.nameOrigin}, ${origin})
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        INSERT INTO actor_config (actor_id, key, value) VALUES
+          (${actorId}, ${AGENT_CONFIG_KEYS.displayName}, ${name}),
+          (${actorId}, ${AGENT_CONFIG_KEYS.nameOrigin}, ${origin})
+        ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value
       `;
     },
     getRoleSelection: readRoleSelection,
     setRoleSelection(roleId) {
-      void sql`INSERT INTO agent_config (key, value)
-        VALUES (${AGENT_CONFIG_KEYS.roleSelection}, ${roleId})
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
+      set(AGENT_CONFIG_KEYS.roleSelection, roleId);
     },
     getAssignedTier(): TierId | null {
       const stored = get(AGENT_CONFIG_KEYS.assignedTier);
@@ -388,7 +395,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     setAssignedTier(tier) {
       if (tier === null) {
-        void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.assignedTier}`;
+        remove(AGENT_CONFIG_KEYS.assignedTier);
         return;
       }
       if (!isTierId(tier)) throw new Error(`Invalid assigned tier: ${String(tier)}`);
@@ -464,7 +471,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     setAlwaysActiveSkills(names) {
       const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
-      if (v.length === 0) void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
+      if (v.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
       else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
     },
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
@@ -481,7 +488,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setAutoGepaEveryNTurns(n) {
-      // Persist 0 explicitly — unset now means "autonomous default", so a
+      // Persist 0 explicitly — unset means "autonomous default", so a
       // deliberate disable must stick as a stored value.
       const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
       set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));

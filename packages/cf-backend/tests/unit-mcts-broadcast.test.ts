@@ -70,10 +70,15 @@ function seedNode(
     task?: string; observation?: string;
   },
 ): void {
+  // A node belongs to the actor whose tree it is, and `broadcastMctsProgress`
+  // reads through `actorHandle()` — so the seed writes under the very handle
+  // the agent will read back with. A different one is not an error here: the
+  // scoped read would simply answer nothing and the payload would go missing.
   harness.db.prepare(
-    `INSERT INTO search_nodes (id, parent_id, root_id, task, action, observation, code_used, depth, visits, value, status, created_at)
-     VALUES (?, ?, ?, ?, 'action', ?, NULL, ?, ?, 0.5, 'open', ?)`,
+    `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, code_used, depth, visits, value, status, created_at)
+     VALUES (?, ?, ?, ?, ?, 'action', ?, NULL, ?, ?, 0.5, 'open', ?)`,
   ).run(
+    harness.agent.observeRuntime().actor.actorId,
     node.id,
     node.parent ?? null,
     node.root,
@@ -124,6 +129,7 @@ describe('broadcastMctsProgress', () => {
       mode: 'build',
       inheritedContext: [],
       budget: { maxDepth: 0, spawnedAt: 1_020 },
+      loop: { kind: 'inherit' },
       mergeStrategy: 'synthesize',
     });
 

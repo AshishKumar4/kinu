@@ -55,8 +55,8 @@ export async function storeProviderSecret(opts: {
   } catch (err) {
     // Deliberately not falling back to disk: the user asked for account
     // storage, and writing the secret somewhere they did not choose is the
-    // surprise this whole change exists to remove. Say what happened and what
-    // to do about it, and leave nothing behind.
+    // surprise this refusal prevents. Say what happened and what to do about
+    // it, and leave nothing behind.
     throw new Error(
       `Your Kinu account did not accept the key (${renderThrownChain({ cause: err })}). `
       + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',

@@ -4,11 +4,11 @@
  * What has to happen before {@link snapshotWorkspaceForFork} runs, and after
  * it: refuse to cut a workspace mid-turn, resolve and validate the fork's name,
  * refuse to overwrite a name someone already asked for, ship the snapshot, and
- * report where it landed. None of that is Durable-Object-shaped — it was
- * written as a DO method, which is why a fork existed on exactly one backend
- * and why the payload's query set had a second, hand-maintained transcription
- * (a SqlExecutor shim answering the exact SELECTs the copy issues) living
- * beside it. Core owns both ends of the query set now, so the shim is gone.
+ * report where it landed. None of that is Durable-Object-shaped, so none of it
+ * lives in a DO: written as a DO method, a fork exists on exactly one backend
+ * and the payload's query set needs a second, hand-maintained transcription
+ * beside it — a SqlExecutor answering the exact SELECTs the copy issues. Core
+ * owns both ends of the query set, so there is exactly one transcription.
  *
  * What a backend supplies is a {@link ForkTransport}: how to reach a workspace
  * that does not exist yet. On Cloudflare that is a Durable Object addressed by
@@ -19,6 +19,7 @@
 import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { ForkFileSource } from './fork-transfer';
 
 /**
@@ -54,6 +55,11 @@ export interface ForkDriverDeps {
   readonly vfs: ForkFileSource;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
+  /** The actor whose transcript is being cut. The fork point is looked up in
+   *  THIS actor's rows: a workspace database holds every actor it issued, and
+   *  message ids are minted per actor, so an unscoped preflight would admit a
+   *  cut at a sibling's message and then snapshot an empty chain. */
+  readonly actor: ActorHandle;
   transport: ForkTransport;
   /** The source workspace's name, the stem of a generated fork name. */
   sourceName: string;
@@ -89,7 +95,7 @@ export async function forkWorkspace(
     throw new Error('agent busy, retry when current turn finishes');
   }
 
-  if (!forkPointExists(deps.sql, untilMessageId)) {
+  if (!forkPointExists(deps.sql, deps.actor, untilMessageId)) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
 

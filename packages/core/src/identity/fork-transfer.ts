@@ -36,9 +36,11 @@ import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor, VFS } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
+import { openWorkspaceMainActor } from '../state/workspace-actors';
 import {
   ancestryIds,
   messageRowById,
@@ -254,6 +256,9 @@ export type ForkFileSource = VFS & Pick<VfsNativeReads, 'readRange'>;
 /** Inputs the source half needs to read one workspace into fork frames. */
 export interface ForkTransferSource {
   sql: SqlExecutor;
+  /** Whose conversation is being forked. The pane rows are keyed on the owner,
+   *  so a snapshot taken without one would carry a sibling's transcript. */
+  actor: ActorHandle;
   vfs: ForkFileSource;
   untilMessageId: string;
   transferId: string;
@@ -293,11 +298,12 @@ function messagePayloadBytes(row: ForkMessageRow): number {
 
 
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
+  const actor = openWorkspaceMainActor(sql);
   let rowid = 0;
   for (;;) {
     const row = sql<ForkConfigRow & { rowid: number }>`
-      SELECT rowid, key, value FROM agent_config
-      WHERE rowid > ${rowid}
+      SELECT rowid, key, value FROM actor_config
+      WHERE actor_id = ${actor.actorId} AND rowid > ${rowid}
       ORDER BY rowid ASC LIMIT 1
     `[0];
     if (row === undefined) return;
@@ -339,16 +345,18 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
   }
 }
 
-async function* paneRows(sql: SqlExecutor, ids: string[]): AsyncGenerator<ForkPaneRow> {
+async function* paneRows(
+  sql: SqlExecutor, actor: ActorHandle, ids: string[],
+): AsyncGenerator<ForkPaneRow> {
   for (const id of ids) {
-    const row = paneRowById(sql, id);
+    const row = paneRowById(sql, actor, id);
     if (row !== undefined) yield row;
   }
 }
 
-async function* messageRows(sql: SqlExecutor, ids: string[]): AsyncGenerator<ForkMessageRow> {
+async function* messageRows(sql: SqlExecutor, actor: ActorHandle, ids: string[]): AsyncGenerator<ForkMessageRow> {
   for (const id of ids) {
-    const row = messageRowById(sql, id);
+    const row = messageRowById(sql, actor, id);
     if (row !== undefined) yield row;
   }
 }
@@ -368,7 +376,8 @@ export async function* forkTransferFrames(
     throw new RangeError('fork frameBytes must be a positive finite number');
   }
 
-  const ancestry = ancestryIds(source.sql, source.untilMessageId);
+  const actor = openWorkspaceMainActor(source.sql);
+  const ancestry = ancestryIds(source.sql, actor, source.untilMessageId);
   if (ancestry.ids.length === 0) {
     throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
   }
@@ -376,7 +385,7 @@ export async function* forkTransferFrames(
   for await (const path of forkFilePaths(source.vfs)) filePaths.push(path);
 
   const counts: ForkSectionCounts = {
-    agentConfig: source.sql<{ key: string }>`SELECT key FROM agent_config`
+    agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actor.actorId}`
       .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
     craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
     memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
@@ -393,13 +402,13 @@ export async function* forkTransferFrames(
   }
   let createdAtMs: number;
   if (ancestry.authority === 'pane') {
-    const row = paneRowById(source.sql, lastId);
+    const row = paneRowById(source.sql, source.actor, lastId);
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
     }
     createdAtMs = paneStampMs(row.created_at);
   } else {
-    const row = messageRowById(source.sql, lastId);
+    const row = messageRowById(source.sql, actor, lastId);
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
     }
@@ -466,7 +475,7 @@ export async function* forkTransferFrames(
         break;
       case 'assistantMessages':
         if (ancestry.authority === 'pane') yield* yieldRows(
-          paneRows(source.sql, ancestry.ids), panePayloadBytes, (rows) => seal({
+          paneRows(source.sql, source.actor, ancestry.ids), panePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'assistantMessages', rows,
           }),
@@ -475,13 +484,13 @@ export async function* forkTransferFrames(
       case 'messages':
         if (ancestry.authority === 'pane') {
           yield* yieldRows((async function* (): AsyncGenerator<ForkMessageRow> {
-            for await (const row of paneRows(source.sql, ancestry.ids)) yield paneRowToForkChainRow(row);
+            for await (const row of paneRows(source.sql, source.actor, ancestry.ids)) yield paneRowToForkChainRow(row);
           })(), messagePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'messages', rows,
           }));
         } else {
-          yield* yieldRows(messageRows(source.sql, ancestry.ids), messagePayloadBytes, (rows) => seal({
+          yield* yieldRows(messageRows(source.sql, actor, ancestry.ids), messagePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'messages', rows,
           }));

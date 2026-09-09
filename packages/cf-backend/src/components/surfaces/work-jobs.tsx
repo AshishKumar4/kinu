@@ -31,10 +31,9 @@ function statusMeta(status: BackgroundJob["status"]) {
 /**
  * What a running job's card says about having been interrupted.
  *
- * A job that was evicted and re-driven used to say nothing at all: the count was
- * durable the whole time and appeared nowhere a reader could see it, so the only
- * thing that ever mentioned an interruption was the give-up that ended the work.
- * The give-up is gone; this is what replaces it.
+ * The resume count is durable, and without this note it appears nowhere a
+ * reader can see: a job that was evicted and re-driven says nothing at all
+ * about it, and no give-up ends the work to mention it either.
  *
  * Null when there is nothing to say, so an ordinary job's card is unchanged.
  */

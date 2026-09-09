@@ -517,11 +517,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 /* ── File tree ───────────────────────────────────────────────────── */
 
 /**
- * The tree carries FILES as well as folders. It used to drop every file entry
- * when it recursed, so the one persistent navigation pane in the surface could
- * never reach a file — the drive looked like a folder-only view of a plane that
- * had always answered with both kinds. A folder navigates; a file opens in the
- * preview pane, the same thing a listing row does.
+ * The tree carries FILES as well as folders. Dropping file entries on recursion
+ * leaves the one persistent navigation pane in the surface unable to reach a
+ * file — a folder-only view of a plane that answers with both kinds. A folder
+ * navigates; a file opens in the preview pane, the same thing a listing row
+ * does.
  */
 function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badgeFor, onNavigate, onOpenFile, onToggle }: {
   dir: string;

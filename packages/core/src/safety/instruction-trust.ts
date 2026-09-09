@@ -28,12 +28,12 @@
  * sweep, no watcher, no mtime cache and no TTL to get wrong.
  *
  * A revocation is kept rather than deleted. `revoked` is the owner's standing
- * answer, so a one-time grandfather can never resurrect a file the owner has
- * already refused.
+ * answer, so the refusal outlives the bytes it was made about.
  */
 
 import { argumentDigest } from './argument-digest';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import * as v from 'valibot';
 
 export type {
@@ -41,9 +41,9 @@ export type {
 } from '../types/instruction-trust';
 import type { VerifiedInstructionTrust } from '../types/instruction-trust';
 
-/** The owner's standing answer for one path. `grandfathered` is a migration
- *  decision, read exactly like `approved` and written only by the one-time
- *  carry-over; `revoked` is kept on purpose so nothing can re-grant it. */
+/** The owner's standing answer for one path. `grandfathered` is a stored answer
+ *  from the removed one-time carry-over, read exactly like `approved`; no code
+ *  writes it. `revoked` is kept on purpose so nothing can re-grant it. */
 export type InstructionDecision = 'approved' | 'grandfathered' | 'revoked';
 
 const DECISION = v.picklist(['approved', 'grandfathered', 'revoked']);
@@ -54,14 +54,6 @@ export interface InstructionApproval {
   readonly digest: string;
   readonly decision: InstructionDecision;
 }
-
-/** One migration-time content address. Raw source bytes are hashed while read,
- * then released before the atomic baseline write. */
-export interface InstructionMigrationEntry {
-  readonly path: string;
-  readonly digest: string;
-}
-
 /**
  * The digest an approval binds.
  *
@@ -77,14 +69,12 @@ export function instructionDigest(content: string): string {
 
 export function initInstructionApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS instruction_approvals (
+    actor_id TEXT NOT NULL,
     scope    TEXT NOT NULL,
     path     TEXT NOT NULL,
     digest   TEXT NOT NULL,
     decision TEXT NOT NULL CHECK (decision IN ('approved', 'grandfathered', 'revoked')),
-    PRIMARY KEY (scope, path)
-  )`);
-  execRaw(`CREATE TABLE IF NOT EXISTS instruction_approval_migrations (
-    scope TEXT PRIMARY KEY
+    PRIMARY KEY (actor_id, scope, path)
   )`);
 }
 
@@ -138,19 +128,31 @@ export function trustOfInstructionApprovals(
  * the cloud, the discovery root on a local CLI. It is part of the key so a
  * database that ever serves two workspaces cannot lend one's approvals to the
  * other, and so a copied or forked workspace starts unapproved.
+ *
+ * The ACTOR leads that key. One physical database now holds every logical actor
+ * of a workspace, and they share a scope while emphatically not sharing trust:
+ * a hired subordinate reads its own instruction files, and the owner approving
+ * a skill for the root is not the owner approving it for a temporary the root
+ * spawned. A fresh actor therefore starts with no decisions at all: every
+ * discovered file is unverified until the owner approves its exact digest.
  */
 export class InstructionApprovalStore {
+  private readonly actorId: string;
+
   constructor(
     private readonly sql: SqlExecutor,
+    private readonly actor: ActorHandle,
     private readonly scope: string,
-    private readonly transaction: <T>(body: () => T) => T,
-  ) {}
+  ) {
+    this.actorId = actor.actorId;
+  }
 
   /** The standing decision for this path, whatever bytes it was made about. */
   get(path: string): InstructionApproval | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
-      WHERE scope = ${this.scope} AND path = ${path} LIMIT 1`;
+      WHERE actor_id = ${this.actorId} AND scope = ${this.scope} AND path = ${path} LIMIT 1`;
     return rows[0] ? toApproval(rows[0]) : null;
   }
 
@@ -165,78 +167,32 @@ export class InstructionApprovalStore {
    *  changed file moves the digest, which is what makes an edit re-approvable
    *  without first clearing the old answer. */
   approve(path: string, digest: string): void {
+    this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (scope, path, digest, decision)
-      VALUES (${this.scope}, ${path}, ${digest}, 'approved')
-      ON CONFLICT (scope, path)
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, ${digest}, 'approved')
+      ON CONFLICT (actor_id, scope, path)
         DO UPDATE SET digest = ${digest}, decision = 'approved'`;
   }
 
-  /**
-   * Carry the workspace's pre-trust instruction files over exactly once.
-   *
-   * This is deliberately NOT a discovery-time fallback. A first-seen fallback
-   * lets an agent create a new path after upgrade and have its own bytes enter
-   * system placement as "grandfathered". Call this once before the first turn,
-   * snapshotting the paths that exist at migration time, then persist the marker.
-   * Every path discovered after that marker starts unverified until the owner
-   * approves its exact digest.
-   *
-   * Existing approval rows win. The migration may resume after a process dies
-   * between rows, so inserts are idempotent; the marker is written last, after
-   * every baseline row has landed.
-   */
-  grandfatherExisting(entries: ReadonlyArray<InstructionMigrationEntry>): void {
-    this.transaction(() => {
-      const migrated = this.sql<{ scope: string }>`
-        SELECT scope FROM instruction_approval_migrations WHERE scope = ${this.scope} LIMIT 1`;
-      if (migrated.length > 0) return;
-
-      const seen = new Set<string>();
-      for (const entry of entries) {
-        if (seen.has(entry.path)) continue;
-        seen.add(entry.path);
-        void this.sql`
-          INSERT INTO instruction_approvals (scope, path, digest, decision)
-          VALUES (${this.scope}, ${entry.path}, ${entry.digest}, 'grandfathered')
-          ON CONFLICT (scope, path) DO NOTHING`;
-      }
-      void this.sql`
-        INSERT INTO instruction_approval_migrations (scope)
-        VALUES (${this.scope})
-        ON CONFLICT (scope) DO NOTHING`;
-    });
-  }
-
-  /** A fork copies writable files but not the owner's approval authority. Mark
-   * the target migrated with no rows before it is published, so copied paths
-   * start unverified instead of being mistaken for a legacy baseline. */
-  markMigratedEmpty(): void {
-    this.transaction(() => {
-      void this.sql`
-        INSERT INTO instruction_approval_migrations (scope)
-        VALUES (${this.scope})
-        ON CONFLICT (scope) DO NOTHING`;
-    });
-  }
-
-
   /** The owner withdraws trust from a path. The row STAYS, holding the refusal,
-   *  so the file drops to `unverified` and no later carry-over can re-grant it
-   *  without the owner saying so again. */
+   *  so the file drops to `unverified` and only a fresh owner approval can
+   *  grant it again. */
   revoke(path: string): void {
+    this.actor.assertCurrent();
     void this.sql`
-      INSERT INTO instruction_approvals (scope, path, digest, decision)
-      VALUES (${this.scope}, ${path}, '', 'revoked')
-      ON CONFLICT (scope, path) DO UPDATE SET decision = 'revoked'`;
+      INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES (${this.actorId}, ${this.scope}, ${path}, '', 'revoked')
+      ON CONFLICT (actor_id, scope, path) DO UPDATE SET decision = 'revoked'`;
   }
 
   /** Every standing decision in this scope — what the owner's approval surface
    *  lists beside the files discovery actually found. */
   list(): InstructionApproval[] {
+    this.actor.assertCurrent();
     return this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
-      WHERE scope = ${this.scope} ORDER BY path`.map(toApproval);
+      WHERE actor_id = ${this.actorId} AND scope = ${this.scope} ORDER BY path`.map(toApproval);
   }
 }
 

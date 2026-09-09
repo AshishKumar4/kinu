@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/memory/facts.ts b/packages/core/src/memory/facts.ts
-index 103e9eac4..b32133370 100644
+index 987ce6ea8..633f05330 100644
 --- a/packages/core/src/memory/facts.ts
 +++ b/packages/core/src/memory/facts.ts
-@@ -80,7 +80,7 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
-   return {
+@@ -108,7 +108,7 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
      upsert(key, value, opts = {}) {
+       authorize();
        const canonical = normalizeFactKey(key);
 -      const raw = opts.confidence ?? 1;
 +      const raw = opts.confidence ?? 0;

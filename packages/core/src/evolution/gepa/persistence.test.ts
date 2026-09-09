@@ -4,10 +4,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from '../../../tests/helpers';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
   runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,
 } from './index';
@@ -16,7 +17,10 @@ function setup() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   initGepaTables(execRaw);
-  return { sql: makeSql(db), execRaw, db };
+  const sql = makeSql(db);
+  // Every gepa row is one actor's: the run ledger, the candidates and the front
+  // are all keyed on the owner, so the fixture issues a real bound handle.
+  return { sql, execRaw, db, actor: testActorHandle(sql) };
 }
 
 function mkCandidate(id: string, source: string, scores: Record<string, number>): GepaCandidate {
@@ -44,20 +48,20 @@ describe('initGepaTables', () => {
 
 describe('startGepaRun + finishGepaRun', () => {
   test('round-trips run metadata', () => {
-    const { sql } = setup();
-    const runId = startGepaRun(sql, {
+    const { sql, actor } = setup();
+    const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       targetRef: null,
       budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 2 },
     });
     expect(runId).toMatch(/^gepa-/);
 
-    let runs = listGepaRuns(sql);
+    let runs = listGepaRuns(sql, actor);
     expect(runs.length).toBe(1);
     expect(runs[0].status).toBe('running');
     expect(runs[0].target).toBe('scaffold');
 
-    finishGepaRun(sql, {
+    finishGepaRun(sql, actor, {
       runId,
       status: 'completed',
       stopReason: 'iterations_exhausted',
@@ -66,7 +70,7 @@ describe('startGepaRun + finishGepaRun', () => {
       iterations: 5,
     });
 
-    runs = listGepaRuns(sql);
+    runs = listGepaRuns(sql, actor);
     expect(runs[0].status).toBe('completed');
     expect(runs[0].stopReason).toBe('iterations_exhausted');
     expect(runs[0].winnerId).toBe('c1');
@@ -78,15 +82,15 @@ describe('startGepaRun + finishGepaRun', () => {
 
 describe('persistGepaCandidate + loadGepaCandidates', () => {
   test('round-trips scores Map and feedback Map verbatim', () => {
-    const { sql } = setup();
-    const runId = startGepaRun(sql, {
+    const { sql, actor } = setup();
+    const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1 },
     });
     const cand = mkCandidate('c1', 'source-1', { i1: 0.7, i2: 0.3 });
-    persistGepaCandidate(sql, { runId, candidate: cand, iteration: 0, accepted: true });
+    persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
 
-    const loaded = loadGepaCandidates(sql, runId);
+    const loaded = loadGepaCandidates(sql, actor, runId);
     expect(loaded.length).toBe(1);
     expect(loaded[0].id).toBe('c1');
     expect(loaded[0].source).toBe('source-1');
@@ -97,26 +101,26 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
   });
 
   test('orders by iteration then created_at', () => {
-    const { sql } = setup();
-    const runId = startGepaRun(sql, {
+    const { sql, actor } = setup();
+    const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 1 },
     });
     const seed = mkCandidate('seed', 'src-0', { i1: 0.5 });
     const it1 = mkCandidate('it1', 'src-1', { i1: 0.6 });
     const it2 = mkCandidate('it2', 'src-2', { i1: 0.7 });
-    persistGepaCandidate(sql, { runId, candidate: seed, iteration: 0, accepted: true });
-    persistGepaCandidate(sql, { runId, candidate: it1, iteration: 1, accepted: true });
-    persistGepaCandidate(sql, { runId, candidate: it2, iteration: 2, accepted: true });
-    const loaded = loadGepaCandidates(sql, runId);
+    persistGepaCandidate(sql, actor, { runId, candidate: seed, iteration: 0, accepted: true });
+    persistGepaCandidate(sql, actor, { runId, candidate: it1, iteration: 1, accepted: true });
+    persistGepaCandidate(sql, actor, { runId, candidate: it2, iteration: 2, accepted: true });
+    const loaded = loadGepaCandidates(sql, actor, runId);
     expect(loaded.map(c => c.id)).toEqual(['seed', 'it1', 'it2']);
   });
 });
 
 describe('loadGepaParetoFront — the derived front', () => {
   test('derives the per-instance front from accepted candidates alone', () => {
-    const { sql } = setup();
-    const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
+    const { sql, actor } = setup();
+    const runId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
     // A specialist per instance: neither dominates the other. The old
     // membership table stored this shape after every iteration; the
     // derivation must reproduce it from scores_json with no stored
@@ -124,10 +128,10 @@ describe('loadGepaParetoFront — the derived front', () => {
     const a = mkCandidate('a', 'src-a', { i1: 0.9, i2: 0.3 });
     const b = mkCandidate('b', 'src-b', { i1: 0.3, i2: 0.9 });
     for (const cand of [a, b]) {
-      persistGepaCandidate(sql, { runId, candidate: cand, iteration: 0, accepted: true });
+      persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
     }
 
-    expect(loadGepaParetoFront(sql, runId)).toEqual([
+    expect(loadGepaParetoFront(sql, actor, runId)).toEqual([
       { candidateId: 'a', instanceId: 'i1', score: 0.9 },
       { candidateId: 'b', instanceId: 'i1', score: 0.3 },
       { candidateId: 'a', instanceId: 'i2', score: 0.3 },
@@ -136,25 +140,23 @@ describe('loadGepaParetoFront — the derived front', () => {
   });
 
   test('an empty or absent run yields an empty front', () => {
-    const { sql } = setup();
-    expect(loadGepaParetoFront(sql, 'gepa-none')).toEqual([]);
+    const { sql, actor } = setup();
+    expect(loadGepaParetoFront(sql, actor, 'gepa-none')).toEqual([]);
   });
 });
 
-describe('runGepa with makePersistingHook end-to-end', () => {
+describe('runGepa with makePersistingHooks end-to-end', () => {
   test('every accepted candidate ends up in gepa_candidates + run counters update', async () => {
-    const { sql } = setup();
+    const { sql, actor } = setup();
     const evalSet: EvalInstance<string>[] = [
       { id: 'i1', input: 'a' }, { id: 'i2', input: 'b' },
     ];
-    const runId = startGepaRun(sql, {
+    const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
     });
 
-    // Seed: persist before the loop.
-    const persisted = new Set<string>();
-    const hook = makePersistingHook({ sql, runId, persisted });
+    const hooks = makePersistingHooks({ sql, actor, runId });
 
     let lmCall = 0;
     const reflectionLm = async () => { lmCall++; return `improved-${lmCall}`; };
@@ -169,10 +171,10 @@ describe('runGepa with makePersistingHook end-to-end', () => {
       metric,
       reflectionLm,
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
-      onIteration: hook,
+      ...hooks,
     });
 
-    finishGepaRun(sql, {
+    finishGepaRun(sql, actor, {
       runId,
       status: 'completed',
       stopReason: result.stopReason,
@@ -181,12 +183,35 @@ describe('runGepa with makePersistingHook end-to-end', () => {
       iterations: result.iterationsRun,
     });
 
-    const loaded = loadGepaCandidates(sql, runId);
+    const loaded = loadGepaCandidates(sql, actor, runId);
     // Seed + at least one improvement
     expect(loaded.length).toBeGreaterThanOrEqual(2);
-    const runs = listGepaRuns(sql);
+    const runs = listGepaRuns(sql, actor);
     expect(runs[0].metricCalls).toBe(result.metricCallsUsed);
     expect(runs[0].winnerId).toBe(result.winner.id);
     expect(runs[0].status).toBe('completed');
   });
+});
+
+test('a fully measured seed is retained before the first reflection measurement can fail', async () => {
+  const { sql, actor } = setup();
+  const runId = startGepaRun(sql, actor, { target: 'scaffold' });
+  const hooks = makePersistingHooks({ sql, actor, runId });
+  const iterations: number[] = [];
+  const failure = new Error('first reflection measurement failed');
+  let calls = 0;
+  await expect(runGepa({ seed: 'seed', evalSet: [{ id: 'one', input: 'task' }],
+    metric: async () => {
+      if (++calls === 2) throw failure;
+      return { score: 0.7, feedback: 'fully measured seed' };
+    },
+    reflectionLm: async () => 'candidate',
+    ...hooks,
+    onIteration: state => { iterations.push(state.iteration); return hooks.onIteration(state); },
+    budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
+  })).rejects.toBe(failure);
+  expect(iterations).toEqual([]);
+  const candidates = loadGepaCandidates(sql, actor, runId);
+  expect(candidates.map(candidate => ({ source: candidate.source, score: candidate.aggregateScore,
+    measured: Object.fromEntries(candidate.scores) }))).toEqual([{ source: 'seed', score: 0.7, measured: { one: 0.7 } }]);
 });

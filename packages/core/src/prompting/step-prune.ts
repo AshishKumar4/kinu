@@ -17,11 +17,21 @@
  *  - messages are NEVER removed or reordered (step-injection indices, ledger
  *    positions, and tool-call/result pairing all depend on the count) — only
  *    tool-result part CONTENT shrinks, in place;
- *  - deterministic and byte-stable: the truncated form is a pure function of
- *    the part's content, and the protected set only ever moves forward as new
- *    results arrive, so a part that was truncated at step N re-truncates
- *    IDENTICALLY at step N+1 and later steps' prompt prefixes stay
- *    cache-stable;
+ *  - deterministic: the truncated form is a pure function of the part's
+ *    content, so a part truncated at step N re-truncates to identical bytes at
+ *    step N+1;
+ *  - BATCHED, which is what makes those identical bytes worth anything. The
+ *    SDK rebuilds every step's array from the ORIGINAL history, so this pass
+ *    never sees its own previous output and the total it measures grows for
+ *    the whole turn. A pass therefore has to decide the boundary afresh each
+ *    step, and a boundary that moved by one result per step re-prefilled
+ *    everything after it: measured against a Sonnet window (200k/64k → 136k)
+ *    with 24k-char results, the pass first fired at step 22 and then fired on
+ *    all 18 remaining steps, rewriting 72-77% of every request while a cache
+ *    write costs ~12x a cache read. The boundary is quantized to
+ *    {@link stepPruneBatchTokens} instead, so it holds still until a whole
+ *    batch of new output has arrived and the requests in between are pure
+ *    extensions of one another;
  *  - idempotent: an already-truncated output is under the size threshold and
  *    is never re-truncated.
  */
@@ -32,11 +42,15 @@ import { renderThrownChain } from '../obs/index';
 /**
  * The window one request occupies, and how much of it the answer may take.
  *
- * `modelOutputLimit` is the per-call configured output cap when the caller set
- * one — the same number the provider is sent (llm.ts) — and otherwise the
- * resolved model's catalog maximum (ModelCatalogSession.modelOutputLimit). It
- * is a SHARE of `contextWindow`, not capacity beside it: a chat model's window
- * holds the instruction and the answer together.
+ * `modelOutputLimit` is the resolved model's catalog maximum
+ * (ModelCatalogSession.modelOutputLimit), and only ever that. No caller
+ * configures a per-call output cap — a reasoning model spends its budget
+ * thinking before it emits anything, so `llm.ts` sets none and a gate keeps
+ * the SDK's cap option out of every production source
+ * (cf-backend/tests/unit-turn-pipeline-correctness.test.ts, "no production
+ * source names an output-token cap"). It is a SHARE of `contextWindow`, not
+ * capacity beside it: a chat model's window holds the instruction and the
+ * answer together.
  */
 export interface ModelWindow {
   readonly contextWindow: number;
@@ -81,9 +95,23 @@ export function stepContextLimit(limits: ModelWindow): number {
   return Math.max(0, Math.floor(limits.contextWindow)) - outputReserveTokens(limits);
 }
 
-/** Newest tool results kept untouched, by estimated token cost — mirrors the
- *  compaction ladder's RECENT_TOOL_RESULT_BUDGET_TOKENS. */
-export const STEP_RECENT_TOOL_BUDGET_TOKENS = 40_000;
+/**
+ * The quantum a pass frees, and therefore how much new tool output has to
+ * arrive before the next pass moves the boundary again.
+ *
+ * A SHARE of the allocation rather than a token count: a fixed number is a
+ * no-op against a 1M window and clears the whole array on a 32k one. A
+ * quarter leaves the request within one quarter of its allocation after a
+ * pass — so three quarters of the window is still verbatim recent output,
+ * more than the fixed 40k window this replaced ever protected — and buys a
+ * quarter of the window's worth of steps before the boundary has to move.
+ *
+ * Never zero: a window too small to batch still frees something rather than
+ * looping over a target it can never meet.
+ */
+function stepPruneBatchTokens(limits: ModelWindow): number {
+  return Math.max(1, Math.floor(stepContextLimit(limits) / 4));
+}
 
 /** Head snippet kept from a pruned output. */
 const PRUNED_OUTPUT_HEAD_CHARS = 2_000;
@@ -110,6 +138,14 @@ type ToolPart = ToolModelMessage['content'][number];
  * Shrink old tool-result outputs when the step context is over budget.
  * Returns a new array with replaced parts (untouched messages keep their
  * object identity), or `undefined` when under budget or nothing shrinkable.
+ *
+ * The amount freed is the overage rounded UP to a whole
+ * {@link stepPruneBatchTokens}. That rounding is the whole point: the overage
+ * grows by one tool result per step, so a pass that freed exactly the overage
+ * would move the boundary — and re-prefill everything after it — on every
+ * step of the turn. Rounded, the target is constant until the overage crosses
+ * the next batch line, so the same results are truncated to the same bytes
+ * and each request in between is a literal extension of the last.
  */
 export function pruneStepToolOutputs(
   messages: readonly ModelMessage[],
@@ -120,34 +156,47 @@ export function pruneStepToolOutputs(
 
   let total = budget.reservedTokens ?? 0;
   for (const message of messages) total += estimateMessageTokens(message);
-  if (total <= limit) return undefined;
+  const over = total - limit;
+  if (over <= 0) return undefined;
 
-  const protectedResults = collectProtectedResults(messages);
+  const batch = stepPruneBatchTokens(budget);
+  const target = Math.ceil(over / batch) * batch;
+  const doomed = resultsToTruncate(messages, target);
+  if (doomed.size === 0) return undefined;
   let changed = false;
   const next = messages.map((message) => {
-    const rebuilt = pruneMessage(message, protectedResults);
+    const rebuilt = pruneMessage(message, doomed);
     if (rebuilt !== message) changed = true;
     return rebuilt;
   });
   return changed ? next : undefined;
 }
 
-/** The newest tool-result parts whose cumulative estimated cost fits the
- *  recent-tool budget — these stay untouched so the model keeps verbatim
- *  access to what it just read. Reference identities, collected newest-first. */
-function collectProtectedResults(messages: readonly ModelMessage[]): Set<ToolResultPart> {
-  const protectedResults = new Set<ToolResultPart>();
-  let used = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    for (const part of toolResultPartsOf(messages[i]).reverse()) {
-      const cost = Math.max(1, Math.round(serializedOutputLength(part) / 4));
-      if (used >= STEP_RECENT_TOOL_BUDGET_TOKENS) return protectedResults;
-      if (protectedResults.size > 0 && used + cost > STEP_RECENT_TOOL_BUDGET_TOKENS) return protectedResults;
-      protectedResults.add(part);
-      used += cost;
-    }
+/**
+ * The OLDEST tool-result parts whose truncation frees `target` tokens, by
+ * reference identity.
+ *
+ * Oldest-first because the newest results are what the model just read, and
+ * the walk stops the moment the target is met — so what stays verbatim is the
+ * recent tail, without a from-the-tail window that would slide as the array
+ * grows. The newest result is never a candidate: a turn must always be able
+ * to see the output of the call it just made, whatever the target asks for.
+ */
+function resultsToTruncate(messages: readonly ModelMessage[], target: number): Set<ToolResultPart> {
+  const candidates: ToolResultPart[] = [];
+  for (const message of messages) candidates.push(...toolResultPartsOf(message));
+  candidates.pop();
+  const doomed = new Set<ToolResultPart>();
+  let freed = 0;
+  for (const part of candidates) {
+    if (freed >= target) break;
+    const before = serializedOutputLength(part);
+    const truncated = truncateResultPart(part);
+    if (truncated === part) continue;
+    doomed.add(part);
+    freed += Math.max(0, Math.round((before - serializedOutputLength(truncated)) / 4));
   }
-  return protectedResults;
+  return doomed;
 }
 
 function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
@@ -161,11 +210,13 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
   return [];
 }
 
-function pruneMessage(message: ModelMessage, protectedResults: ReadonlySet<ToolResultPart>): ModelMessage {
+/** Replace exactly the parts the walk chose, in place. Everything else keeps
+ *  its object identity, so an untouched message is the same reference. */
+function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>): ModelMessage {
   if (message.role === 'tool') {
     let changed = false;
     const content = message.content.map((part): ToolPart => {
-      if (part.type !== 'tool-result' || protectedResults.has(part)) return part;
+      if (part.type !== 'tool-result' || !doomed.has(part)) return part;
       const truncated = truncateResultPart(part);
       if (truncated !== part) changed = true;
       return truncated;
@@ -175,7 +226,7 @@ function pruneMessage(message: ModelMessage, protectedResults: ReadonlySet<ToolR
   if (message.role === 'assistant' && Array.isArray(message.content)) {
     let changed = false;
     const content = message.content.map((part): AssistantPart => {
-      if (part.type !== 'tool-result' || protectedResults.has(part)) return part;
+      if (part.type !== 'tool-result' || !doomed.has(part)) return part;
       const truncated = truncateResultPart(part);
       if (truncated !== part) changed = true;
       return truncated;

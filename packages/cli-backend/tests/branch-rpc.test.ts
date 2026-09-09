@@ -1,24 +1,24 @@
 // Two overlapping `explore` RPCs against one branch worker must each resolve
-// to their own result. The parent used to match a reply to a waiter by method
-// name alone, so the first arriving reply settled every same-method waiter.
+// to their own result. Matching a reply to a waiter by method name alone lets
+// the first arriving reply settle every same-method waiter.
 import { test, expect, afterAll } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { createBranchSpawner } from '../src/branch-process';
-
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { initActorStateSchema } from '@kinu.run/core';
 const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-rpc-'));
 const parentDbPath = `${dir}.db`;
 const parentDb = new Database(parentDbPath, { create: true });
-parentDb.exec('CREATE TABLE crafted_tools (name TEXT PRIMARY KEY, description TEXT NOT NULL)');
-parentDb.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-parentDb.close();
+const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
+  parentDb.close();
   rmSync(dir, { recursive: true, force: true });
   rmSync(parentDbPath, { force: true });
-  rmSync(`${dir}/branches`, { recursive: true, force: true });
 });
 
 const LANGUAGES: [string, ...string[]] = ['typescript'];
@@ -59,7 +59,11 @@ test('concurrent explores resolve to their own results', async () => {
     headers: { Authorization: 'Bearer branch-rpc' },
     model: 'test-model',
   };
-  const { spawn, abort } = createBranchSpawner(dir, { llm });
+  // The spawner is handed the workspace's ONE database, not a base path it
+  // decorates: `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued
+  // bootstrap does not name, so a fixture that passes anything else gets a
+  // child that exits before `ready` and a startup rejection instead of a reply.
+  const { spawn } = createBranchSpawner(parentDbPath, { llm, parent: parentRuntime.actor });
   const handle = await spawn('rpc-correlation');
   try {
     const first = handle.explore([{ role: 'user', content: 'first task' }], [], LANGUAGES, 'plan', []);
@@ -68,7 +72,7 @@ test('concurrent explores resolve to their own results', async () => {
     expect(firstResult.text).toBe(FIRST_TEXT);
     expect(secondResult.text).toBe(SECOND_TEXT);
   } finally {
-    await abort('rpc-correlation');
+    await handle.release();
     await server.stop(true);
   }
 }, 30_000);

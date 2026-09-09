@@ -2,15 +2,15 @@
  * ONE Bun resolution, inlined by both the served installer and the launcher
  * that installer writes.
  *
- * The two used to resolve Bun independently. The installer ran
- * `command -v bun`, and on a miss installed Bun, did
- * `export PATH="$HOME/.bun/bin:$PATH"` **in its own process**, re-checked
- * there and printed "Kinu CLI is ready." Nothing persisted that directory to
- * any profile (only `$KINU_HOME/bin` was appended), so the next shell ran the
- * launcher, which re-derived Bun from whatever ambient PATH it happened to
- * have, missed the same Bun sitting on disk and answered "Bun is required."
- * One runtime, two resolutions, and the install transcript said the opposite
- * of the first command the user typed.
+ * Two independent resolutions contradict each other. Nothing persists
+ * `$HOME/.bun/bin` to any profile — only `$KINU_HOME/bin` is appended — so an
+ * installer that runs `command -v bun`, installs Bun on a miss, does
+ * `export PATH="$HOME/.bun/bin:$PATH"` **in its own process**, re-checks there
+ * and prints "Kinu CLI is ready." hands the next shell a launcher that
+ * re-derives Bun from whatever ambient PATH it happens to have, misses the same
+ * Bun sitting on disk and answers "Bun is required." One runtime, two
+ * resolutions, and the install transcript says the opposite of the first
+ * command the user typed.
  *
  * So there is one resolution and both scripts inline this text. Its candidate
  * order is fixed and PATH-independent, which is what makes the launcher reach
@@ -18,10 +18,10 @@
  * Kinu's own managed install is tried first, at an absolute path the installer
  * controls, and only then whatever Bun the user already has.
  *
- * Presence is not the question either — compatibility is. Both sides used to
- * accept any `bun` on PATH, so a Bun too old for this tree passed the gate and
- * failed later inside `bun install` with a message about neither Bun nor Kinu.
- * The check reads the candidate's own `--version`.
+ * Presence is not the question either — compatibility is. Accepting any `bun`
+ * on PATH lets a Bun too old for this tree pass the gate and fail later inside
+ * `bun install` with a message about neither Bun nor Kinu. The check reads the
+ * candidate's own `--version`.
  *
  * There is no second runtime to fall back to: the CLI imports `bun:sqlite` and
  * `Bun.stdin` (packages/cli/src/config.ts, commands/run.ts), so an
@@ -87,7 +87,7 @@ kinu_bun_compatible() {
 
 # Kinu's managed Bun first. It is an absolute path the installer controls, so
 # the launcher resolves the binary the installer verified whatever PATH the
-# user's next shell has — that disagreement is what printed "Kinu CLI is ready."
+# user's next shell has — a PATH disagreement is what prints "Kinu CLI is ready."
 # and then "Bun is required."
 kinu_resolve_bun() {
   KINU_BUN=""

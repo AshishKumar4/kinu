@@ -7,14 +7,14 @@
  * cadence, the review lane, `kinu evolve`, a scheduled job) has none, so the
  * runtime resolves one here instead of refusing every lane.
  *
- * This used to live inside `LocalAgentSession`, which meant a local runtime
- * opened without a session — the shape `kinu evolve` and every session-less
- * surface has — routed nothing at all: `ensureProfile()` threw
- * "this runtime has no profile resolver" after the search had already spent
- * real model calls. Resolution is a property of the WORKSPACE (its durable
- * `agent_config`, its catalog authority, its provider plane), not of the chat
- * loop on top of it, so it is built where the runtime is built and a session
- * refines its inputs rather than supplying the capability.
+ * Resolution is a property of the WORKSPACE (its durable `actor_config`, its
+ * catalog authority, its provider plane), not of the chat loop on top of it, so
+ * it is built where the runtime is built and a session refines its inputs
+ * rather than supplying the capability. Inside `LocalAgentSession` instead, a
+ * local runtime opened without a session — the shape `kinu evolve` and every
+ * session-less surface has — routes nothing at all: `ensureProfile()` throws
+ * "this runtime has no profile resolver" after the search has already spent
+ * real model calls.
  */
 
 import type {

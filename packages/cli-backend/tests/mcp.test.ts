@@ -5,7 +5,8 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import { isMcpToolKey, mcpToolKey, type LLMProviderConfig } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { connectMcpServers } from '../src/mcp';
 import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -53,13 +54,16 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
 }
 
 function sessionWithModel(model: LanguageModel) {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
+  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
+  // reading the database's own filename back, and refuses a runtime whose path
+  // does not match it (`requireLocalDatabasePath`).
+  const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('mcp', 'agent.db'),
+    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];
@@ -72,10 +76,10 @@ function sessionWithModel(model: LanguageModel) {
 describe('connectMcpServers', () => {
   test('keys tools with the same core rule the cf backend uses', async () => {
     // A prompt or skill that names an MCP tool has to resolve to the same tool
-    // on both backends. cf used to key on its random registration id
-    // (`tool_<nanoid>_<name>`) while the CLI keyed on the server name — so no
-    // reference to an MCP tool was portable. Both now go through mcpToolKey,
-    // via core's `describeMcpTool`.
+    // on both backends, so both go through mcpToolKey, via core's
+    // `describeMcpTool`. Keying on a random registration id
+    // (`tool_<nanoid>_<name>`) on one side and the server name on the other
+    // makes no reference to an MCP tool portable.
     const conn = await connectMcpServers(mcpServers());
     try {
       expect(conn.descriptors.map((d) => d.toolKey)).toEqual(
@@ -89,15 +93,33 @@ describe('connectMcpServers', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test('a tool call gets the full call budget, not the startup budget', async () => {
-    // The 5s startup timeout used to apply to tool calls too, so any MCP tool
-    // doing real work (a fetch, a query, a build) failed. The fixture sleeps
-    // past that budget; cfg.timeoutMs still bounds it.
+  test('a tool call without a configured timeout completes after six seconds', async () => {
+    // The fixture completes a 6,000 ms call without a server timeout; this
+    // exercises a call longer than five seconds, not the SDK's 60-second
+    // default. Startup has no wall-clock bound, and only an explicit server
+    // timeout config bounds a tool call.
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });
     try {
       await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
+    } finally {
+      await conn.close();
+    }
+  }, 20_000);
+
+  test('the caller cancels a running tool call; nothing else ends it early', async () => {
+    const conn = await connectMcpServers({
+      echo: { command: 'node', args: [fixtureServer] },
+    });
+    try {
+      const stop = new AbortController();
+      const running = conn.call('echo', 'slow', { ms: 30_000 }, stop.signal);
+      const started = Date.now();
+      stop.abort();
+      await expect(running).rejects.toBeInstanceOf(Error);
+      // The rejection is the abort, not a wait for the fixture's own sleep.
+      expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       await conn.close();
     }

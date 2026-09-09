@@ -161,13 +161,26 @@ describe('two independent callers of one container', () => {
     // A different directory and a different port, both while the first is held.
     const other = owner.b.op('write', [...pathScopes({ path: '/workspace/two/b.txt', membership: true })]);
     const port = owner.b.op('expose', [...portScope(3000)]);
-    await Promise.all([other.entered, port.entered]);
+
+    // DRAINED AND ASSERTED, not awaited. A lane keyed by the container instead
+    // of the resource holds both of these behind `held`, and awaiting their
+    // entry reports that as a five-second suite timeout naming no expectation.
+    // After a drain, an operation that has not entered is one the lane is
+    // holding back — so the overlap is a statement about `order`, and the
+    // three-way concurrency this test is named for is what fails.
+    await drain();
+    expect(owner.order).toEqual(['a/write:enter', 'b/write:enter', 'b/expose:enter']);
+
     other.release();
     port.release();
     await Promise.all([other.done, port.done]);
 
     held.release();
     await held.done;
+    expect(owner.order).toEqual([
+      'a/write:enter', 'b/write:enter', 'b/expose:enter',
+      'b/write:exit', 'b/expose:exit', 'a/write:exit',
+    ]);
   });
 
   test('a directory claim orders the creates inside it and nothing outside', async () => {
@@ -239,7 +252,16 @@ describe('two independent callers of one container', () => {
     // container, and a lane that were shared across instances would serialize
     // every workspace in the deployment against every other.
     const elsewhere = second.a.op('write', scopes);
-    await elsewhere.entered;
+    await drain();
+
+    // Each box's log carries its own single entry. A module-level lane — the
+    // one plausible way to build this wrong — leaves `second.order` empty here
+    // and says so, rather than hanging on an entry that never comes.
+    expect(second.order).toEqual(['a/write:enter']);
+    // The first claim is still held, so the second entry is a real overlap and
+    // not a release that had already run.
+    expect(first.order).toEqual(['a/write:enter']);
+
     elsewhere.release();
     await elsewhere.done;
 

@@ -252,10 +252,10 @@ const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
  *
  * BOTH SYNTAXES, by the rule an author states by writing: a block comment's
  * closing delimiter ends it, and a run of line comments is one block while nothing
- * but whitespace separates the lines. Reading only `/** *\/` was the first draft
- * and it under-reported itself — `unit-checkpoint-format.test.ts` declares a
- * quotation over a `//` run, and the citation gate counted zero uncompared
- * quotations while that one sat unread.
+ * but whitespace separates the lines. Reading only `/** *\/` would under-report
+ * this gate itself — `unit-checkpoint-format.test.ts` declares a quotation over
+ * a `//` run, and the citation gate would count zero uncompared quotations while
+ * that one sits unread.
  */
 export function docComment(text: string, node: SyntaxNode): string | undefined {
   let statement = node;
@@ -767,6 +767,23 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
         ? parent.property.name : literalString(parent.property);
       if (name !== undefined) uses.push({ specifier: origin.specifier, imported: name });
     } else uses.push(origin);
+  });
+  // `lazy(() => import('./m'))`: React resolves the promise and reads exactly
+  // `.default`, so the module's default export is consumed without a binding
+  // this scope walk could see. Only that shape counts: a dynamic import handed
+  // anywhere else proves nothing about which member is read.
+  walk(tree, node => {
+    const { raw } = node;
+    if (raw.type !== 'ImportExpression') return;
+    const arrow = node.parent?.raw;
+    if (arrow?.type !== 'ArrowFunctionExpression' || arrow.body !== raw) return;
+    const call = node.parent?.parent?.raw;
+    if (call?.type !== 'CallExpression' || call.arguments[0] !== arrow) return;
+    const callee = call.callee.type === 'MemberExpression' && !call.callee.computed
+      ? call.callee.property : call.callee;
+    if (callee.type !== 'Identifier' || callee.name !== 'lazy') return;
+    const specifier = literalString(raw.source);
+    if (specifier !== undefined) uses.push({ specifier, imported: 'default' });
   });
   return uses;
 }

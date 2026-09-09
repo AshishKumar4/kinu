@@ -23,7 +23,7 @@
 // always was — a detach trigger, never a kill.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import { toolExecute } from '@kinu.run/test-utils';
+import { toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
@@ -163,7 +163,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     expect(detached).toHaveLength(1);
 
     // …and the work it was told is "still running, not cancelled" really is.
-    // Before the fix this settled as `Command timeout after 60000ms`.
+    // A lane deadline would settle this as `Command timeout after 60000ms`.
     container.finish();
     expect(String(await detached[0])).toContain('epoch 40/40 done');
   });
@@ -218,7 +218,11 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     initBackgroundJobsTable(makeExecRaw(db));
     const hubSql = makeSqlExec(db);
     initEventsHubTables(hubSql);
-    const store = new BackgroundJobStore(makeSql(db));
+    // ONE actor for the job store and the inbox: a runner detaches this actor's
+    // job and signals this actor's log, and two handles would signal an inbox
+    // nothing drains.
+    const actor = createTestActorsOver(db).main;
+    const store = new BackgroundJobStore(makeSql(db), actor);
 
     const bodies: Array<Promise<unknown>> = [];
     const fiber: Schedule['fiber'] = async (_name, fn) => {
@@ -234,7 +238,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
       setTimer: () => {},
     };
     const runner = new BackgroundJobRunner({
-      store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql),
+      store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql, actor),
       scheduleDrain: () => {}, logActivity: () => {},
       // A zero window so the crossing is decided by the command not having
       // finished, never by how long a test waited.

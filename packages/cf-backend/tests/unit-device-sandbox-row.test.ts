@@ -185,19 +185,19 @@ describe('a device row written before the registry recorded a sandbox', () => {
   afterEach(() => { globalThis.fetch = realFetch; });
 
   test('parses as switch-on, capability unproven, rather than failing the listing', async () => {
-    const legacy = {
+    const withoutSandbox = {
       id: 'dev-old', label: 'old', os: 'linux', hostname: 'old', connected: false,
       createdAt: AT, lastSeenAt: null, expiresAt: null,
       lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
     };
-    const modern = { ...legacy, id: 'dev-new', sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] } };
+    const withSandbox = { ...withoutSandbox, id: 'dev-new', sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] } };
     globalThis.fetch = Object.assign(
-      async () => new Response(JSON.stringify([legacy, modern]), { headers: { 'content-type': 'application/json' } }),
+      async () => new Response(JSON.stringify([withoutSandbox, withSandbox]), { headers: { 'content-type': 'application/json' } }),
       { preconnect: realFetch.preconnect },
     );
     const devices = await listDevices();
-    // `modern` carries no `detail`: a hub older than the field lists as
-    // having said nothing beyond the reason.
+    // `withSandbox` carries no `detail`: a hub that does not send the field
+    // lists as having said nothing beyond the reason.
     expect(devices.map((row) => row.sandbox)).toEqual([
       { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] },
       { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },

@@ -26,6 +26,7 @@ import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
 import { decodeEntities, htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images, stripTags } from './markdown';
 import type { AuthResolver } from '../providers/types';
 import { TOOL_REACH } from '../tools/registry';
+import { readExecSignal } from '../execution/signal';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 
 /** Credential key for the optional Tavily search upgrade. */
@@ -60,8 +61,10 @@ export interface WebFetchResult {
 }
 
 export interface WebSearchProvider {
-  search(query: string, opts?: { limit?: number }): Promise<WebSearchResponse>;
-  fetch(url: string): Promise<WebFetchResult>;
+  /** `signal` is the caller's cancellation, and with no `timeoutMs` it is the
+   *  only thing that ends a request early. */
+  search(query: string, opts?: { limit?: number; signal?: AbortSignal }): Promise<WebSearchResponse>;
+  fetch(url: string, opts?: { signal?: AbortSignal }): Promise<WebFetchResult>;
 }
 
 export interface DefaultWebSearchProviderDeps {
@@ -73,11 +76,18 @@ export interface DefaultWebSearchProviderDeps {
   /** Platform HTML→markdown override (cf-backend: env.AI.toMarkdown). Falls
    *  back to the dependency-free local converter when absent or it throws. */
   htmlToMarkdown?: (html: string, opts?: { url?: string }) => Promise<string>;
-  /** Per-request network timeout. Default 15s. */
+  /**
+   * Per-request network budget in ms, CALLER-REQUESTED ONLY.
+   *
+   * Absent means the request ends on its response, on a network failure, or on
+   * the platform below it — never on a clock chosen here. A 15_000 ms default
+   * would cite no requirement, and it would fail a slow origin with `request
+   * timed out`, which a reader cannot tell apart from an origin that really
+   * refused.
+   */
   timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 20;
 const TavilyResponseSchema = v.object({
@@ -109,24 +119,33 @@ class WebFetchError extends Error {
 /** The single shared provider implementation. Both backends construct it with
  *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const budgetMs = deps.timeoutMs;
   // workerd's fetch enforces its `this` binding: invoking the dependency as
   // a member of `deps` sets `this = deps` and throws "Illegal invocation".
   // Detach once so every call goes out with `this = undefined`, exactly like
   // a bare `fetch()` call (undici on the CLI is `this`-insensitive either way).
   const fetchImpl = deps.fetch;
 
-  const withTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  // The caller's signal is what ends a request early. A `timeoutMs` the caller
+  // ALSO asked for adds a timer on top of it; with neither, the request ends on
+  // the origin's answer or a network failure and nothing local can cut it.
+  const withRequestBudget = async <T>(
+    caller: AbortSignal | undefined,
+    run: (signal?: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
+    if (budgetMs === undefined) return run(caller);
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    caller?.addEventListener('abort', () => ctrl.abort(caller.reason), { once: true });
+    const timer = setTimeout(() => ctrl.abort(), budgetMs);
     const onAbort = new Promise<never>((_, reject) => {
       ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
     });
     try {
       return await Promise.race([run(ctrl.signal), onAbort]);
     } catch (error) {
+      if (caller?.aborted === true) throw error;
       if (ctrl.signal.aborted) {
-        throw new WebFetchError(`request timed out after ${timeoutMs}ms`, true, { cause: error });
+        throw new WebFetchError(`request timed out after ${String(budgetMs)}ms`, true, { cause: error });
       }
       throw error;
     } finally {
@@ -157,8 +176,9 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     query: string,
     limit: number,
     headers: Record<string, string>,
+    caller: AbortSignal | undefined,
   ): Promise<WebSearchResponse> {
-    return withTimeout(async (signal) => {
+    return withRequestBudget(caller, async (signal) => {
       const res = await fetchImpl('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
@@ -189,14 +209,14 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
           }));
         return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
       } catch (error) {
-        if (signal.aborted) throw error;
+        if (signal?.aborted === true) throw error;
         throw new WebFetchError('Tavily search returned an unreadable response', false, { cause: error });
       }
     });
   }
 
-  async function duckDuckGoSearch(query: string, limit: number): Promise<WebSearchResponse> {
-    return withTimeout(async (signal) => {
+  async function duckDuckGoSearch(query: string, limit: number, caller: AbortSignal | undefined): Promise<WebSearchResponse> {
+    return withRequestBudget(caller, async (signal) => {
       const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
       const res = await fetchImpl(endpoint, {
         headers: {
@@ -221,11 +241,11 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       if (!q) throw new WebFetchError('search query is empty');
       const limit = clampLimit(opts?.limit);
       const headers = await tavilyKey();
-      if (headers) return tavilySearch(q, limit, headers);
-      return duckDuckGoSearch(q, limit);
+      if (headers) return tavilySearch(q, limit, headers, opts?.signal);
+      return duckDuckGoSearch(q, limit, opts?.signal);
     },
 
-    async fetch(url) {
+    async fetch(url, opts) {
       let parsed: URL;
       try {
         parsed = assertSafeUrl(url);
@@ -239,7 +259,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       // benign public page could bounce the agent's fetch onto a metadata or
       // private address the initial check had refused.
       let finalUrl = parsed.toString();
-      const fetched = await withTimeout(async (signal) => {
+      const fetched = await withRequestBudget(opts?.signal, async (signal) => {
         let target = finalUrl;
         for (let redirects = 0; ; redirects++) {
           const hop = await fetchImpl(target, {
@@ -390,13 +410,15 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
           const query = String(args[0] ?? '');
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
           const opts = parsedOpts.success ? parsedOpts.output : undefined;
-          return provider.search(query, opts);
+          // The trailing context is the executor cancellation convention; a
+          // codemode call that carries one ends its request with the turn.
+          return provider.search(query, { ...opts, signal: readExecSignal({ context: args[2] }) });
         },
       },
       fetch: {
         planAllowed: true,
         description: 'web.fetch(url) → { url, title?, retrievedAt, markdown }',
-        execute: async (...args: unknown[]) => provider.fetch(String(args[0] ?? '')),
+        execute: async (...args: unknown[]) => provider.fetch(String(args[0] ?? ''), { signal: readExecSignal({ context: args[1] }) }),
       },
     },
   };

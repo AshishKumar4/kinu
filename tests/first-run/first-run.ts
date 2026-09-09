@@ -213,8 +213,9 @@ const REPO_ROOT = join(import.meta.dirname, '../..');
  *  `resolveArtifactRoot` rule every other family states. ONE directory per
  *  suite process, resolved at import: every case retains its ledger and its
  *  transcript under it before its subgoals are asserted, and the record this
- *  process publishes names the same directory. It used to be minted at publish
- *  time, so the record pointed at a directory nothing had ever written into. */
+ *  process publishes names the same directory. Minting it at publish time
+ *  instead makes the record point at a directory nothing has ever written
+ *  into. */
 const TRANSCRIPTS = join(
   resolveArtifactRoot({
     flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
@@ -324,10 +325,10 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
  *   2. SPEND FIRST — recorded before any assertion can throw, because what a run
  *      cost is a fact about the run rather than a reward for passing.
  *   3. THE LEDGER, READ. Turns, tool calls and tokens come off the workspace's
- *      own run-event routes, the same read the trajectory arm scores from. The
- *      observation used to carry `turns: 0, tokensIn: 0` as literals, so every
- *      record this tier ever published was INADMISSIBLE — "zero graded turns"
- *      — beside a spend line showing the eight calls it had just made.
+ *      own run-event routes, the same read the trajectory arm scores from.
+ *      `turns: 0, tokensIn: 0` as literals makes every record this tier
+ *      publishes INADMISSIBLE — "zero graded turns" — beside a spend line
+ *      showing the eight calls it just made.
  *   4. THE EVIDENCE, RETAINED: ledger, transcript and verdicts under the
  *      directory the record names, before any verdict on them.
  *   5. THE OBSERVATION before the assertions, so a missed subgoal still reaches

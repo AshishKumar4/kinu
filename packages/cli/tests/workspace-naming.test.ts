@@ -25,7 +25,6 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
-  createAgentConfigStore,
   initWorkspaceSchema,
   workspaceSlug,
   type HostedAgentRef,
@@ -155,7 +154,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   try {
     const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    createAgentConfigStore(rt.storage.sql).setDisplayNameOrigin('', 'auto');
+    rt.actor.config.setDisplayNameOrigin('', 'auto');
   } finally {
     db.close();
   }
@@ -167,7 +166,6 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
   const options: LocalAgentHostOptions = {
     roster: () => refs,
     dbPath: (name) => join(AGENT_HOME, name, 'agent.db'),
-    childDbPath: (parentDbPath, child) => join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
     open: async (ref, db, dbPath) => {
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
@@ -206,9 +204,9 @@ describe('a workspace is named by its first prompt, and that name is what a pers
     const host = makeHost(log.model, [{ name: SLUG, cwd: project, workspaceId: 'proj' }]);
     try {
       // Nothing has named this workspace yet, so the very first prompt the
-      // model reads must not claim a name. The old shape claimed one: SOUL.md
-      // opened `# handwrought-walnut-…` because the create path seeded the
-      // heading with the slug.
+      // model reads must not claim a name. Seeding SOUL.md's heading with the
+      // slug on the create path is exactly how it would: the prompt opens
+      // `# handwrought-walnut-…`.
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
       await session.send(FIRST_PROMPT);
@@ -217,7 +215,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       expect(await renamed).toBe(TITLE);
 
       // THE SURFACE. `listKnownAgents` is what `kinu list` prints and what the
-      // TUI navigator renders; before this it answered with the directory name.
+      // TUI navigator renders; it answers with the title, never the directory name.
       const row = listKnownAgents().find((agent) => agent.name === SLUG);
       expect(row?.label).toBe(TITLE);
 

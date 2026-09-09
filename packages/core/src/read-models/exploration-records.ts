@@ -49,6 +49,7 @@ import {
   type CellSeek, type RecordCellHandle, type RecordObjectiveHandle,
 } from '../strategy/records';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { boundedInt } from '../utils/bounds';
 import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 
@@ -140,11 +141,12 @@ const MAX_RECORD_PAGE = 200;
  */
 export function listRecordObjectives(
   sql: SqlExecutor,
+  actor: ActorHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_OBJECTIVE_PAGE,
 ): Page<RecordObjectiveSummary> {
   const page = boundedInt(limit, DEFAULT_OBJECTIVE_PAGE, 1, MAX_RECORD_PAGE);
-  const after = cursor === null ? null : objectiveAnchorOf(sql, cursor.after);
+  const after = cursor === null ? null : objectiveAnchorOf(sql, actor, cursor.after);
   const from = after === null ? 0 : 1;
   const at = after?.lastRecordedAt ?? 0;
   const objective = after?.objectiveId ?? '';
@@ -161,6 +163,7 @@ export function listRecordObjectives(
            SUM(CASE WHEN descriptor IS NULL THEN 1 ELSE 0 END) AS unpartitioned,
            MAX(first_recorded_at)     AS last_recorded_at
       FROM exploration_records
+     WHERE actor_id = ${actor.actorId}
      GROUP BY objective_id, floor_digest
     HAVING MAX(metric) IS NOT NULL
        AND (${from} = 0
@@ -186,7 +189,7 @@ export function listRecordObjectives(
       // covering nothing.
       cells: row.named_cells + (row.unpartitioned > 0 ? 1 : 0),
       rows: row.row_count,
-      best: recordsUnder(sql, handle, direction, 1)[0] ?? null,
+      best: recordsUnder(sql, actor, handle, direction, 1)[0] ?? null,
       lastRecordedAt: row.last_recorded_at,
     };
   }));
@@ -216,20 +219,22 @@ interface ObjectiveGroup {
  */
 export function listRecordCells(
   sql: SqlExecutor,
+  actor: ActorHandle,
   handle: RecordObjectiveHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_CELL_PAGE,
 ): Page<RecordCellSummary> {
-  const direction = directionOf(sql, handle);
+  const direction = directionOf(sql, actor, handle);
   if (direction === null) return { status: 'end', items: [] };
   const page = boundedInt(limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
-  const after = cursor === null ? null : cellAnchorOf(sql, handle, cursor.after);
+  const after = cursor === null ? null : cellAnchorOf(sql, actor, handle, cursor.after);
   const from = after === null ? 0 : 1;
   const descriptor = after === null ? null : after.descriptor;
   const cells = sql<{ descriptor: string | null; occupants: number }>`
     SELECT descriptor, COUNT(*) AS occupants
       FROM exploration_records
-     WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}
+     WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
+       AND floor_digest IS ${handle.floorDigest}
        AND (${from} = 0
             OR (descriptor IS NOT NULL
                 AND (${descriptor} IS NULL OR descriptor > ${descriptor})))
@@ -240,7 +245,7 @@ export function listRecordCells(
   return mapPage(seekPage(cells, page, cellCursor), (rows) => rows.map((row) => ({
     descriptor: row.descriptor,
     occupants: row.occupants,
-    elite: recordsInCell(sql, { ...handle, descriptor: row.descriptor }, direction, null, 1)[0] ?? null,
+    elite: recordsInCell(sql, actor, { ...handle, descriptor: row.descriptor }, direction, null, 1)[0] ?? null,
   })));
 }
 
@@ -256,15 +261,16 @@ export function listRecordCells(
  */
 export function readRecordCell(
   sql: SqlExecutor,
+  actor: ActorHandle,
   handle: RecordCellHandle,
   cursor: SeekCursor | null = null,
   limit = DEFAULT_OCCUPANT_PAGE,
 ): Page<ExplorationRecord> {
-  const direction = directionOf(sql, handle);
+  const direction = directionOf(sql, actor, handle);
   if (direction === null) return { status: 'end', items: [] };
   const page = boundedInt(limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
-  const seek = cursor === null ? null : occupantSeek(sql, handle, cursor.after);
-  return seekPage(recordsInCell(sql, handle, direction, seek, page + 1), page,
+  const seek = cursor === null ? null : occupantSeek(sql, actor, handle, cursor.after);
+  return seekPage(recordsInCell(sql, actor, handle, direction, seek, page + 1), page,
     (record) => record.artifactDigest);
 }
 
@@ -278,8 +284,10 @@ export function readRecordCell(
  * would report a populated cell as empty, and those two are exactly what a caller must
  * be able to tell apart.
  */
-function directionOf(sql: SqlExecutor, handle: RecordObjectiveHandle): ObjectiveDirection | null {
-  const described = describeObjective(sql, handle);
+function directionOf(
+  sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
+): ObjectiveDirection | null {
+  const described = describeObjective(sql, actor, handle);
   if (described.identity !== null) return described.identity.direction;
   if (described.rows > 0) {
     throw new Error(
@@ -327,11 +335,12 @@ function objectiveCursor(row: ObjectiveGroup): string {
   return JSON.stringify({ objectiveId: row.objective_id, floorDigest: row.floor_digest });
 }
 
-function objectiveAnchorOf(sql: SqlExecutor, after: string): ObjectiveAnchor {
+function objectiveAnchorOf(sql: SqlExecutor, actor: ActorHandle, after: string): ObjectiveAnchor {
   const handle = parseAnchor('objective list', after, ObjectiveAnchorSchema);
   const row = sql<{ last_recorded_at: number | null }>`
     SELECT MAX(first_recorded_at) AS last_recorded_at FROM exploration_records
-     WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}`[0];
+     WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
+       AND floor_digest IS ${handle.floorDigest}`[0];
   if (!row || row.last_recorded_at === null) throw new StaleCursorError('objective list', after);
   return { ...handle, lastRecordedAt: row.last_recorded_at };
 }
@@ -340,11 +349,14 @@ function cellCursor(row: CellAnchor): string {
   return JSON.stringify({ descriptor: row.descriptor });
 }
 
-function cellAnchorOf(sql: SqlExecutor, handle: RecordObjectiveHandle, after: string): CellAnchor {
+function cellAnchorOf(
+  sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle, after: string,
+): CellAnchor {
   const anchor = parseAnchor('cell list', after, CellAnchorSchema);
   const present = sql<{ present: number }>`
     SELECT 1 AS present FROM exploration_records
-     WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}
+     WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
+       AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${anchor.descriptor} LIMIT 1`;
   if (present.length === 0) throw new StaleCursorError('cell list', after);
   return anchor;
@@ -358,10 +370,13 @@ function cellAnchorOf(sql: SqlExecutor, handle: RecordObjectiveHandle, after: st
  * says it is. A carried value would seek from a place the row no longer occupies once a
  * re-record raised it.
  */
-function occupantSeek(sql: SqlExecutor, handle: RecordCellHandle, after: string): CellSeek {
+function occupantSeek(
+  sql: SqlExecutor, actor: ActorHandle, handle: RecordCellHandle, after: string,
+): CellSeek {
   const row = sql<{ value: number; first_recorded_at: number }>`
     SELECT value, first_recorded_at FROM exploration_records
-     WHERE objective_id = ${handle.objectiveId} AND floor_digest IS ${handle.floorDigest}
+     WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
+       AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${handle.descriptor} AND artifact_digest = ${after} LIMIT 1`[0];
   if (!row) throw new StaleCursorError('cell', after);
   return { value: row.value, firstRecordedAt: row.first_recorded_at, artifactDigest: after };

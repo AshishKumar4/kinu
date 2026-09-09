@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { initRunEventTables, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
+import { makeSql } from '@kinu.run/cli-backend';
+import { createTestActor } from '../../core/tests/helpers';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -24,14 +26,18 @@ function readLocal(expression: string): JsonValue {
   tempDirs.push(home);
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = new Database(join(home, 'jarvis', 'agent.db'));
-  db.exec(`CREATE TABLE run_events (
-    run_id TEXT NOT NULL, event_index INTEGER NOT NULL, type TEXT NOT NULL,
-    payload TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY (run_id, event_index))`);
+  const execRaw = (ddl: string) => { db.exec(ddl); };
+  initRunEventTables(execRaw);
+  // The reader resolves this store's own main actor, and `run_events` is scoped
+  // by it, so the seed registers a real workspace identity rather than only
+  // creating the table.
+  const actor = createTestActor(makeSql(db), execRaw, 'run-events-workspace', 'jarvis');
   const row = (index: number, type: string, extra: JsonObject = {}) => {
     const ts = new Date(1_700_000_000_000 + index * 1000).toISOString();
     const payload = { ...extra, type, eventIndex: index, runId: 'run-1', timestamp: ts };
-    db.query(`INSERT INTO run_events VALUES (?, ?, ?, ?, ?)`)
-      .run('run-1', index, type, JSON.stringify(payload), ts);
+    db.query(`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(actor.actorId, 'run-1', index, type, JSON.stringify(payload), ts);
   };
   row(0, 'run_start', { agentId: 'jarvis', caused_by: 'chat', userMessage: 'hi' });
   row(1, 'tool_call_end', { name: 'run', toolCallId: 'tc-1', result: 'ok' });

@@ -82,16 +82,15 @@
  * is ever dropped silently — a node that cannot tell refusal from being ignored will
  * simply propose again.
  *
- * THE BUDGET IS CONSERVED AND NOT MERELY CAPPED, and that is new here because
- * arbitration moved. A thought node's proposal was answered in this loop, one node
- * at a time, so reading the remaining budget and spending it could not interleave.
- * An agent node asks from inside its own tool loop and N of those run concurrently,
- * so `SwarmBudget` owns the number and decides-and-debits in one synchronous step
- * (*Budget conservation*: the allocations granted to a node's children must SUM to no
- * more than the parent's remaining budget). Depth and width bound the shape;
- * conservation bounds the spend.
+ * THE BUDGET IS CONSERVED AND NOT MERELY CAPPED. A thought node's proposal is answered
+ * in this loop, one node at a time, so reading the remaining budget and spending it
+ * cannot interleave. An agent node asks from inside its own tool loop and N of those
+ * run concurrently, so `SwarmBudget` owns the number and decides-and-debits in one
+ * synchronous step (*Budget conservation*: the allocations granted to a node's children
+ * must SUM to no more than the parent's remaining budget). Depth and width bound the
+ * shape; conservation bounds the spend.
  *
- * WHAT THE ISOLATION PROOF COVERS, AND WHAT IT NO LONGER COVERS.
+ * WHAT THE ISOLATION PROOF COVERS, AND WHAT IS DELIBERATELY OUTSIDE IT.
  * `MCTS/StorageIsolation.lean` holds of TOOLLESS branches: its two branch-side
  * actions carry a frame condition forbidding a branch from introducing a storage
  * identity no existing branch holds. `Exploration/Isolation.lean`'s
@@ -120,11 +119,11 @@ import { selectFrontierNode } from '../mcts/frontier';
 import { diagnostics, type Logger } from '../obs/index';
 import { renderCauseChain, type Refusal } from '../obs/error';
 import { usageTotal, type Usage, addUsage } from '../usage';
-import type { NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
-import type { NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
+import type { HostedNodeSeat } from './node-agent';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -174,7 +173,17 @@ const SWARM_FIRST_LEDGER_EPOCH = 0;
 /** What a run needs that a resolved call does not carry: a model to expand with, and
  *  a workspace to measure in. */
 export interface SwarmRunDeps {
+  /** The CALLER's runtime — the actor that asked for this search. It owns the
+   *  run ledgers, the journal and the archive; it is not any node's runtime. */
   readonly rt: AgentRuntime;
+  /**
+   * Acquire the hosted logical actor ONE node runs as, by that node's identity.
+   *
+   * Separate from {@link rt} because a search creates N actors and they are not
+   * the caller: each node claims its own turns, evolves its own loop pointer and
+   * owns its own rows in the SAME workspace database.
+   */
+  readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   readonly model: LanguageModel;
   readonly mode: WorkMode;
   readonly signal?: AbortSignal;
@@ -215,10 +224,10 @@ export interface SwarmRunDeps {
    * A caller-declared wall clock for ONE agent node, observed at its step
    * boundaries. OPTIONAL — there is no default clock over a node's work (owner
    * ruling, 2026-08-21: no per-turn bounds). Absent, a node runs until its work
-   * is done; present is a search or a test declaring a tighter deadline. The
-   * derived-default this field used to fall back to was the product of a deleted
-   * step cap and a deleted turn envelope — the exact per-turn bounds the ruling
-   * removed.
+   * is done; present is a search or a test declaring a tighter deadline. There
+   * is no implicit wall-clock default: the owner ruling of 2026-08-21 forbids
+   * per-turn bounds. A product of a step cap and a turn envelope would impose
+   * such a bound, just as a directly chosen default would.
    */
   readonly maxWallClockMs?: number;
   /**
@@ -252,24 +261,7 @@ export interface SwarmRunDeps {
   readonly provisionHome?: NodeWorkspaceProvisioner;
   /** How a node's own runtime is built once it has a home — see
    *  {@link NodeAgentDeps.runtimeForWorkspace}. */
-  readonly runtimeForWorkspace?: (workspace: NodeWorkspace) => Promise<AgentRuntime>;
-  /**
-   * Where a TOOL-USING node's loop runs.
-   *
-   * Present hands each answer node to a host that gives it its own
-   * storage and its own shell state — on the Cloudflare backend a
-   * `SubordinateAgent` facet in node mode, the same class a fork's head already runs in. Absent
-   * runs the loop in this isolate, which is the honest answer for a backend with
-   * no facets rather than a refusal: the body is the same function either way, so
-   * an absent host costs a node nothing but its storage boundary.
-   *
-   * `unit:'thought'` NEVER reaches this, and that is the rule rather than an
-   * omission: a thought node is one toolless `generateText` call that acquires no
-   * tools, no journal row and no shell, so there is nothing for a facet to
-   * isolate and the storage-isolation proof already covers it for exactly that
-   * reason. The dispatch that enforces it is `agentNodes` below.
-   */
-  readonly host?: NodeLoopHost;
+  readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   /** Backend-built `execute_tools` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
   readonly executeTool?: unknown;
@@ -401,7 +393,7 @@ export async function runSwarm(
   // spawn, its steps and its report all reach an open surface by the one push.
   const { sql, journal, searchLedger } = initRunLedgers(deps.rt, deps.announceHeadActivity);
   const { carriedIn, carriedBest } = readCarryIn({
-    sql,
+    sql, actor: deps.rt.actor,
     identity,
     publishing,
     floor: measured?.floor ?? null,
@@ -461,7 +453,7 @@ export async function runSwarm(
    * recover.
    */
   const { reentry, runProfile } = resolveReentry({
-    sql, searchLedger, journal, redrive: deps.redrive,
+    sql, searchLedger, journal, actor: deps.rt.actor, redrive: deps.redrive,
     task: resolved.task, preset: resolved.preset,
     profile: deps.profile ?? null, log,
   });
@@ -479,7 +471,7 @@ export async function runSwarm(
   if (contendedRefusal) return contendedRefusal;
 
   const { rootId, nodes, root } = await createRoot({
-    sql, reentry, verifier, ctx, resolved,
+    sql, actor: deps.rt.actor, reentry, verifier, ctx, resolved,
     originContext: deps.originContext, measures, journal, agentNodes,
   });
 
@@ -535,7 +527,7 @@ export async function runSwarm(
   // declared is a shape the record cannot report honestly, and this one `expansions`
   // reports.
   //
-  // OWNED BY A TYPE rather than by a `let`, because arbitration no longer happens only
+  // OWNED BY A TYPE rather than by a `let`, because arbitration does not happen only
   // in this loop: an agent node asks from inside its own concurrent tool loop, so the
   // read and the debit have to be one step (`swarm-budget.ts`).
   const expansionBudget = maxDepth * branches;
@@ -565,8 +557,8 @@ export async function runSwarm(
    * THE LEASE every ledger write of this run is stamped with: the epoch a re-entry
    * claimed, or zero for a first attempt.
    *
-   * Live fencing rather than the constant zero it used to be. A swarm has a resume now,
-   * so an executor from the evicted activation may still hold the previous lease, and a
+   * Live fencing rather than a constant zero. A swarm has a resume, so an executor
+   * from the evicted activation may still hold the previous lease, and a
    * `converge` from it would settle a row this run is making progress on.
    */
   const ledgerEpoch = reentry?.epoch ?? SWARM_FIRST_LEDGER_EPOCH;
@@ -612,11 +604,10 @@ export async function runSwarm(
   }
 
   const nodeDeps = buildNodeDeps({
-    rt: deps.rt, model: nodeModel, journal, logger: log,
+    hostNode: deps.hostNode, model: nodeModel, journal, logger: log,
     signal: deps.signal, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    host: deps.host,
     executeTool: deps.executeTool, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
@@ -684,6 +675,7 @@ export async function runSwarm(
    *  passed here is a seam the runner already owned. */
   const levelFanIn = createLevelFanIn<TreeNode, Expansion>({
     nodes,
+    actor: deps.rt.actor,
     ancestorPath: (parent) => pathTo(nodes, parent),
     rootId,
     maxDepth,
@@ -692,7 +684,7 @@ export async function runSwarm(
     preset: resolved.preset,
     context: resolved.config.context,
     sql,
-    markMerged: (id) => markSwarmNodeMerged(sql, id, Date.now()),
+    markMerged: (id) => markSwarmNodeMerged(sql, deps.rt.actor, id, Date.now()),
     countLost: () => { lost += 1; },
     expandChild: (input) => expandChild(expandCtx, input),
     measureChild,
@@ -760,7 +752,7 @@ export async function runSwarm(
       ? { id: resumed.parentId }
       : owed ?? (scheduler.kind === 'pareto'
         ? selectParetoFrontierNode(nodes, maxDepth, scheduler.axes)
-        : selectFrontierNode(sql, {
+        : selectFrontierNode(sql, deps.rt.actor, {
           rootId, policy: scheduler.policy, maxDepth,
           explorationWeight: resolved.config.explorationWeight
             ?? DEFAULT_CONFIG.mcts.explorationWeight,
@@ -822,9 +814,9 @@ export async function runSwarm(
     const prefix = agentNodes
       ? await sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
       : [];
-    // What a child starts from: the proposal's per-branch answer where one was
-    // granted, otherwise the run's `context`. `expand:'mutate'` used to ask this and
-    // was cut for exactly that reason — it was a second spelling of `context`.
+    // What a child starts from: the proposal's per-branch context where one was
+    // granted, otherwise the run's `context`. The expansion axis does not
+    // independently control inheritance.
     const inheritedArtifact = (grant
       ? grant.proposal.branches.some((branch) => branch.context === 'fork')
       : resolved.config.context === 'fork')
@@ -882,9 +874,9 @@ export async function runSwarm(
      * TWO KINDS SIT HERE UNDER ONE NAME, because "this branch produced nothing the search
      * can continue from" is one fact: a member the barrier rejected left no report at
      * all, and a member that reported `incomplete` left a status line rather than an
-     * answer. The second kind used to be the first — an `errored` node was thrown — and
-     * collapsing them again in the other direction would put a node the caller can read
-     * back into the bucket for the ones that vanished.
+     * answer. One name for the refusal text and no further than that — treating an
+     * `incomplete` node as a rejected one would put a node the caller can read into the
+     * bucket for the ones that vanished.
      */
     const unusable: string[] = [];
     for (const { id, answer } of answers) {
@@ -940,10 +932,9 @@ export async function runSwarm(
     // cut one settles instead of refusing.
     if (unusable.length > 0 && expansions.every((child) => child.incomplete?.status === 'errored')) {
       // THE LEDGER IS SETTLED ON THE WAY OUT, as it is on every other refusal past
-      // `begin`. A refused run left `running` used to be merely untidy; now it is a
-      // RESUME TARGET — the next re-drive of this task would re-enter a tree whose run
-      // already gave up — so a refusal that does not settle its row is a refusal that
-      // silently continues.
+      // `begin`. A refused run left `running` is a RESUME TARGET — the next re-drive of
+      // this task would re-enter a tree whose run already gave up — so a refusal that
+      // does not settle its row is a refusal that silently continues.
       searchLedger.fail(rootId, ledgerEpoch, Date.now());
       return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
         + `${String(width)} of its nodes failed. ${unusable.join(' | ')}`);
@@ -1043,7 +1034,7 @@ export async function runSwarm(
     node.proposal = null;
   }
   return settleRun({
-    started, log, sql, resolved, rootId, maxDepth, branches, policy,
+    started, log, sql, actor: deps.rt.actor, resolved, rootId, maxDepth, branches, policy,
     paretoAxes: pareto?.axes ?? null, ctx, verifier, measured, baseline, identity,
     publishing, archive, publication: scoringState.publication, candidates, best: scoringState.best,
     usage, judgeSamples, ensembles: scoringState.ensembles, spentBy, carriedIn, carriedBest,

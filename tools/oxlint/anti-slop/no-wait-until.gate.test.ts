@@ -185,17 +185,23 @@ function durableObjectCorpus(): {
     `no source found under ${WORKER}; a facet scan over an empty corpus finds no facets and passes`,
   );
 
-  // Facet classes, named to the SDK's facet API. Deliberately not an `extends Agent` scan: a base
-  // class or a test double also matches that shape, while a name the SDK's facet API is given is a
-  // class the deployment really activates.
+  // Facet classes, named to the SDK's facet API — and this list is EXPECTED TO
+  // BE EMPTY. It is kept, and still scanned both ways, because an empty result
+  // is the assertion below rather than an absence nobody checks.
   //
-  // TWO forms, because a facet class reaches that API two ways and this gate must not be keyed on
-  // the syntax of one of them. `subAgent(Cls, id)` names it at the call site. `SubAgentClass<Cls>`
-  // names it in the hook a concrete root supplies the value through — the shape
-  // `ActorAgent.facetClass()` and `FacetHost.facetClass()` use, which exists precisely
-  // so a low-level module carries no runtime import of the class it spawns. Matching only the call
-  // site made this corpus collapse to zero the moment `facet-spawn.ts` stopped naming
-  // `SubordinateAgent` directly, which is an empty-corpus pass, not a fix.
+  // Nothing spawns facets: a hired subordinate, a temporary, a head, a swarm
+  // node and an MCTS branch are logical actors of the ONE workspace object,
+  // bound over its SQLite by `core/src/state/actor-host.ts`, so nothing calls
+  // `subAgent()` and no second Durable Object activates. A head's background
+  // work therefore runs INSIDE the bound root this corpus's other half already
+  // covers, which is why the `bound` and `declaredHere` assertions are the ones
+  // carrying the non-vacuity guarantee.
+  //
+  // BOTH forms are matched, because the thing being guarded is the APPEARANCE
+  // of facet spawning, and it could arrive through either: a `subAgent(Cls, id)`
+  // call site, or a `SubAgentClass<Cls>` hook — the shape a concrete root
+  // supplies the class through, so a low-level module carries no runtime import
+  // of the class it spawns.
   const facets = [
     ...new Set(
       sources.flatMap((text) => [
@@ -220,13 +226,14 @@ assert.ok(
   corpus.bound.length > 0,
   "packages/cf-backend/wrangler.jsonc declares no durable_objects bindings; there is then no Durable Object for this rule to gate",
 );
-assert.ok(
-  corpus.facets.length > 0,
-  "no subAgent/abortSubAgent/deleteSubAgent call site under packages/cf-backend/src names a facet class; the facet half of the corpus — where a head's background work runs — would then be uncounted",
+assert.strictEqual(
+  corpus.facets.length,
+  0,
+  `the facet list must be EMPTY and holds: ${corpus.facets.join(", ")}. Every agent kind is a logical actor of the ONE workspace object (core/src/state/actor-host.ts), so a class reaching the SDK's facet API means a second Durable Object activates — with its own SQLite, its own \`waitUntil\` surface and its own storage to leak. The bound half of this corpus carries the non-vacuity guarantee for both halves.`,
 );
 assert.ok(
   corpus.declaredHere.length > 0,
-  `none of the ${corpus.bound.length} bound and ${corpus.facets.length} facet Durable Object classes (${[...corpus.bound, ...corpus.facets].join(", ")}) is declared under packages/cf-backend/src; this rule would then inspect no Durable Object of ours`,
+  `none of the ${corpus.bound.length} bound Durable Object classes (${[...corpus.bound, ...corpus.facets].join(", ")}) is declared under packages/cf-backend/src; this rule would then inspect no Durable Object of ours`,
 );
 assert.ok(
   corpus.stateHandleUses > 0,
@@ -292,7 +299,7 @@ try {
     assert.equal(
       firedIn(green, rule).length,
       0,
-      `anti-slop/${rule} fires on the corrected form, so the cutover has no green state to reach`,
+      `anti-slop/${rule} fires on the corrected form, so there is no green state to reach`,
     );
   }
 

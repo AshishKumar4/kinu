@@ -1,25 +1,26 @@
 /**
- * The surfaces the system prompt is frozen against.
+ * The surfaces the system prompt is measured over.
  *
- * Sectionising `prompt.ts` moved every line of its prose out of the builder and
- * into `prompting/section-templates.ts`. That is a change of REPRESENTATION, so
- * the landing condition is that not one byte of any rendered prompt moved — the
- * layergate `context-assembly/system-prefix` digest included.
+ * `prompt.ts` holds no prose: every line of it lives in
+ * `prompting/section-templates.ts` as one addressable template, and the
+ * builder renders the eleven of them through one override-aware seam. Both
+ * properties are branch-shaped — a section that renders on one arm and not the
+ * other, a family overlay, a plan-submission spelling — so measuring them takes
+ * a matrix rather than one call: a branch nobody renders is a branch nobody
+ * checked.
  *
- * A conversion like that is only proven by a matrix, because the bytes are the
- * easy half: every branch in the builder has to keep taking the same branch, and
- * a branch nobody renders is a branch nobody checked. This list covers each
- * conditional at least once in each direction: the two plan-submission
- * spellings, both model-family overlays, each built-in role, the background
- * resume overlay, an offline laptop, a preview-capable executor, the empty
- * tool surface, the delegation rungs one at a time, and a workspace carrying
- * instruction files in both trust tiers.
+ * This list covers each conditional at least once in each direction: the two
+ * plan-submission spellings, both model-family overlays, each built-in role,
+ * an offline laptop, a preview-capable executor, the empty tool surface, the
+ * delegation rungs one at a time, and a workspace carrying instruction files
+ * in both trust tiers. No resume case: provenance is turn-local and renders
+ * no system section at all (prompting/volatile-context.ts).
  *
- * `fixtures/prompt-golden.json` holds the last deliberate rendering of these
- * surfaces. Regenerate it only when a prompt change is the point
- * (`bun run scripts/prompt-golden.ts`), never to make a red test green. It was
- * re-cut on 2026-08-25 by a measured slimming pass; the reasoning and the
- * before/after byte totals are recorded in `unit-prompt-sections.test.ts`.
+ * Consumers (`unit-prompt-sections.test.ts`): the per-section override
+ * controls, which compare two LIVE renderings, and the whole-matrix byte
+ * ceiling. Nothing here records prompt bytes — the prompt's content changes
+ * deliberately, and a recorded rendering would only ever say which prompt
+ * shipped the day it was recorded.
  */
 
 import type { SystemPromptOptions } from '../../src/prompt';
@@ -175,10 +176,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       planSubmissionAvailable: false,
     },
   },
-  {
-    name: 'background-resume',
-    opts: { availableTools: ['run'], provenance: 'background_resume', backend: 'cf' },
-  },
   ...Object.entries(BUILTIN_ROLE_DEFINITIONS).map(([id, role]) => rolePromptCase(id, role)),
   {
     name: 'no-tools',
@@ -234,18 +231,27 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['report'], registeredExecutors: [] },
   },
   {
-    name: 'code-execution-without-temporary-ask',
-    opts: { availableTools: ['execute_tools'], temporaryAsk: false, registeredExecutors: [] },
+    // ONE case, not the `code-execution-with/without-temporary-ask` pair this
+    // replaces. `temporaryAsk` reaches the prompt only through the Delegation
+    // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('hire')`
+    // (prompt.ts) — so on a surface carrying `execute_tools` and no `agents`
+    // tool the flag renders nothing in either position, and the two cases were
+    // one request under two names. The Code-execution section had its own
+    // temporary-delegation bullet until the 2026-09-03 delegation-nudge
+    // cutover; the pair outlived it.
+    name: 'code-execution',
+    opts: { availableTools: ['execute_tools'], registeredExecutors: [] },
   },
   {
-    name: 'code-execution-with-temporary-ask',
-    opts: { availableTools: ['execute_tools'], temporaryAsk: true, registeredExecutors: [] },
-  },
-  {
-    name: 'delegation-temporary-ask',
+    // The task lifetime's TRUE direction, and the only case that renders it.
+    // Its false direction is `delegation-hire-only` above: the section branches
+    // on `hasTemporaryAsk`, not on why it is false, so a fourth case pairing
+    // these actions with `temporaryAsk: false` renders `delegation-hire-only`'s
+    // exact bytes and measures nothing.
+    name: 'delegation-task-lifetime',
     opts: {
       availableTools: ['agents'],
-      agentsActions: ['ask', 'hire', 'list'],
+      agentsActions: ['hire', 'msg', 'list'],
       temporaryAsk: true,
       registeredExecutors: [],
     },

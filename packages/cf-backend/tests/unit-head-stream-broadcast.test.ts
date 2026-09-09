@@ -16,7 +16,6 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 
 /** The client's own contract, restated: a frame the validator would keep. */
 const FrameSchema = v.object({
@@ -35,13 +34,13 @@ function captureFrames(agent: HarnessOrchestratorAgent): string[] {
   return sent;
 }
 
-describe('publishHeadStream', () => {
+describe('publishHeadStreamFrame', () => {
   test('both kinds go out as frames the client validator accepts', () => {
     const harness = orchestratorHarness();
     const sent = captureFrames(harness.agent);
 
-    harness.agent.publishHeadStream('head-7', 'reasoning', 'weighing the two lexers');
-    harness.agent.publishHeadStream('head-7', 'text', 'the lexer handles UTF-8');
+    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'reasoning', delta: 'weighing the two lexers' });
+    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'the lexer handles UTF-8' });
 
     expect(sent.map((payload) => v.parse(FrameSchema, JSON.parse(payload)))).toEqual([
       { type: 'head_stream', headId: 'head-7', kind: 'reasoning', delta: 'weighing the two lexers' },
@@ -63,16 +62,9 @@ describe('publishHeadStream', () => {
       return counted.n;
     };
     const before = rows();
-    harness.agent.publishHeadStream('head-7', 'text', 'a partial answer');
+    harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'a partial answer' });
     // The durable channel is `recordHeadStep`, and it is the ONLY writer of this
     // table. A frame that had landed here would be a row no attempt produced.
     expect(rows()).toBe(before);
-  });
-
-  test('a facet can reach it: the name is on the sealed RPC surface', () => {
-    // The frames come from another isolate, so an unlisted method is a channel
-    // that exists and cannot be called — which is silent, because the producer
-    // drops a failed frame on purpose.
-    expect(ORCHESTRATOR_RPC_SURFACE).toContain('publishHeadStream');
   });
 });

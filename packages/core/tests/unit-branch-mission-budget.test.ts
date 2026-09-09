@@ -20,14 +20,15 @@
  * ledger issues while a full search runs unbudgeted.
  *
  * That negative is also why the last describe exists. The mission port is a CAP
- * and it is a no-op without a label, so for an unlabelled search the rollout
- * usage the engine captures off the wire used to be captured and then dropped.
- * The report sink is the LEDGER, and it is asked unconditionally.
+ * and it is a no-op without a label, so an unlabelled search has no cap to
+ * debit and the rollout usage the engine captures off the wire has nowhere else
+ * to land. The report sink is the LEDGER, and it is asked unconditionally.
  */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, createMockSession, makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
@@ -41,7 +42,15 @@ import type { Usage } from '../src/usage';
 import { usageTotal } from '../src/usage';
 import type { ModelCallReport, ModelCallSink } from '../src/events/model-call';
 
-/** A ledger over real SQLite that records every statement issued through it. */
+/**
+ * A ledger over real SQLite that records every statement issued through it,
+ * plus the actor whose spend it holds.
+ *
+ * `mission_budget` is keyed by actor now — a label is caller-authored prose, so
+ * two actors declare the same one — and the handle is bound over THIS database
+ * through the counting seam, so nothing the governor does can reach the table
+ * without the counter seeing it.
+ */
 function countingLedger() {
   const db = new Database(':memory:');
   const rawSql = makeSql(db);
@@ -55,7 +64,8 @@ function countingLedger() {
     statements.push(ddl.replace(/\s+/g, ' ').trim());
     rawExec(ddl);
   };
-  return { db, sql, execRaw, statements };
+  const actor = createTestActors(sql, execRaw).main;
+  return { db, sql, execRaw, statements, actor };
 }
 
 // `satisfies` rather than an annotation: every field of `Usage` is optional, so
@@ -78,16 +88,13 @@ function branchingRuntime() {
   rt.judgeModel = judge;
   let rollouts = 0;
   let reflections = 0;
-  rt.spawnBranch = async () => ({
-    explore: async () => {
-      rollouts++;
-      return { text: 'an approach', usage: PER_ROLLOUT };
-    },
-    generateReflection: async () => {
-      reflections++;
-      return { text: 'it did not work', usage: PER_REFLECTION };
-    },
-  });
+  rt.spawnBranch = async () => ({ explore: async () => {
+    rollouts++;
+    return { text: 'an approach', usage: PER_ROLLOUT };
+  }, generateReflection: async () => {
+    reflections++;
+    return { text: 'it did not work', usage: PER_REFLECTION };
+  }, release: async () => {} });
   initSearchTables(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);
   initCraftedToolsTables(rt.storage.sql);
@@ -111,7 +118,7 @@ async function search(
 describe('an undeclared search is never governed', () => {
   test('a full search issues no ledger statement at all, even beside an exhausted label', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     // A budget exists on this governor and is ALREADY spent. A search that
     // never declared it must be untouched by it.
     governor.declare('someone-elses-mission', { tokens: 10 }, {});
@@ -139,7 +146,7 @@ describe('an undeclared search is never governed', () => {
 
   test('a search under a fresh governor leaves mission_budget empty', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     const afterConstruction = ledger.statements.length;
 
     const { rt, rollouts } = branchingRuntime();
@@ -153,7 +160,7 @@ describe('an undeclared search is never governed', () => {
 
   test('an unbudgeted search explores exactly what a budgeted-but-roomy one does', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('roomy', { tokens: 10_000_000 }, {});
 
     const bare = branchingRuntime();
@@ -170,7 +177,7 @@ describe('an undeclared search is never governed', () => {
 describe('a declared budget reaches the search between expansions', () => {
   test('every rollout is debited as it returns, not once at the end', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const seen: number[] = [];
@@ -196,7 +203,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
   test('an exhausted budget stops the search without recording a refused branch', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     // Room for roughly one expansion of a search asked for eight.
     governor.declare('mission', { tokens: 2_000 }, {});
 
@@ -210,7 +217,8 @@ describe('a declared budget reaches the search between expansions', () => {
     // an absence of expansions, never an expansion full of empty proposals that
     // would backpropagate 0 through the persisted tree.
     const nodes = rt.storage.sql<{ observation: string; parent_id: string | null }>`
-      SELECT observation, parent_id FROM search_nodes WHERE parent_id IS NOT NULL`;
+      SELECT observation, parent_id FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND parent_id IS NOT NULL`;
     expect(nodes.length).toBe(rollouts());
     expect(nodes.every((n) => n.observation === 'an approach')).toBe(true);
     ledger.db.close();
@@ -218,7 +226,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
   test('a search opened under an already-spent mission spawns no branch at all', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 100 }, {});
     governor.debit(500, { labels: ['mission'], calls: 1 });
 
@@ -242,6 +250,7 @@ describe('a declared budget reaches the search between expansions', () => {
     const exhausted: string[] = [];
     const governor = new MissionGovernor({
       storage: { sql: ledger.sql, execRaw: ledger.execRaw },
+      actor: ledger.actor,
       onExhausted: (refusal) => { exhausted.push(refusal.label); },
     });
     governor.declare('mission', { tokens: 2_000 }, {});
@@ -255,7 +264,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
   test('a nested label debits its ancestors, so an outer mission caps the search', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('outer', { tokens: 2_000 }, {});
     governor.declare('inner', { tokens: 10_000_000 }, { parent: 'outer' });
 
@@ -269,14 +278,11 @@ describe('a declared budget reaches the search between expansions', () => {
 
   test('a branch that reports no usage meters nothing rather than a guess', async () => {
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const { rt } = branchingRuntime();
-    rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'an approach' }),
-      generateReflection: async () => ({ text: 'no lesson' }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => ({ text: 'an approach' }), generateReflection: async () => ({ text: 'no lesson' }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -292,15 +298,12 @@ describe('a declared budget reaches the search between expansions', () => {
     // no measurement, so the engine must decline to charge it rather than
     // debiting the zero that `input + output` would have produced.
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
-      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -323,8 +326,8 @@ describe('every rollout is reported, labelled or not', () => {
 
     await search(rt, null, 3, 2, (report) => reports.push(report));
 
-    // The search really ran, and no ledger was involved — this is the exact
-    // shape whose spend used to vanish.
+    // The search really ran, and no ledger was involved — the exact shape whose
+    // spend has nowhere to go but the report sink.
     expect(rollouts()).toBe(6);
     expect(reflections()).toBeGreaterThan(0);
     expect(reports.length).toBe(rollouts() + reflections());
@@ -338,16 +341,13 @@ describe('every rollout is reported, labelled or not', () => {
     // measurement it does not have, and the ledger still counts the call — so a
     // silent provider stays distinguishable from a free one.
     const ledger = countingLedger();
-    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw } });
+    const governor = new MissionGovernor({ storage: { sql: ledger.sql, execRaw: ledger.execRaw }, actor: ledger.actor });
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { explores++; return { text: 'an approach', usage: {} }; },
-      generateReflection: async () => ({ text: 'no lesson', usage: {} }),
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']), 3, 2, (r) => reports.push(r));
 
@@ -363,10 +363,7 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let reflections = 0;
-    rt.spawnBranch = async () => ({
-      explore: async () => { throw new Error('branch down'); },
-      generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; },
-    });
+    rt.spawnBranch = async () => ({ explore: async () => { throw new Error('branch down'); }, generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; }, release: async () => {} });
 
     await search(rt, null, 3, 2, (report) => reports.push(report));
 

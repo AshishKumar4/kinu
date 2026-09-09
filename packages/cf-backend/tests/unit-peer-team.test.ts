@@ -15,11 +15,11 @@ import {
   type PeerAgentPayload, type ReplyDispatcher, type ReplyChannelKind,
   type PeerMessage, type KinuEvent, type ReceiveResult, type SqlExec,
 } from '@kinu.run/core';
-import { createMemoryVfs } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActorsOver } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
 
-function makeSql(): SqlExec {
-  return sqlExec(new Database(':memory:'));
+function makeExec(db: Database): SqlExec {
+  return sqlExec(db);
 }
 
 interface TestAgent {
@@ -71,11 +71,13 @@ function makeNetwork() {
   const network = new Map<string, TestAgent>();
 
   function addAgent(name: string, userId: string): TestAgent {
-    const sql = makeSql();
+    const db = new Database(':memory:');
+    const sql = makeExec(db);
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const actor = createTestActorsOver(db).main;
+    const log = new EventLog(sql, actor);
     const dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {};
-    const replyChannels = new ReplyChannelStore(sql, dispatchers);
+    const replyChannels = new ReplyChannelStore(sql, actor, dispatchers);
     const { vfs, files } = createMemoryVfs();
     let agent: TestAgent | null = null;
     const hub = new PeerHub({
@@ -172,7 +174,7 @@ describe('fire-and-forget (send)', () => {
     // The drained turn renders the message without a reply instruction.
     const batch = buildDrainBatch(pendingPeerEvents(bob))!;
     expect(batch.text).toContain('peer agent (alice)');
-    expect(batch.text).not.toContain("action:'reply'");
+    expect(batch.text).not.toContain("action:'msg'");
 
     expect(outboxRows(alice)[0].state).toBe('sent');
   });
@@ -195,7 +197,7 @@ describe('send-and-await (ask) round-trip', () => {
     expect(events).toHaveLength(1);
     expect(peerPayload(events[0]).reply_expected).toBe(true);
     const batch = buildDrainBatch(events)!;
-    expect(batch.text).toContain(`agents({action:'reply', event_id:'${events[0].id}'`);
+    expect(batch.text).toContain(`agents({action:'msg', event_id:'${events[0].id}'`);
 
     // Bob answers through the peer-back reply channel.
     const replied = await bob.hub.reply({ eventId: events[0].id, message: 'v2 API landed' });

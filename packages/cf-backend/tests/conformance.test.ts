@@ -12,9 +12,10 @@ import type { ToolSet } from 'ai';
 import {
   compareSurface, normalizeObservedTables, observedActionEnum, wiredProducers,
   renderConformanceFindings,
-  type AgentRuntime, type ConformanceRoot, type ObservedSurface,
+  type AgentRuntime, type ObservedSurface,
 } from '@kinu.run/core';
-import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import type { ActorHarness, HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 interface RawToolsAgent {
   observeRawTools(): ToolSet;
@@ -22,56 +23,82 @@ interface RawToolsAgent {
   _kinuTerminalRetryTick(): Promise<void>;
 }
 
-async function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
-  const tools = harness.agent.observeRawTools();
-  // The workspace filesystem boots on its FIRST operation (createWorkspace is
-  // lazy on purpose), and production always performs one — the first turn reads
-  // SOUL.md. Observing sqlite_master before any operation would report the
-  // manifest's filesystem tables missing from a root that wires them.
-  await harness.agent.observeRuntime().storage.vfs.exists('SOUL.md');
-  // Post-init recovery moved onto the maintenance wake (activation only arms),
-  // and the facet registry's own table appears when that work first touches a
-  // facet — production reaches this within one alarm hop, so the STEADY surface
-  // this manifest describes includes it. Driven explicitly: activation and
-  // alarm stay distinct boundaries.
-  await harness.agent._kinuTerminalRetryTick();
+async function observe(workspace: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
+  const tools = workspace.agent.observeRawTools();
+  await workspace.agent.observeRuntime().storage.vfs.exists('SOUL.md');
+  await workspace.agent._kinuTerminalRetryTick();
   return {
-    root,
+    root: 'cf-orchestrator',
     planes: {
       tool: new Set(Object.keys(tools)),
       'agents-action': observedActionEnum(tools.agents),
       'memory-action': observedActionEnum(tools.memory),
-      table: normalizeObservedTables(harness.tableNames()),
-      producer: wiredProducers(harness.agent.observeRuntime()),
+      table: normalizeObservedTables(workspace.tableNames()),
+      producer: wiredProducers(workspace.agent.observeRuntime()),
+    },
+  };
+}
+
+async function observeSubordinate(
+  workspace: ActorHarness<HarnessOrchestratorAgent>,
+): Promise<ObservedSurface> {
+  // A hired subordinate owns no database, so its table plane IS the
+  // workspace's — observed off the same sqlite_master the root reads. What
+  // differs is the model-facing profile: the delegated-turn surface built by
+  // the production builder over the child's own runtime, with the report lane
+  // the root never wires. Both planes come from the workspace's own wiring,
+  // never from a fixture's idea of the subordinate.
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'conformance-child',
+    displayName: 'Conformance Child',
+    nameOrigin: 'user',
+    mission: 'prove the subordinate surface',
+  });
+  const { tools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove the subordinate surface');
+  await workspace.agent._kinuTerminalRetryTick();
+  return {
+    root: 'cf-subordinate',
+    planes: {
+      tool: new Set(Object.keys(tools)),
+      'agents-action': observedActionEnum(tools.agents),
+      'memory-action': observedActionEnum(tools.memory),
+      table: normalizeObservedTables(workspace.tableNames()),
+      producer: wiredProducers(child.actor.runtime),
     },
   };
 }
 
 describe('cf backend conformance', () => {
-  const ROOTS = [
-    ['cf-orchestrator', orchestratorHarness],
-    ['cf-subordinate', subordinateHarness],
-  ] as const;
+  test('cf-orchestrator: the observed surface matches the manifest', async () => {
+    const report = compareSurface(await observe(orchestratorHarness()));
+    expect(renderConformanceFindings(report)).toBe('');
+    expect(report.unmeasured).toEqual([]);
+  });
 
-  for (const [root, make] of ROOTS) {
-    test(`${root}: the observed surface matches the manifest`, async () => {
-      const report = compareSurface(await observe(root, make()));
-      expect(renderConformanceFindings(report)).toBe('');
-      expect(report.unmeasured).toEqual([]);
-    });
+  test('cf-subordinate: the observed surface matches the manifest', async () => {
+    const report = compareSurface(await observeSubordinate(orchestratorHarness()));
+    expect(renderConformanceFindings(report)).toBe('');
+    expect(report.unmeasured).toEqual([]);
+  });
 
-    // Guards the guard, once per root rather than once in total. The floor used
-    // to be asserted for the orchestrator alone, so the SUBORDINATE's
-    // magnitudes were unverified: a harness that drifted to a thin fake there
-    // would still fail on capabilities the manifest declares `wired`, but
-    // everything it declares `absent` would look conformant against a world
-    // that was never built. Same list as above, so a third root added later is
-    // covered without a second place to remember.
-    test(`${root}: the observation sees a real surface at all`, async () => {
-      const observed = await observe(root, make());
-      expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
-      expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-      expect(observed.planes.tool!.has('execute_tools')).toBe(true);
-    });
-  }
+  // Guards the guard, once per root rather than once in total. A floor
+  // asserted for the orchestrator alone leaves the SUBORDINATE's
+  // magnitudes unverified: a harness that drifted to a thin fake there
+  // would still fail on capabilities the manifest declares `wired`, but
+  // everything it declares `absent` would look conformant against a world
+  // that was never built. Same roots as above, so a third root added later is
+  // covered without a second place to remember.
+  test('cf-orchestrator: the observation sees a real surface at all', async () => {
+    const observed = await observe(orchestratorHarness());
+    expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
+    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
+    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+  });
+
+  test('cf-subordinate: the observation sees a real surface at all', async () => {
+    const observed = await observeSubordinate(orchestratorHarness());
+    expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
+    expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
+    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+  });
 });

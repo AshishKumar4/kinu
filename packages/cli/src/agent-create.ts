@@ -4,7 +4,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
-  changeActiveRole, roleChangeOutcomeText, createAgentConfigStore,
+  changeActiveRole, roleChangeOutcomeText, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
@@ -240,7 +240,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const agentConfig = createAgentConfigStore(rt.storage.sql);
+    const agentConfig = rt.actor.config;
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
     const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
     if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
@@ -297,7 +297,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   // THE PUBLICATION. Past this line the workspace is complete and openable, so
   // a failure below is no longer a ghost: an agent.db with no ref in the config
   // is exactly what adoption converges (`kinu list` offers it, and
-  // `adoptLegacyLocalAgent` places it into this project).
+  // `adoptUnplacedLocalAgent` places it into this project).
   renameSync(partial, dbPath);
   // The checkpointed (empty) sidecars belong to a name that no longer exists.
   discardPartialWorkspace(partial);
@@ -403,7 +403,7 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);
   const db = new Database(dbPath);
   try {
-    createAgentConfigStore(makeSql(db)).setDisplayNameOrigin(title, 'user');
+    openWorkspaceMainActor(makeSql(db)).config.setDisplayNameOrigin(title, 'user');
   } finally {
     db.close();
   }
@@ -453,14 +453,14 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
 }
 
 /**
- * The spec a fresh local workspace's `agent_config.model` is seeded with.
+ * The spec a fresh local workspace's `actor_config.model` is seeded with.
  *
  * An explicitly named model wins, then the operator's configured default, then
- * the endpoint's own spec. That last step used to be a SECOND copy of
- * cli-backend's `defaultProviderFor` table, and the copy had never gained the
- * `opencode`, `claude` or `@cf/` rows — so creating a workspace against a Claude
- * subscription wrote `openai-compat/<model>` and its first turn resolved the
- * wrong provider. One table, in the adapter that owns the endpoint.
+ * the endpoint's own spec — read through cli-backend's `defaultProviderFor`
+ * table, the ONE table, in the adapter that owns the endpoint. A second copy
+ * here drifts row by row: without the `opencode`, `claude` or `@cf/` rows,
+ * creating a workspace against a Claude subscription writes
+ * `openai-compat/<model>` and its first turn resolves the wrong provider.
  */
 function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
   const configured = rawModel ?? loadConfigFile().model;

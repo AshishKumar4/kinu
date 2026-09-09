@@ -33,9 +33,13 @@
  * every step and append a block per request.
  *
  * TURN-LOCAL state (skill activation reasons — they vary with THIS user
- * message's keywords — and the one-turn device change notice) — one trailing
- * user message for this turn only, appended at turn assembly and never
- * fingerprinted (folding it in would defeat block stability).
+ * message's keywords — the one-turn device change notice, and the turn's
+ * PROVENANCE, which flips whenever a background job lands mid-session) — one
+ * trailing user message for this turn only, appended at turn assembly and
+ * never fingerprinted (folding it in would defeat block stability). What
+ * belongs here rather than in the prefix is anything that is an overlay
+ * instead of a bar: a permission the turn is held to earns system placement,
+ * a fact about the turn does not.
  *
  * Both backends assemble through the same functions so the seam cannot
  * drift: the ledger rides the shared step pipeline (prompting/prepare-step.ts),
@@ -47,7 +51,7 @@ import type { ModelMessage } from 'ai';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
 } from './sections';
-import { executorIsSelectable, type PromptExecutorInfo } from './surface';
+import { executorIsSelectable, type PromptExecutorInfo, type TurnProvenance } from './surface';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
   connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,
@@ -166,9 +170,11 @@ export interface MissingCapability {
  *
  *  The words are the SURFACE's words, because this block is the model reading
  *  its own live state and it can only act on what the tool surface calls
- *  things. `swarm-run.ts` records every configured search into this journal, so
- *  a row here IS a search — it rendered as `(fork)`, an action the ladder no
- *  longer has, over "heads", which the prompt calls nodes. */
+ *  things. `swarm-run.ts` records every configured search into this journal,
+ *  so a row here IS a search: `agents({action:'swarm'})` in the vocabulary
+ *  the prompt uses, whose units are nodes. Neither `fork` nor "head" appears
+ *  — the ladder has no such action and the prompt has no such word, so a row
+ *  wearing either would name an operation the model cannot invoke. */
 export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {
@@ -243,11 +249,12 @@ export interface DynamicContextSources {
  * backend.
  *
  * Which planes exist, and when a plane is omitted rather than rendered empty,
- * is the whole content of this function — and it is exactly what drifted while
- * each backend built the object itself: a plane added on one side simply did
- * not exist for the other agent, with nothing to say so. Nothing here is
- * clock-derived; a wall-clock field would re-fingerprint the block every
- *  request and append one per step. */
+ * is the whole content of this function, and it owns that decision for both
+ * backends: each hands over the sources it can read and nothing else chooses
+ * a plane. Omission is meaningful — an absent plane renders nothing, never
+ * "(none)" — so a backend that cannot read one passes it absent rather than
+ * empty. Nothing here is clock-derived; a wall-clock field would
+ * re-fingerprint the block every request and append one per step. */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
   const subordinateDelegates = sources.subordinateDelegates ?? [];
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
@@ -289,6 +296,12 @@ export interface TurnLocalContext {
    *  prefix; the per-turn activation reasons (keyword matches vary with the
    *  user message) render here. */
   activeSkills?: ActiveSkillSet;
+  /** Why this turn is running. An overlay and never a bar
+   *  (prompting/surface.ts), so it has no claim on system placement — and it
+   *  flips between consecutive turns of one session whenever a background job
+   *  lands, which is exactly what the prefix must survive. `chat` renders
+   *  nothing: the overlay exists for the wake alone. */
+  provenance?: TurnProvenance;
 }
 
 export const DYNAMIC_CONTEXT_HEADER =
@@ -297,6 +310,22 @@ export const DYNAMIC_CONTEXT_HEADER =
 
 export const TURN_CONTEXT_HEADER =
   '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
+
+/**
+ * The resume overlay, in the turn it belongs to.
+ *
+ * It rendered as a conditional bullet inside OPERATING_GUIDANCE — about 400
+ * bytes into a 9.2 KB cacheable prefix — so a background job finishing
+ * mid-session rewrote 8829 of 9228 bytes and the next chat turn rewrote them
+ * back: an alternating full-prefix cache write on every transition, for one
+ * sentence. Anthropic's own cost guidance measures the same shape at $4.24
+ * per run against $0.59 for the identical work with the volatile bytes moved
+ * behind the stable prefix. Here it costs its own length and nothing else.
+ */
+const BACKGROUND_RESUME_NOTICE =
+  '## Why this turn is running\n'
+  + 'A background job finished; the user did not type anything. Fetch the referenced job result '
+  + 'first, synthesize it, then continue or close the original work.';
 
 /** Live availability label for one executor. Volatile by nature (flips on
  *  device connect/disconnect and sandbox activation), so it renders in the
@@ -611,6 +640,10 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 /** The per-turn tail block (or null when there is nothing to say). */
 export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   const sections: string[] = [];
+
+  // First of the sections: it says why the turn exists at all, which frames
+  // everything the rest of the block and the user message then say.
+  if (ctx.provenance === 'background_resume') sections.push(BACKGROUND_RESUME_NOTICE);
 
   const reasons = ctx.activeSkills?.reasons ?? [];
   if (reasons.length > 0) {

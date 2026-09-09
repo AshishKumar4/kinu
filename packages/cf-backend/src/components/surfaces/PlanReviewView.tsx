@@ -104,12 +104,37 @@ const STATUS_TONE = {
   superseded: "p-badge-neutral",
 } satisfies Record<PlanReview["status"], string>;
 
+/**
+ * The sentence under the plan, which is the only place the reader is told
+ * which of five review states they are looking at. One chain, because the
+ * states are ordered: read-only history outranks an open revision, an open
+ * revision outranks a decision the agent has not picked up, and only then does
+ * the plan's own status choose the wording.
+ */
+function footerNote(
+  { readOnly, editable, handoffPending, approved }: {
+    readOnly: boolean; editable: boolean; handoffPending: boolean; approved: boolean;
+  },
+): string {
+  if (readOnly) return "Read-only plan history.";
+  if (editable) return "Approve this revision, or annotate the text that needs work.";
+  if (handoffPending) {
+    return approved
+      ? "Kinu saved your approval. Implementation has not started."
+      : "Kinu saved your review. The revision has not started.";
+  }
+  return approved
+    ? "Implementation started from this revision."
+    : "The agent is preparing the next revision.";
+}
+
 export interface PlanReviewViewProps {
   plan: PlanReview | null;
   rpc: Rpc;
+  readOnly?: boolean;
 }
 
-export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
+export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanReviewViewProps) {
   const [annotations, setAnnotations] = useState<Annotation[]>(() => parsePlanAnnotations(plan?.annotations ?? []));
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
@@ -179,12 +204,12 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
     () => titleBlock === null ? blocks : blocks.slice(1),
     [blocks, titleBlock],
   );
-  const editable = plan?.status === "pending";
-  const handoffPending = plan != null && !plan.handoffAccepted
+  const editable = !readOnly && plan?.status === "pending";
+  const handoffPending = !readOnly && plan != null && !plan.handoffAccepted
     && (plan.status === "approved" || plan.status === "changes_requested");
 
   const save = useCallback(async (next: Annotation[]): Promise<boolean> => {
-    if (planKey === null) return false;
+    if (readOnly || planKey === null) return false;
     setAnnotations(next);
     setSaving(true);
     const saved = await annotationSaves.enqueue(next);
@@ -192,7 +217,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
       setSaving(false);
     }
     return saved;
-  }, [annotationSaves, planKey]);
+  }, [annotationSaves, planKey, readOnly]);
 
   const changeAnnotations = useCallback(async (next: Annotation[]) => {
     if (decisionInFlight.current) return;
@@ -424,11 +449,7 @@ export default function PlanReviewView({ plan, rpc }: PlanReviewViewProps) {
             <p role="alert" className="p-notice-danger p-meta px-3 py-2 sm:mr-auto">{error}</p>
           ) : (
             <p className="p-meta p-text-3 sm:mr-auto">
-              {editable
-                ? "Approve this revision, or annotate the text that needs work."
-                : handoffPending
-                  ? plan.status === "approved" ? "Kinu saved your approval. Implementation has not started." : "Kinu saved your review. The revision has not started."
-                  : plan.status === "approved" ? "Implementation started from this revision." : "The agent is preparing the next revision."}
+              {footerNote({ readOnly, editable, handoffPending, approved: plan.status === "approved" })}
             </p>
           )}
           {editable && (

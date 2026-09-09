@@ -2,11 +2,11 @@
  * Durable per-case progress for an eval run that spans hours.
  *
  * A behaviour tier is a long queue of paid episodes. Anything that ends the
- * process early — the operator cancelling, a crash, the machine rebooting — used
- * to throw away every finished episode with it, and re-running the tier repeated
- * work that had already been paid for. This module is the fix: each case moves
- * through `started -> progress -> settled` ON DISK, written at the moment it
- * changes, so a restarted suite resumes instead of repeating.
+ * process early — the operator cancelling, a crash, the machine rebooting —
+ * would otherwise take every finished episode with it, and re-running the tier
+ * would repeat work already paid for. So each case moves through
+ * `started -> progress -> settled` ON DISK, written at the moment it changes,
+ * and a restarted suite resumes instead of repeating.
  *
  * The phases, and what a restart does with each:
  *
@@ -444,8 +444,8 @@ export class EvalProgressStore {
    * What state every declared case is in, as one exhaustive partition.
    *
    * The corpus is the denominator, not the observation list: a case this run
-   * never reached is `notRun` here, which is exactly the state that used to be
-   * invisible. Takes the caller's own case objects and hands them back, like
+   * never reached is `notRun` here, and an observation list has no row to put it
+   * in at all. Takes the caller's own case objects and hands them back, like
    * {@link plan}, so a reporter never re-derives a key it already holds.
    */
   census<T extends EvalProgressCase>(cases: readonly T[]): EvalCaseCensus<T> {

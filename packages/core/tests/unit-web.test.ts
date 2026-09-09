@@ -371,6 +371,17 @@ describe('web provider — fetch', () => {
     await expect(provider.fetch('https://example.com/slow')).rejects.toThrow(/timed out after 40ms/);
   });
 
+  test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {
+    // A 15s default here would arm one on every request, and its refusal reads as
+    // an origin that failed. A page the agent asked for is work the agent still
+    // wants at second sixteen.
+    const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
+    const provider = createDefaultWebSearchProvider({ fetch });
+    const res = await provider.fetch('https://example.com/page');
+    expect(res.markdown).toContain('slow but fine');
+    expect(calls[0].init?.signal).toBeUndefined();
+  });
+
   test('a short bare data URI keeps its trailing prose', () => {
     const short = 'data:image/png;base64,AAAA trailing prose after short uri stays visible';
     expect(stripBase64Images(short)).toContain('trailing prose after short uri stays visible');
@@ -459,7 +470,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
     rt,
     craftedToolExecute: unusedCraftedExecute,
     executeTools: createNodeExecBuilder([createWebCodemodeProvider(provider)]),
-    effectClaims: { sql: rt.storage.sql, turnId: () => 'turn-1' },
+    effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     webSearch: provider,
   });
 }

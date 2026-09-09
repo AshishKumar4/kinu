@@ -59,11 +59,11 @@ const EVENT_KEYS = new Set(['corrected', 'frustrated']);
  *  allocation, taken as a SPREAD (systematic) sample of each stratum rather
  *  than a prefix.
  *
- *  The spread is not cosmetic. An early version of this helper took a prefix,
- *  which on a ledger built by concatenating two eras drew the whole gold set
- *  from the first one; the stratum means then described that era while the
- *  population weights described the whole ledger, and the mismatch showed up
- *  as a 6-point transport error that no budget could fix. Any draw that is not
+ *  The spread is not cosmetic. A prefix draw, on a ledger built by
+ *  concatenating two eras, takes the whole gold set from the first one; the
+ *  stratum means then describe that era while the population weights describe
+ *  the whole ledger, and the mismatch shows up as a 6-point transport error
+ *  that no budget can fix. Any draw that is not
  *  representative WITHIN a stratum breaks the estimator, and time order is
  *  exactly where a real ledger hides that. */
 function stratify(rows: ReadonlyArray<SyntheticRow>, budget: number): PredictionStratum[] {

@@ -29,13 +29,13 @@ const WS_OPEN = 1;
  * existence check. Work the daemon answers immediately or not at all, so a
  * wall clock on it is a real signal.
  *
- * It is deliberately NOT the bound on `exec`. The same 30s used to apply to
- * every call, which meant any laptop command outliving half a minute — a
- * build, a test suite, an install — failed as `device RPC timeout`, a message
- * indistinguishable from a dead device. Liveness had been welded onto the work
- * budget. A call with no deadline of its own now rides {@link LIVENESS_PROBE_MS}
- * instead: it fails when the DEVICE stops being there, not when the work takes
- * a while, and says which of the two happened.
+ * It is deliberately NOT the bound on `exec`. One 30s bound over every call
+ * welds liveness onto the work budget: any laptop command outliving half a
+ * minute — a build, a test suite, an install — fails as `device RPC timeout`, a
+ * message indistinguishable from a dead device. A call with no deadline of its
+ * own rides {@link LIVENESS_PROBE_MS} instead: it fails when the DEVICE stops
+ * being there, not when the work takes a while, and says which of the two
+ * happened.
  */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
@@ -266,9 +266,17 @@ export const DEVICE_PTY_EXIT = 'PTY_EXIT';
  *  the RPC correlator sees them: they have no id to correlate, and a
  *  correlator handed one would drop it without a word. */
 
-/** A window a terminal can actually have. The kernel carries each axis as an
- *  `unsigned short`, and a thousand cells on a side is past any real display,
- *  so the hub and the daemon both refuse anything larger. */
+/**
+ * A window a terminal can actually have. The kernel carries each axis as an
+ * `unsigned short`, and a thousand cells on a side is past any real display, so
+ * the hub and the daemon both refuse anything larger.
+ *
+ * The daemon spells it a second time as `MAX_AXIS` in
+ * `packages/pc-agent/src/pty.js`, and it has to: that package is a standalone
+ * CommonJS daemon on the user's own machine with no workspace dependency, so it
+ * cannot import this. The two are the ends of one wire protocol and must agree,
+ * which `packages/pc-agent/tests/pty.test.js` asserts against this constant.
+ */
 export const DEVICE_PTY_MAX_AXIS = 1000;
 
 /**
@@ -336,11 +344,11 @@ export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
 /**
  * This isolate's request-identity epoch, and the counter under it.
  *
- * Ids used to be the bare counter, and the counter is instance-local: a hub
- * that woke after eviction rebuilt its tunnel with the counter back at zero
- * while a timed-out command was still running on the machine, so that command's
- * late answer paired with a DIFFERENT pending call and one workspace's result
- * read as another's. The epoch is what a rebuilt counter cannot reproduce.
+ * The counter alone would not do, because it is instance-local: a hub that
+ * wakes after eviction rebuilds its tunnel with the counter back at zero while
+ * a timed-out command is still running on the machine, so that command's late
+ * answer pairs with a DIFFERENT pending call and one workspace's result reads
+ * as another's. The epoch is what a rebuilt counter cannot reproduce.
  */
 // Workers reject CSPRNG calls during global module evaluation. The epoch is
 // therefore minted by the first actual RPC in this isolate; a reset evaluates

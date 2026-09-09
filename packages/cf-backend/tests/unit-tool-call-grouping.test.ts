@@ -2,8 +2,8 @@
 // derives from its own arguments.
 //
 // A run of finished calls groups into one bordered block; a call still running
-// remains its own live row. The grouped tally headline was removed with the app
-// mock cutover, so this file now tests only behavior that is rendered.
+// remains its own live row. Nothing renders a grouped tally headline, so this
+// file tests only what the blocks and rows actually put on screen.
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonValue } from '@kinu.run/core';
@@ -142,7 +142,7 @@ describe('what a call does, from its own arguments', () => {
       .toBe('Delegated to 3 parallel forks');
     expect(describeToolCall('agents', { action: 'fork', forks: [{}] })).toBe('Delegated to 1 parallel fork');
     expect(describeToolCall('agents', { action: 'fork' })).toBe('Delegated to a fork');
-    expect(describeToolCall('agents', { action: 'ask', agent: 'scout' })).toBe('Asked scout');
+    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
     expect(describeToolCall('agents', { action: 'hire', scope: 'workspace' })).toBe('Hired a workspace');
   });
 

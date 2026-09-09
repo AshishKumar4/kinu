@@ -97,6 +97,8 @@ export interface Storage {
   sql: SqlExecutor;
   /** Raw DDL execution (CREATE TABLE, CREATE INDEX) */
   execRaw: RawSqlExec;
+  /** Atomic synchronous writes on the SAME connection as sql; rolls back on throw. */
+  transactionSync<T>(write: () => T): T;
 }
 
 /**

@@ -1,5 +1,5 @@
 // Pure helpers for building a head's report summary — extracted from
-// SubordinateAgent.runAsHead so the capture logic is unit-testable and shared
+// the hosted head runner so the capture logic is unit-testable and shared
 // by both backends (the cf Facet head + the CLI subprocess head).
 //
 // The bug they fix: ai-SDK v6 `result.text` returns only the LAST step's text,
@@ -48,9 +48,9 @@ export interface TraceStepLike {
  *
  * Per step, not per run, because the trace is written AS the head runs: the
  * head hands each finished step to its journal, so a fork that is still
- * thinking already has a readable trace. A whole-run walk would only ever run
- * after the report, which is the state the Exploration surface used to be
- * stuck in.
+ * thinking already has a readable trace. A whole-run walk can only run after the
+ * report, which would leave the Exploration surface with nothing to show until
+ * then.
  */
 export function toHeadStep(step: TraceStepLike): HeadStep | null {
   const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
@@ -70,22 +70,6 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
   const reasoning = step.reasoningText?.trim() || undefined;
   if (!text && !reasoning && toolCalls.length === 0) return null;
   return { text, reasoning, toolCalls };
-}
-
-/**
- * The whole run's trace, for a reader that has a finished result rather than
- * a live head: every step that carried prose, reasoning or a tool call, in
- * order. `toHeadStep` is the live path and this is the retrospective one, so
- * a report reconstructed after the fact reads the same as one streamed.
- */
-export function extractHeadSteps(steps?: ReadonlyArray<TraceStepLike>): HeadStep[] {
-  if (!Array.isArray(steps)) return [];
-  const trace: HeadStep[] = [];
-  for (const step of steps) {
-    const row = toHeadStep(step);
-    if (row) trace.push(row);
-  }
-  return trace;
 }
 
 /** The head's real final answer: the last text-bearing step (not just the last

@@ -23,6 +23,7 @@
 //      different search wearing the same root id and the same claimed epoch.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from './helpers-actor-host';
 import type { MockLanguageModelV3 } from 'ai/test';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
@@ -140,13 +141,17 @@ function harness(input: {
   readonly envelope: ProfileCatalogEnvelope;
   readonly roleId: string;
 }): Harness {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
   const caller = countingModel('m-default');
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
   const resolvedSpecs: string[] = [];
   const fork: AgentsForkDeps = {
     rt,
+    // One REAL actor per node, over the caller's own database: a routed run
+    // records which model each node ran on, and a node with no actor of its own
+    // would have no claim to record it against.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
     // Branching on the three specs this fixture declares rather than a lookup
     // table, so an unexpected spec is a named failure instead of an undefined.
@@ -223,7 +228,7 @@ function seedInterruptedRun(input: {
   initMctsSearchTable(execRaw);
   initSearchTables(execRaw);
   const rootId = `root-${input.roleId}`;
-  new MctsSearchStore(sql).begin({
+  new MctsSearchStore(sql, input.rt.actor).begin({
     rootId,
     task: input.task,
     engine: 'swarm',
@@ -232,7 +237,7 @@ function seedInterruptedRun(input: {
     budget: 4,
     now: Date.now(),
   });
-  insertSearchNode(sql, {
+  insertSearchNode(sql, input.rt.actor, {
     nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
     task: input.task, action: '', observation: input.task,
     codeUsed: null, depth: 0, msgId: null,
@@ -265,10 +270,11 @@ describe('a delegated tier routes the model its nodes run', () => {
     expect(result.profile.profile.tier).toEqual({ id: 'deep', model: 'm-deep-v1' });
     expect(result.profile.sources.tierSource).toBe('explicit');
     const [row] = h.rt.storage.sql<{ root_id: string }>`
-      SELECT root_id FROM mcts_search_runs WHERE engine = 'swarm' LIMIT 1`;
+      SELECT root_id FROM mcts_search_runs
+      WHERE actor_id = ${h.rt.actor.actorId} AND engine = 'swarm' LIMIT 1`;
     expect(row).toBeDefined();
     if (!row) return;
-    const stored = new MctsSearchStore(h.rt.storage.sql).readSwarmProfile(row.root_id);
+    const stored = new MctsSearchStore(h.rt.storage.sql, h.rt.actor).readSwarmProfile(row.root_id);
     expect(stored?.profile.tier.model).toBe('m-deep-v1');
   }, 30_000);
 
@@ -292,9 +298,12 @@ describe('a delegated tier routes the model its nodes run', () => {
   test('an unrouted actor — no catalog — still runs its nodes on the caller\'s model', async () => {
     // The honest unrouted case, kept working: no profile authority means no tier
     // to route to, so the seam is never consulted and nothing refuses.
-    const { rt } = createTestRuntime();
+    const { rt, testSql } = createTestRuntime();
     const caller = countingModel('m-default');
-    const entry = createAgentsTool({ mode: 'build', fork: { rt, model: caller.model } });
+    const entry = createAgentsTool({
+      mode: 'build',
+      fork: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
+    });
     if (!entry) throw new Error('Expected the agents tool to be created');
     const result = v.parse(v.object({ preset: v.string() }), await toolExecute<AgentsToolInput, unknown>(entry)({
       action: 'swarm', preset: 'ideate', task: 'anything', branches: 1, depth: 1,
@@ -332,16 +341,15 @@ describe('a re-drive continues under the profile it started under', () => {
     //
     // `lead`'s default is `ideate`, scored `none`. `auditor`'s is `audit`, which is
     // scored `verify` and, with nothing to measure, resolves to its judged sweep. So
-    // the outcome names which preset was resolved, and before this fix both calls took
-    // `ideate` and both ran.
+    // the outcome names which preset was resolved; route both to `ideate` and both
+    // calls simply run, discriminating nothing.
     //
-    // THE DISCRIMINATOR MOVED and the property did not. It used to be `audit`'s
-    // `score:"verify"` REFUSAL, which is gone: a named preset with no objective is a
-    // legal call now, so `audit` re-drives into a judged sweep instead of a scolding.
-    // What still separates the two presets is that one of them ASKS A JUDGE — this
-    // harness scripts a model that returns nothing parseable, so the ensemble comes
-    // back empty and the run faults on its scorer. `ideate` is scored `none` and can
-    // never produce that, which is exactly the asymmetry the pair needs.
+    // THE DISCRIMINATOR IS THE JUDGE, not a refusal. A named preset with no objective
+    // is a legal call, so `audit` re-drives into a judged sweep rather than a scolding.
+    // What separates the two presets is that one of them ASKS A JUDGE — this harness
+    // scripts a model that returns nothing parseable, so the ensemble comes back empty
+    // and the run faults on its scorer. `ideate` is scored `none` and can never produce
+    // that, which is exactly the asymmetry the pair needs.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
     const pending = stored.execute({ action: 'swarm', task }, REDRIVE);
@@ -366,16 +374,16 @@ describe('a re-drive continues under the profile it started under', () => {
     // tree re-entered from another.
     const { rt } = createTestRuntime();
     initMctsSearchTable(rt.storage.execRaw);
-    expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
 
     seedInterruptedRun({ rt, task, roleId: 'auditor' });
-    expect(readStartedSwarmProfile(rt.storage, task)?.profile.defaultPreset).toBe('audit');
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)?.profile.defaultPreset).toBe('audit');
     // Task-keyed, like the claim itself: another task's re-drive sees nothing.
-    expect(readStartedSwarmProfile(rt.storage, 'some other task')).toBeNull();
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, 'some other task')).toBeNull();
 
     // Settled rows are not re-entered, so their profile is not offered either.
-    new MctsSearchStore(rt.storage.sql).converge('root-auditor', 0, Date.now());
-    expect(readStartedSwarmProfile(rt.storage, task)).toBeNull();
+    new MctsSearchStore(rt.storage.sql, rt.actor).converge('root-auditor', 0, Date.now());
+    expect(readStartedSwarmProfile(rt.storage, rt.actor, task)).toBeNull();
   });
 });
 
@@ -398,13 +406,17 @@ const PerNodeResultSchema = v.object({
 /** A harness whose resolver knows TWO extra specs besides the caller's model, each
  * separately countable, plus the ordered specs the runner asked to build. */
 function perNodeHarness() {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
   const caller = countingModel('m-default');
   const a = countingModel('m-alpha');
   const b = countingModel('m-beta');
   const resolvedSpecs: string[] = [];
   const fork: AgentsForkDeps = {
     rt,
+    // One REAL actor per node, over the caller's own database: a routed run
+    // records which model each node ran on, and a node with no actor of its own
+    // would have no claim to record it against.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);

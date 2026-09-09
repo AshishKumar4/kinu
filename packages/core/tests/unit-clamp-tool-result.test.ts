@@ -198,7 +198,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const tightened = await run({ command: 'big-last' });
 
     expect(tightened.length).toBeLessThan(9_000);
-    expect(tightened).toContain('as `context_ref` on an agents ask');
+    expect(tightened).toContain('agents hire so that agent reads it');
     const restored = await rt.storage.vfs.readFile(markerPath(tightened), { encoding: 'utf8' });
     const restoredText = v.parse(v.string(), restored);
     expect(restoredText).toStartWith('UNIQUE-');
@@ -206,11 +206,11 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   });
 
   test('the tightened result says WHY it tightened, and an ordinary clamp does not', async () => {
-    // The system prompt used to carry this as doctrine in its Delegation
-    // section, thousands of tokens before any result could trip it — where a
-    // measured 0% of trials acted on it. The fact is only actionable at the
-    // trip, so the marker states it there, and costs nothing on the turns
-    // (most turns) that never reach the floor.
+    // Doctrine in the system prompt's Delegation section sits thousands of
+    // tokens before any result can trip it, and a measured 0% of trials acted
+    // on it there. The fact is only actionable at the trip, so the marker states
+    // it there, and costs nothing on the turns (most turns) that never reach the
+    // floor.
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 

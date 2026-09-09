@@ -6,9 +6,8 @@
 // history inside the Durable Object. `?limit=abc` parsed to NaN, which SQLite
 // refuses as a datatype mismatch, so that request answered 500.
 //
-// Measured on this suite's storage before the fix, 700 rows seeded and a
-// default page of 100: `?limit=-1` returned 700 rows and `?limit=abc` returned
-// 500.
+// Measured on this suite's storage, 700 rows seeded and a default page of
+// 100: unbounded, `?limit=-1` returns 700 rows and `?limit=abc` returns 500.
 //
 // The object behind the route is a REAL `OrchestratorAgent` over its own
 // bun:sqlite, seeded through `publish` — the only admitted author of an event
@@ -97,7 +96,7 @@ describe('the events route closes `limit` before it can reach SQL', () => {
   test('unparseable limit text means unstated and answers 200 with the default', async () => {
     // Not a 400. The run-event route already settled this question: absent and
     // unreadable are the same statement, and the route does not have to decide
-    // what a garbage query string meant. Before the fix each of these was a 500
+    // what a garbage query string meant. Forwarded raw, each of these is a 500
     // from SQLite's datatype mismatch.
     const { env } = seededWorkspace();
     expect(await eventsVia(env, '?limit=abc'))

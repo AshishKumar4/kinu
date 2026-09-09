@@ -1,61 +1,57 @@
 /**
- * Sectionising the system prompt changed representation and nothing else.
+ * The section registry is the prompt's REPLACEMENT surface.
  *
- * Every line of prose that `prompt.ts` used to push into an array now lives in
- * `prompting/section-templates.ts` as one addressable template per section. The
- * point of the move is that a section becomes a value GEPA can score and replace
- * (`evolution/gepa/section-bridge.ts`); the CONDITION of the move is that not one
- * byte the model reads changed on the way.
+ * The registered prompt sections have one addressable template each in
+ * `prompting/section-templates.ts`, so GEPA can score and swap a section
+ * (`evolution/gepa/section-bridge.ts`). This contract governs section
+ * addressing, not every string contributed to the final prompt. What has to
+ * hold is therefore not a historical byte string — the prompt's content is
+ * changed deliberately and often — but the ADDRESSING: every registered
+ * section reaches a rendered prompt, an override on one section replaces
+ * exactly that section's bytes and
+ * nothing else, and an id nobody registered replaces nothing.
  *
- * So the landing proof is three-part, and each part covers a hole the others
- * leave:
+ * That is asserted over `fixtures/prompt-surface-matrix.ts`, which takes every
+ * conditional in the eleven sections in both directions, so a section that only
+ * renders on one branch is still measured on a surface that enables it. Each
+ * comparison is between two LIVE renderings taken in the same run: a recorded
+ * rendering would only say which prompt shipped the day it was recorded, and
+ * the prompt is not frozen.
  *
- *   1. Byte-identity across a branch matrix. `fixtures/prompt-golden.json` is
- *      generated over `fixtures/prompt-surface-matrix.ts`, which takes every
- *      conditional in the eleven sections in both directions.
+ * The byte BUDGET is a separate matter and stays: growth that hides by
+ * spreading thinly across branches has to be a reviewed decision, which is the
+ * matrix ceiling below.
  *
- *      RE-CUT 2026-08-25. The fixture was originally the PRE-SECTIONISATION
- *      builder's output, and part 1 read "the move changed representation and
- *      nothing else". That claim has been retired because the prompt content
- *      deliberately changed: a measured slimming pass took the matrix from
- *      135,116 bytes to 120,952 across the same 27 surfaces, −14,164 (−10.5%).
- *      What was removed was duplication, each piece of it shipping twice in one
- *      request — every tool's `summary` (in the prompt index AND line 1 of its
- *      own schema description), the `agent.*` API bullets (a weaker hand-copy of
- *      the codemode type block carried in the execute_tools description), and
- *      one of two paragraphs stating the mount doctrine in different words.
- *      Placement changed too: `Runtime context` moved to the end of the prefix
- *      and `Execution environments` ahead of the tool index.
- *
- *      Part 1 keeps its full drift-catching power either way: the fixture is
- *      only ever regenerated deliberately (`bun run scripts/prompt-golden.ts`),
- *      so any source edit that moves a prompt byte without that regeneration
- *      still fails here. What changed is only which baseline it compares to.
- *   2. That comparison is SENSITIVE — one character of any one section's source
- *      moves the prompt. Without this, part 1 could be comparing two things that
- *      are equal for a reason other than correctness.
- *   3. The prose is actually GONE from the builder. Bytes cannot tell a live
- *      template from a reverted inline literal, because both render the same.
+ * End-to-end — a candidate proposed, promoted and read back out of the store
+ * into the builder — is `unit-prompt-section-evolution.test.ts`; this file
+ * covers the eleven addresses that path depends on.
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { buildSystemPromptSync } from '../src/prompt';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { templateContract } from '../src/prompting/template';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
 import { createTestRuntime } from '@kinu.run/test-utils';
-import * as v from 'valibot';
 
-const here = dirname(fileURLToPath(import.meta.url));
-// Parsed, not asserted: this is a file on disk, and a fixture that has rotted
-// into some other shape must say so here rather than at the first comparison.
-const golden = v.parse(
-  v.record(v.string(), v.string()),
-  JSON.parse(readFileSync(join(here, 'fixtures', 'prompt-golden.json'), 'utf8')),
-);
+/** The character the mutation writes. Not a letter any section heading starts
+ *  with, so every position where a mutated prompt differs from its baseline is
+ *  attributable to the injection rather than to something that reflowed. */
+const MUTANT = 'Z';
+
+const { rt } = createTestRuntime();
+
+// The full surface renders every unconditional section. Role/profile is
+// intentionally conditional, so its own matrix case is its proof surface.
+const FULL = PROMPT_MATRIX.find((c) => c.name === 'cf-full-surface');
+const ROLE = PROMPT_MATRIX.find((c) => c.name === 'role-general');
+if (!FULL || !ROLE) throw new Error('matrix lost a required proof surface');
+
+// The two baselines every comparison below is against, rendered once. Both are
+// taken in this run, from this source: a recorded rendering would only say
+// which prompt shipped the day it was recorded.
+const FULL_PROMPT = buildSystemPromptSync(rt, FULL.opts);
+const ROLE_PROMPT = buildSystemPromptSync(rt, ROLE.opts);
 
 /** The section's heading letter, changed. Always plain text, always rendered
  *  whenever the section renders at all, and never inside a `{{…}}` tag — so the
@@ -63,35 +59,82 @@ const golden = v.parse(
 function mutateOneCharacter(source: string): string {
   const at = source.indexOf('## ') + 3;
   expect(at).toBeGreaterThan(2);
-  return `${source.slice(0, at)}Z${source.slice(at + 1)}`;
+  expect(source[at]).not.toBe(MUTANT);
+  return `${source.slice(0, at)}${MUTANT}${source.slice(at + 1)}`;
 }
 
-describe('the sectionised builder renders the pre-change bytes', () => {
-  const { rt } = createTestRuntime();
+/** The characters a mutated rendering carries where its baseline carries
+ *  something else — the delta, read as content rather than as a count, so a
+ *  failure names what moved instead of how much. */
+function movedCharacters(baseline: string, mutated: string): string[] {
+  const moved = new Set<string>();
+  for (let index = 0; index < Math.max(baseline.length, mutated.length); index += 1) {
+    if (baseline[index] !== mutated[index]) moved.add(mutated[index] ?? '<end>');
+  }
+  return [...moved].sort();
+}
 
-  test('the golden fixture covers exactly the matrix, with no case rendering empty', () => {
-    // Guards the vacuous pass: a matrix case the fixture never captured, or a
-    // captured case that renders nothing, would make its comparison free.
-    expect(Object.keys(golden).sort()).toEqual(PROMPT_MATRIX.map((c) => c.name).sort());
-    for (const name of Object.keys(golden)) expect(golden[name]?.length ?? 0).toBeGreaterThan(200);
+describe('every registered section reaches a rendered prompt', () => {
+  test('all eleven sections reach a surface that enables them', () => {
+    for (const section of PROMPT_SECTIONS) {
+      const prompt = buildSystemPromptSync(rt, (section.id === 'role/profile' ? ROLE : FULL).opts);
+      // Up to the newline OR the first tag: `## Delegation` is followed
+      // immediately by its first `{{#if}}`, with no newline between them.
+      const heading = /^## [^\n{]*/u.exec(section.source)?.[0] ?? '';
+      expect({ id: section.id, present: prompt.includes(heading) })
+        .toEqual({ id: section.id, present: true });
+    }
   });
 
-  for (const testCase of PROMPT_MATRIX) {
-    test(`${testCase.name} — byte-identical`, () => {
-      expect(buildSystemPromptSync(rt, testCase.opts)).toBe(golden[testCase.name]);
+  test('every matrix surface renders a prompt, and no two cases are one request twice', () => {
+    // Guards the vacuous pass on the other side: a surface that rendered
+    // nothing, or two matrix cases that are the same request under two names,
+    // would make the comparisons in this file free.
+    const rendered = new Set<string>();
+    for (const testCase of PROMPT_MATRIX) {
+      const prompt = buildSystemPromptSync(rt, testCase.opts);
+      expect({ name: testCase.name, long: prompt.length > 200 })
+        .toEqual({ name: testCase.name, long: true });
+      rendered.add(prompt);
+    }
+    expect(rendered.size).toBe(PROMPT_MATRIX.length);
+  });
+});
+
+describe('an override replaces exactly its own section', () => {
+  for (const section of PROMPT_SECTIONS) {
+    test(`${section.id} — the override's bytes reach the model, and only its own`, () => {
+      // Through `sectionOverrides`, which is the real promotion path: this is
+      // simultaneously the proof that a promoted section reaches the model and
+      // the proof that promoting one section cannot disturb another. It is also
+      // what fails if this section's prose were ever inlined back into
+      // `prompt.ts` — the builder would render the literal, ignore the
+      // override, and the two prompts below would be equal.
+      const isRole = section.id === 'role/profile';
+      const target = isRole ? ROLE : FULL;
+      const baseline = isRole ? ROLE_PROMPT : FULL_PROMPT;
+      const mutated = buildSystemPromptSync(rt, {
+        ...target.opts,
+        sectionOverrides: { [section.id]: mutateOneCharacter(section.source) },
+      });
+      expect(mutated).not.toBe(baseline);
+      // One character for one character: nothing reflowed, nothing else moved.
+      expect(mutated.length).toBe(baseline.length);
+      expect(movedCharacters(baseline, mutated)).toEqual([MUTANT]);
     });
   }
 
-  test('the whole matrix is the same number of bytes the fixture recorded', () => {
-    // Drift gate over every surface at once: a byte that moved without a
-    // deliberate regeneration shows up here as a nonzero delta.
-    const before = Object.values(golden)
-      .reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
-    const after = PROMPT_MATRIX
-      .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
-    expect(after - before).toBe(0);
+  test('an override for an unknown id changes nothing', () => {
+    // The registry is the addressing scheme; a typo must not silently no-op
+    // some OTHER section, and must not throw on a live turn either.
+    expect(buildSystemPromptSync(rt, {
+      ...FULL.opts,
+      sectionOverrides: { 'state/does-not-exist': '## Nope' },
+    })).toBe(FULL_PROMPT);
   });
+});
 
+describe('the prompt stays inside its byte budget', () => {
   test('the matrix total stays under its recorded ceiling', () => {
     // The per-section budgets in `unit-prompt.test.ts` gate ONE surface. This
     // gates the whole matrix, so growth that hides by spreading thinly across branches —
@@ -108,7 +151,7 @@ describe('the sectionised builder renders the pre-change bytes', () => {
     // removed in the same change, so the net is the ~3.7k a rung costs across
     // every surface that renders the ladder, not a duplicate of what went.
     // Lowered 2026-09-03 to 111,800, measured 110,668: the delegation nudge
-    // cutover. The Delegation section is a neutral index now (no shape test,
+    // came out. The Delegation section is a neutral index (no shape test,
     // no triggers, no coordination loop, no artifact trail), the Code-execution
     // section lost its `agents.ask` bullet, the `agents` schema shed the
     // Breadth/Doubt triggers and the payoff framing, and the placeholder
@@ -118,89 +161,6 @@ describe('the sectionised builder renders the pre-change bytes', () => {
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
     expect({ total, over: total > MATRIX_CEILING_BYTES })
       .toEqual({ total, over: false });
-  });
-});
-
-describe('the byte-identity comparison is sensitive to one character', () => {
-  const { rt } = createTestRuntime();
-  // The general surface renders every unconditional section. Role/profile is
-  // intentionally conditional, so its own matrix case is its proof surface.
-  const full = PROMPT_MATRIX.find((c) => c.name === 'cf-full-surface');
-  const roleCase = PROMPT_MATRIX.find((c) => c.name === 'role-general');
-  if (!full || !roleCase) throw new Error('matrix lost a required proof surface');
-
-  test('all eleven sections reach a surface that enables them', () => {
-    for (const section of PROMPT_SECTIONS) {
-      const target = section.id === 'role/profile' ? roleCase : full;
-      const prompt = buildSystemPromptSync(rt, target.opts);
-      // Up to the newline OR the first tag: `## Delegation` is followed
-      // immediately by its first `{{#if}}`, with no newline between them.
-      const heading = /^## [^\n{]*/u.exec(section.source)?.[0] ?? '';
-      expect({ id: section.id, present: prompt.includes(heading) })
-        .toEqual({ id: section.id, present: true });
-    }
-  });
-
-  for (const section of PROMPT_SECTIONS) {
-    test(`${section.id} — one changed character makes the prompt differ`, () => {
-      // Through `sectionOverrides`, which is the real promotion path: this is
-      // simultaneously the red proof for part 1 and the proof that a promoted
-      // section actually reaches the model.
-      const target = section.id === 'role/profile' ? roleCase : full;
-      const mutated = buildSystemPromptSync(rt, {
-        ...target.opts,
-        sectionOverrides: { [section.id]: mutateOneCharacter(section.source) },
-      });
-      expect(mutated).not.toBe(golden[target.name]);
-      // And it differs by exactly that character, nowhere else.
-      expect(mutated.length).toBe((golden[target.name] ?? '').length);
-    });
-  }
-
-  test('an override for an unknown id changes nothing', () => {
-    // The registry is the addressing scheme; a typo must not silently no-op
-    // some OTHER section, and must not throw on a live turn either.
-    expect(buildSystemPromptSync(rt, {
-      ...full.opts,
-      sectionOverrides: { 'state/does-not-exist': '## Nope' },
-    })).toBe(golden[full.name]);
-  });
-});
-
-describe('the prose left the builder', () => {
-  const source = readFileSync(join(here, '..', 'src', 'prompt.ts'), 'utf8');
-
-  /** The longest uninterrupted run of plain text in a section — the phrase that
-   *  would still be in `prompt.ts` if the conversion were reverted. Derived from
-   *  the template itself so it cannot drift from the prose it is guarding. */
-  function longestLiteralRun(templateSource: string): string {
-    return templateSource
-      .split(/\{\{[^}]*\}\}/u)
-      .flatMap((chunk) => chunk.split('\n'))
-      .reduce((longest, line) => (line.length > longest.length ? line : longest), '');
-  }
-
-  for (const section of PROMPT_SECTIONS) {
-    test(`${section.id} — its prose is not in prompt.ts`, () => {
-      if (section.id === 'role/profile') {
-        expect(source.includes('## Role:')).toBe(false);
-        return;
-      }
-      const phrase = longestLiteralRun(section.source);
-      expect(phrase.length).toBeGreaterThan(40);
-      expect(source.includes(phrase)).toBe(false);
-    });
-  }
-
-  test('the builder still renders every section through its template', () => {
-    // The other half: prose absent because the section was DELETED would pass
-    // the checks above and fail the model. Each section renders through one
-    // `render(CONSTANT, …)` call, so the builder must carry at least eleven.
-    const rendered = source.match(/\brender\([A-Z][A-Z_]*,/gu) ?? [];
-    expect(rendered.length).toBeGreaterThanOrEqual(PROMPT_SECTIONS.length);
-    // …and the one seam they all go through is built from the turn's overrides,
-    // or a promoted section would compile and never reach a prompt.
-    expect(source).toContain('const render = sectionRenderer(opts.sectionOverrides);');
   });
 });
 

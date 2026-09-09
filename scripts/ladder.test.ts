@@ -46,15 +46,16 @@ const deploy = deployGates();
  * (node --experimental-strip-types) inside `bun run lint`, which is deploy
  * gate 1.
  *
- * THIS WAS A PATH PREFIX AND THAT WAS THE HOLE. A prefix is satisfied by one
- * witness, so it excused the whole directory forever: measured 2026-08-30 the
+ * THE EXCUSE IS A PREDICATE, NOT A PATH PREFIX. A prefix is satisfied by one
+ * witness, so it excuses the whole directory forever: measured 2026-08-30 the
  * 41 suites here are the disjoint union of 12 named on the `test:anti-slop`
  * command line and 29 the aggregator discovers under `rules/`, and a new
- * top-level `tools/oxlint/anti-slop/<name>.test.ts` would have been claimed by the
+ * top-level `tools/oxlint/anti-slop/<name>.test.ts` would be claimed by the
  * prefix and executed by neither — `gate.test.ts` proves only that every
  * `*.gate.test.ts` is on the command line, which a plain `*.test.ts` is not.
- * So the excuse is now a PREDICATE with a total-coverage assertion behind it,
- * and the docstring quotes no count: the one it used to quote said 19.
+ * The predicate carries a total-coverage assertion behind it, and every count
+ * here is a dated measurement rather than a live claim, because a live count
+ * rots the moment a suite is added.
  */
 const NON_BUN_RUNNERS: readonly {
   readonly what: string;
@@ -205,13 +206,12 @@ describe('the ladder measures something', () => {
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
     expect(durabilityProbeGate?.tier).toBe('ci');
-    // Spelled out, like the glob above and for the same reason: the nine rig
-    // suites after the probe are named files, so a tenth is a deliberate edit here
-    // rather than a suite that silently joined a measured row.
+    // Spelled out, like the glob above and for the same reason: the seven rig
+    // suites after the probe are named files, so an eighth is a deliberate edit
+    // here rather than a suite that silently joined a measured row.
     expect(durabilityProbeGate?.run).toBe(
       'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts'
       + ' scripts/sandbox-durability-probe.test.ts'
-      + ' scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts'
       + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
       + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
       + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts'
@@ -235,7 +235,7 @@ describe('the ladder measures something', () => {
 describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
   test('no tier claims a test file that a later tier does not', () => {
     // A gate at an early tier and not a later one means the later tier is the
-    // WEAKER one, which is how a green deploy came to be compatible with a red
+    // WEAKER one, which is how a green deploy ends up compatible with a red
     // local run. Compared by claimed files rather than command text, so a gate
     // that gains an argument does not read as a hole.
     const claimedAt = TIERS.map((tier) => ({
@@ -378,9 +378,9 @@ describe('every test file is claimed by some runner', () => {
     // A predicate matching nothing reads as a considered decision about a runner
     // that no longer has anything to run, and pre-excuses the next file added
     // under it. That is the weak half; the strong half is TOTALITY, which a path
-    // prefix cannot give: this excuse used to be `'tools/oxlint/anti-slop/'` and
-    // one witness satisfied it, so a new top-level `*.test.ts` there would have
-    // been excused and executed by nobody.
+    // prefix cannot give: a bare `'tools/oxlint/anti-slop/'` excuse is satisfied
+    // by one witness, so a new top-level `*.test.ts` there would be excused and
+    // executed by nobody.
     //
     // `bun run test:anti-slop` names 12 files on its command line and its first
     // target, `rules.test.ts`, dynamically imports the rest from the SAME
@@ -851,8 +851,9 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
   });
 
   test('a glob that matches no tracked test file fails loudly', () => {
-    // The empty-corpus pass. A filter matching nothing was previously
-    // indistinguishable from a clean run, which is how this defect survived.
+    // The empty-corpus pass. A filter matching nothing is otherwise
+    // indistinguishable from a clean run, so it throws rather than reporting
+    // green over zero files.
     expect(() => runnableArgv('bun test scripts/no-such-suite*.test.ts', tracked))
       .toThrow('glob matched no tracked test file');
   });

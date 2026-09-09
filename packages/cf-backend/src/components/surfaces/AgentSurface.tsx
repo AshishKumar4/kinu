@@ -2,18 +2,19 @@
  * Agent — what this agent is, and whether it is getting better.
  *
  * Identity · Memory · World model · Tools · Evolution. Everything the agent IS,
- * as opposed to what it made (Output), what it is working through (Work), how
- * it explored (Exploration), or where it can act (Environment).
+ * as opposed to what it made (a titled preview tab per running app, and Diffs
+ * for the file changes behind them), what it is working through (Work), how it
+ * explored (Exploration), or where it can act (Environment).
  *
  * Evolution is the whole trajectory in one place: the scaffold lineage with its
  * shadow verdict and promote/rollback, the GEPA passes that generate candidates
  * for the next version, and the quality scoreboard that says whether the
- * versions are measurably better. The last two used to sit under Exploration,
- * beside the fork strategies, purely because the strategy code is adjacent —
- * and the quality rows are literally keyed by `scaffoldVersion`, so beside the
- * lineage they measure is where they read as one loop.
+ * versions are measurably better. The last two belong here rather than under
+ * Exploration beside the fork strategies: adjacency of the strategy code is not
+ * a reason, and the quality rows are literally keyed by `scaffoldVersion`, so
+ * beside the lineage they measure is where they read as one loop.
  *
- * The changelog left for Work: a self-change is an EVENT, and "what happened
+ * The changelog lives in Work: a self-change is an EVENT, and "what happened
  * while I was away" is not a question anyone opens a CV to answer.
  */
 import { useCallback, useState } from "react";
@@ -59,13 +60,13 @@ export interface AgentSurfaceProps {
  * dispatcher. That is a real difference in how the agent has to call it and
  * therefore worth a word on screen.
  *
- * It used to be a two-valued guess the orchestrator made from the assembled
- * ToolSet — `native` if present, `codemode` otherwise — which had no way to say
- * "this agent has it on neither surface". `report` is the one deps-gated
- * builtin, so on an orchestrator it fell into the else-branch and this badge
- * read "code mode": false twice over, because `report` is native wherever it
- * exists and its `report.*` namespace is wired only on subordinates. Absence is
- * now its own signal (`wired`), so neither word has to carry it.
+ * A two-valued guess off the assembled ToolSet — `native` if present,
+ * `codemode` otherwise — has no way to say "this agent has it on neither
+ * surface". `report` is the one deps-gated builtin, so on an orchestrator it
+ * falls into the else-branch and this badge reads "code mode": false twice
+ * over, because `report` is native wherever it exists and its `report.*`
+ * namespace is wired only on subordinates. Absence is its own signal
+ * (`wired`), so neither word has to carry it.
  */
 function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
   const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";

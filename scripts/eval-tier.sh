@@ -83,6 +83,71 @@
 # nobody can reproduce, and the ratchet is the part that must never be optional.
 # The liveness assertion is conditional on a target for exactly that reason: it
 # fires on "you had a model and did not call it", never on "you had no model".
+#
+# ── WHAT THIS TIER DOES ABOUT COST, AND WHAT IT CANNOT ────────────────────────
+#
+# Every arm below is unattended by construction, which is the profile Anthropic's
+# cost guidance names as the one batch processing is for. It is written down here
+# because the answer is "not on this path", and an unrecorded refusal is a
+# question the next reader re-opens.
+#
+# NO BATCH ARM, AND NO BATCH ARM IS POSSIBLE HERE. Three independent reasons,
+# each checked rather than assumed:
+#
+#   1. The route does not exist. Our inference path is the deployment's own
+#      proxy, and `handleUserAIProxyRequest` serves exactly two routes —
+#      `GET /models` and `POST /chat/completions` — answering 404 to everything
+#      else (cf-backend/src/user/ai-proxy.ts). Staging, where this tier points,
+#      goes through `createDirectWorkersAIFetch`, which turns ONE
+#      chat-completions request into ONE `binding.run()` call; there is no
+#      `requests[]` / `queueRequest` shape anywhere in it.
+#   2. Our models are not batch-capable. Workers AI does have an asynchronous
+#      batch API, and its catalog tags the models that support it. Every arm
+#      here runs `EVAL_MODELS[TIER]` — deepseek-v4-flash-0731 or, under
+#      KINU_EVAL_TIER=pro, deepseek-v4-pro-0813 (test-utils/src/eval-run.ts);
+#      each arm overrides the resolved target's model with it, so the fallback
+#      in `resolveLiveModel` is never what runs. Both carry Function calling
+#      and Reasoning and neither carries Batch. The only batch-tagged text
+#      models are llama-3.3-70b-instruct-fp8-fast, llama-4-scout-17b-16e-instruct
+#      and qwen3-30b-a3b-fp8 — none an agentic coding model, so switching to one
+#      would change what this tier MEASURES rather than what it costs.
+#   3. There is no discount to capture. The 50%-off figure is Anthropic's Batch
+#      API on their own Messages endpoint. Workers AI prices one per-model rate
+#      with no batch tier, and its batch API is documented as a CAPACITY
+#      guarantee ("fulfilled eventually, rather than erroring out"). This tier
+#      cannot reach an Anthropic model at all: `resolveLiveModel` names
+#      `workers-ai` and `liveChatModel` builds `openai-compat`
+#      (test-utils/src/live-model.ts).
+#
+# And even with all three, an eval EPISODE is a dependent chain: request n+1 is
+# not knowable until response n lands, so only the first request of an episode
+# could ever be submitted as part of a batch. So there is no fake batch path
+# here, on purpose.
+#
+# NO OUTPUT CAP, ALSO ON PURPOSE, and it is the higher cap rather than a missing
+# one. The guidance says to set `max_tokens` to 64,000 for agentic work because
+# on the Messages API the field is required and a small value truncates. Here no
+# caller sets one — `createVercelAILLM` says why (core/src/llm.ts) and a gate
+# holds every production source to it — so each provider applies its own
+# ceiling: the Anthropic adapter fills the resolved model's maximum (128,000 on
+# the current Opus and frontier models, above the recommendation), and this
+# tier's openai-compat path omits the field entirely, measured on the wire. Both
+# arm models publish an output limit of 1,048,576 tokens, so the ceiling in
+# force here is sixteen times the recommended 64,000 and eight times the
+# 128,000 maximum the guidance offers for costly cut-offs.
+# What the tier now DOES carry is the other half of that rule: a step the
+# provider cut is a failure with its own name, reported per episode as the
+# `output_cap` row (test-utils/src/eval-outcome.ts) so the share of attempts an
+# output limit ended is a number this tier can report rather than a behavioural
+# miss it misattributes.
+#
+# NO TASK BUDGET, because nothing on this path can carry one. Task budgets are
+# Anthropic-only (`output_config.task_budget`, beta `task-budgets-2026-03-13`)
+# and the pinned @ai-sdk/anthropic does support them, but every arm here
+# resolves openai-compat Workers AI, which has no such field. Setting one also
+# has to happen ONCE on a run's first request — a mid-task change invalidates
+# the cached prefix — and that is session state, which lives in the backends'
+# session assembly and not at a per-call factory.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -311,7 +376,7 @@ SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_DEVICE"
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
-# credential exported in a developer's shell can no longer make the commit hook
+# credential exported in a developer's shell cannot make the commit hook
 # bill the owner's account — being driven by this script is the consent.
 export KINU_EVAL_LIVE=1
 
@@ -549,25 +614,25 @@ fi
 
 # THE ACTIVE ARMS, as one indexed list.
 #
-# Six arms used to be spelled that many times each in the three blocks below — a
-# report check, a timing line and a liveness assertion — so adding an arm meant
-# four edits and forgetting one meant an arm nobody measured. That is the shape
-# of the hole this tier was built to close, one level up: the set the assertions
-# govern and the set the run produced must be the same set. Now they are one
-# array, and an arm this backend cannot measure is simply absent from it.
+# Spelling six arms once per block below — a report check, a timing line and a
+# liveness assertion — makes adding an arm four edits, and forgetting one leaves
+# an arm nobody measured. That is the shape of the hole this tier was built to
+# close, one level up: the set the assertions govern and the set the run
+# produced must be the same set. They are one array, and an arm this backend
+# cannot measure is simply absent from it.
 #
 # `SKIPPED_ARMS` is printed rather than left implicit: an arm missing from the
 # report because it was never run and one missing because it crashed look
 # identical afterwards, and only one of them is fine.
 #
-# EACH ARM CARRIES ITS RATCHET TARGET, because that is the fifth thing that used
-# to be spelled somewhere else: `skip-ratchet.ts` proved every target it knows
-# about non-empty, and this backend runs a SUBSET of them. Under `--backend
-# cloud` the behaviour, research and optimization arms are deliberately absent,
-# so all three of their targets reported missing and the ratchet exited 1 — the
-# tier could not pass while doing exactly what it was told. Now the arm array is
-# also the target list, so the set the ratchet governs is the set this run
-# produced, by construction rather than by two lists agreeing.
+# EACH ARM CARRIES ITS RATCHET TARGET, which is the fifth thing a second list
+# would hold: `skip-ratchet.ts` proves every target it knows about non-empty,
+# and this backend runs a SUBSET of them. Under `--backend cloud` the behaviour,
+# research and optimization arms are deliberately absent, so a fixed target list
+# reports all three missing and the ratchet exits 1 — the tier cannot pass while
+# doing exactly what it was told. The arm array is also the target list, so the
+# set the ratchet governs is the set this run produced, by construction rather
+# than by two lists agreeing.
 #
 # AND EACH ARM CARRIES ITS LIVENESS CURRENCY, which is the sixth thing. Five arms
 # prove they ran by reaching a MODEL, and `eval-spend.ts --expect-live` is that

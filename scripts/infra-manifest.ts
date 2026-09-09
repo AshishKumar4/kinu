@@ -85,6 +85,7 @@ const EnvironmentSchema = v.object({
   send_email: v.optional(v.array(v.object({ name: v.string() }))),
   ai: v.optional(v.object({ binding: v.string() })),
   worker_loaders: v.optional(v.array(v.object({ binding: v.string() }))),
+  version_metadata: v.optional(v.object({ binding: v.string() })),
   r2_buckets: v.optional(v.array(v.object({ binding: v.string(), bucket_name: v.string() }))),
   kv_namespaces: v.optional(v.array(v.object({
     binding: v.string(),
@@ -765,6 +766,13 @@ interface Draft {
   readonly required?: boolean;
 }
 
+/** A `{ binding }` block that wrangler allows at most one of, as zero or one
+ *  names. A list, so both call sites spread it and neither takes a branch of
+ *  its own — `draftsFor` is at its complexity lock and this census row must not
+ *  be paid for by raising it. */
+const singleBinding = (block: { readonly binding: string } | undefined): readonly string[] =>
+  block === undefined ? [] : [block.binding];
+
 function environmentRow(key: string, topName: string, config: WranglerEnvironment): InfraEnvironment {
   const bindings = [
     ...(config.kv_namespaces ?? []).map((k) => k.binding),
@@ -776,6 +784,7 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
     ...(config.send_email ?? []).map((e) => e.name),
     ...(config.ai === undefined ? [] : [config.ai.binding]),
     ...(config.assets === undefined ? [] : [config.assets.binding]),
+    ...singleBinding(config.version_metadata),
   ];
   return {
     key,
@@ -1075,6 +1084,8 @@ function draftsFor(
     ...(config.ai === undefined ? [] : [[config.ai.binding, 'Workers AI — platform embeddings and the ai-gateway transport'] as const]),
     ...(config.assets === undefined ? [] : [[config.assets.binding, `static assets from ${config.assets.directory} — the SPA and the CLI downloads`] as const]),
     ...(config.send_email ?? []).map((e) => [e.name, 'outbound Mission Inbox replies and owner notifications'] as const),
+    ...singleBinding(config.version_metadata).map((binding) =>
+      [binding, 'the deployed Worker version — the installed-build identity a durable turn claim records'] as const),
   ];
   for (const [binding, purpose] of inert) {
     drafts.push({
@@ -1223,7 +1234,7 @@ export function supplyCensus(
  * obtain, install and rotate something nothing consumes.
  *
  * The needle is the NAME, not `env.<name>`, and that is a correction rather than
- * a shortcut: the first draft searched for `env.<name>` and reported seven live
+ * a shortcut: searching for the spelling `env.<name>` would report seven live
  * values as dead, because this Worker reaches an environment value three
  * different ways — `env.CLOUDFLARE_OAUTH_CLIENT_SECRET` directly,
  * `const { R2_ACCESS_KEY_ID } = this.env` by destructuring, and

@@ -197,8 +197,8 @@ describe('the interactive client and the driver lease', () => {
       log(JSON.stringify({ ownerPid, printed: lines.join('\\n'), heldPid: holder()?.pid ?? null }));
     `);
 
-    // The command used to print a tick it had not performed. It now names the
-    // holder, which is also the answer to "why did nothing happen?".
+    // The command never prints a tick it did not perform: it names the holder,
+    // which is also the answer to "why did nothing happen?".
     expect(String(result.printed)).toContain('deferred');
     expect(String(result.printed)).toContain('leasebot');
     expect(String(result.printed)).toContain(String(result.ownerPid));

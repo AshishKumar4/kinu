@@ -203,13 +203,13 @@ function reportCall(
  * this seam. Omitted = the workspace's configured chat model.
  *
  * Every judge, classifier, reflection, craft-generalization and sleep-time
- * compute call in a local workspace comes through here, and each of them used to
- * discard the provider's usage report on the line that received it — so `spend`
- * is the whole difference between a workspace total that counts them and one
- * that silently omits them. Only a completed call reports. A call that threw
- * produced no usage. This seam cannot tell whether that call was billed.
- * Counting it would understate the coverage fraction with requests that cost
- * nothing.
+ * compute call in a local workspace comes through here, and `spend` is the
+ * whole difference between a workspace total that counts them and one that
+ * silently omits them: without it each call discards the provider's usage
+ * report on the line that received it. Only a completed call reports. A call
+ * that threw produced no usage. This seam cannot tell whether that call was
+ * billed. Counting it would understate the coverage fraction with requests that
+ * cost nothing.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spec?: string | null;
@@ -753,11 +753,10 @@ type CliProviderId =
  * a registry — that core has no business reading, which is why
  * `providers/default-spec.ts` declares it platform-specific at the seam rather
  * than hoisting it. This table is the adapter's ONE answer, read through
- * `defaultSpecForEndpoint` below. The create path carried a second copy of
- * this table that had never gained the `opencode`, `claude` or `@cf/` rows,
- * so creating a workspace against a Claude subscription wrote
- * `openai-compat/<model>` into its config and the first turn resolved the
- * wrong provider.
+ * `defaultSpecForEndpoint` below — the create path included, because a second
+ * copy of it missing the `opencode`, `claude` or `@cf/` rows makes creating a
+ * workspace against a Claude subscription write `openai-compat/<model>` into
+ * its config and the first turn resolve the wrong provider.
  */
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
@@ -774,7 +773,7 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
 /**
  * The full `provider/model` spec a configured endpoint stands for.
  *
- * What `agent_config.model` is seeded with when the operator named no model, and
+ * What `actor_config.model` is seeded with when the operator named no model, and
  * what a bare id falls to. Null when no endpoint derives one, which is the
  * caller's cue to say `noDefaultModelMessage()` — the same shape core's
  * `defaultSpecFor` uses for the half it owns.

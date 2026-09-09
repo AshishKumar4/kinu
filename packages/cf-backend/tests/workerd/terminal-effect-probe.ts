@@ -7,9 +7,9 @@
  * a real alarm as its wake, driven across `abortAllDurableObjects()`: an isolate
  * death, not a simulated one. That means the in-activation guard, the durable
  * claim, the roster freeze, `resumeAll`, the close gate and the recovery arming
- * are all the shipped implementations. This file used to reimplement each of
- * them, so the real-isolate suite stayed green for defects in the lifecycle and
- * proved only the ledger underneath it.
+ * are all the shipped implementations. A probe that reimplemented any of them
+ * would keep the real-isolate suite green for defects in the lifecycle and
+ * prove only the ledger underneath it.
  *
  * The schema comes from `initTerminalEffectTable` and `initToolEffectClaimTable`,
  * so a probe cannot pass against a table production has drifted away from.
@@ -48,8 +48,9 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 
 import {
-  argumentDigest, claimToolEffect, initToolEffectClaimTable, parseJsonValue, settleToolEffect,
-  type RawSqlExec, type SqlExecutor, type ToolEffectKey,
+  argumentDigest, claimToolEffect, initToolEffectClaimTable, initWorkspaceSchema, openWorkspaceMainActor,
+  parseJsonValue, settleToolEffect, WorkspaceActorDirectory,
+  type ActorHandle, type RawSqlExec, type SqlExecutor, type ToolEffectKey,
 } from '@kinu.run/core';
 
 import {
@@ -181,8 +182,24 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    *  has touched — passes through here first. */
   private ensureInit(): void {
     if (this.initialized) return;
+    initWorkspaceSchema({
+      execRaw: this.execRaw,
+      sql: this.sql,
+      exec: this.ctx.storage.sql,
+    });
     initTerminalEffectTable(this.execRaw);
     initToolEffectClaimTable(this.execRaw);
+    // The probe's own actor: claims and transitions are keyed per actor, so a
+    // probe that ran them under no handle would write rows no actor owns.
+    // Idempotent per activation — `createMain` returns the registered main
+    // when the name matches, and the identity row is inserted once.
+    const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
+    if (identity.length === 0) {
+      void this.sql`INSERT INTO workspace_identity (id, name, created_at)
+        VALUES (${'probe-workspace'}, ${'probe'}, ${Date.now()})`;
+    }
+    new WorkspaceActorDirectory(this.sql, { workspaceId: 'probe-workspace', ownerUserId: '' })
+      .createMain({ name: 'probe' });
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_effect_runs (
       effect_key TEXT NOT NULL,
       ran_at     INTEGER NOT NULL
@@ -194,6 +211,13 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_held_scope (scope TEXT PRIMARY KEY)`);
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_alarm_runs (at INTEGER NOT NULL)`);
     this.initialized = true;
+  }
+
+  /** The handle every claim below is admitted under. Re-opened per call: an
+   *  activation holds no handles across evictions, and opening is a read. */
+  private probeActor(): ActorHandle {
+    this.ensureInit();
+    return openWorkspaceMainActor(this.sql);
   }
 
   /** Armed by one call, never persisted: a cut point is an isolate death, and an
@@ -223,11 +247,11 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
   private get transitions(): TerminalTransitions {
     this._transitions ??= new TerminalTransitions({
       sql: this.sql,
+      actor: this.probeActor(),
       effects: this.effectTable(),
       now: () => Date.now() + this.clockSkewMs,
       fault: () => this.fault,
       transaction: (body) => this.ctx.storage.transactionSync(body),
-      // Written on the spot and AWAITED, as production's schedule row is: core
       // arms BEFORE it replays, because a one-shot alarm must not be consumed
       // with the suffix still uncarried, and a wake held in RAM until the call
       // returns is one an eviction can take with it.
@@ -422,19 +446,17 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       digest: argumentDigest({ tool: call.tool, args: call.args }),
     };
   }
-
   claimTool(call: ProbeToolCall): ProbeToolClaim {
     this.ensureInit();
-    const claim = claimToolEffect(this.sql, this.toolKey(call));
+    const claim = claimToolEffect(this.sql, this.probeActor(), this.toolKey(call));
     return {
       kind: claim.kind,
       result: claim.kind === 'settled' ? JSON.stringify(claim.result) : null,
     };
   }
-
   settleTool(call: ProbeToolCall, result: string): void {
     this.ensureInit();
-    settleToolEffect(this.sql, this.toolKey(call), result);
+    settleToolEffect(this.sql, this.probeActor(), this.toolKey(call), result);
   }
 
   // ── Observation ───────────────────────────────────────────────────────

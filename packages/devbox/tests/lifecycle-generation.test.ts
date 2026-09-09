@@ -10,19 +10,19 @@
 // pinned in `decisions.test.ts`; what is pinned here is the shipped methods
 // acting on them.
 //
-// The four defects, in the shape they had:
-//   * a startup attempt abandoned by a container replacement kept running, then
-//     published readiness for a generation that no longer existed, filed that
-//     generation's attach failure, and RELEASED ITS SUCCESSOR'S single-flight
-//     entry — after which the next caller started a second concurrent
-//     restoration against the same container;
+// The four defects this suite pins against:
+//   * a startup attempt abandoned by a container replacement keeps running,
+//     then publishes readiness for a generation that no longer exists, files
+//     that generation's attach failure, and RELEASES ITS SUCCESSOR'S
+//     single-flight entry — after which the next caller starts a second
+//     concurrent restoration against the same container;
 //   * a restored process whose start threw, and a port whose listener stayed
-//     silent, were recorded and stepped over — straight into exposing that very
+//     silent, are recorded and stepped over — straight into exposing that very
 //     port, and then reporting the box ready;
-//   * one generic retry policy re-armed the same identity for every failure,
+//   * one generic retry policy re-arms the same identity for every failure,
 //     spending retries on configuration that cannot change and repeating copies
 //     into a filesystem that is already full;
-//   * and no number of failures ever escalated to replacing the identity.
+//   * and no number of failures ever escalates to replacing the identity.
 import { beforeEach, describe, expect, test, vi } from 'bun:test';
 
 import * as v from 'valibot';
@@ -161,12 +161,11 @@ function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
  * read, by failing its first durable write.
  *
  * An ephemeral box's `attach()` cannot fail — it has nowhere to attach from —
- * and a container fault is no longer usable for this. After the fenceability
- * split, every step AFTER the attach reports its exhaustion instead of throwing,
- * so a faulted process start or boot stamp produces an INCOMPLETE restoration
- * rather than an attach failure. The attempt's first durable write is the
- * nearest honest stand-in: it propagates exactly as a real attach failure does,
- * into the recovery ladder.
+ * and a container fault cannot stand in either: every step AFTER the attach
+ * reports its exhaustion instead of throwing, so a faulted process start or
+ * boot stamp produces an INCOMPLETE restoration rather than an attach failure.
+ * The attempt's first durable write is the nearest honest stand-in: it
+ * propagates exactly as a real attach failure does, into the recovery ladder.
  */
 function failAttempt(harnessed: { readonly storage: FakeStorage }, code: string): void {
   harnessed.storage.faultOn('devbox:last-attach', failure(code));
@@ -278,7 +277,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
   test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
     // `startFaultAfterRunning` fires once the platform has an instance, so the
     // container really is up — but this attempt cannot know that, because the
-    // admission probe it asked threw. The restore no longer happens inside the
+    // admission probe it asked threw. The restore does not happen inside the
     // container-start hook (see restore-out-of-gate.test.ts for the probe that
     // refuted that placement), so what this box owes is the honest sequence: the
     // refusal is recorded as transient, a successor is armed, and the next drive
@@ -348,9 +347,9 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
 
   test('a superseded attempt cannot publish readiness for a generation that is gone', async () => {
     // KINU-030. The attempt is parked at its LAST await — the boot-id stamp —
-    // and the container is replaced underneath it. Before the fence it went on
-    // to set readiness, and the box then reported itself restored while the
-    // instance it had restored no longer existed.
+    // and the container is replaced underneath it. Unfenced it goes on to set
+    // readiness, and the box then reports itself restored while the instance it
+    // restored no longer exists.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
     const parked = gate();
@@ -390,9 +389,9 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
 
   test('a superseded FAILING attempt files nothing, arms nothing and stores no stage', async () => {
     // The other half of the ownership defect: this attempt is already in its
-    // RECOVERY path when the generation turns over. It used to record the attach
-    // failure of a generation that had been replaced, publish that generation's
-    // refusal, and re-arm a startup nobody had asked for.
+    // RECOVERY path when the generation turns over. Unfenced, it records the
+    // attach failure of a generation that has been replaced, publishes that
+    // generation's refusal, and re-arms a startup nobody asked for.
     //
     // Parked INSIDE the conditional write, which is where both tokens are
     // compared. The row still names this attempt — nothing deleted it — so the
@@ -622,7 +621,7 @@ describe('a failed restored service is never exposed and never reported ready', 
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
-    // The deployed merkle-pack release of run 20260905075659: the attach was
+    // The deployed release of run 20260905075659: the attach was
     // abandoned at its budget and classified terminal, and the stop's final
     // checkpoint then waited on the container the abandoned restore was still
     // running in, past the driver's 120 s release deadline. A box that
@@ -911,7 +910,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   };
 
   test('the next operation drives the attach when no row is left to deliver it', async () => {
-    // The deployed shape: `overlay-cas` failed its attach with
+    // The deployed shape: a box failed its attach with
     // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
     // the ONE schedule row that answer armed was the only thing that could
     // re-drive it — `ensureReady` refused every operation on `unattached` and
@@ -999,10 +998,10 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
 
 describe('one budget, two policies: the attach may replace, the phases after it may not', () => {
   test('silent ports share the remaining budget instead of one window each', async () => {
-    // KINU-N014. Each port used to get its own thirty-second window, so three
-    // silent ports added about ninety seconds while every caller sat in the
-    // readiness gate. WITHOUT THE ALLOWANCE THIS TEST CANNOT PASS: three
-    // thirty-second windows outlast the runner's timeout many times over.
+    // KINU-N014. A thirty-second window per port makes three silent ports cost
+    // about ninety seconds while every caller sits in the readiness gate.
+    // WITHOUT THE ALLOWANCE THIS TEST CANNOT PASS: three thirty-second windows
+    // outlast the runner's timeout many times over.
     const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
     for (const value of [3000, 8080, 9000]) port(rows, value, `tok${String(value)}`);
@@ -1099,8 +1098,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
   test('a boot stamp that outruns its allowance leaves the box attached and unready',
     async () => {
-      // The last phase, and the one that used to sit furthest outside any bound.
-      // It is a step like the others now: reported, never replaced.
+      // The last phase, and the one furthest from the attach that opened the
+      // bound. It is a step like the others: reported, never replaced.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       const slow = gate();
@@ -1120,8 +1119,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     async () => {
       // The other half of the split, and it must not regress: an attach
       // abandoned mid-mount leaves work a retry would collide with, so the
-      // identity goes. `r2fs.test.ts` drives the real strategy attach; this pins
-      // the class-level consequence through the ladder.
+      // identity goes. `snapshot-chain.test.ts` drives the real strategy
+      // attach; this pins the class-level consequence through the ladder.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: PREVIOUS, stage: 'retry' });

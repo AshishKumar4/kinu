@@ -178,7 +178,7 @@ describe('a refusal is not output', () => {
     });
   });
 
-  test('an unclassified legacy executor error does not invent a no-dispatch reason', () => {
+  test('an executor error with no refusal channel does not invent a no-dispatch reason', () => {
     expect(readDeviceCommand({ error: 'Executor "laptop" is not available' })).toEqual({
       kind: 'refused', reason: 'unclassified', text: 'Executor "laptop" is not available',
     });
@@ -331,13 +331,11 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
     );
   });
 
-  test('the grant drives the card flow, and never the route the product deleted', async () => {
-    // This test used to assert a single `PUT /api/user/devices/:id/consent`
-    // carrying the browser identity. That route does not exist: `b2ceb2e7c`
-    // deleted it, and `user/routes.ts` now serves only `GET /devices/consents`
-    // and `DELETE /devices/:id/consent`. The old assertions passed anyway,
-    // because this fake answers 200 to anything — green over a route the
-    // product had dropped. So the pin is now the flow an owner really performs:
+  test('the grant drives the card flow, and never a route the product does not serve', async () => {
+    // NO `PUT /api/user/devices/:id/consent` EXISTS: `user/routes.ts` serves only
+    // `GET /devices/consents` and `DELETE /devices/:id/consent`. Pinning a route
+    // this fake does not serve is green anyway, because the fake answers 200 to
+    // anything — so the pin is the flow an owner really performs:
     // one harmless `laptop` call raises the card, the workspace's own pending
     // list is read, and the card is answered `always` through the RPC its
     // button calls. All three go through `/api/cli` under the bearer, because

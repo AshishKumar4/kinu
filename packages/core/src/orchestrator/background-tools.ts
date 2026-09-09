@@ -1,7 +1,7 @@
 /**
  * The ACTOR's background-detach policy, and the evict/exit resume policy. One
- * implementation for both backends (each previously carried its own copy of the
- * map AND the wrapper AND the resume gate).
+ * implementation for both backends, so they cannot disagree about what detaches
+ * or about what may be re-driven.
  *
  * The WRAPPER is not here: it is `jobs/background-wrap.ts`, a leaf, along with the
  * entries whose gate needs nothing. What is here is the one entry that cannot be
@@ -21,12 +21,16 @@ import { resumableAgentsInput } from '../tools/agents-tool';
 import { harvestSwarm } from '../strategy/swarm-resume';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
 /** The durable rows a swarm harvest reads. The backend already holds both. */
 export interface SwarmHarvestDeps {
   readonly sql: SqlExecutor;
+  /** Whose harvest. The tree and the node records are actor-private, so the raw
+   *  reads inside `harvestSwarm` carry the same owner the ledger is bound to. */
+  readonly actor: ActorHandle;
   readonly ledger: MctsSearchStore;
 }
 
@@ -57,9 +61,9 @@ export const BACKGROUNDABLE_TOOLS = {
  * re-detach) CONTINUES the interrupted search rather than starting another: both
  * engines re-enter their own durable rows — `mcts/engine.ts` from its checkpoint,
  * `strategy/swarm-run.ts` from its tree and its per-node records
- * (`strategy/swarm-resume.ts`). That claim used to be true of MCTS only, and the
- * swarm half of it was measured costing a live five-head search its whole tree: the
- * re-drive minted a second root, re-paid for every expansion and abandoned the first.
+ * (`strategy/swarm-resume.ts`). BOTH halves are load-bearing: a swarm re-drive that
+ * does not re-enter its tree was measured costing a live five-head search its whole
+ * tree — it minted a second root, re-paid for every expansion and abandoned the first.
  *
  * THE CALL IS MARKED AS A RE-DRIVE, and it is the only path that sets that marker.
  * The stored input is replayed verbatim, so nothing in it distinguishes a re-drive
@@ -67,8 +71,8 @@ export const BACKGROUNDABLE_TOOLS = {
  * task matches a search still expanding must get its own tree. See
  * {@link RESUME_REDRIVE_OPTION}.
  *
- * Rows stored before today's surface — the pre-unification `think` kind, and
- * the removed `fork` action — are TRANSLATED onto the same path by
+ * Durable rows whose kind is `think`, or whose action is `fork` — spellings this
+ * surface does not emit — are TRANSLATED onto the same path by
  * `resumableAgentsInput` rather than refused, because a durable row is history
  * and nobody is left to correct its spelling. Side-effecting kinds
  * (execute_tools / run) can't be safely re-executed, so they decline.

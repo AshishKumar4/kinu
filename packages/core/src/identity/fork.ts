@@ -5,7 +5,7 @@
  * a NEW workspace by a new name). The semantics are "clean-slate messages-only":
  *
  *   Copy:   SOUL.md, the cut message's ancestry in the session tree,
- *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
+ *           memory/* VFS rows + memory_chunks, crafted_tools, actor_config
  *           EXCEPT the shell-approval authority rows — see the snapshot below
  *   Reset:  search_nodes, scaffold_versions, task_history, craft quality,
  *           fibers, evolution_events, executor_output, activity_log,
@@ -53,6 +53,8 @@ import { CHAT_SESSION_ID, forkAncestry, hasPaneStore } from './conversation-stor
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
 import { uiMessageText } from '../utils/ui-message';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../state/workspace-actors';
+import { KinuError } from '../obs/error';
 
 /** The serialized UI message form of one stored row — what the SDK's pane
  *  store renders and therefore what a pane-shaped write must land. */
@@ -139,7 +141,7 @@ export const ForkCraftedToolRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One agent_config row. The shell-approval authority keys never appear here:
+/** One actor_config row. The shell-approval authority keys never appear here:
  *  they are withheld at the READ, in {@link snapshotWorkspaceForFork}. */
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
 
@@ -200,9 +202,10 @@ export interface ForkResult {
  *
  * Throws if `untilMessageId` is not a node of the source's session tree — the
  * one failure worth surfacing before a target workspace is created, and the
- * failure the operator hit: the id came from the chat pane, and the table this
- * resolved against was a turn-end summary that had never recorded it; the cut
- * now reads the store the pane renders, directly, and needs no projection.
+ * failure the operator hit. The cut resolves the id against the store the chat
+ * pane renders, directly, and needs no projection: the operator's id comes from
+ * that pane, and resolving it against a turn-end summary instead misses every
+ * id the summary never recorded.
  */
 export async function snapshotWorkspaceForFork(
   source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
@@ -211,7 +214,8 @@ export async function snapshotWorkspaceForFork(
   // the pane rows already carry it. The chat pane hydrates from the SDK's store,
   // so a fork without those rows shows an empty pane despite a populated
   // `messages` table.
-  const { chain: messages, pane: assistantMessages } = forkAncestry(source, untilMessageId);
+  const actor = openWorkspaceMainActor(source);
+  const { chain: messages, pane: assistantMessages } = forkAncestry(source, actor, untilMessageId);
   const lastMessage = messages[messages.length - 1];
   if (lastMessage === undefined) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
@@ -232,14 +236,15 @@ export async function snapshotWorkspaceForFork(
   // run matching commands without ever asking. Withheld at the SNAPSHOT rather
   // than at the write, so the authority never enters the value that crosses
   // between workspaces at all.
-  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM agent_config`
+  const agentConfig = source<ForkSnapshot['agentConfig'][number]>`SELECT key, value FROM actor_config WHERE actor_id = ${actor.actorId}`
     .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key));
 
   // The FTS content table (agent-utils MemoryStore), created for every
   // workspace by initWorkspaceSchema. Carrying it is an optimization — the text
   // is in the memory/*.md FILES above, and a fork with no chunks reindexes via
-  // FTS5 'rebuild' on its next write — but it is carried, because framing
-  // removed the budget that used to make dropping it the cheaper answer.
+  // FTS5 'rebuild' on its next write. The framed transfer has no total
+  // snapshot-size cap, so retaining `memory_chunks` avoids reindexing without
+  // competing for a snapshot budget.
   const memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
     SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
   `;
@@ -345,6 +350,18 @@ export class ForkTargetWriter {
   }
 
   /**
+   * The target's own main actor.
+   *
+   * Resolved on demand rather than captured in the constructor: {@link begin}
+   * is what CREATES this actor on a target that had no identity yet, so a field
+   * read at construction would name an actor that does not exist. Every
+   * `messages` statement below asks for it after `begin` has run.
+   */
+  private get actorId(): string {
+    return openWorkspaceMainActor(this.target).actorId;
+  }
+
+  /**
    * Record which fork this is, and reset what this write has taken.
    *
    * One row, one statement. The destructive half is {@link clearStagedRows},
@@ -354,6 +371,14 @@ export class ForkTargetWriter {
    * still roll the deletion back.
    */
   begin(head: ForkSnapshotHead): void {
+    const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
+    if (!current) {
+      void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
+      new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
+    } else {
+      if (current.id !== this.opts.workspaceId) throw new KinuError('denied', 'The fork target does not match its durable workspace identity.');
+      openWorkspaceMainActor(this.target);
+    }
     this.staging.begin(head);
   }
 
@@ -369,18 +394,20 @@ export class ForkTargetWriter {
    * fork.
    */
   clearStagedRows(): void {
-    void this.target`DELETE FROM messages`;
+    const actorId = this.actorId;
+    void this.target`DELETE FROM messages WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM crafted_tools`;
     void this.target`DELETE FROM memory_chunks`;
-    void this.target`DELETE FROM agent_config`;
+    void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
-    if (hasPaneStore(this.target)) void this.target`DELETE FROM assistant_messages`;
+    if (hasPaneStore(this.target)) {
+      void this.target`DELETE FROM assistant_messages WHERE actor_id = ${actorId}`;
+    }
   }
 
   stageAgentConfig(rows: readonly ForkConfigRow[]): void {
-    for (const row of rows) {
-      void this.target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
-    }
+    const config = openWorkspaceMainActor(this.target).config;
+    for (const row of rows) config.set(row.key, row.value);
     this.staging.count({ agentConfig: rows.length });
   }
 
@@ -416,8 +443,10 @@ export class ForkTargetWriter {
     this.ensurePaneTable();
     for (const m of rows) {
       void this.target`
-        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
+        INSERT OR IGNORE INTO assistant_messages
+          (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${this.actorId}, ${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role},
+                ${m.content}, ${m.created_at})
       `;
     }
     this.staging.count({ assistantMessages: rows.length });
@@ -445,19 +474,24 @@ export class ForkTargetWriter {
       for (const m of rows) {
         const text = this.carriedText(m);
         void this.target`
-          INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-          VALUES (${m.id}, ${''}, ${m.parent_id}, ${m.role}, ${encodeUiMessage(m.id, m.role, text)},
-                  ${paneStampOf(m.created_at)})
+          INSERT OR IGNORE INTO assistant_messages
+            (actor_id, id, session_id, parent_id, role, content, created_at)
+          VALUES (${this.actorId}, ${m.id}, ${''}, ${m.parent_id}, ${m.role},
+                  ${encodeUiMessage(m.id, m.role, text)}, ${paneStampOf(m.created_at)})
         `;
       }
       return;
     }
     // Plain destination: PKs and parent edges preserved — the chain IS the
-    // tree, carried verbatim.
+    // tree, carried verbatim, under THIS target's actor. The parent edges are
+    // re-keyed by that actor too: `messages` keys on (actor_id, id), so the
+    // inherited chain is a tree of this actor's rows and nothing else.
+    const actorId = this.actorId;
     for (const m of rows) {
       void this.target`
-        INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role}, ${this.carriedText(m)}, ${m.created_at})
+        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actorId}, ${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role},
+                ${this.carriedText(m)}, ${m.created_at})
       `;
     }
   }
@@ -578,8 +612,7 @@ export class ForkTargetWriter {
     invalidateConversationSearchIndex(this.target);
 
     // 3. display_name, so the UI shows the fork rather than the bootstrap.
-    void this.target`
-      INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${this.opts.workspaceName})`;
+    openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
 
     // 4. Lineage — single row, and the thing that makes this workspace a fork.
     void this.target`
@@ -603,14 +636,15 @@ export class ForkTargetWriter {
     const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
     if (this.authority === 'pane') {
       void this.target`
-        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${markerId}, ${''}, ${head.cut.messageId}, ${'system'},
+        INSERT OR IGNORE INTO assistant_messages
+          (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${this.actorId}, ${markerId}, ${''}, ${head.cut.messageId}, ${'system'},
                 ${encodeUiMessage(markerId, 'system', syntheticText)}, ${paneStampOf(forkPointMs + 1)})
       `;
     } else {
       void this.target`
-        INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
+        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${this.actorId}, ${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
                 ${syntheticText}, ${forkPointMs + 1})
       `;
       // The pane table existed only to resolve elided text on a plain target.
@@ -627,11 +661,17 @@ export class ForkTargetWriter {
   }
 
   /**
-   * The agents SDK session provider creates this table on its first append, so
-   * a target that has not run a hosted turn does not have it yet — created here
-   * with the SDK own definition (agents,
-   * src/experimental/memory/session/providers/agent.ts) so a hosted target can
-   * never come up with an empty pane beside a full `messages`.
+   * The pane store of a hosted target, created here so a target that has not run
+   * a hosted turn cannot come up with an empty pane beside a full `messages`.
+   *
+   * ACTOR-SCOPED, like every other per-actor table: one physical database holds
+   * every logical actor, a pane message id is minted per actor, and the pane
+   * ancestry walk climbs `parent_id` to `id` — so without the owner in the key
+   * one actor's transcript is another's ancestry. That makes this definition
+   * DIVERGE from the agents SDK's own (agents,
+   * src/experimental/memory/session/providers/agent.ts), which knows nothing
+   * about actors; the host owns this table now and creates it before any SDK
+   * append can.
    *
    * The DDL runs even when the table already exists, because a target carrying
    * the SDK table need not carry these indexes and the pane ancestry walk is
@@ -643,16 +683,20 @@ export class ForkTargetWriter {
     if (!hasPaneStore(this.target)) this.staging.paneTableCreated();
     void this.target`
       CREATE TABLE IF NOT EXISTS assistant_messages (
-        id TEXT PRIMARY KEY,
+        actor_id TEXT NOT NULL,
+        id TEXT NOT NULL,
         session_id TEXT NOT NULL DEFAULT '',
         parent_id TEXT,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (actor_id, id)
       )
     `;
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent
+      ON assistant_messages(actor_id, parent_id)`;
+    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session
+      ON assistant_messages(actor_id, session_id)`;
   }
 
   /** The text a plain row carries: verbatim, or flattened from the rich twin
@@ -661,7 +705,8 @@ export class ForkTargetWriter {
     if (row.content !== null) return row.content;
     const twin = hasPaneStore(this.target)
       ? this.target<{ content: string }>`
-          SELECT content FROM assistant_messages WHERE id = ${row.id} LIMIT 1`[0]
+          SELECT content FROM assistant_messages
+          WHERE actor_id = ${this.actorId} AND id = ${row.id} LIMIT 1`[0]
       : undefined;
     if (!twin) {
       throw new Error(
@@ -754,8 +799,8 @@ export interface ForkLineageRow {
 /** Read the single-row fork_lineage. Returns null when not a fork.
  *
  *  `fork_lineage` is created by initAllTables on every workspace, and an empty
- *  result already says "not a fork" — so there was never a condition for the
- *  catch that used to wrap this, only the ability to report a broken read as a
+ *  result already says "not a fork" — so this read is uncaught. A catch would
+ *  have no condition to handle, only the ability to report a broken read as a
  *  workspace with no parent. */
 export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   const rows = sql<{

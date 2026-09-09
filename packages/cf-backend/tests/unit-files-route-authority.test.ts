@@ -398,11 +398,11 @@ describe('a device the workspace has no grant on', () => {
   });
 
   test('an unbound workspace reaches no file on the device, and is asked once', async () => {
-    // What this replaces: the base action tier used to stop short of the file
-    // view, because the view learned the device's home by running a shell
-    // command and a shell was the OTHER tier. Both halves of that are gone —
-    // the paths arrive on HELLO, and there is one binding. So the boundary
-    // here is the binding itself: refuse it, and no frame reaches the machine.
+    // There is no action tier that stops short of the file view: the paths
+    // arrive on HELLO rather than being learned by running a shell command, and
+    // there is ONE binding rather than a shell tier beside a file tier. So the
+    // boundary here is the binding itself: refuse it, and no frame reaches the
+    // machine.
     const rail = await seam({ workspaces: ['device-base'] });
     rail.user.consentDecision = 'deny';
 
@@ -487,7 +487,7 @@ describe('a request the authority behind it has since withdrawn', () => {
     // user plane refuses it — the route's 404 is not the only thing standing
     // between a deleted workspace and the owner's machine.
     // Refused, and nothing reached the machine. The MESSAGE is whichever
-    // refusal the caller met first: the file view now reads its scope off the
+    // refusal the caller met first: the file view reads its scope off the
     // device row before it sends anything, and that read is refused for the
     // same reason the RPC would have been. Pinning one of the two sentences
     // would pin the order rather than the boundary.

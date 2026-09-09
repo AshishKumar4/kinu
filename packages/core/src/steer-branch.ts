@@ -9,7 +9,7 @@
  * This module owns the single-head run (over the SAME HeadRuntime seam the
  * agents fork uses, journaled like any head run) and the
  * settle step. Both backends drive it: LocalAgentSession.branch() in-process,
- * OrchestratorAgent.branchTurn() over SubordinateAgent facets in head mode.
+ * OrchestratorAgent.branchTurn() over hosted head actors.
  */
 
 import type { SqlExecutor } from './types/primitives';
@@ -20,6 +20,8 @@ import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
 import { renderThrownChain } from './obs/index';
+import { defaultLoopOrigin } from './scaffold/loop-origin';
+import type { ActorHandle } from './state/actor-handle';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle
@@ -112,6 +114,8 @@ export async function startBranchHead(
     budget: { ...BRANCH_HEAD_BUDGET, spawnedAt },
     model: input.model,
     mergeStrategy: 'best_of',
+    // A steer branch is one head of one run: same rule as every other fork.
+    loop: defaultLoopOrigin('head'),
   };
   journal.recordSplit(rootId, BRANCH_RATIONALE, spawnedAt);
   journal.insertSpawn(headInput);
@@ -168,6 +172,8 @@ export interface PendingBranch {
 export async function settlePendingBranch(
   deps: {
     sql: SqlExecutor;
+    /** The actor whose turn was steered — see {@link settleBranchIntoTakes}. */
+    actor: ActorHandle;
     sessionId: string;
     broadcast: (event: BranchStatusEvent) => void;
   },
@@ -204,6 +210,7 @@ export async function settlePendingBranch(
   };
   const outcome = settleBranchIntoTakes(
     deps.sql,
+    deps.actor,
     settlementKey === undefined ? settlement : { ...settlement, settlementKey },
   );
   if (outcome.ok) {
@@ -274,6 +281,16 @@ export function branchOutcomeFromJournal(
 
 export function settleBranchIntoTakes(
   sql: SqlExecutor,
+  /**
+   * The actor whose turn was steered.
+   *
+   * Second, per this repo's sql-first/actor-second convention, and REQUIRED:
+   * the take set is claimed against the live turn of the actor that steered,
+   * and with every actor's rows in ONE database an unowned write lands under
+   * whoever the reader happens to be. This scope had no handle at all, so it
+   * is passed rather than derived.
+   */
+  actor: ActorHandle,
   input: {
     task: string;
     report: BranchOutcome;
@@ -312,6 +329,7 @@ export function settleBranchIntoTakes(
   };
   const set = recordBranchTakeSet(
     sql,
+    actor,
     input.settlementKey === undefined
       ? settlement
       : { ...settlement, settlementKey: input.settlementKey },

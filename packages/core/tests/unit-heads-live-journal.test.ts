@@ -1,16 +1,15 @@
 // The head journal announces its own writes, so a running search is live.
 //
-// Shared rather than cf-only: the listener is injected, and the CLI carries the
-// same defect in a stronger form — its nodes always run in process, so nothing
-// it journals has ever announced anything.
+// Shared rather than cf-only: the listener is injected, and the CLI is exposed
+// in a stronger form — its nodes always run in process, so an announcement
+// bolted to an RPC hop would never fire there at all.
 //
-// `head_activity` used to be a side effect on two RPC methods, both reachable
-// only from a facet calling back to its parent. So a top-level node's or head's
-// COMPLETION announced nothing, and an UNHOSTED node — a workspace with no
-// owner gets no facet, and core then wires `reportStep` straight to
-// `journal.appendStep` — announced nothing at all, for its whole run. Its rows
-// landed correctly and a manual reload showed them, which is the worst shape a
-// liveness defect can take.
+// `head_activity` as a side effect on two RPC methods, both reachable only from
+// a facet calling back to its parent, announces nothing for a top-level node's
+// or head's COMPLETION, and nothing at all for an UNHOSTED node's whole run — a
+// workspace with no owner gets no facet, and core then wires `reportStep`
+// straight to `journal.appendStep`. Those rows land correctly and a manual
+// reload shows them, which is the worst shape a liveness defect can take.
 //
 // The property under test is that the announcement rides the WRITE. Every path
 // into the journal goes through the one instance this backend hands to core, so
@@ -22,10 +21,11 @@
 // listeners must not fail a durable write).
 
 import { describe, expect, test } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';
 import {
   HeadJournal, initHeadsTables, LiveHeadJournal, type HeadInput, type HeadReport,
 } from '../src/index';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 function spawn(id: string, rootId: string): HeadInput {
   return {
@@ -33,6 +33,7 @@ function spawn(id: string, rootId: string): HeadInput {
     task: `do ${id}`, mode: 'build', rationale: 'because',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 
@@ -48,8 +49,12 @@ function report(id: string): HeadReport {
 function live() {
   const sql = createTestSql();
   initHeadsTables(sql.execRaw);
+  const actor = createTestActorsOver(sql.db).main;
   const announced: string[] = [];
-  return { sql, announced, journal: new LiveHeadJournal(sql.sql, (id) => { announced.push(id); }) };
+  return {
+    sql, announced,
+    journal: new LiveHeadJournal(sql.sql, actor, (id) => { announced.push(id); }),
+  };
 }
 
 describe('LiveHeadJournal', () => {
@@ -83,11 +88,12 @@ describe('LiveHeadJournal', () => {
   test('the announcement follows the durable write, never precedes it', () => {
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
+    const actor = createTestActorsOver(sql.db).main;
     // Read the store from INSIDE the announcement. A row that is not there yet
     // would send a client to an empty ledger, and an announcement that
     // overtook its own write is indistinguishable from a dropped one.
     const seen: (string | null)[] = [];
-    const journal = new LiveHeadJournal(sql.sql, (id) => {
+    const journal = new LiveHeadJournal(sql.sql, actor, (id) => {
       seen.push(journal.readHead(id)?.status ?? null);
     });
     journal.insertSpawn(spawn('n1', 'root-1'));
@@ -98,7 +104,7 @@ describe('LiveHeadJournal', () => {
   test('a failed announcement does not fail the write it was announcing', () => {
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
-    const journal = new LiveHeadJournal(sql.sql, () => {
+    const journal = new LiveHeadJournal(sql.sql, createTestActorsOver(sql.db).main, () => {
       throw new Error('no listeners');
     });
     // The caller is core, mid-search. A socket with nobody on it must not cost
@@ -113,9 +119,12 @@ describe('LiveHeadJournal', () => {
     // announced by itself all along.
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
-    const plain = new HeadJournal(sql.sql);
+    // ONE owner, two journals over its store: the wrapper is the only thing
+    // that differs between them.
+    const actor = createTestActorsOver(sql.db).main;
+    const plain = new HeadJournal(sql.sql, actor);
     let announcements = 0;
-    const counting = new LiveHeadJournal(sql.sql, () => { announcements += 1; });
+    const counting = new LiveHeadJournal(sql.sql, actor, () => { announcements += 1; });
     plain.insertSpawn(spawn('n1', 'root-1'));
     expect(announcements).toBe(0);
     counting.insertSpawn(spawn('n2', 'root-1'));

@@ -2,11 +2,11 @@
  * Sandbox lifecycle failures — the notification the container could not make.
  *
  * The container's persistence path (the filesystem attach on start, the
- * periodic checkpoint, the supervised processes and ports it restores) reported
- * its failures to `diagnostics` and nowhere else, which is a logging sink. An
- * agent that lost a workspace attach saw a generically-failing tool call; an
- * agent whose checkpoint had been failing for an hour saw nothing at all. That
- * is the gap this closes: the sandbox's Durable Object calls
+ * periodic checkpoint, the supervised processes and ports it restores) reports
+ * its failures to `diagnostics`, which is a logging sink: on its own it leaves
+ * an agent that lost a workspace attach with a generically-failing tool call,
+ * and an agent whose checkpoint has been failing for an hour with nothing at
+ * all. So the sandbox's Durable Object calls
  * {@link acceptSandboxLifecycleFailure} on the workspace root stub, and the
  * failure becomes a blocker the agent is woken for.
  *
@@ -47,14 +47,14 @@
  * and the container's retry is the recovery.
  *
  * -- Every settlement is a row, including the good ones ----------
- * The seam used to produce no fleet signal at all, which made an incident the
- * agent acted on and an incident that reached nobody the same observable
- * result: nothing. Every exit below now hands ONE typed record to
- * `deps.recordRecovery`: the stage, how it settled, which delivery attempt it
- * was, how long since the incident was first reported, and the class of failure
- * where this side can classify one. Successful recovery and failed recovery go
- * through that one seam, so a query asks about the outcome dimension rather
- * than about whether a row exists.
+ * Every exit below hands ONE typed record to `deps.recordRecovery`: the stage,
+ * how it settled, which delivery attempt it was, how long since the incident
+ * was first reported, and the class of failure where this side can classify
+ * one. Successful recovery and failed recovery go through that one seam, so a
+ * query asks about the outcome dimension rather than about whether a row
+ * exists. A seam that produced no fleet signal at all would make an incident
+ * the agent acted on and an incident that reached nobody the same observable
+ * result: nothing.
  *
  * -- The envelope is versioned, and refuses to guess ----------
  * {@link SANDBOX_LIFECYCLE_ENVELOPE_VERSION} is stamped by the one producer
@@ -98,10 +98,10 @@ const SANDBOX_LIFECYCLE_SIGNAL_KIND = 'sandbox_lifecycle_failure';
  * ONE VOCABULARY, AND IT IS THE PRODUCER'S. Keyed by `@kinu.run/devbox`'s own
  * `IncidentStage`, so the compiler refuses a table that is missing a stage the
  * container can emit and refuses one that invents a stage nothing produces.
- * Both halves are load-bearing: the two sides used to keep separate lists, the
- * container emitted `attach` and `checkpoint`, this schema admitted neither,
- * and every restore failure and snapshot failure — the two the seam exists for
- * — was answered `rejected` and frozen in the container's ledger, never
+ * Both halves are load-bearing: let the two sides keep separate lists and the
+ * container emits `attach` and `checkpoint` while this schema admits neither,
+ * so every restore failure and snapshot failure — the two the seam exists for
+ * — is answered `rejected` and frozen in the container's ledger, never
  * retried and never seen by the agent.
  */
 const STAGE_CONSEQUENCE = {
@@ -176,14 +176,15 @@ export type SandboxLifecycleFailure = v.InferOutput<typeof SandboxLifecycleFailu
  * translating it, and the two sides cannot hold different opinions about whether
  * an announcement landed.
  *
- * THAT DISAGREEMENT WAS THE DEFECT. `status` used to be the constant `'queued'`
- * for every accepted envelope, meaning "the shape was fine", while a second
- * `signal` field held the delivery truth. The host read `status`, and the box
- * maps `queued` to `deliveredAt` — so an announcement that reached nobody made
- * the box write the incident off and stop retrying, while this side's own ledger
- * still held it as re-deliverable and was waiting to be asked again. Nobody was
- * ever told, and nothing was left to tell them. The parse verdict is no longer a
- * delivery answer, and there is no second field for it to contradict.
+ * THAT DISAGREEMENT IS THE DEFECT THIS SHAPE FORECLOSES. A `status` that meant
+ * only "the shape was fine" — the constant `'queued'` for every accepted
+ * envelope — beside a second `signal` field holding the delivery truth is a
+ * contradiction the host cannot see: it reads `status`, and the box maps
+ * `queued` to `deliveredAt`, so an announcement that reached nobody makes the
+ * box write the incident off and stop retrying while this side's own ledger
+ * still holds it as re-deliverable and waits to be asked again. Nobody is ever
+ * told, and nothing is left to tell them. The parse verdict is not a delivery
+ * answer, and there is no second field for it to contradict.
  */
 export type SandboxLifecycleFailureResult =
   | {
@@ -242,9 +243,9 @@ const StoredOutcomeSchema = v.picklist(['mid-turn', 'queued', 'undelivered'] as 
  *  branch on, so it throws here rather than reading as "not announced".
  *
  *  `firstSeenAt` is returned because it is the start of the one duration worth
- *  measuring here: how long the agent went without being told. The column was
- *  already selected and already written once and never moved, so the fact was
- *  on hand and only the reader was dropping it. */
+ *  measuring here: how long the agent went without being told. The column is
+ *  already selected, written once and never moved, so the fact is on hand and a
+ *  reader that drops it loses the duration for nothing. */
 function readDeliveryState(
   sql: SqlExecutor, incidentId: string,
 ): {

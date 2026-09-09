@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/memory/conversation-search.ts b/packages/core/src/memory/conversation-search.ts
-index 1d9aef550..1be2c31fa 100644
+index e5ec3652d..9cbb9ed53 100644
 --- a/packages/core/src/memory/conversation-search.ts
 +++ b/packages/core/src/memory/conversation-search.ts
-@@ -190,7 +190,7 @@ export class ConversationSearchStore {
+@@ -204,7 +204,7 @@ export class ConversationSearchStore {
        : this.sql<PlainRaw>`
            SELECT id, role, content, created_at, rowid AS rid FROM messages
-           WHERE session_id = ${row.session_id} AND rowid < ${row.rid}
+           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
 -          ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
 +          ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp));
      const after = paneSide

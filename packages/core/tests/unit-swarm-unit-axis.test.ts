@@ -1,23 +1,19 @@
 /**
  * The `unit` axis, and the axis that took its parameter.
  *
- * THIS FILE USED TO ASSERT A REFUSAL. `unit:'trajectory'` named a tool-using agent
- * node and `regionRefusal` refused it, because nodes share one workspace and a node
- * cannot be graded on what it changed when every node changed the same tree. That
- * region was a measured gap — models compose the shape CORRECTLY, the design blocked
- * it, and nothing on the surface said so — so the refusal's own wording was the
- * contract under test.
+ * A TOOL-USING NODE RUNS, and the bound that could make it look illegal is a bound on
+ * the GRADING SIGNAL rather than on the tool surface: nodes share one workspace, so a
+ * node cannot be graded on what it CHANGED — every node changed the same tree — but it
+ * can be graded on what it REPORTS. `answer` IS that shape, so no separate value names
+ * it, and models compose the shape correctly without one.
  *
- * The blocker was real and it was mis-sited. It bounds the GRADING SIGNAL, not the tool
- * surface: a node holding a shell can still be graded, as long as it is graded on what
- * it REPORTS. So the shape runs now, the value that named it is gone because it is what
- * `answer` IS, and what these tests assert is the migration itself —
- * the old spellings are unrepresentable, the new ones resolve, and the composition that
- * was permanently refused is no longer refused at all.
+ * What these tests assert is *One spelling per axis*, held across the cut: the cut
+ * spellings are UNREPRESENTABLE rather than merely refused, every declared value
+ * resolves, and a tool-using composition starts instead of coming back `unsupported`.
  *
- * The inheritance question `unit:'trajectory'` carried did not vanish; it moved to the
- * `context` axis, which asks it once for the caller-to-root edge and every branch edge
- * (*Inherited context*). That is the second half of what is asserted here.
+ * The inheritance question a unit-level flag would carry is asked once on the
+ * `context` axis, for the caller-to-root edge and every branch edge (*Inherited
+ * context*). That is the second half of what is asserted here.
  *
  * Specified by docs/EXPLORATION.md — "The six axes", "One spelling per axis", "Presets",
  * "Validity over the resolved configuration", "Inherited context" and "Isolation".
@@ -26,11 +22,13 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
+import type { JsonValue } from '../src/utils/json';
 import {
   resolveSwarm, swarmValidity, SWARM_CONTEXTS, SWARM_UNITS,
   type BranchContext, type SwarmUnitSetting,
 } from '../src/strategy/swarm';
 import { runSwarm } from '../src/strategy/swarm-run';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 
 /**
@@ -79,21 +77,30 @@ describe('the unit axis names what a node produces, and nothing else', () => {
     expect([...SWARM_UNITS]).toEqual(['answer', 'thought']);
   });
 
-  test('the removed spellings are UNREPRESENTABLE, not merely refused', () => {
-    // The migration guard. `trajectory` named the shape two of the three values now
-    // have, and `step` never executed — accepting either beside the current set would
-    // be the second spelling *One spelling per axis* exists to prevent.
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: true } })).toThrow();
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'step' } })).toThrow();
-    // And no unit carries a parameter any more: the one it had is the `context` axis.
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'answer', inherit: true } })).toThrow();
+  /** Where the schema points when it refuses `input`: one dotted path per issue.
+   *  A refusal that names another axis, or none, is a different defect from
+   *  acceptance, and `toThrow()` alone cannot tell the three apart. */
+  function refusedAt(input: JsonValue): string[] {
+    const result = v.safeParse(SwarmConfigSchema, input);
+    if (result.success) throw new Error(`parsed a cut spelling: ${JSON.stringify(input)}`);
+    return result.issues.map((issue) => (issue.path ?? []).map((step) => String(step.key)).join('.'));
+  }
+
+  test('the cut spellings are UNREPRESENTABLE, not merely refused', () => {
+    // The one-spelling guard. `trajectory` named the shape two of the three values
+    // have, and `step` never executed — accepting either beside the current set is the
+    // second spelling *One spelling per axis* exists to prevent.
+    expect(refusedAt({ unit: { kind: 'trajectory', inherit: true } })).toEqual(['unit.kind']);
+    expect(refusedAt({ unit: { kind: 'step' } })).toEqual(['unit.kind']);
+    // And no unit carries a parameter: inheritance is the `context` axis.
+    expect(refusedAt({ unit: { kind: 'answer', inherit: true } })).toEqual(['unit.inherit']);
   });
 
   test('a bare axis string is not a unit — the tag IS the value', () => {
-    expect(() => v.parse(SwarmConfigSchema, { unit: 'answer' })).toThrow();
+    expect(refusedAt({ unit: 'answer' })).toEqual(['unit']);
   });
 
-  test('every declared unit resolves, so the rename removed no reachable value', () => {
+  test('every declared unit resolves, so no declared value is unreachable', () => {
     for (const kind of SWARM_UNITS) {
       const call = unitCall({ unit: { kind }, context: 'fresh' });
       const resolved = resolveSwarm(call);
@@ -105,7 +112,7 @@ describe('the unit axis names what a node produces, and nothing else', () => {
 
 describe('the surface has SIX axes, and each cut value is refused by its own name', () => {
   /** A config as a caller might still spell it, INCLUDING the axes and values the
-   *  surface no longer has. Named rather than `object`, because the shape these
+   *  surface does not have. Named rather than `object`, because the shape these
    *  tests send is exactly the thing under test. */
   interface CutSpelling {
     readonly unit?: { readonly kind: string };
@@ -188,19 +195,19 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   });
 
   test("an archive with no rejection test is UNCONSTRUCTIBLE, not refused", () => {
-    // The load-bearing half of the re-homing. There is no longer a validity rule to
-    // fail: the parse itself has nowhere to put an archive without its novelty test.
+    // The load-bearing half of the re-homing: there is no validity rule to fail,
+    // because the parse itself has nowhere to put an archive without its novelty test.
     expect(() => v.parse(SwarmConfigSchema, { advance: { kind: 'archive' } })).toThrow();
     expect(v.parse(SwarmConfigSchema, { advance: { kind: 'archive', novelty: 0.6 } }))
       .toMatchObject({ advance: { kind: 'archive', novelty: 0.6 } });
   });
 
   test('the three archive presets resolve, at the CONVERTED Rainbow filter', () => {
-    // This test used to pin the opposite and record it as a cost: all three refused,
-    // because no row declared the threshold the archive arm requires. The threshold is
-    // now declared — τ=0.6 is a similarity CEILING and this axis is a distance FLOOR,
-    // so the row states 1 − 0.6 — and the presets resolve. The conversion is the point:
-    // 0.6 written here unconverted is a stricter archive than the evidence describes.
+    // Every row declares the threshold the archive arm requires; a row that does not
+    // refuses, and the advertised preset is unusable. τ=0.6 is a similarity CEILING
+    // and this axis is a distance FLOOR, so the row states 1 − 0.6. The conversion is
+    // the point: 0.6 written here unconverted is a stricter archive than the evidence
+    // describes.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const resolved = resolveSwarm({
         preset, task: 'probe it', key: 'behaviour', objective: MEASURED,
@@ -230,17 +237,15 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   });
 
   test('`prove` without a checker takes the judged sweep rather than refusing', () => {
-    // FLIPPED. This used to assert that a `prove` call with no `objective` was
-    // refused, which was true and was the defect: `prove` scores by `verify`, `verify`
-    // needs an instrument, so the shortest legal `prove` call was unreachable without
-    // authoring a whole spec — and five of the six presets had the same property. A
-    // measured incident spent five of a model's ten steps collecting those refusals
-    // one at a time, and the last of them said the instrument could not have run in
-    // that workspace at all.
+    // Refusing a `prove` call with no `objective` is the defect: `prove` scores by
+    // `verify`, `verify` needs an instrument, so the shortest legal `prove` call would
+    // be unreachable without authoring a whole spec — and five of the six presets have
+    // the same property. A measured incident spent five of a model's ten steps
+    // collecting those refusals one at a time, and the last of them said the
+    // instrument could not have run in that workspace at all.
     //
-    // The checker is still what `prove` IS, and naming one still buys the depth-7
-    // best-first tree below. What changed is that omitting it yields a run instead of
-    // a scolding.
+    // The checker is what `prove` IS, and naming one buys the depth-7 best-first tree
+    // below. Omitting it yields a run rather than a scolding.
     const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
     if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
     expect(swarmValidity(resolved)).toBeNull();
@@ -301,16 +306,20 @@ describe('the context axis carries the inheritance question, at one spelling', (
   });
 });
 
-describe('the composition that was permanently refused is no longer refused', () => {
+describe('a tool-using node over a shared workspace is a runnable composition', () => {
   test('a tool-using node run starts — no `unsupported` about a shared workspace', async () => {
     // Reaching the model at all is the claim: `regionRefusal` is the first thing
     // `runSwarm` does and it spends nothing, so a refusal would come back before any
     // call. This model answers once and stops, which is the smallest run that proves
     // the region opened; what an agent node DOES with its tools is the behavioural
     // suite's subject, not this one's.
-    const { rt } = createTestRuntime();
+    const { rt, testSql } = createTestRuntime();
     const result = await runSwarm({
       rt,
+      // `unit:'answer'` is an agent node, so the run acquires one seat per node
+      // — a real one, over this runtime's own database, because a node that got
+      // no actor is exactly the composition this case says must run.
+      hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
       model: scriptedTurnModel({
         provider: 'fake',
         modelId: 'fake-unit-axis',

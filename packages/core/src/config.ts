@@ -45,7 +45,7 @@ export interface MCTSDefaults {
  *  is heads-specific. */
 export interface HeadsDefaults {
   /** Independent merge-synthesis samples; the median-scored one is kept.
-   *  1 ⇒ the legacy n=1 merge. */
+   *  1 ⇒ a single merge sample, no ensemble. */
   mergeSamples: number;
 }
 
@@ -75,7 +75,7 @@ export interface ScaffoldDefaults {
  *
  *  Four constant tables, read field by field (`DEFAULT_CONFIG.mcts.judgeSamples`
  *  and its like). There is no whole-config value to merge and no caller that
- *  overrides one: per-knob overrides live in the `agent_config` table and are
+ *  overrides one: per-knob overrides live in the `actor_config` table and are
  *  applied at each call site by `??`, which is why `mergeConfig` and the
  *  `AgentConfig` aggregate it took have been deleted rather than kept as the
  *  shape nothing constructs. */

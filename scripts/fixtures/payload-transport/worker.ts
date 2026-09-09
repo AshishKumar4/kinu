@@ -35,12 +35,11 @@ import { AwsClient } from 'aws4fetch';
 import { SignJWT } from 'jose';
 import { Sandbox, ContainerProxy, streamFile, type Process } from '@cloudflare/sandbox';
 import * as v from 'valibot';
-// THE SHAPE THE PRODUCT NO LONGER HAS. This upload was
-// `packages/devbox/src/object-store.ts`'s until this instrument priced it: the
-// snapshot chain now writes its archive through a store mount, and the
-// isolate-side uploader is deleted from devbox. The arm keeps the shape as the
-// baseline that removal is measured against, so the code moved here with it,
-// unchanged in routing, part geometry and digest. See `isolate-relay.ts`.
+// THE SHAPE THE PRODUCT DOES NOT HAVE. devbox's snapshot chain writes its
+// archive through a store mount, so there is no isolate-side uploader in
+// `packages/devbox/src/object-store.ts`. The arm keeps that shape here as the
+// baseline the removal is measured against, unchanged in routing, part geometry
+// and digest. See `isolate-relay.ts`.
 import { putStream } from './isolate-relay';
 import { operationNeedsStart } from './decision';
 import { HarnessResultSchema } from './wire';

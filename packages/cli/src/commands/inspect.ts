@@ -22,7 +22,9 @@ import {
   getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
+  getLocalActorInfo,
   getLocalReleaseBoard,
+  listLocalActors,
   listLocalEvents,
   listLocalExecutors,
   listLocalGepaRuns,
@@ -116,6 +118,44 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
   console.log(`${WARN('local foreground turns are process-local')} use Ctrl+C in the terminal running that turn.`);
 }
 
+/**
+ * Every logical actor this workspace holds, and optionally what ONE of them did.
+ *
+ * The terminal's half of owner inspection. A workspace is one database holding
+ * N actors — the main agent, its hires, its heads, its swarm nodes — so "which
+ * agents are in here" is a question with an answer for the first time, and a
+ * dismissed hire's rows are still part of it. Retired actors are listed by
+ * default and flagged, because their history is retained on purpose and a
+ * lister that hid them would report the workspace as smaller than its archive.
+ *
+ * NOTHING IS STARTED. Both reads go through the directory row and `actor_id`,
+ * never through a handle or a session, which is what makes inspecting a retired
+ * actor possible at all — it has no handle left to issue.
+ *
+ * LOCAL ONLY, stated rather than faked: the cloud workspace answers this
+ * through its own authorized inspection surface in the web UI, and there is no
+ * RPC on the deployment that returns the actor directory. A cloud target is
+ * refused with that reason instead of being shown an empty list.
+ */
+// `async` for `wrapAction`'s contract, not for any awaited work: both reads are
+// synchronous because neither opens an actor.
+export async function actorsCommand(name: string, actorId?: string, opts: InspectOpts = {}): Promise<void> {
+  const target = resolveAgentTarget(name);
+  if (target.mode === 'cloud') {
+    throw new Error(
+      'kinu actors reads the local workspace database directly; the deployment exposes no actor-directory RPC. '
+      + 'Use the web workspace view for a cloud agent.',
+    );
+  }
+  if (actorId !== undefined) {
+    const info = getLocalActorInfo(target.localName, actorId);
+    if (!info) throw new Error(`No actor ${actorId} was ever issued in workspace ${target.name}.`);
+    printData(decodeJsonValue({ value: info }), opts);
+    return;
+  }
+  printData(decodeJsonValue({ value: listLocalActors(target.localName) }), opts);
+}
+
 export async function stateCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
@@ -137,12 +177,11 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
  *
  * NO WINDOW, on either arm. Both figures are summed over the whole log by
  * `workspaceSpend`, so there is nothing for `--limit` to bound and nothing for
- * the two surfaces to disagree about. This used to pass a 2000-row window
- * commented "one number for both surfaces, so the same workspace does not report
- * two totals" — which was false as written, because the deployment clamped the
- * request to its own smaller bound and answered a different question than the
- * one asked. The cloud arm therefore sends no `steps` at all: that argument only
- * ever bounded the step telemetry this command does not print.
+ * the two surfaces to disagree about. A row window here would NOT buy one
+ * number for both surfaces: the deployment clamps the request to its own
+ * smaller bound and answers a different question than the one asked. The cloud
+ * arm therefore sends no `steps` at all — that argument only ever bounds the
+ * step telemetry this command does not print.
  */
 export async function spendCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);

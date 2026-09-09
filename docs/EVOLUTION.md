@@ -191,7 +191,7 @@ minTrials 5 · maxTrials 20 · promoteThreshold 0.6 · rollbackThreshold 0.4
 maxRegressions 1 · minDecisiveTrials 5
 ```
 
-Each trial is judged twice with the two responses swapped, unlabelled and in randomized order. A candidate takes the trial only by winning both orders, and a flip records as a tie. That removes the position and status-quo bias the old prompt built in by pinning the incumbent to "Response A". The judge prefers a model from a different vendor family than the chat model whenever one is connected. A model grading its own family's prose inflates it; same-model judging survives as the single-vendor fallback.
+Each trial is judged twice with the two responses swapped, unlabelled and in randomized order. A candidate takes the trial only by winning both orders, and a flip records as a tie. That removes the position and status-quo bias a prompt that pins the incumbent to "Response A" builds in. The judge prefers a model from a different vendor family than the chat model whenever one is connected. A model grading its own family's prose inflates it; same-model judging survives as the single-vendor fallback.
 
 The regression veto runs first: more than `maxRegressions` losses rolls the proposal back regardless of win rate. At `maxTrials` the decision is forced, and only `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:592`), so a tie rolls back to current. Every constant here comes from binomial Monte Carlo rather than taste, in `scripts/shadow-veto-monte-carlo.ts`, which models the judging protocol itself. At the shipping settings that script reports a genuinely better scaffold promoted about 62% of the time, against a worst case of about 3.2% for promoting a clearly worse one. Neither figure carries a measurement date in the source; re-run the script to date them.
 
@@ -217,6 +217,16 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 
 **GEPA train/val split** (`buildOutcomeEvalSplit`, `core/src/evolution/eval-split.ts`). The reflection minibatch draws from older corrected and frustrated turns, while the newest failures are held out and scored alongside the accepted-turn regression guards. The two sets are disjoint, so a winning candidate was never optimised against the instances that picked it. When the ledger holds too few failures to hold any out, the split returns a `degeneracy` reason. The caller reports the selection as exploratory rather than quietly overlapping the sets.
 
+A failed judge call is unavailable evidence, not a neutral score. Failure during
+seed scoring, reflection evaluation, or candidate scoring aborts the GEPA run;
+the run retains its attempted-call count and completed iterations but selects no
+winner. Every complete candidate, including the seed, is retained before later
+evaluation starts. An incomplete candidate gets no numeric aggregate. The shared
+metric boundary refuses non-finite scores and scores outside 0..1. Iteration counts
+include rejected proposals, independently of the accepted-candidate history.
+Section proposal and paired promotion trials propagate judge failures before
+writing the unmeasured proposal or trial.
+
 **Full MCTS exploration** runs smaller than the tool's default, at budget 2 and branches 2 (`DEFAULT_EVOLUTION_CONFIG`, `core/src/evolution/types.ts:152-157`, called at `core/src/evolution/engine.ts:1088`). An operator MCTS override replaces the branch count; the budget stays the lifetime cadence cap. See [MCTS.md](./MCTS.md).
 
 ## Evolution changelog
@@ -238,7 +248,7 @@ Reverts dispatch to the real code paths rather than a separate undo log (`execut
 
 ## Continual refinement
 
-A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only temporary rung (`agents.ask`) reads the trajectory and answers with one strict object.
+A refinement reviews the agent's own recent failures and proposes the smallest typed edits. It is the only evolution lane whose proposer is a full agent: the read-only task lifetime (`agents.hire` with `lifetime:'task'`, reached programmatically through `TemporaryAgentPort`) reads the trajectory and answers with one strict object.
 
 `/refine` opens one on request. The automatic trigger opens one when three or more corrected or frustrated turns sit unresolved that no earlier request has taken. Three is a pattern rather than a coincidence. It is also the point where `buildOutcomeEvalSplit` can both give reflection something to fix and keep a failure back to score against: at three it holds one out and leaves two to train on.
 
@@ -356,7 +366,7 @@ The scoring constants live in `DEFAULT_CONFIG.craftStore` (`core/src/config.ts:1
 - Injection cutoff: `effectiveScore >= 0.2`. Unscored tools pass, which is why `workspace.createTool` seeds the 0.5 neutral prior at creation.
 - Retirement threshold: `effectiveScore < 0.1`, and only after 2 uses.
 
-Extraction happens from three places: an accepted turn (`extractPattern`), an MCTS iteration scoring above `craftExtractionThreshold` (0.8 at `core/src/config.ts:100`, applied at `core/src/mcts/engine.ts:483`), and MCTS convergence when the winner scores above the same threshold (`core/src/mcts/convergence.ts:135`). Only the MCTS paths carry a size gate, and it is a floor. `maybeStoreCraftedTool` returns early below 50 characters (`core/src/craft/discovery.ts:49`). There is no upper ceiling. A 1500-char ceiling used to sit there and was removed, because it silently excluded every substantial win from the craft loop; the prompt budget bounds the source instead. `extractPattern` applies no length gate at all. `upsertCraftedTool` decides usability by compiling the code the way the runtime will.
+Extraction happens from three places: an accepted turn (`extractPattern`), an MCTS iteration scoring above `craftExtractionThreshold` (0.8 at `core/src/config.ts:100`, applied at `core/src/mcts/engine.ts:483`), and MCTS convergence when the winner scores above the same threshold (`core/src/mcts/convergence.ts:135`). Only the MCTS paths carry a size gate, and it is a floor. `maybeStoreCraftedTool` returns early below 50 characters (`core/src/craft/discovery.ts:49`). There is no upper ceiling: one silently excludes every substantial win from the craft loop, and the prompt budget bounds the source instead. `extractPattern` applies no length gate at all. `upsertCraftedTool` decides usability by compiling the code the way the runtime will.
 
 ## Evolution events
 

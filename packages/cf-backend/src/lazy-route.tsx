@@ -10,7 +10,7 @@
  * exist. The moment its reader opens the MCTS explorer or the control plane, the
  * import 404s and React throws — and what they see is "Something went wrong
  * rendering this view", for a view that is not broken at all. Reloading fixes it
- * completely, and until this nothing did that.
+ * completely, and nothing else does.
  *
  * ## Two mechanisms, and why both
  *

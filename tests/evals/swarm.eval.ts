@@ -95,18 +95,18 @@ const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
 /**
  * WHERE this run's agent lives, resolved once, and the model it DRIVES.
  *
- * `liveModelTarget` alone stood here, so this suite could only ever measure the
- * in-process runtime — while `eval-tier.sh` exported `KINU_EVAL_BACKEND=cloud`,
- * named every report file `-cloud`, printed a CLOUD banner and ran this arm
+ * `liveModelTarget` alone names no backend, so a suite built on it measures the
+ * in-process runtime while `eval-tier.sh` exports `KINU_EVAL_BACKEND=cloud`,
+ * names every report file `-cloud`, prints a CLOUD banner and runs this arm
  * against the local loop anyway. The cross-target arm below states that it
  * reaches `@cloudflare/think` under `=cloud`; the plan is what makes that true
  * rather than aspirational.
  *
- * ONE id, spread from the tier, read back off the PLAN. The model used to be
- * spread here from a separately resolved target: `resolveLiveModel`'s fallback
- * then decided it — `DEFAULT_WORKERS_AI_MODEL_ID`, the PRO id — so
- * `KINU_EVAL_TIER=flash` billed this arm at pro in silence, the one arm of four
- * whose cost the tier switch did not reach. `KINU_MODEL` is deliberately not
+ * ONE id, spread from the tier, read back off the PLAN. Spreading the model from
+ * a separately resolved target hands the decision to `resolveLiveModel`'s
+ * fallback — `DEFAULT_WORKERS_AI_MODEL_ID`, the PRO id — so
+ * `KINU_EVAL_TIER=flash` bills this arm at pro in silence, the one arm of four
+ * whose cost the tier switch does not reach. `KINU_MODEL` is deliberately not
  * honoured: an arm chosen by two knobs is an arm that can be half-changed.
  */
 const PLAN = resolveEvalTarget(SUITE, EVAL_MODELS[TIER]);
@@ -453,7 +453,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
   beforeAll(async () => {
     console.warn(`[swarm] ${PLAN?.describe ?? 'no live target — credential-free arms only'}`);
     if (!IN_PROCESS) {
-      // NOT provisioned, and that is the fix rather than an omission. The arms
+      // NOT provisioned, and that is deliberate rather than an omission. The arms
       // below this block drive the INNER API, so on the cloud plan they cannot
       // run at all — and opening a local workspace here would be a local
       // measurement standing under a cloud banner, which is the one error the
@@ -481,14 +481,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     });
     rt = target.runtime;
 
-    // THE VERIFIER PROBE, and this is the assertion that changed rather than moved.
-    // What stood here was `requireVerifierShell`, which asserts a shell EXISTS. The
-    // production incident was a shell that existed and could not run the only
-    // registered verifier kind: `exec-ratio` writes a `.mjs` harness and runs `node`
-    // on it, and the deployed Nimbus shim rejects esbuild-wasm's `wasmModule` option
-    // outside a browser, so every `score:'verify'` search there is dead on arrival.
-    // The old check passed throughout. This one RUNS the instrument's own shape and
-    // refuses on the verdict, which is the fact this eval's ground truth depends on.
+    // THE VERIFIER PROBE, and it RUNS the instrument rather than asserting a shell
+    // EXISTS. The production incident was a shell that existed and could not run the
+    // only registered verifier kind: `exec-ratio` writes a `.mjs` harness and runs
+    // `node` on it, and the deployed Nimbus shim rejects esbuild-wasm's `wasmModule`
+    // option outside a browser, so every `score:'verify'` search there is dead on
+    // arrival. An existence check passes throughout that; this one refuses on the
+    // instrument's own verdict, which is the fact this eval's ground truth depends on.
     const probe = await target.probe();
     if (probe.verifier.kind !== 'runs') {
       throw new Error(`swarm-eval cannot measure anything on this target: ${probe.verifier.reason}`);
@@ -505,9 +504,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       agents: {
         mode: 'build',
         // The exploration substrate, which is what puts `swarm` in the action enum.
-        fork: { rt, model },
+        // `hostNode` goes through the TARGET: every node of this search is its own
+        // actor of the one workspace database, and this arm drives the rung directly
+        // rather than through `sendTurn`, so without it the search would run every
+        // node on the caller's actor and share one claim ledger across the wave.
+        fork: { rt, model, hostNode: (node) => target.hostNode(node) },
       },
-      effectClaims: { sql: rt.storage.sql, turnId: () => WORKSPACE_RUN_ID },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     });
     const entry = tools.agents;
     if (!entry) throw new Error('the agents tool was not built, so there is no swarm rung to drive');
@@ -615,10 +618,10 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     }, AbortSignal.timeout(ENVELOPE_MS));
     const wallSeconds = (Date.now() - startedAt) / 1000;
 
-    // SPEND FIRST, BEFORE ANY PATH THAT CAN THROW. This line used to sit below
-    // the refusal check and the destructuring, so a swarm that ran and then
-    // refused reported ZERO model calls — and this arm's whole reason for being
-    // its own arm is that its zero has to be its own failure.
+    // SPEND FIRST, BEFORE ANY PATH THAT CAN THROW. Below the refusal check and
+    // the destructuring, a swarm that ran and then refused reports ZERO model
+    // calls — and this arm's whole reason for being its own arm is that its zero
+    // has to be its own failure.
     //
     // Measured 2026-08-24 against staging: three nodes ran (7, 14 and 9 model
     // steps; 9, 14 and 12 tool calls), one died on an upstream 500 after
@@ -809,13 +812,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // Read back through the STORE'S OWN READER, scoped by the identity and the floor
     // — the key a later run holds. Recomputed from the objective this suite declared,
     // so this proves the rows are findable by a caller that never saw the result.
-    const rows = recordsFor(rt.storage.sql, { identity: IDENTITY, floor: FLOOR });
+    const rows = recordsFor(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: FLOOR });
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThanOrEqual(records.written);
     // Best FIRST in the objective's own direction, so the store's incumbent is the
     // winner this run crowned.
     expect(rows[0]?.value).toBe(winner);
-    expect(bestInCell(rt.storage.sql, { identity: IDENTITY, floor: FLOOR, descriptor: null })?.value)
+    expect(bestInCell(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: FLOOR, descriptor: null })?.value)
       .toBe(winner);
     // Every row belongs to THIS run's tree, and carries the provenance a leaderboard
     // reader needs without resolving a digest.
@@ -838,10 +841,10 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // nothing, and the same rows under a different floor must find nothing either —
     // the comparable set is the identity AND the floor it was published under, never
     // one without the other.
-    expect(recordsFor(rt.storage.sql, {
+    expect(recordsFor(rt.storage.sql, rt.actor, {
       identity: { ...IDENTITY, metric: 'wall_ms' }, floor: FLOOR,
     })).toEqual([]);
-    expect(recordsFor(rt.storage.sql, { identity: IDENTITY, floor: null })).toEqual([]);
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: null })).toEqual([]);
 
     // ── The run reported what it spent ─────────────────────────────────────────
     // Last, because it is the weakest claim and the easiest to fake: an absent total
@@ -877,21 +880,21 @@ describe('Swarm evals — a live measured search through the settled tool surfac
    * `KINU_EVAL_BACKEND=cloud` and `plan.provision` hands it a real staging
    * workspace, so it drives the capped loop instead.
    *
-   * ITS OWN WORKSPACE, for two reasons that are one reason. It used to share the
-   * in-process arm's target, and the seam's own rule says why that cannot stand
-   * ("a suite runs many cases and each needs its own workspace: one workspace
-   * reused across cases would let case N's ledger rows be read as case N+1's"):
+   * ITS OWN WORKSPACE, for two reasons that are one reason. Sharing the in-process
+   * arm's target cannot stand, and the seam's own rule says why ("a suite runs many
+   * cases and each needs its own workspace: one workspace reused across cases would
+   * let case N's ledger rows be read as case N+1's"):
    *
-   *   1. THE REACHABILITY ASSERTION WAS PRE-SATISFIED. The first arm's
+   *   1. THE REACHABILITY ASSERTION IS PRE-SATISFIED. The first arm's
    *      `tools.agents.execute` call writes real search rows into that store, so
-   *      `searchRuns + canvasNodes + forkRuns > 0` held over the SAME store
+   *      `searchRuns + canvasNodes + forkRuns > 0` holds over the SAME store
    *      whether or not this arm's agent ever reached the rung — the central
-   *      claim could pass while the agent declined.
-   *   2. ITS SPEND WAS UNACCOUNTABLE. `workspaceSpend` is a cumulative read over
-   *      a whole log, so recording a second episode on one workspace would
-   *      double the first arm's figures and recording nothing loses this arm's
-   *      multi-minute turn. Exactly-once is only expressible per workspace, and
-   *      that is what makes this a separate target rather than a tidier call.
+   *      claim passes while the agent declines.
+   *   2. ITS SPEND IS UNACCOUNTABLE. `workspaceSpend` is a cumulative read over
+   *      a whole log, so recording a second episode on one workspace doubles the
+   *      first arm's figures and recording nothing loses this arm's multi-minute
+   *      turn. Exactly-once is only expressible per workspace, and that is what
+   *      makes this a separate target rather than a tidier call.
    *
    * WHAT IT ASSERTS, and every one can fail. The step count is the primary
    * instrument, so it is asserted as a NUMBER rather than as a bound: a run that

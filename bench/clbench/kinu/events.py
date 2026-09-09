@@ -293,7 +293,8 @@ def tool_outcome_counts(events: list[Event]) -> dict[str, int]:
         if isinstance(outcome, dict) and type(outcome.get("success")) is bool:
             counts["succeeded" if outcome["success"] else "failed"] += 1
         elif outcome is None and isinstance(row.get("error"), str) and row["error"]:
-            # Explicit legacy errors prove failure, but carry no inferred class.
+            # An `error` string with no structured `outcome` proves failure, but
+            # carries no inferred class.
             counts["failed"] += 1
         else:
             counts["unmeasured"] += 1

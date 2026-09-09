@@ -14,11 +14,16 @@
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { RunEvent, RunEventInput, RunEventType } from './types';
+import type { ActorHandle } from '../state/actor-handle';
+import {
+  CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
+  type RunEvent, type RunEventInput, type RunEventType,
+} from './types';
 import { JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
+import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../tools/db-codemode';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
@@ -103,6 +108,16 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number() }),
   v.object({ ...BaseFields, type: v.literal('memory_write'), path: v.string(), bytes: v.number() }),
+  // The picklists ARE the exported vocabularies, so an operation or a status a
+  // producer can write is never one this parser would reject.
+  v.object({ ...BaseFields, type: v.literal('db_op'), op: v.picklist(APP_MUTATIONS),
+    table: v.string(), scope: v.picklist(APP_TABLE_SCOPES), rowsAffected: v.number(),
+    batch: v.nullable(v.number()) }),
+  v.object({ ...BaseFields, type: v.literal('context_edit'), revision: v.number(),
+    baseRevision: v.number(), messageCount: v.number(), author: v.string(),
+    via: v.picklist(CONTEXT_EDIT_VIA), status: v.picklist(CONTEXT_EDIT_STATUSES),
+    effectiveAt: v.picklist(CONTEXT_EDIT_BOUNDARIES),
+    turnId: v.nullable(v.string()), stepIndex: v.nullable(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('context_budget'), admittedChars: v.number(),
     omittedChars: v.number(), trips: v.object({
       run: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
@@ -186,14 +201,16 @@ export const RUN_EVENT_LIMIT_DEFAULT = 200;
 
 /**
  * The ceiling on a read an UNTRUSTED caller asked for — the bound the HTTP route
- * already enforced, applied by {@link boundRunEventQuery} so the route is no
- * longer the only place it holds.
+ * enforces, applied by {@link boundRunEventQuery} so the route is not the only
+ * place it holds. The read it is actually about is the SSE
+ * replay at `cf-backend/src/run-events-routes.ts:202`, which asks for it by
+ * name.
  *
- * It is NOT the recorder's ceiling. An in-object read-model states its own
- * window because it folds an answer out of the whole of it — `getRunSummaries`
- * sums a run's usage and prints the total as the workspace's spend, so a window
- * silently narrowed to a stranger's allowance would be a truncated denominator
- * presented as a settled figure.
+ * It is NOT a ceiling every in-object read-model inherits. One folds an answer
+ * out of its whole window — `getRunSummaries` sums a run's usage and prints the
+ * total as the workspace's spend, so a window silently narrowed to a stranger's
+ * allowance would be a truncated denominator presented as a settled figure.
+ * Those state their own window, or none at all.
  */
 export const RUN_EVENT_LIMIT_MAX = 500;
 
@@ -230,17 +247,39 @@ export interface RunListEntry {
 
 export type RunEventListener = (event: RunEvent) => void;
 
+/**
+ * A recorded event whose row is written and whose subscribers are not yet
+ * notified. See {@link RunEventRecorder.emitDeferred}.
+ */
+export interface DeferredRunEvent {
+  readonly event: RunEvent;
+  /** Notify the live subscribers. Called once, after the caller's transaction
+   *  has committed. */
+  publish(): void;
+}
+
+/**
+ * The durable per-run event log.
+ *
+ * ACTOR-SCOPED, and the column is in the primary key rather than beside it: a
+ * shared host holds several issued actors in one database, `run_id` is minted
+ * per activation, and `event_index` restarts at 0 for every run — so without
+ * the actor in the key two actors' runs are one stream, and `MAX(event_index)`
+ * for a run answers about whichever actor wrote last. Every statement in this
+ * class is scoped, so nothing has to remember to add the predicate.
+ */
 export function initRunEventTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS run_events (
+    actor_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     event_index INTEGER NOT NULL,
     type TEXT NOT NULL,
     payload TEXT NOT NULL,
     ts TEXT NOT NULL,
-    PRIMARY KEY (run_id, event_index)
+    PRIMARY KEY (actor_id, run_id, event_index)
   )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(run_id, ts)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(type)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_run_ts ON run_events(actor_id, run_id, ts)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_run_events_type ON run_events(actor_id, type, ts DESC)`);
 }
 
 /**
@@ -287,24 +326,56 @@ export class RunEventRecorder {
   // Cached next-index per runId. Loaded lazily from the table on first emit.
   private nextIndex = new Map<string, number>();
   private listeners = new Set<RunEventListener>();
+  private readonly actorId: string;
 
-  constructor(private readonly sql: SqlExecutor) {}
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   /** Record an event for runId. Returns the assigned monotonic event. */
   emit(runId: string, input: RunEventInput): RunEvent {
-    const idx = this.allocateIndex(runId);
-    const ev = stampRunEvent(input, idx, runId);
-    this.persist(ev);
-    for (const l of this.listeners) {
-      try { l(ev); } catch (err) {
-        diagnostics.failure(
-          'event.listener_failed',
-          toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
-          { runId, eventType: ev.type },
-        );
-      }
-    }
-    return ev;
+    const deferred = this.emitDeferred(runId, input);
+    deferred.publish();
+    return deferred.event;
+  }
+
+  /**
+   * Record an event whose ROW must live or die with the caller's open SQL
+   * transaction, and whose live fan-out must wait for that transaction to
+   * commit.
+   *
+   * `emit` is this with the two halves back to back, which is right for a
+   * caller that is not inside a transaction. A caller that IS — the `db`
+   * capability's `transactionSync` — needs them apart, because the two halves
+   * fail differently: the INSERT is on the same connection and rolls back with
+   * the data, so a rolled-back mutation leaves no evidence of a mutation and a
+   * failed evidence write takes the data down with it, but a NOTIFIED
+   * subscriber cannot be un-notified. Publishing after the transaction has
+   * returned is what stops an SSE client being told about a write that was
+   * undone.
+   *
+   * The allocated index is spent either way. A rolled-back row therefore leaves
+   * a gap in `event_index`, which every reader already tolerates — the log is
+   * queried by `>= since` and ordered, never counted — and the alternative,
+   * reusing an index after a rollback, is how two events come to share one.
+   */
+  emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
+    const event = stampRunEvent(input, this.allocateIndex(runId), runId);
+    this.persist(event);
+    return {
+      event,
+      publish: () => {
+        for (const listener of this.listeners) {
+          try { listener(event); } catch (err) {
+            diagnostics.failure(
+              'event.listener_failed',
+              toKinuError({ doing: 'notify a run-event listener', cause: err, otherwise: 'io' }),
+              { runId, eventType: event.type },
+            );
+          }
+        }
+      },
+    };
   }
 
   private allocateIndex(runId: string): number {
@@ -313,9 +384,12 @@ export class RunEventRecorder {
       this.nextIndex.set(runId, cached + 1);
       return cached;
     }
-    // Load from DB.
+    // Load from DB — this actor's rows only: `run_id` is minted per activation
+    // and `event_index` restarts per run, so another actor's row under the same
+    // run id would hand this one an index it does not own.
     const rows = this.sql<{ max_idx: number | null }>`
-      SELECT MAX(event_index) AS max_idx FROM run_events WHERE run_id = ${runId}`;
+      SELECT MAX(event_index) AS max_idx FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
     const max = rows[0]?.max_idx ?? -1;
     const next = max + 1;
     this.nextIndex.set(runId, next + 1);
@@ -325,8 +399,9 @@ export class RunEventRecorder {
   // Plain INSERT: an index collision raises instead of replacing a live row.
   // `allocateIndex` never reuses an index, so a collision is a second writer.
   private persist(ev: RunEvent): void {
-    void this.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
-      VALUES (${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
+    this.actor.assertCurrent();
+    void this.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+      VALUES (${this.actorId}, ${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
   }
 
   /**
@@ -342,6 +417,7 @@ export class RunEventRecorder {
    * states the window its answer is correct over and must get it.
    */
   read(runId: string, opts: RunEventQuery = {}): RunEvent[] {
+    this.actor.assertCurrent();
     const limit = boundedInt(opts.limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     const since = boundedInt(opts.since, 0, 0, Number.MAX_SAFE_INTEGER);
     const types = opts.types && opts.types.length > 0 ? new Set<string>(opts.types) : null;
@@ -349,7 +425,7 @@ export class RunEventRecorder {
     if (!types) {
       const rows = this.sql<{ payload: string }>`
         SELECT payload FROM run_events
-        WHERE run_id = ${runId} AND event_index >= ${since}
+        WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${since}
         ORDER BY event_index ASC
         LIMIT ${limit}`;
       return rows.map((r) => parseStoredRunEvent(r.payload));
@@ -366,7 +442,7 @@ export class RunEventRecorder {
     while (matched.length < limit) {
       const rows = this.sql<{ payload: string; event_index: number }>`
         SELECT payload, event_index FROM run_events
-        WHERE run_id = ${runId} AND event_index >= ${cursor}
+        WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${cursor}
         ORDER BY event_index ASC
         LIMIT ${fetchLimit}`;
       const last = rows[rows.length - 1];
@@ -401,16 +477,16 @@ export class RunEventRecorder {
    * event. Pushing the predicate into SQL would buy nothing and would still
    * parse every row it kept.
    *
-   * That is a cost argument and no longer a capability one. This method's
-   * docstring used to say no production query had ever depended on SQLite's JSON
-   * functions being available on both SqlExecutors; {@link spendByProducer} now
-   * does, deliberately, and `tests/workerd/do-spend-aggregate.test.ts` runs it on
-   * real Durable Object SQLite so the claim is measured rather than assumed.
+   * That is a cost argument, not a capability one: {@link spendByProducer} depends
+   * on SQLite's JSON functions being available on both SqlExecutors, deliberately,
+   * and `tests/workerd/do-spend-aggregate.test.ts` runs it on real Durable Object
+   * SQLite so the claim is measured rather than assumed.
    */
   runForHeadSplit(rootId: string, window = 500): string | null {
+    this.actor.assertCurrent();
     const rows = this.sql<{ run_id: string; payload: string }>`
       SELECT run_id, payload FROM run_events
-      WHERE type = 'head_split'
+      WHERE actor_id = ${this.actorId} AND type = 'head_split'
       ORDER BY ts DESC LIMIT ${window}`;
     for (const row of rows) {
       const ev = parseStoredRunEvent(row.payload);
@@ -439,9 +515,10 @@ export class RunEventRecorder {
    * caller reads anyway.
    */
   unterminatedRuns(window = 500, startedBefore = Number.POSITIVE_INFINITY): string[] {
+    this.actor.assertCurrent();
     const rows = this.sql<{ run_id: string; type: string; ts: string }>`
       SELECT run_id, type, ts FROM run_events
-      WHERE type = 'run_start' OR type = 'run_end'
+      WHERE actor_id = ${this.actorId} AND (type = 'run_start' OR type = 'run_end')
       ORDER BY ts DESC LIMIT ${window}`;
     const closed = new Set(rows.filter((row) => row.type === 'run_end').map((row) => row.run_id));
     const open: string[] = [];
@@ -480,9 +557,10 @@ export class RunEventRecorder {
    * so it is parsed either way.
    */
   unterminatedModelOperations(window = 500): Array<Extract<RunEvent, { type: 'model_operation' }>> {
+    this.actor.assertCurrent();
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
-      WHERE type = ${'model_operation' satisfies RunEventType}
+      WHERE actor_id = ${this.actorId} AND type = ${'model_operation' satisfies RunEventType}
       ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
     const events = rows.map((row) => parseStoredRunEvent(row.payload))
       .flatMap((event) => event.type === 'model_operation' ? [event] : []);
@@ -499,29 +577,37 @@ export class RunEventRecorder {
    * This is a SOURCE QUERY, not a counter: the count lives in these rows, so
    * it survives every activation loss that the log survives. `sinceTs` is the
    * timestamp of whatever marks the last GEPA pass (null = count everything).
-   * A row without `workMode` predates the field and counts nothing: the
-   * denominator starts at the cutover rather than inventing history, and
-   * `json_extract` returning NULL for those rows is what makes absence read
-   * as "before it started", never as build. Timestamps are millisecond ISO,
-   * and a turn stamped in the SAME millisecond as the boundary is excluded —
-   * a tie reads as "before", which keeps a re-driven pass from recounting.
+   * A row with no `workMode` counts nothing: the denominator starts where the
+   * field does rather than inventing history, and `json_extract` returning NULL
+   * for those rows is what makes absence read as "before it started", never as
+   * build. Timestamps are millisecond ISO, and a turn stamped in the SAME
+   * millisecond as the boundary is excluded — a tie reads as "before", which
+   * keeps a re-driven pass from recounting.
    */
   completedWorkTurns(sinceTs: string | null): number {
+    this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM run_events
-      WHERE type = ${'turn_end' satisfies RunEventType}
+      WHERE actor_id = ${this.actorId} AND type = ${'turn_end' satisfies RunEventType}
         AND (${sinceTs} IS NULL OR ts > ${sinceTs})
         AND json_extract(payload, '$.workMode') != 'plan'`;
     return rows[0]?.n ?? 0;
   }
 
-  /** Replay all events strictly after `afterIndex` — for SSE Last-Event-ID resume. */
-  readSince(runId: string, afterIndex: number, limit = 500): RunEvent[] {
+  /**
+   * Replay all events strictly after `afterIndex` — the SSE Last-Event-ID
+   * resume shape. It has NO live caller: the resuming browser reads through
+   * `getRunEventsWire(runId, { since, limit: RUN_EVENT_LIMIT_MAX })` at
+   * `cf-backend/src/run-events-routes.ts:202`. The default here is the same
+   * constant so the two spellings of one page size cannot drift.
+   */
+  readSince(runId: string, afterIndex: number, limit = RUN_EVENT_LIMIT_MAX): RunEvent[] {
+    this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
-    const capped = boundedInt(limit, 500, 1, Number.MAX_SAFE_INTEGER);
+    const capped = boundedInt(limit, RUN_EVENT_LIMIT_MAX, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
-      WHERE run_id = ${runId} AND event_index > ${afterIndex}
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index > ${afterIndex}
       ORDER BY event_index ASC
       LIMIT ${capped}`;
     return rows.map((r) => parseStoredRunEvent(r.payload));
@@ -542,9 +628,10 @@ export class RunEventRecorder {
    * `read` returns, and the order the steps ran in.
    */
   transcript(runId: string): ModelMessage[] {
+    this.actor.assertCurrent();
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
-      WHERE run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}
       ORDER BY event_index ASC`;
     return rows.flatMap((r) => {
       const event = parseStoredRunEvent(r.payload);
@@ -567,12 +654,13 @@ export class RunEventRecorder {
    * a new run's first step before an old run's last one whenever both landed
    * in the same millisecond.
    */
-  readRecentByType(type: RunEventType, limit = 200): RunEvent[] {
+  readRecentByType(type: RunEventType, limit = RUN_EVENT_LIMIT_DEFAULT): RunEvent[] {
+    this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
-    const capped = boundedInt(limit, 200, 1, Number.MAX_SAFE_INTEGER);
+    const capped = boundedInt(limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
-      WHERE type = ${type}
+      WHERE actor_id = ${this.actorId} AND type = ${type}
       ORDER BY ts DESC, rowid DESC
       LIMIT ${capped}`;
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
@@ -616,6 +704,7 @@ export class RunEventRecorder {
    * counted as unmeasured.
    */
   spendByProducer(): ReadonlyMap<SpendSource, SpendTally> {
+    this.actor.assertCurrent();
     const rows = this.sql<SpendAggregateRow>`
       WITH call AS (
         SELECT CASE type
@@ -625,8 +714,9 @@ export class RunEventRecorder {
                json_extract(payload, '$.usage') AS usage,
                json_extract(payload, '$.usd') AS usd
         FROM run_events
-        WHERE type = ${'step_finish' satisfies RunEventType}
-           OR type = ${'model_call' satisfies RunEventType}
+        WHERE actor_id = ${this.actorId}
+          AND (type = ${'step_finish' satisfies RunEventType}
+            OR type = ${'model_call' satisfies RunEventType})
       ),
       field AS (
         SELECT source, usd,
@@ -685,8 +775,9 @@ export class RunEventRecorder {
 
   /** Total event count for a run. */
   count(runId: string): number {
+    this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM run_events WHERE run_id = ${runId}`;
+      SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
     return rows[0]?.n ?? 0;
   }
 
@@ -720,12 +811,13 @@ export class RunEventRecorder {
    * history, which is why `unit-run-events.test.ts` pins both halves together.
    */
   listRunsBefore(before: number | null, count: number): RunListEntry[] {
+    this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
     const capped = boundedInt(count, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
     return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
-      WHERE run_id != ${WORKSPACE_RUN_ID}
+      WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
       GROUP BY run_id
       HAVING ${before} IS NULL OR MAX(rowid) < ${before}
       ORDER BY MAX(rowid) DESC
@@ -736,8 +828,9 @@ export class RunEventRecorder {
    *  holds it — the resolvable question a page anchor asks, so that a vanished
    *  run raises instead of reading as an exhausted history. */
   runSeq(runId: string): number | null {
+    this.actor.assertCurrent();
     const rows = this.sql<{ seq: number | null }>`
-      SELECT MAX(rowid) AS seq FROM run_events WHERE run_id = ${runId}`;
+      SELECT MAX(rowid) AS seq FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
     return rows[0]?.seq ?? null;
   }
 }

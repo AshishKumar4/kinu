@@ -683,10 +683,11 @@ describe('the analytics marker', () => {
   });
 
   test('a screenshot-refusal marker says a screenshot was carried, and how big the part was', async () => {
-    // Every arm that refuses a submission WHICH HAD a screenshot. All of them
-    // used to report `hasScreenshot: false` and zero bytes, because the flag was
-    // derived from a byte count set only on the accept path — so the screenshot
-    // dimensions under-counted exactly the population they describe.
+    // Every arm that refuses a submission WHICH HAD a screenshot. The flag is
+    // not derived from a byte count set only on the accept path: derived that
+    // way, every one of these arms reports `hasScreenshot: false` and zero
+    // bytes, and the screenshot dimensions under-count exactly the population
+    // they describe.
     const png = realPng();
     const forged = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 128 }, () => 0x41)]);
     const arms: { request: Request; reason: FeedbackMarker['rejectReason']; bytes: number }[] = [
