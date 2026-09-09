@@ -31,6 +31,7 @@ import {
   ALLOWED_PREFIXES, BLIND_SPOTS, GENERATED_SUBJECT, MESSAGE_LINE_CEILING, NAMES_WITHOUT_CODE,
   NARRATION, ROSTER, type Rule, SUBJECT_CEILING, cleanMessage, codeIdentifierTest,
   committedIdentifierTest, inspect, sizeViolations, subjectOf, proseOnly,
+  truncatedHistoryRefusal,
 } from './commit-hygiene';
 import { isParseable, readMatching } from './sources';
 
@@ -508,6 +509,61 @@ describe('a historical message is judged against the tree it shipped', () => {
     ]));
     expect(live('BrandNewThing')).toBe(true);
     expect(live('SealSideDoor')).toBe(false);
+  });
+});
+
+describe('history mode refuses a clone that has no history, and says how to get one', () => {
+  /** `cutoverRepo`'s two commits, cloned at depth 1 — what `actions/checkout@v4`
+   *  produces by default, reproduced rather than described. */
+  const shallowClone = (): string => {
+    const { repo } = cutoverRepo();
+    const clone = join(scratchDir('commit-hygiene-shallow'), 'clone');
+    git(repo, 'clone', '-q', '--depth', '1', `file://${repo}`, clone);
+    return clone;
+  };
+
+  test('a depth-1 clone is refused, naming both ways to supply the history', () => {
+    // Not a green badge over zero commits, and not the raw
+    // `fatal: ambiguous argument 'HEAD^..HEAD'` this used to die on: a shallow
+    // clone reports HEAD as the commit that ADDED this file, so the governed
+    // range collapses and `commitsFrom` asks git for a parent it does not have.
+    const clone = shallowClone();
+    expect(git(clone, 'rev-parse', '--is-shallow-repository').trim()).toBe('true');
+    const refusal = truncatedHistoryRefusal(clone);
+    expect(refusal).toBeDefined();
+    expect(refusal?.fix).toContain('git fetch --unshallow');
+    expect(refusal?.fix).toContain('fetch-depth: 0');
+    expect(refusal?.silently).toContain('zero commits');
+  });
+
+  test('a full clone is not refused, and neither is an empty governed range', () => {
+    // The control that keeps this from becoming "refuse everything". Emptiness is
+    // legitimate — `boundary..HEAD` is empty right after the gate lands — so the
+    // refusal is keyed on TRUNCATION, and a one-commit repository that is not a
+    // shallow clone passes.
+    const { repo } = cutoverRepo();
+    expect(truncatedHistoryRefusal(repo)).toBeUndefined();
+    const fresh = scratchDir('commit-hygiene-fresh');
+    initRepo(fresh);
+    writeFileSync(join(fresh, 'only.ts'), 'export const only = 1;\n');
+    git(fresh, 'add', 'only.ts');
+    git(fresh, 'commit', '-qm', 'chore(repo): seed');
+    expect(truncatedHistoryRefusal(fresh)).toBeUndefined();
+  });
+
+  test('the shallow clone still answers the current-tree question the hook asks', () => {
+    // The other boundary. `commit-msg` reads the working tree and the message
+    // file and asks the history nothing, so a shallow checkout must still be able
+    // to commit — a gate that blocks committing in the clone CI hands you would
+    // be worse than the defect.
+    const clone = shallowClone();
+    const live = codeIdentifierTest(new Map([
+      ['src/read.ts', readFileSync(join(clone, 'src/read.ts'), 'utf8')],
+    ]));
+    expect(live('rows')).toBe(true);
+    expect(live('SealSideDoor')).toBe(false);
+    expect(inspect('fix(delta): keep the rows honest\n\n`rows` no longer restates its element '
+      + 'type.', live)).toEqual([]);
   });
 });
 

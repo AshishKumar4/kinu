@@ -74,7 +74,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { assertMeasured, finding } from './gate-ratchet';
+import { assertMeasured, finding, type Finding } from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
 import { identifierText, parse, walk } from './syntax';
 
@@ -736,6 +736,48 @@ export function committedIdentifierTest(repo: string, commit: string): (name: st
   };
 }
 
+/**
+ * The refusal history mode owes a clone that cannot answer it, or undefined when
+ * the clone can.
+ *
+ * A DEPTH-1 CHECKOUT IS THE DEFAULT, and it makes every question this mode asks
+ * unanswerable while looking like an answer. `conventionBoundary()` runs
+ * `git log --diff-filter=A --follow` over a one-commit history and reports HEAD
+ * as the commit that ADDED this file, so the governed range collapses to
+ * `HEAD..HEAD`; `commitsFrom` then asks for `HEAD^..HEAD` and git answers
+ * `fatal: ambiguous argument … unknown revision`. Measured on
+ * `git clone --depth 1`: the gate dies on a raw git error, and the one edit that
+ * makes the error go away — treating a missing parent as an empty range — turns
+ * it into a green badge over zero commits. Both are worse than saying so.
+ *
+ * Stated as a finding rather than thrown, because it is the same kind of fact as
+ * a violation: something the gate needs is absent, and the reader needs the one
+ * command that supplies it. `--is-shallow-repository` is git's own name for the
+ * condition, so this cannot drift from what git means by it.
+ *
+ * NOT the empty range. `boundary..HEAD` is legitimately empty on a full clone
+ * right after this gate lands, and on a branch that predates the convention.
+ * Truncation is the thing being refused, not emptiness.
+ */
+export function truncatedHistoryRefusal(repo: string): Finding | undefined {
+  const shallow = execFileSync('git', ['-C', repo, 'rev-parse', '--is-shallow-repository'], {
+    encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
+  }).trim();
+  if (shallow !== 'true') return undefined;
+  return {
+    at: `${repo} — git rev-parse --is-shallow-repository says true`,
+    invariant: 'history mode reads every commit since the convention landed, from this clone',
+    found: 'the clone is shallow, so the commits this mode governs are not in it',
+    silently: 'the governed range collapses to nothing and the gate reports a clean history it '
+      + 'never read — a green badge over zero commits, which is the corpus-narrowing failure the '
+      + 'whole gate ladder exists to refuse.',
+    fix: 'supply the history: `git fetch --unshallow` here, or `fetch-depth: 0` on the '
+      + 'actions/checkout step of the job that runs this gate — .github/workflows/'
+      + 'security-scan.yml states the same reason for the same setting. The `commit-msg` hook '
+      + 'needs no history and is unaffected.',
+  };
+}
+
 /** The commit that added this file, in HEAD's ancestry: the point from which the
  *  convention applies. Undefined until it is committed, and undefined on a
  *  branch that does not contain it — both of which mean "nothing to govern here"
@@ -863,6 +905,16 @@ if (import.meta.main) {
   // is stopped rather than reported. No argument is the ladder tier, over every
   // commit made since the convention landed.
   const messageFile = process.argv[2];
+
+  // Before any question is asked of the history, whether this clone HAS one.
+  // Only history mode: the hook reads the working tree and the message file, and
+  // nothing below this point, so a shallow checkout commits normally.
+  const refusal = messageFile === undefined ? truncatedHistoryRefusal(root) : undefined;
+  if (refusal !== undefined) {
+    console.error(`${gate}: this clone cannot answer history mode\n`);
+    console.error(finding(refusal));
+    process.exit(1);
+  }
   const boundary = messageFile === undefined ? conventionBoundary() : undefined;
   const governed: readonly GovernedCommit[] = messageFile === undefined
     ? (boundary === undefined ? [] : governedCommits(boundary))
