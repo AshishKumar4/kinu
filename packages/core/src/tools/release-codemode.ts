@@ -15,7 +15,9 @@
  * assertions of what was never run. Where no engine is wired, the agent runs
  * the commands itself with `run`/`execute_tools` and recordCheck/
  * recordDeployment are the only way the ledger learns what happened. Which
- * half exists is read from `deps().engine`, the same gate the schema reads.
+ * half exists is selected by `releaseToolActions(!!deps().engine)`: the
+ * namespace members and their declarations. The dispatcher enforces engine
+ * presence for the operations it selects.
  *
  * Flow with an engine: bindSource → create → update (store the unified
  * diff) → apply → runChecks → preview → requestApproval → deploy; rollback

@@ -715,8 +715,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // Steps recorded so far — the trace's dense sequence and the report's count.
   // ONE counter across every turn, because `head_steps` is keyed `${id}-s${seq}`
   // and a per-turn counter would overwrite the first turn's trace with the
-  // second's. A step with no prose, reasoning or tool call is padding and is not
-  // recorded, exactly as the whole-run walk drops it.
+  // second's. A step with no prose, reasoning or tool call is padding and is
+  // not recorded. The counter advances only for recorded steps, keeping the
+  // trace sequence dense across turns.
   let recorded = 0;
   // `extractFinalText`'s two inputs, tracked as the steps land: the last
   // text-bearing step's prose, and the last reasoning. A whole-run walk is not

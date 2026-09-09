@@ -242,8 +242,9 @@ export async function snapshotWorkspaceForFork(
   // The FTS content table (agent-utils MemoryStore), created for every
   // workspace by initWorkspaceSchema. Carrying it is an optimization — the text
   // is in the memory/*.md FILES above, and a fork with no chunks reindexes via
-  // FTS5 'rebuild' on its next write — but it is carried, because no snapshot
-  // budget makes dropping it the cheaper answer.
+  // FTS5 'rebuild' on its next write. The framed transfer has no total
+  // snapshot-size cap, so retaining `memory_chunks` avoids reindexing without
+  // competing for a snapshot budget.
   const memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
     SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
   `;

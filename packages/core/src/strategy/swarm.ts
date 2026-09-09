@@ -254,11 +254,9 @@ export type SwarmCarrySetting =
 /**
  * The `unit` axis, UNTAGGED — and the note recording why it carries no parameter.
  *
- * A tagged `trajectory` value carrying `inherit` would rest on the argument that only
- * an agent node has a conversation to start from, and both halves of that fail: every
- * node except `thought` is an agent, so the parameter would belong to two of three
- * values rather than one, and the question it asks is the {@link SWARM_CONTEXTS} axis,
- * which asks it once for the caller-to-root edge and every branch edge together. *One
+ * `unit` distinguishes an agent answer from a toolless thought. Inheritance
+ * belongs to `SWARM_CONTEXTS`, which governs the caller-to-root edge and every
+ * branch edge, so `unit` carries no inheritance parameter. *One
  * spelling per axis*: *"the caller-to-root edge and every branch edge are the same
  * question and MUST have the same spelling"* — two fields, two names, one question,
  * with a docstring whose only job is telling a reader they are different.

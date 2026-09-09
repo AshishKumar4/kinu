@@ -224,9 +224,10 @@ export interface SwarmRunDeps {
    * A caller-declared wall clock for ONE agent node, observed at its step
    * boundaries. OPTIONAL — there is no default clock over a node's work (owner
    * ruling, 2026-08-21: no per-turn bounds). Absent, a node runs until its work
-   * is done; present is a search or a test declaring a tighter deadline. There is no
-   * derived default to fall back to: any derivation would be the product of a step cap
-   * and a turn envelope, the exact per-turn bounds the ruling removed.
+   * is done; present is a search or a test declaring a tighter deadline. There
+   * is no implicit wall-clock default: the owner ruling of 2026-08-21 forbids
+   * per-turn bounds. A product of a step cap and a turn envelope would impose
+   * such a bound, just as a directly chosen default would.
    */
   readonly maxWallClockMs?: number;
   /**
