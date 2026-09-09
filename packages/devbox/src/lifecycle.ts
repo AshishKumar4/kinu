@@ -296,7 +296,7 @@ async function raceAllowance<T>(
  * Abandoning a value is not the same as discarding an error, and that late
  * error is usually the only diagnostic there is.
  */
-export async function withContainerStartDeadline<T>(
+async function withContainerStartDeadline<T>(
   label: string,
   budget: StartBudget,
   work: () => Promise<T>,
