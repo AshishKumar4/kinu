@@ -45,6 +45,7 @@ import {
   type SessionRecovery,
 } from "./session-recovery";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
+import { terminalChatError, type ChatTurnError } from "./chat-turn-error";
 import type { AsyncResource } from "./use-async-resource";
 import { pruneSlateReloads } from "../components/surfaces/presence";
 
@@ -99,18 +100,6 @@ export interface BranchRun {
  *  The same shape the durable rows resolve to, so the thread places a live
  *  steer and the row it becomes through one function. See read-models/transcript.ts. */
 export type { InlineSteer as SteerRun } from "@kinu.run/core";
-
-/** A turn that ended without an answer, and whether the server is REPLAYING an
- *  older one rather than reporting this session's.
- *
- *  The distinction is the whole difference between "your turn just failed" and
- *  "the last thing that happened here failed, some time ago". The server keeps
- *  its terminal record until a later turn supersedes it, so a workspace left
- *  after a failure re-serves it on every connect. */
-export interface ChatTurnError {
-  body: string;
-  replayed: boolean;
-}
 
 export interface ForkLineage {
   sourceWorkspaceId: string;
@@ -927,15 +916,15 @@ export function useKinu(target?: string | KinuActorAddress) {
         }));
       } else if (data?.type === "cf_agent_stream_resuming") {
         resumedRequestIds.current.add(data.id);
-      } else if (data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true) {
+      } else {
         // Terminal-error frame. During a live stream the transport also
         // surfaces it as useChat's `error`; on connect the server REPLAYS
         // the last terminal error with a stale request id the transport
-        // drops — this handler is the only place that frame is seen.
-        setChatError({
-          body: data.body?.trim() ? data.body : "The turn failed with an unknown error.",
-          replayed: data.id !== undefined && resumedRequestIds.current.has(data.id),
-        });
+        // drops — this handler is the only place that frame is seen. The
+        // RULE lives in `chat-turn-error.ts`, where an inverted replay test
+        // or a dropped `done` check fails a test instead of reading correct.
+        const failed = data === null ? null : terminalChatError(data, resumedRequestIds.current);
+        if (failed !== null) setChatError(failed);
       }
     }, [actorAddress.workspace]),
   };
