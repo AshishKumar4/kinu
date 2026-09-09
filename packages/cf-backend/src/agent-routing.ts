@@ -101,12 +101,9 @@ const HOSTED_ACTOR_PATH = new RegExp(
 /**
  * The hosted actor a public path addresses, or null for the workspace itself.
  *
- * Returns the LOGICAL name and the tail, and deliberately no prefix to rewrite:
- * there is no second object and no physical key in the URL — the root receives
- * this path as-is and resolves the name through its own directory. Handing
- * `server.ts` a `prefix` would mean substituting a facet's physical storage key
- * into the SDK's `/sub/<class>/<key>` hop, which is both a rewrite nothing needs
- * and a storage key in a client-visible address.
+ * Returns the logical actor name and transport suffix; the root resolves that
+ * name through its own directory and receives the request path unchanged.
+ * Physical storage keys are not part of the client-visible address.
  */
 export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;

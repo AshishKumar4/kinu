@@ -93,10 +93,11 @@ describe('connectMcpServers', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test("a tool call outlives the 5s startup bound and the SDK's 60s default", async () => {
-    // Neither the 5s startup bound nor the MCP SDK's 60s default applies to a
-    // tool call: the fixture sleeps past the first, and only a server's own
-    // `timeoutMs` config bounds it.
+  test('a tool call without a configured timeout completes after six seconds', async () => {
+    // The fixture completes a 6,000 ms call without a server timeout; this
+    // exercises a call longer than five seconds, not the SDK's 60-second
+    // default. Startup has no wall-clock bound, and only an explicit server
+    // timeout config bounds a tool call.
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });

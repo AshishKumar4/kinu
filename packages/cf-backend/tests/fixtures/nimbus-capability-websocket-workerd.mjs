@@ -196,11 +196,11 @@ try {
 // workerd's "your Worker's code had hung" teardown diagnostic
 // (server.c++:6573) is not available as a control here: miniflare 5 does not
 // leave the socket's request outstanding when the runtime goes down, so nothing
-// is cancelled and nothing is logged. Measured rather than assumed — workerd
-// 1.20260820.1 driven under the raw-stdio path still prints it, while the same
-// binary under miniflare 5 writes zero bytes to stdout and stderr for this
-// flow, taken from a tee wrapper on the runtime's own streams via
-// MINIFLARE_WORKERD_PATH.
+// is cancelled and nothing is logged. Measured rather than assumed — for
+// workerd 1.20260820.1, the miniflare-before-5 raw-stdio configuration prints
+// the diagnostic, while the miniflare 5 configuration emits zero stdout and
+// stderr bytes for this flow. The measurement uses a tee wrapper on the
+// runtime's own streams through MINIFLARE_WORKERD_PATH.
 //
 // So the control is the guest's own line instead of platform noise: the
 // one-Worker baseline proves the channel carries runtime diagnostics at all,

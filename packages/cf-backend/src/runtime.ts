@@ -162,12 +162,11 @@ export interface ActorRuntimeIdentity {
   /**
    * Is this the workspace's own MAIN actor.
    *
-   * STATED, never inferred. The test used to be `agent.name ===
-   * actor.workspaceName`, which worked only because a child was a different
-   * Durable Object with a different `name`. Hosted in the root's isolate every
-   * actor shares that name, so the comparison answers `true` for a subordinate
-   * and would hand it the root's shell-approval authority — standing grants
-   * included — instead of the inherited policy that can only narrow.
+   * STATED, never inferred. Every actor of a workspace is hosted in the root's
+   * isolate and answers to the same agent `name`, so an `agent.name ===
+   * actor.workspaceName` test answers `true` for a subordinate and would hand
+   * it the root's shell-approval authority — standing grants included —
+   * instead of the inherited policy that can only narrow.
    */
   rootActor: boolean;
   /** Owner userId, or null while unclaimed. Resolved per call — never cached
@@ -392,12 +391,10 @@ export interface CFRuntimeHooks {
   /**
    * WHERE AN MCTS ROLLOUT BRANCH COMES FROM.
    *
-   * A branch used to be a Facet — `subAgent()` plus a bootstrap sequence plus a
-   * private SQLite plus a reclaim — and this factory built that spawner itself
-   * out of the agent host. It is now a hosted logical actor of kind
-   * `'branch'`, acquired from the workspace's one `ActorHost`, which is a
-   * question only the root can answer: the host holds the directory. So the
-   * seam arrives as a hook instead of being constructed here.
+   * A branch is a hosted logical actor of kind `'branch'`, acquired from the
+   * workspace's one `ActorHost` — a question only the root can answer, because
+   * the host holds the directory. So the seam arrives as a hook instead of
+   * being constructed here.
    *
    * Omitted leaves `spawnBranch`/`abortBranch` refusing rather than absent,
    * because `AgentRuntime` does not make them optional and a search that
@@ -501,9 +498,8 @@ export function createCFRuntime(
   }
   const executor = createExecutor(envForExec.LOADER);
   // Every non-turn model lane this runtime carries, off ONE binding of the
-  // three inputs they all resolve from (see `createProfileLaneLLM`): the four
-  // call sites used to repeat that binding, and the reflection one repeated the
-  // whole factory beside it.
+  // three inputs they all resolve from (see `createProfileLaneLLM`), so no
+  // call site repeats that binding.
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM(
     agent, env, actor, hooks.turnProfile, hooks.resolveProfile, source, hooks.reportModelCall,
   );
@@ -530,19 +526,18 @@ export function createCFRuntime(
   // RPC takes effect on the very next command with no toolset rebuild needed.
   // `deferrals` is what stops an unattended run dying on its first `sudo`: with
   // no interactive channel on this backend, a 'gate' decision under 'strict'
-  // used to be an explanatory refusal, so a night's run stopped there. It is
-  // now parked on the owner and the model is told so — never told it ran.
+  // is parked on the owner and the model is told so — never told it ran.
   // A getter, so the queue is resolved at exec time like every other member of
   // this policy — see ShellApprovalPolicy's own doc on live reads.
   //
   // MAIN vs HOSTED, and it is STATED rather than derived — see `rootActor` on
-  // ActorRuntimeIdentity above for why the old `agent.name ===
-  // actor.workspaceName` test had to go. There is no name to compare any more:
-  // every actor of a workspace is a logical actor of the ONE object and answers
-  // to that one name, so the comparison returns true for a subordinate. Nor is
-  // there a second split for it to agree with — the container is keyed on
-  // `workspaceName` (`sandboxIdForWorkspace` below), which is the same string
-  // for every actor, so all of them ride one container unconditionally.
+  // ActorRuntimeIdentity above. There is no name to compare: every actor of a
+  // workspace is a logical actor of the ONE object and answers to that one
+  // name, so an `agent.name === actor.workspaceName` test returns true for a
+  // subordinate. Nor is there a second split for it to agree with — the
+  // container is keyed on `workspaceName` (`sandboxIdForWorkspace` below),
+  // which is the same string for every actor, so all of them ride one
+  // container unconditionally.
   //
   // What survives is the grants question, and it is now decided by the actor's
   // registered KIND. `actor_config` is `actor_id`-scoped in the one database and
@@ -1015,13 +1010,11 @@ function reportCall(
 }
 
 /** Build one fixed-tier lane from the active immutable profile — every non-turn
- *  model seam this runtime has, including the reflection lane that used to
- *  carry a byte-identical copy of this factory beside it.
+ *  model seam this runtime has, including the reflection lane.
  *
  *  `source` is core's `FixedTierSource`, derived from MODEL_ROUTE_POLICY's
- *  fixed rows. It used to be a local `'judge' | 'fast' | 'advisor'` union — a
- *  hand-mirror of a SUBSET of those rows, so moving a producer onto a fixed tier
- *  in core left this factory unable to name it and nothing said so.
+ *  fixed rows, so a producer moved onto a fixed tier in core is nameable here
+ *  without a local union to keep in step.
  *
  *  Only a COMPLETED call reports. A seam that threw produced no usage and, as
  *  far as anything here can see, was not billed — counting it as an unmeasured

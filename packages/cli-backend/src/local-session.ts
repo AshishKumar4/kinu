@@ -1524,11 +1524,10 @@ export class LocalAgentSession implements BackendHost {
    * started. A caller outside the pump keeps the execution-awaiting contract,
    * which the fiber wake path depends on.
    *
-   * The deadlock is reachable because the roster genuinely runs inside the
-   * pump. A turn finalization that THROWS on an `ON CONFLICT` mismatch before
-   * the roster runs hides it: the inline drain never executes inside the pump
-   * and the debounced `scheduleDrain()` timer — which fires outside it — picks
-   * the work up instead.
+   * The terminal roster runs inside the pump, so an inline event drain must
+   * wait only for queue admission, not for execution by that same pump. A
+   * debounced drain runs outside this stack and does not exercise that
+   * re-entrant wait.
    */
   private settlingDepth = 0;
 

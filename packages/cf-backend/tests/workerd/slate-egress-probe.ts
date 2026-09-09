@@ -70,10 +70,10 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     const committed = v.parse(v.object({ ok: v.literal(true), value: v.object({ source: v.string() }) }),
       await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
     const digest = new ContentRef(committed.value.source).digest.value;
-    // The worker key an UNMEDIATED start produces, spelled out here because the
-    // host hands out no such key: it seeds the loader cache with an image the
-    // egress policy never saw, which is exactly what the mediated start below
-    // must refuse to reuse.
+    // This fixed key models an already-cached image that does not include the
+    // egress policy in its identity; the fixture seeds that cache entry
+    // directly and is not a production compatibility reader. A mediated start
+    // for the same workspace, source and caller must not reuse it.
     const key = 'slate:' + this.ctx.id.toString() + ':' + slateCallerKey(ROOT_SLATE_CALLER) + '#network:' + digest;
     const writerId = crypto.randomUUID();
     const unmediated = processes(this.ctx, this.env).spawn(

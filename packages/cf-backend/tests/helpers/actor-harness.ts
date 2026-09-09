@@ -887,14 +887,10 @@ export interface ObservedNaming {
  * on, so nothing here needs overriding and there is nothing to keep in step
  * with the SDK.
  *
- * Nothing simulates per-actor storage, and that absence is the fixture's whole
- * claim. A fixture that stood a child up itself would need a second
- * `Database(':memory:')` per child, a `parentPath` array declared by hand
- * because facets are workerd-only, a `FacetIdentity` seed so the child could
- * read its own name back, an SDK-lineage write into `cf_agents_parent_path`
- * and `cf_agents_facet_name`, and two `Object.defineProperty` overrides on the
- * PARENT so `subAgent` and `getExistingSubAgent` resolved one name to the real
- * child — and it could only ever agree with whichever side it was written for.
+ * Acquire the production `HostedActor` from the workspace's `ActorHost` so its
+ * handle, stores, runtime and session share the workspace database. A fixture
+ * that simulates separate child storage cannot establish that the production
+ * actors share one physical database.
  */
 export interface HostedActorHarness {
   /** The hosted actor itself — handle, stores, runtime, session. */
@@ -1312,10 +1308,8 @@ export async function hostedSubordinateHarness(
 /**
  * One exploration actor of the given kind, hosted and acquired.
  *
- * The three exploration kinds differ here in exactly one argument, which is the
- * point: a head, a node and a rollout branch are ONE directory registration and
- * one `acquire`, not three bootstrap sequences each pushing its own seed RPC
- * and each with its own discard path for a bootstrap that failed.
+ * Head, node and rollout-branch fixtures use the same directory registration
+ * and `acquire` sequence. Their registered kind is the one differing argument.
  */
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,

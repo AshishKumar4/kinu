@@ -239,11 +239,10 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   });
 });
 
-// KINU-034 is not covered here: the claim lives in the object every facet of a
-// workspace reaches, and its tests live with it —
-// packages/devbox/tests/resource-lane.test.ts. A keyed queue held by THIS
-// adapter would order one facet's calls only, and every facet of a workspace
-// has its own copy of this adapter while they all address the same container.
+// KINU-034 is not covered here: it is enforced in the container object reached
+// by every workspace caller, and its tests live with it —
+// packages/devbox/tests/resource-lane.test.ts. A queue local to an adapter
+// cannot serialize calls arriving through another handle to the same container.
 
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {

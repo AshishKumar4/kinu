@@ -2,18 +2,10 @@
  * The object that owns one workspace, as the methods a caller in this Worker
  * needs of it.
  *
- * WHAT IS NOT HERE. Nothing forwards a file operation: no `WorkspaceBoxOp`
- * union, no results map keyed by op name, no dispatcher on the owner and no
- * client re-implementing `NimbusSandboxHandle` over one monomorphic RPC. A
- * hosted logical actor shares the root's isolate and therefore its box directly
- * — `createCFRuntime` is handed the very handle the workspace composed — so
- * `files.read`, `files.write`, `exec` and `ports.expose` cross no isolate
- * boundary, and there is nothing for a forwarding layer to carry.
- *
- * WHAT REMAINS is genuinely cross-WORKSPACE, which is a different question from
- * cross-actor: a slate binding held by a process in one workspace calling into
- * the object that owns another, and an actor reaching its own workspace owner
- * from a Worker entrypoint. Those are real Durable Object hops and stay.
+ * Hosted actors share the root's isolate and its composed workspace box, so
+ * their file and execution operations need no owner RPC. This module declares
+ * genuinely cross-workspace owner calls, including slate bindings held by a
+ * process in another workspace.
  */
 
 import type { SlateBindingRequest, SlateCallResult, SlateOperation } from '@kinu.run/core';
