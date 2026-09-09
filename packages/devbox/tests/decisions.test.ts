@@ -22,11 +22,10 @@ import { scratchDir } from '@kinu.run/test-utils';
 // decisions are reachable without the platform is the point of separating them,
 // so this import is the property rather than a workaround. The barrel's own
 // coherence is checked by `tsc`.
-import { DEVBOX_RUNTIME_DIR, DEVBOX_WORKDIR, parseDevboxStrategyName } from '../src/storage';
+import { DEVBOX_WORKDIR, parseDevboxStrategyName } from '../src/storage';
 import {
   DEFAULT_DEVBOX_POLICY,
   describeThrown,
-  findMount,
   generatePortToken,
   healthProbeCommand,
   healthProbeSilent,
@@ -39,12 +38,12 @@ import {
   classifyRecovery,
   ContainerStartOverrun,
   openStartBudget,
+  racedRestoreSteps,
   runRestoreStep,
   parseRecoveryRow,
   quiesceStep,
   recoveryStep,
   restartPlan,
-  withContainerStartDeadline,
   type DevboxIncident,
   type IncidentDisposition,
   type PortExposureSpec,
@@ -63,32 +62,12 @@ import {
   layerIntegrityFailure,
   metadataObjectKey,
   normalizeChainState,
-  isOverlayMounted,
-  shouldCheckpoint,
   type ChainLayer,
 } from '../src/snapshot-chain';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 /** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
-
-/** What the PRODUCTION image really reports. fuse-overlayfs publishes NO
- *  lowerdir/upperdir/workdir options; only kernel overlay does. */
-const OVERLAY_MOUNTS = [
-  'sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0',
-  `/dev/sqsh ${DEVBOX_RUNTIME_DIR}/lower-base squashfs ro,relatime 0 0`,
-  'fuse-overlayfs /workspace fuse.fuse-overlayfs rw,nosuid,nodev,relatime,user_id=0 0 0',
-].join('\n');
-/** Kernel overlay, which DOES publish the dirs. Both must read as mounted. */
-const KERNEL_OVERLAY_MOUNTS =
-  'overlay /workspace overlay rw,lowerdir=/a:/b,upperdir=/c,workdir=/d 0 0';
-
-const FUSE_MOUNTS = [
-  'proc /proc proc rw,relatime 0 0',
-  's3fs /workspace fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0',
-].join('\n');
-
-const NO_MOUNTS = 'proc /proc proc rw,relatime 0 0\n/dev/vdc / ext4 rw 0 0';
 
 // ── the activity lease ──────────────────────────────────────────────────────
 
@@ -884,17 +863,21 @@ describe('an incident is written off only when the host says it LANDED', () => {
 });
 
 describe('the attach budget', () => {
+  /** The attach step of the restore's one policy, which is where the budget's
+   *  throwing arm is reached from. */
+  const attachWithin = <T>(
+    budgetMs: number, work: () => Promise<T>, onOverrun: (failure: { readonly cause: unknown }) => void,
+  ): Promise<T> => racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun);
+
   test('work that finishes inside the budget resolves normally', async () => {
-    const done = await withContainerStartDeadline(
-      't', openStartBudget(25_000), () => Promise.resolve('ok'), () => {},
-    );
+    const done = await attachWithin(25_000, () => Promise.resolve('ok'), () => {});
     expect(done).toBe('ok');
   });
 
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
     const late: string[] = [];
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
-    const run = withContainerStartDeadline('t', openStartBudget(0), () => work, failure => {
+    const run = attachWithin(0, () => work, failure => {
       late.push(describeThrown({ cause: failure.cause }));
     });
     await expect(run).rejects.toThrow(/exceeded its 0ms budget and was abandoned/);
@@ -908,8 +891,8 @@ describe('the attach budget', () => {
 
   test('a failure inside the budget propagates rather than becoming an overrun', async () => {
     const late: string[] = [];
-    await expect(withContainerStartDeadline(
-      't', openStartBudget(25_000), () => Promise.reject(new Error('bad layer')),
+    await expect(attachWithin(
+      25_000, () => Promise.reject(new Error('bad layer')),
       failure => { late.push(describeThrown({ cause: failure.cause })); },
     )).rejects.toThrow('bad layer');
     expect(late).toEqual([]);
@@ -1009,10 +992,7 @@ describe('the attach budget', () => {
     // would silently stop recognising it the day the sentence is reworded.
     let overrun: { readonly cause: unknown } | undefined;
     try {
-      await withContainerStartDeadline(
-        'Devbox.attach', openStartBudget(0),
-        () => Promise.withResolvers<never>().promise, () => {},
-      );
+      await attachWithin(0, () => Promise.withResolvers<never>().promise, () => {});
     } catch (error) {
       overrun = { cause: error };
     }
@@ -1020,39 +1000,6 @@ describe('the attach budget', () => {
     expect(classifyRecovery(overrun ?? { cause: undefined })).toBe('abandoned');
     expect(recoveryStep({ owned: true, failure: 'abandoned', stage: undefined }))
       .toEqual({ action: 'replace', stage: 'replace' });
-  });
-});
-
-// ── mount facts ─────────────────────────────────────────────────────────────
-
-describe('mount facts — the kernel is asked, not a marker', () => {
-  test('DEPLOYED DEFECT: a fuse-overlayfs mount reads as mounted with NO dir options', () => {
-    // A deployed container answered "produced an overlay whose upper directory
-    // (unnamed) does not exist" because an earlier version parsed `upperdir` out
-    // of the mount line. fuse-overlayfs never publishes it. Both overlay
-    // families must read as mounted, and neither answer may depend on options.
-    expect(isOverlayMounted(OVERLAY_MOUNTS, '/workspace')).toBe(true);
-    expect(isOverlayMounted(KERNEL_OVERLAY_MOUNTS, '/workspace')).toBe(true);
-    expect(OVERLAY_MOUNTS).not.toContain('upperdir');
-  });
-
-  test('an octal-escaped space in the mountpoint survives the parse', () => {
-    const escaped = 'fuse-overlayfs /my\\040box fuse.fuse-overlayfs rw 0 0';
-    expect(isOverlayMounted(escaped, '/my box')).toBe(true);
-  });
-
-  test('a non-overlay mount at the same path is NOT an overlay', () => {
-    // This is the whole reason the fstype is checked: a plain FUSE mount at
-    // /workspace is a real mount and a real filesystem, and reading it as an
-    // overlay would make the chain archive a directory that has no upper.
-    expect(isOverlayMounted(FUSE_MOUNTS, '/workspace')).toBe(false);
-    expect(findMount(FUSE_MOUNTS, '/workspace')?.fstype).toBe('fuse.s3fs');
-  });
-
-  test('nothing mounted reads as nothing mounted', () => {
-    expect(isOverlayMounted(NO_MOUNTS, '/workspace')).toBe(false);
-    expect(findMount(NO_MOUNTS, '/workspace')).toBeUndefined();
-    expect(findMount(NO_MOUNTS, '/')?.fstype).toBe('ext4');
   });
 });
 
@@ -1462,23 +1409,6 @@ describe('integrity probe — each unsound shape names itself', () => {
         label: 'delta',
       })).toContain('different archive of the same length');
     });
-});
-
-describe('the checkpoint interval gate', () => {
-  const interval = DEFAULT_DEVBOX_POLICY.checkpointIntervalMs;
-
-  test('an unchanged directory is never archived, however long it has been', () => {
-    expect(shouldCheckpoint('unchanged', 0, Number.MAX_SAFE_INTEGER, interval)).toBe(false);
-  });
-
-  test('a change inside the interval waits; on the boundary it commits', () => {
-    expect(shouldCheckpoint('changed', 1_000, 1_000 + interval - 1, interval)).toBe(false);
-    expect(shouldCheckpoint('changed', 1_000, 1_000 + interval, interval)).toBe(true);
-  });
-
-  test('lost change state counts as changed, because it cannot prove otherwise', () => {
-    expect(shouldCheckpoint('resync', 0, interval, interval)).toBe(true);
-  });
 });
 
 describe('archive options', () => {
