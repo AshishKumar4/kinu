@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-09",
-  "files": 2139,
-  "functions": 55605,
+  "files": 2060,
+  "functions": 52089,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -22,20 +22,32 @@
       "complexity": 92
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 91
-    },
-    {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 87
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#candidateLifecycleChecks",
-      "complexity": 73
+      "key": "scripts/bench-devbox-strategies.ts#measureArm",
+      "complexity": 77
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 72
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 72
     },
     {
       "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
       "complexity": 72
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
+      "complexity": 71
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
+      "complexity": 64
     },
     {
       "key": "packages/core/src/mcts/engine.ts#runMCTS>fiber",
@@ -62,19 +74,11 @@
       "complexity": 51
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#render",
-      "complexity": 51
-    },
-    {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
     },
     {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 50
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#controlWitnessChecks>map",
       "complexity": 50
     },
     {
@@ -98,12 +102,24 @@
       "complexity": 46
     },
     {
+      "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 46
+    },
+    {
       "key": "packages/pc-agent/src/index.js#handle",
+      "complexity": 46
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#render",
       "complexity": 46
     },
     {
       "key": "scripts/bench-r2-workspace.ts#main",
       "complexity": 46
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 45
     },
     {
       "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
@@ -162,10 +178,6 @@
       "complexity": 39
     },
     {
-      "key": "scripts/bench-devbox-strategies.ts#readCandidateCutCell",
-      "complexity": 39
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 39
     },
@@ -176,6 +188,18 @@
     {
       "key": "packages/core/src/strategy/swarm-resume.ts#harvestSwarm",
       "complexity": 38
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
+      "complexity": 37
     },
     {
       "key": "packages/cf-backend/src/server.ts#route",
