@@ -81,11 +81,13 @@ export const EXTERNAL_TOOL_LINE = definePromptSection(
 /**
  * The turn's guidance, in independent layers.
  *
- * Permission (workMode) and provenance are separate facts and each renders on
- * its own: a background-job wake is a resume AND it is plan or build work.
- * Collapsing them into one value is what made the resume overlay unreachable —
- * see prompting/surface.ts. The role renders as its own section (ROLE_SECTION
- * below), never as a branch of this one.
+ * Permission (workMode) renders here because it is a BAR: a Plan turn is
+ * forbidden things, and a prohibition belongs at system placement. Provenance
+ * does not — it is an overlay and never a bar (prompting/surface.ts), so it
+ * rides the turn-local tail instead of buying a full prefix rewrite every
+ * time a background job lands mid-session (prompting/volatile-context.ts
+ * `BACKGROUND_RESUME_NOTICE`). The role renders as its own section
+ * (ROLE_SECTION below), never as a branch of this one.
  *
  * `build` (Auto) renders nothing here, on purpose: it is the absence of
  * constraint.
@@ -100,8 +102,7 @@ export const OPERATING_GUIDANCE = definePromptSection(
 - Kimi models work best with concrete and continuous tool use: preserve tool/result context and continue from each observation.
 - For long-horizon coding, save durable decisions with \`memory\`.{{/if}}{{#if gpt}}
 - GPT/Codex-style reasoning models do best with direct success criteria. State assumptions briefly, use tools for current facts, and keep final answers outcome-focused.
-- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{#if backgroundResume}}
-- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.{{/if}}{{#if planMode}}
+- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{#if planMode}}
 - Plan mode: {{#if planSubmission}}investigate, then submit a concrete Markdown plan with affected files, risks, and verification through \`submit_plan\`.{{else}}investigate and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.{{/if}}
 - Do not change project files, system resources, releases, or deployments. Use file read/list/stat/search for inspection. Research notes, task bookkeeping, and the plan itself remain allowed. After approval starts a Build turn, use mutating operations.
 - Run code only through a tool that explicitly supports Plan-safe analysis. Unrestricted shell/local native execution is unavailable in Plan; do not route around that refusal through another environment.
@@ -332,18 +333,22 @@ A background job needs nothing from you while it runs. Its full result wakes you
  * writing every row of it transposed; building an API to its own convenient
  * signature and self-grading it green against its own tests.
  *
- * Deliberately NOT here: a "check your work before calling it done" framing
- * sentence. The CompletionGate is that instruction as a mechanism — it shows the
- * harness's own reading of the working directory and asks for it to be checked
- * against the task — and a generic re-check prompt is the one Anthropic's Opus 5
- * guidance says to delete because it over-verifies. What survives is what the
- * gate does not say and cannot: the exact SHAPE the request named, and the
- * interface it will be called through.
+ * Deliberately NOT here: any instruction to re-read or re-check as such. The
+ * CompletionGate is that instruction as a mechanism — it shows the harness's
+ * own reading of the working directory and asks for it to be checked against
+ * the task — and an unconditional re-verification pass is the family
+ * Anthropic's Opus 5 guidance says to delete: removing it measured a third
+ * off cost per ticket with no accuracy change. The framing sentence went
+ * first; "Re-read the artifact itself against the request's own words" was
+ * the same instruction in narrower words and went with it. What survives is
+ * what the gate does not say and cannot: the exact SHAPE the request named,
+ * and the interface the work will be called through. Both name a specific
+ * thing to look at, neither asks for a second pass over the whole artifact.
  */
 export const VERIFICATION_SECTION = definePromptSection(
   'state/verification',
   `## Verification
-- Re-read the artifact itself against the request's own words. Check every deliverable it names, and the exact shape it names (column order, direction, units, filenames).
+- Check every deliverable the request names, and the exact shape it names (column order, direction, units, filenames).
 - Build to the interface the task states. Exercise your work the way the task says it will be called, with the signature, entry point, and arguments it specifies.{{#if hasShell}}
 - Run the real check and report what passed or failed. A result is something you executed.{{/if}}`,
 );

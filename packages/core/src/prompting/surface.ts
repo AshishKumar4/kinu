@@ -152,8 +152,6 @@ export interface PromptSurfaceOptions {
   /** What the turn may do. Defaults to `build` — Auto, the absence of
    *  constraint — which renders no guidance at all. */
   workMode?: WorkMode;
-  /** Why the turn is running. Defaults to `chat`, which renders nothing. */
-  provenance?: TurnProvenance;
   /** The one Role section this turn renders, from the resolved turn profile.
    *  Absent renders nothing — an actor resolved without a profile authority
    *  keeps its plain surface. */
@@ -178,7 +176,6 @@ export interface PromptSurface {
   model: PromptModelProfile;
   backend?: PromptBackend;
   workMode: WorkMode;
-  provenance: TurnProvenance;
   planSubmissionAvailable: boolean;
   roleSection: { id: string; label: string; instructions: string } | null;
   identity: ResolvedPromptIdentity;
@@ -294,7 +291,6 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,
     workMode: opts.workMode ?? 'build',
-    provenance: opts.provenance ?? 'chat',
     planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
     // `|| null`, not `??`: the empty string is what a fresh workspace's title
     // is until its first prompt names it, and whitespace is not a name either.
