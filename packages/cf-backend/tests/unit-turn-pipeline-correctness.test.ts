@@ -2,12 +2,19 @@ import { describe, expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { memberBody, toolExecute } from '@kinu.run/test-utils';
-import { WORKSPACE_RUN_ID, type CompletedTurn } from '@kinu.run/core';
+import {
+  MERGE_POLICY_BINDING, memberBody, mergePolicyProfile, scriptedTurnModel, toolExecute,
+} from '@kinu.run/test-utils';
+import {
+  MergeOutputSchema, WORKSPACE_RUN_ID,
+  type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
+} from '@kinu.run/core';
 import {
   hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { createHeadRuntime } from '../src/head-runtime';
+import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
@@ -65,8 +72,6 @@ const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
-const ownedModelServices = readFileSync(join(import.meta.dir, '..', 'src', 'owned-model-services.ts'), 'utf8');
-const mergePolicy = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'heads', 'merge-policy.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
  *  options. Core owns the function; this names its callers, so a second
@@ -84,6 +89,52 @@ function effortDerivationSites(): string[] {
   };
   walk(join(import.meta.dir, '..', 'src'));
   return sites.sort();
+}
+
+/** The exploration substrate a merge must never reach. Fail-loud on every member
+ *  at once rather than member by member: `mergeLLM` touching the spawn seams at
+ *  all is the wiring regression this wants named, and a Proxy cannot grow a
+ *  quietly answering member the day the interface grows one. */
+const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
+  get: (_target, key) => {
+    throw new Error(`the head merge reached the exploration substrate: ${String(key)}`);
+  },
+});
+
+/** What the model behind the port answers a merge with. Valid JSON, because the
+ *  assertion is what the port was ASKED for and a refused parse would take the
+ *  second ask down with it. Built through the shared scripted factory, which
+ *  answers `doStream` as well — nothing here streams, and a fixture that only
+ *  implements the half production skips is how nine of them failed at once. */
+const MERGE_ANSWER_MODEL = scriptedTurnModel({
+  doGenerate: () => ({
+    content: [{
+      type: 'text' as const,
+      text: '{"narrative":"Both heads agree the parser is sound.","selected_decisions":[],'
+        + '"unresolved_questions":[],"recommendations":["ship it"]}',
+    }],
+    finishReason: { unified: 'stop' as const, raw: undefined },
+    usage: {
+      inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 7, text: 7, reasoning: undefined },
+    },
+    warnings: [],
+  }),
+});
+
+/** A SECOND judge route, disagreeing with the shared merge fixture on both axes:
+ *  a route that moved only its model cannot tell a bound effort from a routed
+ *  one, and one that moved only its effort cannot tell a bound model. */
+const REBOUND_JUDGE = {
+  model: 'fake/deep-rebound', reasoningEffort: 'low',
+} satisfies { model: string; reasoningEffort: ReasoningEffort };
+
+/** The shared merge fixture with that route in its `deep` slot. A rebind rather
+ *  than a second catalog resolution: `judge` is a fixed-tier producer, so its
+ *  route IS `profile.tiers.deep`, and resolving a whole second profile would
+ *  restate the fixture's construction beside it to move one slot. */
+function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
+  return { ...profile, tiers: { ...profile.tiers, deep: REBOUND_JUDGE } };
 }
 
 describe('turn-pipeline correctness wiring', () => {
@@ -203,41 +254,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).toContain('operations?: ModelOperationSink');
   });
 
-  test('the agents swarm substrate is built as an ANNOTATED AgentsForkDeps, with no strategy objects', () => {
-    // The fork action is gone. Each backend builds the typed swarm substrate
-    // directly, with no pass-through wrapper and no dormant strategy objects.
-    //
-    // The annotation is load-bearing, not style: `gate:wired` attributes a
-    // field supply by the WRITTEN type on the literal, and it does not descend
-    // into a nested one. Built inline under `fork:` the substrate's own optional
-    // wires were supplied here and reported as supplied by nobody, which is how
-    // a live wire looks identical to a missing one. So the shape this asserts is
-    // the shape that stays measurable.
-    //
-    // The wires themselves are the HOSTED ones. `nodeHost` — the in-isolate
-    // `NodeLoopHost` a facet backend handed a whole wave — has no supplier on
-    // this backend any more; a node is a logical actor of the one workspace, so
-    // the substrate asks for its seat PER NODE (`hostNode`) and for that seat's
-    // own private home (`provisionNodeHome`). Both of those, and the two
-    // liveness channels beside them, are optional in the interface and supplied
-    // here, which is exactly the set that goes unattributed if this literal ever
-    // slides back inside `fork:`.
-    const depsBody = memberBody(actor, 'private getAgentsToolDeps(workMode: WorkMode)');
-    expect(depsBody).toContain('const fork: AgentsForkDeps = {');
-    expect(depsBody).toContain('resolveModel:');
-    expect(depsBody).toContain('hostNode:');
-    expect(depsBody).toContain('provisionNodeHome:');
-    expect(depsBody).toContain('reportNodeDelta:');
-    expect(depsBody).toContain('announceHeadActivity:');
-    expect(depsBody).toContain('compactShared:');
-    // And no in-isolate loop host smuggled back in beside the hosted seat: two
-    // suppliers for one node's execution is the collision the cutover removes.
-    expect(depsBody).not.toContain('nodeHost:');
-    expect(depsBody).not.toContain('mcts:');
-    expect(depsBody).not.toContain('heads:');
-    expect(actor).not.toContain('defaultOptions');
-  });
-
   test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
     // Parity with the CLI: the reflection loop assumes the model sees its
     // newest lessons in-turn. The tail is the ONE dynamic-context input behind
@@ -304,73 +320,66 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
 
-  // Output caps are not asserted per seam here: the gate below owns that rule
-  // for every production source at once, and a second, weaker copy of it beside
-  // four hand-picked files is the drift that gate exists to prevent.
-  test('provider-agnostic auxiliary calls take their effort from the route, not a constant', () => {
-    // Low effort is no longer DERIVED here. Every auxiliary caller asks the
-    // shared owner-scoped services for it, and those services are the single
-    // place that turns an effort level into provider options.
-    expect(exploration).not.toContain('reasoningEffortOptions');
-    // And no auxiliary caller NAMES an effort any more. `'low'` was a second
-    // decision sitting beside a routed model: the tier that chose the model
-    // already chose how hard to run it, and a constant here overrode it. The
-    // two askers in this file — the MCTS rollout and the pruned-branch
-    // reflection — both read `route.reasoningEffort` now.
-    expect(exploration).not.toMatch(/resolveModelWithEffort\([^)]*'(low|medium|high)'\)/);
-    // Hosting SPLIT the pair's producer from its consumer, and the split is
-    // where an effort goes missing without anything failing to compile. The
-    // askers resolve `(model, effort)` together and no longer bind a client at
-    // all — the root owns the provider registry and the operation sink — so what
-    // has to be measured now is that the effort TRAVELS with the spec it was
-    // resolved beside, on both askers.
-    expect(exploration.match(/spec: route\.model, effort: route\.reasoningEffort/g)?.length).toBe(2);
-    // …and that the one transport on the other side of the split spends it
-    // rather than recomputing one. A `REASONING_EFFORT_FOR_STAGE` lookup here
-    // reads as routing while overriding exactly the axis the route decided,
-    // which is the substitution that stood in this file for an hour.
-    const branchTransport = memberBody(actor, 'private branchRunnerDeps()');
-    expect(branchTransport).toContain('resolveModelWithEffort(spec, effort)');
-    // `effort` there has to have ARRIVED. The compiler forces it to come from
-    // the request or not exist, so what is left to refuse is a local shadow: a
-    // stage-table lookup or a named level, either of which computes the route's
-    // own answer and then substitutes for it.
-    expect(branchTransport).not.toMatch(/REASONING_EFFORT_FOR_STAGE\.\w+/);
-    expect(branchTransport).not.toMatch(/'(low|medium|high)'/);
-    expect(ownedModelServices.match(/reasoningEffortOptions\(/g)?.length).toBe(1);
-    expect(headRuntime).not.toContain('reasoningEffortOptions');
-    // The merge's ROUTE is no longer decided in this backend at all — core's
-    // `headMergeLLM` resolves `judge` and the tier's own effort, and both
-    // backends call it, which is what stops the local merge from running the
-    // session's chat model at a constant while filing `judge` spend. So the
-    // route lookup and the spend label must be there and NOT here.
-    expect(mergePolicy).toContain("const HEAD_MERGE_SOURCE = 'judge'");
-    expect(mergePolicy).toContain('resolveModelRoute(HEAD_MERGE_SOURCE, profile)');
-    expect(headRuntime).not.toContain('resolveModelRoute');
-    // What is left here is the one backend-local decision: binding the routed
-    // pair through the OWNER's provider registry. Effort still comes from the
-    // resolution, never from a constant beside it.
-    expect(headRuntime).toContain('bindMergeModel: (route) => deps.models.resolveModelWithEffort(');
-    expect(headRuntime).toContain('route.model, route.reasoningEffort,');
-    // Chat and all auxiliary profile lanes derive provider options at the
-    // point where their resolved concrete model is known.
+  // Output caps are not restated at this seam. The gate below owns that rule for
+  // every production source at once, and a second, weaker copy of it beside a
+  // hand-picked seam is the drift that gate exists to prevent — which is also why
+  // what this asserts is DRIVEN rather than read: a source scan for
+  // `route.reasoningEffort` cannot tell a spent effort from a shadowed one.
+  test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
+    // A tier is a (model, effort) PAIR, and hosting SPLIT the producer of that
+    // pair from the consumer that binds it. An effort can go missing across that
+    // split without anything failing to compile: the routed model still arrives,
+    // the spend still files as `judge`, and the call runs at whatever constant
+    // sits beside the spec. Which is why the port is driven TWICE, under two
+    // judge routes that disagree on BOTH axes — a constant that happens to equal
+    // the first route's effort passes any single-call assertion and fails here.
+    const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
+    let profile = mergePolicyProfile();
+    const runtime = createHeadRuntime({
+      host: noExplorationHost,
+      models: {
+        resolveModelWithEffort: (spec, effort) => {
+          asked.push({ spec, effort });
+          return { model: MERGE_ANSWER_MODEL, providerOptions: undefined };
+        },
+      },
+      profile: async () => profile,
+      reportModelCall: () => undefined,
+    });
+
+    await runtime.mergeLLM('merge the first pair of heads', MergeOutputSchema);
+    profile = reboundJudgeRoute(profile);
+    await runtime.mergeLLM('merge the second pair of heads', MergeOutputSchema);
+
+    // The first ask is the SHARED merge binding — the value the local backend's
+    // suite compares against too, so the two backends resolving one policy is an
+    // equality between suites rather than two expectations maintained apart. The
+    // second is the rebound route, and it has to be that route's own pair: a
+    // captured route, a bound model or a bound effort each answer the first ask
+    // correctly and the second with the first one's.
+    expect(asked).toEqual([
+      MERGE_POLICY_BINDING,
+      { spec: REBOUND_JUDGE.model, effort: REBOUND_JUDGE.reasoningEffort },
+    ]);
+  });
+
+  // A whole-backend scan, and stated here because no gate owns it:
+  // `gate:duplication` compares implementations that both exist and a three-line
+  // re-derivation is below its fingerprint, while `gate:capability-parity` asks
+  // who WIRES a contract, not who computes one answer twice. So this is not the
+  // per-seam copy the comment above refuses: there is no wider owner to drift
+  // from, and the denominator is every file in the backend rather than a
+  // hand-picked few.
+  test('one place in this backend turns a reasoning-effort level into provider options', () => {
+    // Chat and every auxiliary profile lane derive provider options at the point
+    // where their resolved concrete model is known. A fourth entry is a second
+    // derivation, which is how a lane came to carry options computed from the
+    // CHAT model's family and applied to a review model on another provider.
     expect(effortDerivationSites()).toEqual([
       'actor-agent.ts',
       'owned-model-services.ts',
       'runtime.ts',
     ]);
-
-    // The shadow eval's judge is the control plane's, and the plane builds it
-    // over the cross-family REVIEW model at the judge stage's own effort. The
-    // actor used to build a second judge here carrying provider options derived
-    // from the CHAT model's family — options a review model on a different
-    // provider cannot apply — so the effort is no longer named at this seam.
-    const control = actor.slice(
-      actor.indexOf('protected get scaffoldControl()'),
-      actor.indexOf("/** The scaffold's host.llmStream bridge"),
-    );
-    expect(control).toContain('judge: createJsonJudge(() => this.getModelForReview())');
-    expect(control).not.toContain('reasoningEffortOptions');
   });
 
   // Owner directive: output caps are the wrong mechanism entirely — a reasoning

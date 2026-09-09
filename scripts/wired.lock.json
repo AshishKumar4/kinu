@@ -267,7 +267,6 @@
   "packages/core/src/orchestrator/terminal-effects.ts#TerminalEffectInterrupt (unreached-export)",
   "packages/core/src/orchestrator/terminal-effects.ts#terminalEffectBackoffMs (unreached-export)",
   "packages/core/src/orchestrator/terminal-effects.ts#terminalEffectKey (unreached-export)",
-  "packages/core/src/orchestrator/terminal-roster.ts#TerminalTurnParts.completionGate (unsupplied-field)",
   "packages/core/src/orchestrator/terminal-transition.ts#TERMINAL_TRANSITION_CALL_ID (unreached-export)",
   "packages/core/src/orchestrator/turn-context.ts#TurnContextInput.admission (unsupplied-field)",
   "packages/core/src/orchestrator/turn-lifecycle.ts#TOOL_CALLS_PENDING (unreached-export)",

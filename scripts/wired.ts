@@ -524,6 +524,19 @@ const MOUNTS: ReadonlySet<string> = new Set(['createRoot', 'hydrateRoot']);
  */
 const SPAWNS = /^(?:fork|spawn|spawnSync|execFile|execFileSync)$/;
 
+/** The name a call calls, when what it calls is one of those. `undefined` for
+ *  every other node, so the entrypoint dispatcher tests a spawn once rather
+ *  than unfolding the callee shape inline. */
+function spawningCallee(call: SyntaxNode): string | undefined {
+  const { raw } = call;
+  if (raw.type !== 'CallExpression') return undefined;
+  const callee = raw.callee.type === 'MemberExpression' && !raw.callee.computed
+    && raw.callee.property.type === 'Identifier'
+    ? raw.callee.property.name
+    : raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
+  return callee !== undefined && SPAWNS.test(callee) ? callee : undefined;
+}
+
 /**
  * The corpus files a spawn call names, resolved the way the code resolves them.
  *
@@ -617,6 +630,40 @@ function foreignRooted(
 }
 
 /**
+ * The methods of one framework-rooted class that nothing in this tree invokes.
+ *
+ * Empty unless the class is rooted outside the repository, so the caller hands
+ * every `ClassDeclaration` here and reads the answer. A getter, a setter, a
+ * constructor, a computed key, a `private` member and a `#private` member are
+ * none of them a hook the platform can reach.
+ */
+function platformHooks(
+  node: SyntaxNode,
+  file: string,
+  module: Module,
+  rooted: ReadonlyMap<string, { file: string; node: SyntaxNode }>,
+  invoked: ReadonlySet<string>,
+  lineAt: (offset: number) => number,
+): Entrypoint[] {
+  const owner = declaredName(node);
+  if (owner === undefined || !rooted.has(owner)) return [];
+  const hooks: Entrypoint[] = [];
+  for (const member of classMembers(node)) {
+    if (member.type !== 'MethodDefinition' || methodKind(member) !== 'method') continue;
+    if (member.raw.type === 'MethodDefinition'
+      && (member.raw.computed || member.raw.accessibility === 'private'
+        || member.raw.key.type === 'PrivateIdentifier')) continue;
+    const method = declaredName(member);
+    if (method === undefined || invoked.has(method)) continue;
+    hooks.push({
+      file, line: lineAt(member.start), kind: 'platform-hook', at: `${owner}.${method}`,
+      symbol: module.exports.has(owner) ? owner : undefined,
+    });
+  }
+  return hooks;
+}
+
+/**
  * Every entrypoint this tree declares.
  *
  * `invoked` is every name anything in the reacher corpus calls. A method on a
@@ -699,19 +746,14 @@ export function findEntrypoints(
       // `fork(workerPath, [dbPath])` — a path this tree hands to the OS. The
       // spawned file is a root: nothing imports it, so without this every
       // symbol the child consumes reads as reached by nothing.
-      if (raw.type === 'CallExpression') {
-        const callee = raw.callee.type === 'MemberExpression' && !raw.callee.computed
-          && raw.callee.property.type === 'Identifier'
-          ? raw.callee.property.name
-          : raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
-        if (callee !== undefined && SPAWNS.test(callee)) {
-          for (const script of spawnedScripts(node, file, bindings, corpus)) {
-            found.push({
-              file: script, line: 1, kind: 'spawned-script',
-              at: `${collapsePath(file)}:${String(lineAt(node.start))} ${callee}`,
-              symbol: undefined,
-            });
-          }
+      const spawns = spawningCallee(node);
+      if (spawns !== undefined) {
+        for (const script of spawnedScripts(node, file, bindings, corpus)) {
+          found.push({
+            file: script, line: 1, kind: 'spawned-script',
+            at: `${collapsePath(file)}:${String(lineAt(node.start))} ${spawns}`,
+            symbol: undefined,
+          });
         }
       }
       // `tools.run = tool({…})` and `{ run: tool({…}) }` — a handler bound under
@@ -761,20 +803,7 @@ export function findEntrypoints(
       }
 
       if (node.type !== 'ClassDeclaration') return;
-      const owner = declaredName(node);
-      if (owner === undefined || !rooted.has(owner)) return;
-      for (const member of classMembers(node)) {
-        if (member.type !== 'MethodDefinition' || methodKind(member) !== 'method') continue;
-        if (member.raw.type === 'MethodDefinition'
-          && (member.raw.computed || member.raw.accessibility === 'private'
-            || member.raw.key.type === 'PrivateIdentifier')) continue;
-        const method = declaredName(member);
-        if (method === undefined || invoked.has(method)) continue;
-        found.push({
-          file, line: lineAt(member.start), kind: 'platform-hook', at: `${owner}.${method}`,
-          symbol: module.exports.has(owner) ? owner : undefined,
-        });
-      }
+      found.push(...platformHooks(node, file, module, rooted, invoked, lineAt));
     });
   }
   return found.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
@@ -973,6 +1002,7 @@ interface Typed {
 function annotatedTypes(
   annotation: SyntaxNode | undefined,
   member?: (owner: string, key: string) => readonly string[],
+  instanceOf?: (name: string) => MappedInstance | undefined,
 ): readonly string[] {
   if (annotation === undefined) return [];
   const names: string[] = [];
@@ -993,6 +1023,32 @@ function annotatedTypes(
         const arguments_ = node.children.find((child) => child.raw.type === 'TSTypeParameterInstantiation');
         const first = arguments_?.children[0];
         if (first !== undefined) descend(first);
+        return;
+      }
+      // A PROJECT-LOCAL mapped alias — `INSTANCE_UTILITIES` written in this
+      // tree's own words, and the same rule for the same reason.
+      // `cli-backend/src/local-session.ts:333` declares
+      // `type Writable<T> = { -readonly [K in keyof T]: T[K] }` and finishes a
+      // terminal roster on `const parts: Writable<TerminalTurnParts> = {}`, so
+      // `parts.parentReport = …` at :3325 is the ONLY supply of that field
+      // anywhere and this gate credited it to `Writable` — a name no interface
+      // declares. Measured on this tree: annotating that one binding
+      // `Required<TerminalTurnParts>` instead closes the `parentReport` finding
+      // AND resolves the already-locked `TerminalTurnParts.completionGate` row,
+      // which is the two-row blind spot this arm removes.
+      // The alias's own PARAMETER is resolved at the use site, because
+      // `Writable<A>` and `Writable<B>` are instances of different things; a
+      // NAMED type is a mapped type over one concrete interface, which is how
+      // `vfs/context-plane.ts:127` writes the same idea.
+      const carried = instanceOf?.(name);
+      if (carried !== undefined) {
+        if (carried.kind === 'parameter') {
+          const supplied = node.children.find((child) => child.raw.type === 'TSTypeParameterInstantiation');
+          const at = supplied?.children[carried.position];
+          if (at !== undefined) descend(at);
+        } else {
+          names.push(carried.type);
+        }
         return;
       }
       names.push(name);
@@ -1017,6 +1073,47 @@ function annotatedTypes(
 /** The mapped utilities whose instances carry the annotated shape whole (less
  *  the named keys, for `Omit`). `Pick` and `Partial` are deliberately absent. */
 const INSTANCE_UTILITIES: ReadonlySet<string> = new Set(['Omit', 'Required', 'Readonly']);
+
+/**
+ * What a project-local mapped alias's instances carry: one of the alias's own
+ * type parameters, named by position, or one concrete type.
+ *
+ * A TAGGED value rather than `string | number`, so the arm that reads it
+ * branches on a domain answer instead of inspecting a representation.
+ */
+type MappedInstance =
+  | { readonly kind: 'parameter'; readonly position: number }
+  | { readonly kind: 'named'; readonly type: string };
+
+/**
+ * Which shape a project-local mapped alias's instances carry, or `undefined`
+ * when they carry none this gate can name.
+ *
+ * HOMOMORPHIC ONLY: the constraint has to be `keyof` something, because
+ * `{ [K in keyof T]: … }` has exactly T's keys and a literal annotated with it
+ * therefore supplies the keys the interface declares. A SUBSET — `{ [P in K]:
+ * T[P] }`, which is the shape `Pick` has — is refused here for precisely the
+ * reason `Pick` is absent from {@link INSTANCE_UTILITIES}: crediting it would
+ * report every key outside K as supplied by nothing.
+ *
+ * Answers with the alias's own type PARAMETER by position when the constraint
+ * names one, so an alias that maps over a later parameter resolves to that
+ * argument rather than to the first one.
+ */
+function mappedInstanceOf(alias: SyntaxNode, mapped: SyntaxNode): MappedInstance | undefined {
+  const keyOf = mapped.children.find((child) => child.raw.type === 'TSTypeOperator');
+  if (keyOf === undefined) return undefined;
+  const operator = 'operator' in keyOf.raw ? keyOf.raw.operator : undefined;
+  if (operator !== 'keyof') return undefined;
+  const over = keyOf.children.find((child) => child.raw.type === 'TSTypeReference');
+  if (over === undefined) return undefined;
+  const name = identifierText(over.children[0] ?? over);
+  if (name === undefined) return undefined;
+  const declared = alias.children.find((child) => child.raw.type === 'TSTypeParameterDeclaration');
+  const own = (declared?.children ?? []).map((child) => identifierText(child.children[0] ?? child));
+  const position = own.indexOf(name);
+  return position === -1 ? { kind: 'named', type: name } : { kind: 'parameter', position };
+}
 
 const annotationOf = (node: SyntaxNode): SyntaxNode | undefined =>
   node.children.find((child) => child.raw.type === 'TSTypeAnnotation');
@@ -1086,6 +1183,29 @@ export interface FieldFacts {
    *  by a bare type name, so a name shared with a dependency cannot be
    *  attributed to the interface this tree declares under it. */
   readonly foreignNames: ReadonlySet<string>;
+}
+
+/**
+ * The parameter positions the declaration a call NAMES carries.
+ *
+ * The declaration THIS file's `callee` names: what it imported, or its own when
+ * it imported nothing under that name. Failing that, the callee is a BINDING
+ * and its annotation names a callback seam. `undefined` for a callee that is no
+ * identifier at all, so the caller has one answer to test rather than two.
+ */
+function calleePositions(
+  callee: string | undefined,
+  file: string,
+  origins: ReadonlyMap<string, string>,
+  parameters: ReadonlyMap<string, string[][]>,
+  signatures: ReadonlyMap<string, string[][]>,
+  typed: ReadonlyMap<string, Typed[]>,
+): string[][] | undefined {
+  if (callee === undefined) return undefined;
+  return parameters.get(origins.get(callee) ?? `${file}#${callee}`)
+    ?? (typed.get(callee) ?? [])
+      .map((binding) => signatures.get(binding.type))
+      .find((found) => found !== undefined);
 }
 
 /**
@@ -1172,6 +1292,16 @@ export function measureFields(
    *  `I['k']`. Direct members only: a nested type literal's keys belong to the
    *  literal, not to the interface around it. */
   const members = new Map<string, readonly string[]>();
+  /**
+   * `declaringFile#alias -> the shape its instances carry`, for the mapped
+   * aliases this tree writes itself.
+   *
+   * Keyed by DECLARING FILE, never by bare name: all three collisions
+   * `8c313fcb1` repaired were a global table keyed on a name two files spell
+   * their own way, and `Writable` is exactly the kind of name a second file
+   * redeclares differently.
+   */
+  const mappedInstances = new Map<string, MappedInstance>();
   for (const [file, text] of reachers) {
     walk(parseOnce(file, text).root, (node) => {
       if (node.type === 'TSInterfaceDeclaration') {
@@ -1198,6 +1328,14 @@ export function measureFields(
       if (node.type === 'TSTypeAliasDeclaration') {
         const name = declaredName(node);
         if (name === undefined) return;
+        // A homomorphic mapped alias, recorded before the arms below because a
+        // mapped type is none of the things they look for.
+        const mapped = node.children.find((child) => child.raw.type === 'TSMappedType');
+        if (mapped !== undefined) {
+          const carries = mappedInstanceOf(node, mapped);
+          if (carries !== undefined) mappedInstances.set(`${file}#${name}`, carries);
+          return;
+        }
         const intersection = node.children.find((child) => child.raw.type === 'TSIntersectionType');
         if (intersection !== undefined) {
           const members = intersection.children
@@ -1313,6 +1451,11 @@ export function measureFields(
   for (const [file, text] of reachers) {
     const { root: tree } = parseOnce(file, text);
     const origins = calleeOrigins(file, tree);
+    /** A mapped alias this file can SEE: one it declares, or one it imported.
+     *  Resolved through the caller's own import for the reason the table is
+     *  keyed by file at all. */
+    const instanceOfAlias = (name: string): MappedInstance | undefined =>
+      mappedInstances.get(`${file}#${name}`) ?? mappedInstances.get(origins.get(name) ?? '');
     // Names this file takes from outside the corpus, so a type it shares with a
     // dependency stops being attributable everywhere.
     for (const statement of tree.children) {
@@ -1343,7 +1486,7 @@ export function measureFields(
       const scope = owningScope(node);
       const bound = identifierText(node.children[0] ?? node) ?? identifierText(node);
       if (annotation === undefined || bound === undefined) return;
-      for (const type of annotatedTypes(annotation, memberTypes)) {
+      for (const type of annotatedTypes(annotation, memberTypes, instanceOfAlias)) {
         typed.set(bound, [...(typed.get(bound) ?? []), { type, from: scope.from, to: scope.to }]);
       }
     });
@@ -1378,18 +1521,18 @@ export function measureFields(
 
       if (raw.type === 'VariableDeclarator') {
         const init = node.children.find((child) => child.raw.type === 'ObjectExpression');
-        if (init !== undefined) site(annotatedTypes(annotationOf(node.children[0] ?? node), memberTypes), init);
+        if (init !== undefined) site(annotatedTypes(annotationOf(node.children[0] ?? node), memberTypes, instanceOfAlias), init);
         return;
       }
       if (raw.type === 'TSSatisfiesExpression' || raw.type === 'TSAsExpression') {
         const literal = node.children.find((child) => child.raw.type === 'ObjectExpression');
         if (literal !== undefined) {
-          site(annotatedTypes(node.children[1] ?? node, memberTypes), literal);
+          site(annotatedTypes(node.children[1] ?? node, memberTypes, instanceOfAlias), literal);
         }
         return;
       }
       if (isFunctionLike(node)) {
-        const returned = annotatedTypes(returnTypeOf(node), memberTypes);
+        const returned = annotatedTypes(returnTypeOf(node), memberTypes, instanceOfAlias);
         if (returned.length === 0) return;
         walk(node, (inner) => {
           if (inner.raw.type !== 'ReturnStatement') return;
@@ -1417,14 +1560,7 @@ export function measureFields(
       }
       if (raw.type !== 'CallExpression') return;
       const callee = identifierText(node.children[0] ?? node);
-      if (callee === undefined) return;
-      // The declaration THIS file's `callee` names: what it imported, or its
-      // own when it imported nothing under that name. Failing that, the callee
-      // is a BINDING and its annotation names a callback seam.
-      const positions = parameters.get(origins.get(callee) ?? `${file}#${callee}`)
-        ?? (typed.get(callee) ?? [])
-          .map((binding) => signatures.get(binding.type))
-          .find((found) => found !== undefined);
+      const positions = calleePositions(callee, file, origins, parameters, signatures, typed);
       if (positions === undefined) return;
       node.children.slice(1).forEach((argument, index) => {
         const literal = argument.raw.type === 'ObjectExpression'

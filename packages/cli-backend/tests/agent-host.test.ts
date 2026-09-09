@@ -8,7 +8,6 @@ import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
   BackgroundJobStore,
-  actorScopedTables,
   backgroundJobWakeTrigger,
   openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
@@ -703,8 +702,8 @@ describe('LocalAgentHost', () => {
     // every dismissal does and this rung's `transcript: 'kept'` does not
     // contradict; `actorRowCount` says the actor's own rows survived it, and
     // those rows ARE the transcript the outcome claims. Reading the lifecycle
-    // alone would prove nothing about the bytes — `actorScopedTables`
-    // deliberately excludes `workspace_actors` — and a destroy would pass it.
+    // alone would prove nothing about the bytes — `actorRowCount` deliberately
+    // excludes `workspace_actors` — and a destroy would pass it.
     const askActorId = childActorId(dbPath, agent);
     expect(actorLifecycle(dbPath, askActorId)).toBe('retained');
     expect(actorRowCount(dbPath, askActorId)).toBeGreaterThan(0);
@@ -1373,23 +1372,32 @@ function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 
 }
 
 /**
- * Every row this workspace holds for one actor, over the tables the PRODUCT
- * itself sweeps.
+ * Every row this workspace holds for one actor, over every table that carries
+ * an `actor_id` column.
  *
- * `actorScopedTables` is the same read `retire({ destroy: true })` purges
- * through, so this counts exactly what `keepHistory: false` is a promise
- * about. It deliberately excludes `workspace_actors` — the directory owns that
- * row's lifecycle — which is why the DIRECTORY state above and the DATA here
- * are two separate questions: every dismissal releases the name, and only a
- * destroy takes the rows.
+ * The table set is asked of THIS database's own catalogue rather than taken
+ * from the product's cleanup pass, and that is deliberate: a count read
+ * through the very pass it is checking agrees with that pass by construction,
+ * so a purge that stopped sweeping a table would still report zero here and
+ * `keepHistory: false` would pass while the rows sat there. Asked
+ * independently, that defect leaves rows this count can still see.
+ *
+ * `workspace_actors` is the one table left out, and leaving it out is the
+ * reason the DIRECTORY state above and the DATA here are two separate
+ * questions: the directory owns that row's lifecycle, so every dismissal
+ * releases the name and only a destroy takes the rows.
  */
 function actorRowCount(parent: string, actorId: string): number {
   const db = new Database(parent, { readonly: true });
   try {
+    const scoped = db.query<{ name: string }, []>(`
+      SELECT m.name AS name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS c
+      WHERE m.type = 'table' AND m.name <> 'workspace_actors' AND c.name = 'actor_id'
+      ORDER BY m.name`).all();
     let total = 0;
-    for (const table of actorScopedTables(makeSql(db))) {
+    for (const table of scoped) {
       total += db.query<{ c: number }, [string]>(
-        `SELECT COUNT(*) AS c FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`,
+        `SELECT COUNT(*) AS c FROM "${table.name.replace(/"/g, '""')}" WHERE actor_id = ?`,
       ).get(actorId)?.c ?? 0;
     }
     return total;

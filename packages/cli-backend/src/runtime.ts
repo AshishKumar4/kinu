@@ -836,21 +836,22 @@ export async function buildLocalActorRuntime(
  * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
  * real execution, and what the doctrine promises a fork.
  */
-export async function buildCLIHeadRuntime(
+async function buildCLIHeadRuntime(
   opts: {
     parentRuntime: CLIRuntime; actorBinding: LocalActorBinding;
     /**
-     * The handle the HOST bound, when a host bound one.
+     * The handle whoever BOUND this actor issued.
      *
      * `ActorHost` requires a hosted runtime to carry the very handle it issued
      * (`state/actor-host.ts`), because a release revokes THAT handle and a
      * runtime holding a second binding of the same actor would keep
      * authorising statements after the fence flipped. `bindLocalActor` mints a
      * fresh frozen handle per call, so re-binding here produced a runtime the
-     * host correctly refused. Absent only for the hostless caller — a bench or
-     * a probe building a head runtime with no host to bind it.
+     * host correctly refused — which is why the handle is required rather than
+     * re-derived: the only caller, `buildLocalActorRuntime`, already holds the
+     * one its binder issued.
      */
-    actor?: ActorHandle;
+    actor: ActorHandle;
     /** Watches every write this head makes to the PARENT workspace, so the
      *  split can report which files this head changed. Its own view is what
      *  makes the answer exact under concurrency. */
@@ -860,7 +861,7 @@ export async function buildCLIHeadRuntime(
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
   if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
-  const actor = opts.actor ?? bindLocalActor(sql, opts.actorBinding);
+  const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
   const stores = createAgentStores(() => sql, () => actor, parent.storage.transactionSync);
 
