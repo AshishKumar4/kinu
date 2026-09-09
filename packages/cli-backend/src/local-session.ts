@@ -3598,12 +3598,14 @@ export class LocalAgentSession implements BackendHost {
         // a fresh session's default cannot open a lane the turn never earned.
         //
         // AWAITED TO ITS CHECKPOINT, not to its finish. Starting the lane and
-        // completing this row in the same breath loses the review: the CLI's
-        // startup recovery re-drives only `bg:*` fibers and DELETES every other
-        // orphan, so a process killed inside the model call leaves a completed
-        // row that makes a retry impossible. Resolving at the checkpoint is
-        // what makes "the lane is recoverable" and "the row is done" the same
-        // fact; the review itself still runs off the queue.
+        // completing this row in the same breath loses the review: before the
+        // checkpoint nothing about the lane is on disk, so a process killed
+        // inside the model call leaves a completed row with no snapshot for
+        // `recoverAdvisorLane` to re-drive. (Startup preserves the advisor
+        // orphan for recovery under the driver lease; the snapshot is what it
+        // re-drives.) Resolving at the checkpoint is what makes "the lane is
+        // recoverable" and "the row is done" the same fact; the review itself
+        // still runs off the queue.
         run: async ({ status, workMode, advisor }) => {
           if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };

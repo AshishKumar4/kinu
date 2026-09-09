@@ -152,16 +152,16 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
  *
  * Six methods (checkpointStatus, getEvolutionChangelog, latestAlternateTakes,
  * listFileCheckpoints, listMounts, planFileRestore) are 'interactive', NOT
- * workspace.read. Their only transport is the agent websocket, and opening
- * that socket requires a connect-ticket — which requires workspace.exec. A
- * read-only scoped token therefore reaches them on no transport at all, and
- * classing them workspace.read would newly expose them to read-only tokens.
- * No single scope expresses "needs read (to call) AND exec (to open the
- * socket)", so this takes the strict, non-widening approximation: scoped
- * tokens are denied them on every transport (session tokens, which carry no
- * scope tag, are unaffected — the interactive CLI and the browser keep full
- * access). The interactive WS session and the browser are the only real
- * callers of these, so nothing ships broken.
+ * workspace.read. These six methods require an interactive session on every
+ * transport — the agent websocket AND the HTTP rpc route, which dispatches
+ * table-listed methods for session callers (cli/routes.ts). Neither
+ * workspace.read nor workspace.exec authorizes them, and the policy does not
+ * approximate that boundary by classifying them as reads: doing so would
+ * grant read-only tokens authority they must not have. Scoped tokens are
+ * denied them on every transport (session tokens, which carry no scope tag,
+ * are unaffected — the interactive CLI and the browser keep full access).
+ * The interactive session and the browser are the only real callers of
+ * these, so nothing ships broken.
  */
 export const AGENT_RPC_ACCESS = {
   // ── Reads a workspace.read token may perform ──
@@ -213,9 +213,9 @@ export const AGENT_RPC_ACCESS = {
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
   cancelTrigger: 'interactive',
-  // Reachable only over the exec-gated agent socket, so 'interactive', not
-  // workspace.read (see the block comment above). The UI roster read is
-  // listSubordinates.
+  // Interactive-session-only on both the agent socket and the HTTP rpc route;
+  // scoped tokens cannot invoke these (see the block comment above). The UI
+  // roster read is listSubordinates.
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
   listSubordinates: 'interactive',

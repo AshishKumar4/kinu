@@ -7,13 +7,13 @@
  * reached one cursored page at a time, over `getChatHistoryPage`.
  *
  * One hook because there is one contract and two panes. Both columns need the
- * walk. A subordinate facet's transcript is not one delegation the SDK's seed
- * already carries whole: a facet runs `initWorkspaceSchema` against its own
- * storage and keeps its own conversation, and a helper that worked for an hour
- * has more of one than the window holds. Without the walk everything past the
- * window is not slow to reach, it is unreachable, and the pane has no
- * affordance saying so. Copying the workspace column's four hooks across would
- * make that one contract into two.
+ * walk. Workspace and subordinate panes share one paginated transcript
+ * contract: each actor has its own conversation over the shared workspace
+ * database, and a helper that worked for an hour has more of one than the
+ * window holds. Without the walk everything past the window is not slow to
+ * reach, it is unreachable, and the pane has no affordance saying so.
+ * Copying the workspace column's four hooks across would make that one
+ * contract into two.
  *
  * ── Why the derivation is staged (KINU-072) ─────────────────────────────────
  * Every streamed token replaces the live list. Re-deriving the thread from

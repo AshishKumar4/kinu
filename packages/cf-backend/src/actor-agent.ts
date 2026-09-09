@@ -2933,12 +2933,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── The subtree's head journal, over this actor's control plane ──────
   //
-  // A recursive split runs on a facet with its own SQLite, so a journal it
-  // wrote locally would strand its rows one DO away from the head_steps they
-  // must join against — the C2 defect that made a depth-2 head unreadable.
-  // These four are the writes HeadController performs, exposed as the same kind
-  // of cross-DO port missionGuard/missionDebit use: worker-side DO RPC reachable
-  // on a stub and nowhere else, never `@callable`, allowlisted in rpc-surface.ts.
+  // A recursive split runs in this isolate against the workspace's journal, so
+  // its spawn and report rows land where the head_steps they must join against
+  // already are. These four are the writes HeadController performs, exposed as
+  // methods the hosted split port calls locally (orchestrator.ts
+  // `runHostedSplit`): never `@callable`, allowlisted in rpc-surface.ts.
 
   async headJournalRecordSplit(rootId: HeadId, rationale: string, spawnedAt: number): Promise<void> {
     this.headJournal.recordSplit(rootId, rationale, spawnedAt);
@@ -2949,10 +2948,10 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async headJournalRecordReport(report: HeadReport): Promise<void> {
-    // The announcement is the JOURNAL's, not this method's: broadcasting here
-    // would make a branch's last write — the summary, the status and the wall
-    // clock — live for a recursive split and for nothing else, because this RPC
-    // is only reachable from a facet calling its parent.
+    // The announcement is the JOURNAL's, not this method's: every report
+    // publishes its summary, status and wall clock through that one write,
+    // regardless of which producer records it. This method delegates the
+    // write without adding another broadcast.
     this.headJournal.recordReport(report);
   }
 
