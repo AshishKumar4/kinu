@@ -102,8 +102,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
    * exactly as `ResidentSlateHost.previewInvocation` makes it.
    */
   async request(path: string, chain?: string[]): Promise<{ status: number; body: string }> {
-    // EVERY entry is named now, preview included: an unnamed request is what a
-    // slate used to keep and replay as a root lineage.
+    // EVERY entry is named, preview included: an unnamed request is one a slate
+    // can keep and replay as a root lineage.
     const invocation = crypto.randomUUID();
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: chain ?? [] });
     try {

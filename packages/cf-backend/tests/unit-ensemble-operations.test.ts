@@ -233,10 +233,10 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);
     expect(operations[1]!.outcome).toBe('ok');
     expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
-    // The spec is KNOWN now, and that is the fix: the route resolved it from the
-    // profile, so it is the same string the model was built from. It used to be
-    // absent because the seam resolved a model behind a cache and could not say
-    // which one — leaving the one row that prices the call unpriceable.
+    // The spec is KNOWN: the route resolved it from the profile, so it is the
+    // same string the model was built from. A seam that resolves a model behind
+    // a cache cannot say which one, which leaves the one row that prices the
+    // call unpriceable.
     expect(operations.every((e) => e.spec === TINY_MODEL)).toBe(true);
   });
 });

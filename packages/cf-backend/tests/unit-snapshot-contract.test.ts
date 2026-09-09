@@ -162,38 +162,18 @@ describe('the workspace snapshot contract', () => {
   });
 
   /**
-   * THE FACET HALF OF THIS CONTRACT IS GONE, and its removal is a fact about
-   * the surface rather than a gap in the suite.
+   * WHAT THIS FILE DOES NOT COVER, stated because the hole is real and is not
+   * this file's to close.
    *
-   * What the case proved: `SubordinateSnapshot` — the one round trip a facet
-   * tab made when it opened — declared `name`, `displayName`, `role`,
-   * `mission`, `model`, `activePlan` and `pendingSteers`, and every one of them
-   * had to appear in the return literal of `getSubordinateSnapshot` on
-   * `subordinate-agent.ts`. It caught a real drift: the stub answered `roleId`
-   * where the client read `role`.
-   *
-   * Why it cannot be asked any more: that contract existed BECAUSE of the facet
-   * split. The display name and the role lived in the child's own database, so
-   * the only way the parent's tab could read them was an RPC across a storage
-   * boundary, and the RPC's return literal was the thing to hold the interface
-   * to. `subordinate-agent.ts` is deleted with the facet class, and there is no
-   * hosted method that returns a `SubordinateSnapshot` to compare against.
-   *
-   * What replaced it: `ActorAgent.subordinateView` reads `displayName` and
-   * `role` off `actorHost().bindStores(...).stores.config` — `actor_id`-scoped
-   * rows in the ONE workspace database, no stub and no hop. Nothing there is a
-   * declared-field-set contract, so re-aiming this assertion at the nearest
-   * surviving symbol would pin a guarantee nobody holds, which is worse than
-   * asking nothing. It is deleted rather than re-pointed.
-   *
-   * WHAT THAT LEAVES UNCOVERED, stated because the hole is real and is not
-   * this file's to close: `hooks/use-kinu.ts` still calls
-   * `rpc("getSubordinateSnapshot", [])` in two live places — the 25-second
-   * subordinate liveness ping and `loadSubordinateData` — against a method this
-   * backend no longer implements. Nothing typechecks that edge in either
-   * direction. The replacement coverage belongs with whoever migrates that
-   * caller onto the hosted read, because only that change decides what the
-   * hosted path answers with.
+   * `SubordinateSnapshot` is the other interface the client reads over this
+   * rail: `hooks/use-kinu.ts` takes it from `rpc("getActorSnapshot", …)`, which
+   * the orchestrator answers IN PROCESS off
+   * `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows in the
+   * ONE workspace database, no stub and no hop. That return literal is a
+   * declared-field-set contract exactly the way `getWorkspaceSnapshot`'s is,
+   * and nothing holds the two together: a return answering `roleId` where the
+   * client reads `role` typechecks in neither direction and fails only in the
+   * tab.
    */
 
   test('the gallery stub supplies each field a current snapshot reads', () => {

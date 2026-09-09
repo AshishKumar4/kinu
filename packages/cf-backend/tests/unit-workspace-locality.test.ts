@@ -1,17 +1,16 @@
 /**
  * WHERE THE HOSTED WORKSPACE'S BYTES LIVE.
  *
- * This is the executable form of the requirement the 2026-08-12 ask made and
- * that nothing in CI could previously check: Nimbus is a LIBRARY in the Durable
- * Object that owns the workspace, over that object's own `ctx.storage.sql`, and
- * there is no second object per workspace.
+ * This is the executable form of the requirement the 2026-08-12 ask made, and
+ * the only form of it CI can check: Nimbus is a LIBRARY in the Durable Object
+ * that owns the workspace, over that object's own `ctx.storage.sql`, and there
+ * is no second object per workspace.
  *
- * The gap this closes is recorded rather than guessed at. The requirement used
- * to be pinned only by a commit message and a module header, both of which the
- * commit that broke them rewrote; the harness then satisfied the only runtime
- * check (`if (!env.NIMBUS_SESSION) throw`) with an in-isolate fake, so every
- * suite stayed green while hosted workspaces stopped creating filesystem tables
- * at all. So these tests assert the two things prose cannot:
+ * Prose cannot hold that requirement. A commit message and a module header get
+ * rewritten by the very commit that breaks them, and a harness can satisfy the
+ * only runtime check (`if (!env.NIMBUS_SESSION) throw`) with an in-isolate fake
+ * — which leaves every suite green while hosted workspaces create no filesystem
+ * tables at all. So these tests assert the two things prose cannot:
  *
  *   1. A runtime built through `createCFRuntime` — the production factory, not a
  *      shim — creates the workspace filesystem's tables in the ACTOR's SQLite,
@@ -102,9 +101,9 @@ function actorObject(): ActorObject {
 /**
  * An Env that answers only what it was told to, and names anything else.
  *
- * The point of the Proxy: a hosted workspace that reached for a session binding
- * would previously have found a fake and passed. Here it finds a throw carrying
- * the property name, so the failure says which binding came back.
+ * The point of the Proxy: a hosted workspace that reaches for a session binding
+ * finds a throw carrying the property name, not a fake it can pass against, so
+ * the failure says which binding came back.
  */
 /**
  * EVERY binding a hosted workspace legitimately reads, and it is one: the R2
@@ -226,12 +225,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
   });
 
   /**
-   * The split this cutover closes, as an assertion.
+   * The split this closes, as an assertion.
    *
-   * MemoryStore keeps its FTS5 index in the ACTOR's SQLite while the markdown it
-   * indexes used to live in a second Durable Object: a partial failure diverged
-   * the index from the bytes, and neither object could be snapshotted
-   * consistently with the other. One database means one transaction boundary.
+   * MemoryStore keeps its FTS5 index in the ACTOR's SQLite, in the same database
+   * as the markdown it indexes. Holding the bytes in a second Durable Object
+   * lets a partial failure diverge the index from them, and neither object can
+   * be snapshotted consistently with the other. One database means one
+   * transaction boundary.
    */
   test('the memory index and the bytes it indexes are in one database', async () => {
     const actor = actorObject();

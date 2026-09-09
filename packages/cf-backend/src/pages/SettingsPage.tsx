@@ -62,11 +62,11 @@ type AdvisorConfig = Pick<EvolutionConfigView, "advisorEnabled" | "advisorMinSev
  * One settings field: an AsyncResource read from the server with the user's
  * in-progress edit layered on top, written back only when that edit exists.
  *
- * Save used to write every field unconditionally, gated on the socket being
- * open rather than on the data having arrived — so saving before hydration, or
- * after a read whose `.catch` substituted a default, wiped SOUL.md and reset
- * tuned MCTS values to whatever placeholder the form happened to hold. A field
- * that never loaded has nothing to save, and says so instead of guessing.
+ * Writing every field unconditionally, gated on the socket being open rather
+ * than on the data having arrived, is how a save before hydration — or after a
+ * read whose `.catch` substituted a default — wipes SOUL.md and resets tuned
+ * MCTS values to whatever placeholder the form happens to hold. A field that
+ * never loaded has nothing to save, and says so instead of guessing.
  */
 interface SettingField<T> {
   resource: AsyncResource<T>;

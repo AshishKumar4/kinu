@@ -20,9 +20,8 @@
  * double-count every rollout, so the assertion is the usage coming back
  * intact — and a provider failure propagating instead of filing.
  *
- * What is NOT here any more: the `facetRuntime` lane existence test (judge,
- * fast, advisor, reflection) and the no-parent refusal. Lanes were objects on
- * the facet runtime; a hosted branch resolves one model per call and holds no
+ * NOT PINNED HERE: lane existence (judge, fast, advisor, reflection) and a
+ * no-parent refusal. A hosted branch resolves one model per call and holds no
  * lane objects, so there is nothing to enumerate — a missing profile refuses
  * at the route instead, which both tests below would trip. And a hosted
  * branch is always registered under main, so a parentless branch is

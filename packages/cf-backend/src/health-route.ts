@@ -24,8 +24,8 @@ export async function handleHealthRequest(request: Request, env: Env): Promise<R
     // Counted, not declared: each figure is read out of a registry the
     // compiler already holds to its own declaration (BUILTIN_TOOLS cannot name
     // a tool the reach table does not call native), so a feature that dies
-    // leaves this list in the same commit that deletes it. The hand list this
-    // replaces survived the D1 removal by a day.
+    // leaves this list in the same commit that deletes it. A hand-maintained
+    // count outlives the feature it names and keeps advertising it.
     features: {
       builtinTools: BUILTIN_TOOLS.length,
       swarmPresets: SWARM_PRESETS.length,

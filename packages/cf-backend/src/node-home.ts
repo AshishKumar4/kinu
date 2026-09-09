@@ -34,11 +34,11 @@ export interface HostedNodeHome {
 
 /**
  * The facet kinds an owner provisions homes for, the name namespace they map
- * onto, and the port a facet reached the owner's registry through all used to
- * live here. They live in `actor-hosting.ts` now, as `HostedActorHomeKind`,
- * `hostedActorAgentName` and `provisionHostedActorHome` — beside the host that
- * is the only thing which provisions, so there is one kind vocabulary and one
- * provisioner rather than a second copy of each here that nothing called.
+ * onto, and the port a facet reaches the owner's registry through all live in
+ * `actor-hosting.ts`, as `HostedActorHomeKind`, `hostedActorAgentName` and
+ * `provisionHostedActorHome` — beside the host that is the only thing which
+ * provisions, so there is one kind vocabulary and one provisioner rather than a
+ * second copy of each here that nothing would call.
  */
 
 /**

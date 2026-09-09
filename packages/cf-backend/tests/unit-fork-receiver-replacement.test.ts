@@ -1,13 +1,14 @@
 /**
  * A REPLACEMENT transfer through the fork receiver's activation cache.
  *
- * The receiver is cached per activation, and it used to be built from the
- * FIRST frame's transferId for as long as the activation lived: a failed fork
- * retried under a fresh transferId streamed through a receiver whose sink
- * still carried the predecessor's temp suffix. The durable staging row said
- * T2, the bytes sat in `.fork-T1.tmp`, and the next activation — building its
- * sink honestly from T2 — resumed into a temp that never existed. Every retry
- * failed identically; the fork was destroyed as unresumable.
+ * The receiver is cached per activation, and it has to FOLLOW a replacement
+ * rather than stay built from the first frame's transferId for as long as the
+ * activation lives. A failed fork retried under a fresh transferId otherwise
+ * streams through a receiver whose sink still carries the predecessor's temp
+ * suffix: the durable staging row says T2, the bytes sit in `.fork-T1.tmp`, and
+ * the next activation — building its sink honestly from T2 — resumes into a
+ * temp that never existed. Every retry fails identically and the fork is
+ * destroyed as unresumable.
  *
  * This drives that exact interleaving: T1 begins and stages, T2 replaces it
  * mid-file, the activation dies, and the resumed activation finishes T2.
@@ -47,7 +48,7 @@ describe('a replacement transfer stages under its OWN suffix', () => {
   test('T2 replaces T1 mid-activation, survives the reset, and publishes', async () => {
     // The object under test IS the fork target. `rawCopyFromFork` runs on the
     // TARGET's own Durable Object, and the publication fences every actor
-    // handle it opens on `this.name === forkName` — one database now hosts every
+    // handle it opens on `this.name === forkName` — one database hosts every
     // actor the source had, so the instruction-migration marker is written per
     // actor and a marker written after a rename would key an authority decision
     // to a workspace nobody asked about. A harness named anything else is not

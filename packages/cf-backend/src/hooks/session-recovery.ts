@@ -8,8 +8,8 @@
  * becomes a CORPSE: `readyState` says OPEN, every send vanishes, every RPC
  * dies at the agents SDK's `DEFAULT_CALL_TIMEOUT_MS` backstop, the degraded
  * banner sets, and nothing ever forces a redial. That is the shape behind
- * "Network connection lost … Showing last known data." that a manual reload
- * used to be the only way out of.
+ * "Network connection lost … Showing last known data.", and without the policy
+ * below only a manual reload clears it.
  *
  * This module owns the whole policy as a plain controller the hook wires to
  * real events:

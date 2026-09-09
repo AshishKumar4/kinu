@@ -85,9 +85,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   /** The head-stream broadcaster, which is `protected` because only this
    *  actor's own reporters call it — `reportNodeDelta` and the exploration
-   *  seams' `publishDelta`. It replaced the facet-era inbound RPC, so a suite
-   *  asserting what a client receives reaches the method that really carries
-   *  the frames rather than a shape no caller has any more. */
+   *  seams' `publishDelta`. Exposed so a suite asserting what a client
+   *  receives reaches the method that really carries the frames. */
   observePublishHeadStreamFrame(frame: HeadStreamFrame): void { this.publishHeadStreamFrame(frame); }
   /** The child substrate — how a subordinate is born and retired here — for
    *  suites that drive a lifecycle verb without a roster row in front of it. */
@@ -332,9 +331,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The persisted identity a fresh activation uses to stop old device work. */
   harnessPersistActiveTurn(turnId: string): void {
-    // A durable CLAIM, which is what a real `beforeTurn` writes: the single
-    // `active_durable_turn` row this used to insert no longer exists, and a
-    // fresh activation identifies old device work through the claim ledger.
+    // A durable CLAIM, which is what a real `beforeTurn` writes: a fresh
+    // activation identifies old device work through the claim ledger.
     this.claims.admit({
       runId: `harness-${turnId}`, turnId, workMode: 'build',
       program: { kind: 'builtin', version: 0, digest: null, build: null },
@@ -488,8 +486,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const runtime: HeadRuntime = {
       spawnHead: async (input: HeadInput) => {
         // The `exp:`-marked name `hostHead` registers. No second object is
-        // created: registering the row IS the whole of what a head's existence
-        // was, now that it has no database of its own to bring up.
+        // created: registering the row IS the whole of a head's existence — it
+        // has no database of its own to bring up.
         await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
         return {
           id: input.id,
@@ -553,9 +551,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** The exploration actors this workspace still holds, by registered name.
-   *  Read through the DIRECTORY, which is what the sweep retires from — there
-   *  is no SDK sub-agent registry in play any more, and the directory is the
-   *  one authority on which actors exist. */
+   *  Read through the DIRECTORY, which is what the sweep retires from — no SDK
+   *  sub-agent registry is in play, and the directory is the one authority on
+   *  which actors exist. */
   harnessExplorationActors(): string[] {
     return this.actorDirectoryStore().list()
       .filter((record) => record.kind === 'head' || record.kind === 'node' || record.kind === 'branch')
@@ -705,9 +703,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** The improvement lanes, driven through the CLAIMED effect production drives
-   *  them through — the compound spine that used to sit here has no production
-   *  caller left. Returns whether the lanes were open, which is the one verdict
-   *  the callers of the old method consumed. */
+   *  them through, so a suite cannot settle them by a route production has no
+   *  caller for. Returns whether the lanes were open, which is the one verdict
+   *  the callers consume. */
   async harnessSettleSpine(
     input: { status: RunEndReason; turn: CompletedTurn; workMode?: WorkMode },
   ): Promise<boolean> {
@@ -879,23 +877,20 @@ export interface ObservedNaming {
 /**
  * A HOSTED ACTOR as a suite drives it.
  *
- * There is no `HarnessSubordinateAgent` any more, and its absence is the
- * fixture's whole claim. That class extended the production facet class and the
- * fixtures around it had to simulate a Durable Object: a second
+ * What a suite gets is the production object: a `HostedActor` acquired from the
+ * workspace's ONE `ActorHost`, over the ONE database its parent already owns.
+ * Its handle, stores, runtime and session are the same ones a real hire runs
+ * on, so nothing here needs overriding and there is nothing to keep in step
+ * with the SDK.
+ *
+ * Nothing simulates per-actor storage, and that absence is the fixture's whole
+ * claim. A fixture that stood a child up itself would need a second
  * `Database(':memory:')` per child, a `parentPath` array declared by hand
  * because facets are workerd-only, a `FacetIdentity` seed so the child could
- * read its own name back, an SDK-lineage write into `cf_agents_parent_path` and
- * `cf_agents_facet_name`, and two `Object.defineProperty` overrides on the
+ * read its own name back, an SDK-lineage write into `cf_agents_parent_path`
+ * and `cf_agents_facet_name`, and two `Object.defineProperty` overrides on the
  * PARENT so `subAgent` and `getExistingSubAgent` resolved one name to the real
- * child. Every one of those simulated per-actor storage, which is the thing the
- * cutover removes — so a fixture built that way could only ever agree with
- * whichever side it was written for.
- *
- * What a suite gets instead is the production object: a `HostedActor` acquired
- * from the workspace's ONE `ActorHost`, over the ONE database its parent already
- * owns. Its handle, stores, runtime and session are the same ones a real hire
- * runs on, so nothing here needs overriding and there is nothing to keep in
- * step with the SDK.
+ * child — and it could only ever agree with whichever side it was written for.
  */
 export interface HostedActorHarness {
   /** The hosted actor itself — handle, stores, runtime, session. */
@@ -1151,11 +1146,9 @@ function instantiate<T extends object>(
 /**
  * The actor's own schema half of an activation.
  *
- * ONE arm now, where there used to be two: the workspace root's async boot and
- * a facet's synchronous one. A hosted actor has no activation of its own to
- * run — its schema IS the workspace's, ensured here once — so the class
- * discrimination this function existed to perform has nothing left to
- * discriminate.
+ * ONE arm: a hosted actor has no activation of its own to run — its schema IS
+ * the workspace's, ensured here once — so there is no actor class for this
+ * function to discriminate on.
  *
  * The production override can simply be called: the SCHEMA half is in place
  * synchronously when it returns (DDL is the gate's synchronous prefix). The
@@ -1316,10 +1309,9 @@ export async function hostedSubordinateHarness(
  * One exploration actor of the given kind, hosted and acquired.
  *
  * The three exploration kinds differ here in exactly one argument, which is the
- * point: a head, a node and a rollout branch used to be three bootstrap
- * sequences over one facet class, each pushing a different seed RPC and each
- * with its own discard path for a bootstrap that failed. They are now one
- * directory registration and one `acquire`.
+ * point: a head, a node and a rollout branch are ONE directory registration and
+ * one `acquire`, not three bootstrap sequences each pushing its own seed RPC
+ * and each with its own discard path for a bootstrap that failed.
  */
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,

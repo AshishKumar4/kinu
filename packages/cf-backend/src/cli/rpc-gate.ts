@@ -141,32 +141,30 @@ export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: stri
 export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 
 /**
- * Every remotely invokable OrchestratorAgent method → its access class,
- * preserving the pre-unification per-token-shape reachability:
- *   • workspace.read — the reads the REST router served under
- *     GET /workspaces/:name/*, reachable by a read-only scoped token before;
+ * Every remotely invokable OrchestratorAgent method → its access class, one
+ * table for every transport:
+ *   • workspace.read — the workspace reads a read-only scoped token may
+ *     perform;
  *   • workspace.exec — the two run-a-task surfaces (POST /stop, executor
- *     exec), reachable by an exec scoped token before;
- *   • interactive — session-only, incl. the methods that were reachable by a
- *     scoped token on NO transport before (see the note below).
+ *     exec);
+ *   • interactive — session-only, incl. the methods no scoped token may reach
+ *     on any transport (see the note below).
  *
- * The seven methods that used to live in the old websocket read allowlist
- * (checkpointStatus, getEvolutionChangelog, getWorkspaceAgents,
- * latestAlternateTakes, listFileCheckpoints, listMounts, planFileRestore)
- * are 'interactive', NOT workspace.read. In the old system their only
- * transport was the agent websocket, and opening that socket required a
- * connect-ticket — which requires workspace.exec. So a read-only scoped
- * token could reach them on no transport at all; classing them
- * workspace.read here would newly expose them to read-only tokens. No single
- * scope reproduces the old "needs read (allowlist) AND exec (to open the
- * socket)" requirement, so we take the strict, non-widening approximation:
- * scoped tokens are denied them on every transport (session tokens, which
- * carry no scope tag, are unaffected — the interactive CLI and the browser
- * keep full access). The interactive WS session and browser are the only
- * real callers of these, so nothing ships broken.
+ * Six methods (checkpointStatus, getEvolutionChangelog, latestAlternateTakes,
+ * listFileCheckpoints, listMounts, planFileRestore) are 'interactive', NOT
+ * workspace.read. Their only transport is the agent websocket, and opening
+ * that socket requires a connect-ticket — which requires workspace.exec. A
+ * read-only scoped token therefore reaches them on no transport at all, and
+ * classing them workspace.read would newly expose them to read-only tokens.
+ * No single scope expresses "needs read (to call) AND exec (to open the
+ * socket)", so this takes the strict, non-widening approximation: scoped
+ * tokens are denied them on every transport (session tokens, which carry no
+ * scope tag, are unaffected — the interactive CLI and the browser keep full
+ * access). The interactive WS session and the browser are the only real
+ * callers of these, so nothing ships broken.
  */
 export const AGENT_RPC_ACCESS = {
-  // ── Reads a workspace.read token may perform (old GET /workspaces/:name/*) ──
+  // ── Reads a workspace.read token may perform ──
   getAgentStatus: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
@@ -215,10 +213,9 @@ export const AGENT_RPC_ACCESS = {
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
   cancelTrigger: 'interactive',
-  // The seven old-websocket-read-allowlist methods — 'interactive', not
-  // workspace.read: reachable only over an exec-gated socket before (see the
-  // block comment above). Six now; getWorkspaceAgents was deleted with its
-  // dead RPC — the UI roster read is listSubordinates.
+  // Reachable only over the exec-gated agent socket, so 'interactive', not
+  // workspace.read (see the block comment above). The UI roster read is
+  // listSubordinates.
   checkpointStatus: 'interactive',
   getEvolutionChangelog: 'interactive',
   listSubordinates: 'interactive',

@@ -1,11 +1,11 @@
 /**
  * Linking a machine, wherever the owner asks for it.
  *
- * The Environment tab, the Files drive and Account settings all used to answer
- * "connect my PC" with a link to Account settings → Devices. From a workspace
- * that is a page change in the middle of a job: the owner leaves the surface
- * they were working on to reach a button, and nothing brings them back. The
- * same panel now opens in place on every one of those surfaces.
+ * The Environment tab, the Files drive and Account settings each open this
+ * panel in place. Answering "connect my PC" with a link to Account settings →
+ * Devices is a page change in the middle of a job: the owner leaves the
+ * surface they were working on to reach a button, and nothing brings them
+ * back.
  *
  * The panel owns four things and no fetching of its own:
  *   1. the disclosure, stated BEFORE anything is installed (`@kinu.run/core`,

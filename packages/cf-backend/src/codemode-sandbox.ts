@@ -13,7 +13,7 @@
  *      so a body that throws when evaluated, or is not a function, breaks its
  *      own name and nothing else. A body that does not PARSE is caught on the
  *      host with the same parser the admission gate uses, and becomes a
- *      definition that throws the parse error on call — one bad row used to
+ *      definition that throws the parse error on call, so one bad row cannot
  *      be a SyntaxError for every program in the workspace.
  *   3. EGRESS. `globalOutbound` is the Worker's own loopback entrypoint
  *      (server.ts `CodemodeEgress`), so `fetch()` inside the sandbox is the

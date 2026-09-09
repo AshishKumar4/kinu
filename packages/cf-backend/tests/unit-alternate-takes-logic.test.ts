@@ -64,11 +64,11 @@ describe('alternate-takes view logic', () => {
 
 describe('take-pick schema ordering (lazy-engine hole)', () => {
   test('the boot schema inits the outcome ledger before any pick RPC can run', () => {
-    // Regression: the take_pick CHECK-widening rebuild lived only in the lazy
-    // EvolutionEngine constructor, so a freshly-woken actor whose first action
-    // was pickAlternateTake hit the legacy CHECK and lost the preference. The
-    // fix now lives in core's one workspace schema, which every root boots
-    // through (core/tests/contract-workspace-schema.test.ts pins that).
+    // The take_pick CHECK-widening rebuild lives in core's ONE workspace schema,
+    // which every root boots through
+    // (core/tests/contract-workspace-schema.test.ts pins that). In the lazy
+    // EvolutionEngine constructor instead, a freshly-woken actor whose first
+    // action is pickAlternateTake hits the narrow CHECK and loses the preference.
     const schema = readFileSync(
       join(import.meta.dir, '..', '..', 'core', 'src', 'identity', 'workspace-schema.ts'), 'utf8',
     );

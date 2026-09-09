@@ -105,7 +105,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
  * drawing vocabulary has one word for every ending that is not `completed`, so
  * this collapses `budget_exceeded`, `aborted`, `errored` and `interrupted` into
  * `failed` and `completed` into `open`. That is right for a hollow dot and wrong
- * for a sentence, and the graph used to print this word at the reader.
+ * for a sentence, so this word is never printed at the reader.
  */
 function journalStatus(status: string): ForkNode["status"] {
   if (status === "running") return "running";
@@ -170,11 +170,11 @@ function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): Fo
  * later inserts its search row under the same id — so a node that has reported
  * appears once, settled, and a node still running appears once, provisional.
  *
- * This is the fold that used to choose. It read the tree half whenever that half
- * was non-empty, and a swarm's tree half holds its root row from the moment it
- * is dispatched, so every running node of every real swarm was discarded here:
- * a lone root at 0% with "0 branches" for runs the agent was actively driving.
- * There is no state in which one half is the whole run, so there is no longer a
+ * This fold does not choose between the halves. Reading the tree half whenever
+ * that half is non-empty discards every running node of every real swarm — a
+ * swarm's tree half holds its root row from the moment it is dispatched — and
+ * leaves a lone root at 0% with "0 branches" for runs the agent is actively
+ * driving. There is no state in which one half is the whole run, so there is no
  * choice to get wrong.
  */
 export function explorationForkTree(entry: {

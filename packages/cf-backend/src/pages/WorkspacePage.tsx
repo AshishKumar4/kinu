@@ -187,7 +187,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
         </div>
       </div>
       {/* The strongest tier is never the highlighted button on a card about ONE
-          command. "Always" on an exec used to record full filesystem and shell
+          command. "Always" on an exec would record full filesystem and shell
           access forever, from every ingress the workspace consumes, in answer
           to a question about a single `printf`. For an exec the card offers
           once or deny, and the standing decision lives in Account settings. */}
@@ -208,9 +208,9 @@ export function DeviceConsentCard({ consent, onResolve }: {
  * produced no visible answer.
  *
  * The retry RE-RUNS that turn rather than asking the same thing again: the
- * label says so, because the button used to append a duplicate user message
- * on every press and three attempts left three identical turns in the
- * transcript. The error body is shown verbatim; the hook clears the card on
+ * label says so, because a button that appends a duplicate user message on
+ * every press leaves three identical turns in the transcript after three
+ * attempts. The error body is shown verbatim; the hook clears the card on
  * the next send.
  *
  * A REPLAYED failure is not the same claim and does not get the same words.
@@ -739,8 +739,8 @@ export default function WorkspacePage() {
     e.preventDefault();
     setDragOver(false);
     // Handed straight over: the hook owns the conversion task through
-    // settlement and returns nothing to await, so the transition this used to
-    // be wrapped in resolved on an already-finished value and deferred nothing.
+    // settlement and returns nothing to await, so a transition wrapped around
+    // this would resolve on an already-finished value and defer nothing.
     attachments.add(files);
   }, [attachments]);
 
@@ -817,9 +817,10 @@ export default function WorkspacePage() {
     const t = chatInput.trim();
     if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
     setBranchNotice(null);
-    // The composer is cleared only once the branch was actually accepted — a
-    // refused or failed branch used to destroy what the user had typed. The
-    // identity check leaves anything typed while the RPC was in flight alone.
+    // The composer is cleared only once the branch was actually accepted —
+    // clearing sooner destroys what the user typed when a branch is refused or
+    // fails. The identity check leaves anything typed while the RPC was in
+    // flight alone.
     startTransition(async () => {
       try {
         const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
@@ -1383,9 +1384,9 @@ export default function WorkspacePage() {
   );
 }
 
-/** The device-file restore confirm. Shows the same plan the native confirm()
- *  used to cram into a browser dialog — this overwrites files on the user's
- *  real machine, so it gets the app's own destructive-action treatment. */
+/** The device-file restore confirm. Shows the whole plan in the app's own
+ *  destructive-action treatment rather than crammed into a native `confirm()`
+ *  dialog — this overwrites files on the user's real machine. */
 interface RestorePlan {
   entries: FileCheckpointEntry[];
   dirs: string[];

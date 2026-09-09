@@ -2,13 +2,13 @@
  * KinuSandbox — Kinu's workspace container, and nothing more than the four
  * things that are Kinu's.
  *
- * The lifecycle that used to live here — the activity lease, the split start
- * sequence, supervised process and port manifests, lifecycle incidents and the
- * snapshot-chain storage — is `@kinu.run/devbox` now. It moved WHOLE rather
- * than being copied: an ephemeral container presented as a persistent machine
- * is not a Kinu idea, and two copies of that machinery would drift the moment
- * one of them was fixed. What is left below is the part no other host can
- * supply, and it is deliberately small:
+ * The lifecycle — the activity lease, the split start sequence, supervised
+ * process and port manifests, lifecycle incidents and the snapshot-chain
+ * storage — is `@kinu.run/devbox`, WHOLE and in exactly one copy: an ephemeral
+ * container presented as a persistent machine is not a Kinu idea, and two
+ * copies of that machinery would drift the moment one of them was fixed. What
+ * is left below is the part no other host can supply, and it is deliberately
+ * small:
  *
  *   * the store this workspace's state lives in (`BACKUP_BUCKET`),
  *   * the preview zone its ports are published on,

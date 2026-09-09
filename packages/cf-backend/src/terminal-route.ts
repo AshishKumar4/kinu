@@ -166,9 +166,10 @@ export async function handleTerminalRequest(
 
   // ONE diagnostic scope for this request, and every failure below carries it.
   // These two tags are what make a terminal failure answerable at all: whose
-  // container, and which environment it was asked for. They used to be spelled
-  // at the attach, lease and reset sites only, so a readiness refusal — the most
-  // common way a terminal does not open — reached the fleet with neither.
+  // container, and which environment it was asked for. Spelled once here rather
+  // than at the attach, lease and reset sites only, where a readiness refusal —
+  // the most common way a terminal does not open — reaches the fleet with
+  // neither.
   const scope = { workspace: agentName, executor };
 
   const lane = terminalLane(executor);
@@ -341,19 +342,19 @@ export async function handleTerminalRequest(
   // path, and never a container whose network is still unconfigured.
   //
   // Both halves run inside the SAME tagged scope the attach uses. Routing and
-  // the preflight are how a terminal most often fails to open, and they used to
-  // be the only failures on this route that reached the fleet with no workspace
-  // and no executor: the refusal was rendered to the pane and recorded nowhere,
-  // and an unreachable workspace object escaped the handler with no cause chain
-  // either. The scope stops at the preflight, deliberately — everything past it
-  // is the attach's own, under the attach's own cancellation fence.
+  // the preflight are how a terminal most often fails to open, so they are the
+  // failures least affordable to reach the fleet with no workspace and no
+  // executor — a refusal rendered to the pane and recorded nowhere, or an
+  // unreachable workspace object escaping the handler with no cause chain. The
+  // scope stops at the preflight, deliberately — everything past it is the
+  // attach's own, under the attach's own cancellation fence.
   try {
     const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
     const ready = await agent.prepareTerminal(executor);
     if ("error" in ready) {
       // The refusal is ALREADY a rendered chain from the other side of the RPC,
-      // so it rides as the cause rather than being restated. The pane shows what
-      // it always showed; the fleet row is the part that did not exist.
+      // so it rides as the cause rather than being restated. The pane shows that
+      // chain; the fleet row is what this call adds beside it.
       diagnostics.failure("terminal.not_ready", toKinuError({
         doing: "preparing this workspace's container for a terminal",
         cause: ready.error,

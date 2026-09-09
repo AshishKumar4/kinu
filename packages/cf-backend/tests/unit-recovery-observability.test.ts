@@ -4,10 +4,10 @@
  * ## Why the recovery record is asserted at all
  *
  * A container lifecycle failure is made durable by the box before anyone is
- * told, and the box re-delivers it until this Worker accepts it. That seam used
- * to produce no fleet signal: an incident the agent acted on and an incident
- * that reached nobody were both silence, and silence is also what a deleted
- * instrument looks like. So every settlement is now ONE typed record, and the
+ * told, and the box re-delivers it until this Worker accepts it. That seam owes
+ * a fleet signal: without one, an incident the agent acted on and an incident
+ * that reached nobody are both silence, and silence is also what a deleted
+ * instrument looks like. So every settlement is ONE typed record, and the
  * cases below are the settlements that exist — announced, already announced,
  * undelivered, refused envelope, and a delivery that threw. Each is asserted on
  * the record's own dimensions rather than on whether a row appeared, because
@@ -264,7 +264,7 @@ describe('a durable recovery settlement', () => {
 });
 
 describe('the versioned envelope', () => {
-  test('an envelope with no version is refused rather than read as the old shape', async () => {
+  test('an envelope with no version is refused, never defaulted to the current version', async () => {
     const { deps, delivered, settlements } = ledger();
 
     const answer = await acceptSandboxLifecycleFailure(deps, envelopeWithout('version'), 1_000);

@@ -298,9 +298,9 @@ describe('access token management routes (session tokens only)', () => {
       fresh.env,
     );
     expect(minted?.status).toBe(201);
-    // The minted token is the one time the secret is in a body. It used to say
-    // `no-store` because this route remembered to; the account policy now
-    // reaches every authenticated answer from `json()`.
+    // The minted token is the one time the secret is in a body, and the
+    // account-wide policy reaches it from `json()` rather than from this route
+    // remembering to say `no-store`.
     expect(handled(minted).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(MintedTokenSchema, await handled(minted).json())).toMatchObject({
       token: expect.stringMatching(/^pta_/),

@@ -2,9 +2,9 @@
  * Shared modal shell — the dimmed overlay + centered card used by every dialog
  * (create agent, fork, create webhook). Click-outside and Esc both dismiss,
  * unless the dialog is `busy`: a stray backdrop click during an in-flight
- * create/clear/dismiss used to tear the dialog down mid-write, leaving the
- * result unreported. Two call sites guarded that themselves and four did not,
- * so the policy lives here.
+ * create/clear/dismiss tears the dialog down mid-write and leaves the result
+ * unreported. The policy lives here rather than in each of the six call sites,
+ * which is how the guard goes missing from four of them.
  * Callers supply the header icon/title, the body, and an optional footer row.
  */
 import { useCallback, useEffect, type ReactNode } from "react";

@@ -9,16 +9,14 @@
  * shape, depth varying, because the alternative was two panes where the same user
  * action landed in one or the other depending on an internal strategy id.
  *
- * The file was `fork-tree`, named for a verb the delegation surface no longer has.
- *
- * ONE canvas, not one per search. Each search used to get its own fixed-height
- * SVG in its own card, so the room a tree could use was decided before anyone
- * knew how big the tree was: a three-node merge kept 300px it could not fill
- * while a hundred-node search was squeezed into the same 300px. Here every
- * search is a BAND of a single scene, sized to the tree it holds, under one
- * shared pan and zoom. A band's soft boundary says where one search ends and the
- * next begins; the selected one is lit and the rest recede without going away,
- * which is the comparison the surface exists for.
+ * ONE canvas, not one per search. A fixed-height SVG per search decides the
+ * room a tree can use before anyone knows how big the tree is: a three-node
+ * merge keeps 300px it cannot fill while a hundred-node search is squeezed into
+ * the same 300px. Here every search is a BAND of a single scene, sized to the
+ * tree it holds, under one shared pan and zoom. A band's soft boundary says
+ * where one search ends and the next begins; the selected one is lit and the
+ * rest recede without going away, which is the comparison the surface exists
+ * for.
  *
  * Laid out left→right at a CONSTANT pitch — d3's `nodeSize`, not `size`. Left to
  * right because the two axes of a search are not alike: depth is small and
@@ -28,13 +26,12 @@
  * and it is the only orientation in which a horizontal label gets a column to
  * itself instead of colliding with its siblings'.
  *
- * The old layout stretched the whole search to fit the panel, so a node's row
- * got thinner every time the search grew or the column got narrower; at 106
- * nodes that is a band of overlapping dots under a smear of `n=4` badges. Here
- * the canvas is as large as the searches are and the viewport moves over it: it
- * opens FULLY EXPANDED and fitted to the selected search, pans and zooms, folds
- * branches away on request, and drops labels below the zoom at which they would
- * collide.
+ * A layout that stretches the whole search to fit the panel thins a node's row
+ * every time the search grows or the column narrows; at 106 nodes that is a
+ * band of overlapping dots under a smear of `n=4` badges. Here the canvas is as
+ * large as the searches are and the viewport moves over it: it opens FULLY
+ * EXPANDED and fitted to the selected search, pans and zooms, folds branches
+ * away on request, and drops labels below the zoom at which they would collide.
  *
  * What the picture says before anything is clicked, when the search SCORED its
  * candidates:
@@ -86,9 +83,9 @@ export interface SwarmTreeRegion {
 	/** What the search is CALLED — the run's own name, which `ForkRunSummary.name`
 	 *  always carries (given, or derived from the task). The root node wears it,
 	 *  because a root is the workspace as found and has no action of its own to
-	 *  label it with. REQUIRED: while it was optional the fallback printed the
+	 *  label it with. REQUIRED: an optional name means a fallback printing the
 	 *  literal `(root)` where the run's name belongs, and both call sites always
-	 *  had a name to give. */
+	 *  have a name to give. */
 	name: string;
 	/** The shape it resolved to and what it was dispatched with. */
 	note: string;
@@ -174,12 +171,12 @@ const FIT_PAD = 16;
 /**
  * The docked row under the scene holding the key and the controls.
  *
- * Docked, not floated. Both used to be absolutely positioned over the canvas,
- * which was survivable while a fitted tree left the bottom of the canvas empty
- * and became a chip sitting on top of the branches once a fit filled the
- * height. The row is in flow now; this figure is what the host reserves for it
- * when it asks how tall the whole thing wants to be, and the row is measured
- * rather than assumed once it is on screen.
+ * Docked, not floated. Absolute positioning over the canvas is survivable only
+ * while a fitted tree leaves the bottom of the canvas empty; once a fit fills
+ * the height it is a chip sitting on top of the branches. The row is in flow;
+ * this figure is what the host reserves for it when it asks how tall the whole
+ * thing wants to be, and the row is measured rather than assumed once it is on
+ * screen.
  */
 const LEGEND_H = 30;
 /** Air inside a band's boundary, and the line of type naming the search. */
@@ -258,7 +255,7 @@ function labelFont(): LabelFont {
 
 /** Every tspan of one node's label, already clipped to the room that node has.
  *  Decided during layout because the scene's right edge is where the widest of
- *  them ends — the extent and the clip are one fact and used to be two. */
+ *  them ends — the extent and the clip are ONE fact, not two. */
 interface NodeLabel {
 	/** `47%` or `fail`, or empty for a branch no fork ranked. */
 	readonly score: string;
@@ -706,9 +703,9 @@ export function SwarmTree({
 	 * Guarded on the run IDS, never on `regions` identity. Nothing upstream
 	 * caches a poll that changed nothing — `useAsyncResource` stores whatever the
 	 * RPC returned, so every revalidation hands down a fresh view object, a fresh
-	 * trees map and freshly-built roots. Firing on identity therefore reset
-	 * `userMoved` and refitted on every poll: pan a 106-node search and 1.5s
-	 * later the canvas snapped back to the fit, which is precisely the thing the
+	 * trees map and freshly-built roots. Firing on identity would therefore reset
+	 * `userMoved` and refit on every poll: pan a 106-node search and 1.5s later
+	 * the canvas snaps back to the fit, which is precisely the thing the
 	 * persistent zoom layer exists to prevent.
 	 */
 	const fittedFor = useRef("");
@@ -825,14 +822,13 @@ export function SwarmTree({
 				name.textContent = meta?.title ?? "";
 				// A truncated caption is the one place on this canvas where the
 				// untruncated text is nowhere else: a band has no tooltip, and the
-				// task it names can be a paragraph. The cap used to be a flat 22rem,
-				// which on a 313px column truncated mid-word with no way to read the
-				// rest.
+				// task it names can be a paragraph. A flat 22rem cap would truncate
+				// mid-word on a 313px column with no way to read the rest.
 				name.title = meta?.title ?? "";
 				const note = document.createElement("span");
 				// Shrinks four times faster than the name. Both have to give on a
 				// narrow canvas, and the NAME is what identifies the band — with the
-				// note holding its width the name was squeezed to a single glyph,
+				// note holding its width the name is squeezed to a single glyph,
 				// while the note repeats what the resolution panel above already
 				// states in full.
 				note.className = "min-w-0 shrink-[4] truncate text-[9px] font-mono p-text-3";
@@ -980,10 +976,10 @@ export function SwarmTree({
 			// score contributes no tspan at all, so the label starts at its text
 			// rather than at a fabricated `0%`.
 			//
-			// Every part is read off the layout's own clip. The score, the name and
-			// the badges used to be four independent expressions here, and the
-			// scene's right edge was a fifth constant that had to agree with them —
-			// which is how a label could be cut at 20 characters and still be fitted
+			// Every part is read off the layout's own clip. Four independent
+			// expressions here for the score, the name and the badges make the
+			// scene's right edge a fifth constant that has to agree with them —
+			// which is how a label gets cut at 20 characters and is still fitted
 			// as if it were 205px wide.
 			const labelOf = (d: PointNode) => region.labels.get(d.data.id);
 			text.filter((d) => (labelOf(d)?.score ?? "") !== "")

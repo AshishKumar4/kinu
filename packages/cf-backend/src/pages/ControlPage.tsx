@@ -224,9 +224,9 @@ function UserDetailView(
     userId: string; onOpenWorkspace: (name: string) => void; onBack: () => void;
   },
 ): ReactNode {
-  // Walked like every other list here. An account with more than one page of
-  // workspaces previously had every row past the ceiling unreachable, under copy
-  // that said the table was the registry's.
+  // Walked like every other list here. Without the walk an account with more
+  // than one page of workspaces has every row past the ceiling unreachable,
+  // under copy that says the table is the registry's.
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);

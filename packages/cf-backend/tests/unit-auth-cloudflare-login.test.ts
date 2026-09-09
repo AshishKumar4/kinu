@@ -222,11 +222,11 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
 
 /**
  * Login CSRF: an attacker who finishes a sign-in in their own browser holds a
- * callback URL that used to be bearer authority. Handed to a victim — a link,
- * an image, a redirect — it signed the victim's browser in as the attacker,
- * who then read whatever the victim did in a session they own.
+ * callback URL. As bearer authority it would sign a victim handed it — a link,
+ * an image, a redirect — in as the attacker, who then reads whatever the victim
+ * does in a session they own.
  *
- * The callback is only half the handoff now. The other half never travels
+ * So the callback is only half the handoff. The other half never travels
  * through the provider, so it is only ever in the browser that started the
  * sign-in.
  */
@@ -306,10 +306,10 @@ describe('a sign-in cannot be planted in another browser', () => {
 // ── The step-up recovery URL ────────────────────────────────────────────────
 //
 // A mutation that needs FRESH authentication refuses a stale session with a 401
-// and points the operator at `/login?prompt=login`. That page used to see an
-// active session and redirect straight back to where the 401 came from: the
-// operator bounced between the two forever, with no way to re-authenticate
-// short of clearing cookies by hand.
+// and points the operator at `/login?prompt=login`, which mints a fresh
+// authTime rather than seeing the active session and redirecting straight back
+// to where the 401 came from — that bounces the operator between the two
+// forever, with no way to re-authenticate short of clearing cookies by hand.
 describe('a stale session sent to re-authenticate', () => {
   function loginRequest(token: string, prompt: 'login' | null): Request {
     const url = new URL(`${ORIGIN}/login`);

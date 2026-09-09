@@ -323,9 +323,9 @@ export interface ParkedQueueSnapshot {
  * provable without a browser: nothing it records re-selects what was just
  * decided, and a recorded decision always re-reads the queue.
  *
- * The defect this locks: `decide` used to reset the selection to null — and
- * null means everything — so approving re-ticked every box the instant the
- * call landed, and nothing re-read the queue to make the decided rows leave.
+ * The defect this locks: `decide` resetting the selection to null — and null
+ * means everything — re-ticks every box the instant the call lands, and a
+ * `decide` that does not re-read the queue leaves the decided rows on screen.
  */
 export class ParkedDecisionFlow {
   #snapshot: ParkedQueueSnapshot = { selected: null, busy: false, error: null, decided: null };
@@ -428,8 +428,8 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             <span className="min-w-0 flex-1">
               <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
               {/* Which machine, before you authorise it. The read model puts it
-                  in the title precisely because it is half the decision, and
-                  this card used to drop the title on the floor. */}
+                  in the title precisely because it is half the decision, so
+                  this card never drops the title on the floor. */}
               <span className="block text-[10px] p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>
@@ -506,9 +506,9 @@ type JournalRow =
 /**
  * One reverse-chronological feed out of three ledgers.
  *
- * Exported for its test: the ordering IS the feature — three sources that each
- * used to be its own tab have to read as one stream, or the merge has bought
- * nothing but a longer page.
+ * Exported for its test: the ordering IS the feature — three separate ledgers
+ * have to read as one stream, or the merge has bought nothing but a longer
+ * page.
  */
 export function buildJournal(
   jobs: readonly BackgroundJob[],

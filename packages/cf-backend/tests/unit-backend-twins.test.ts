@@ -24,11 +24,11 @@
  *              hoists produce.
  *   '.symbol'  a method call on a shared core OBJECT (a store, a session).
  *              Some transports are three lines over one core object rather
- *              than over a free function, and the gate used to be blind to
- *              them, so they sat in KNOWN_TWINS with a comment explaining they
- *              were not really twins. Declaring the form makes the claim
- *              machine-checked instead. `this.symbol(` never counts because a method
- *              must not prove itself by calling itself.
+ *              than over a free function, and declaring the form makes that
+ *              claim machine-checked instead of a comment in KNOWN_TWINS
+ *              explaining that an entry is not really a twin. `this.symbol(`
+ *              never counts because a method must not prove itself by calling
+ *              itself.
  *
  * This gate does not forbid the twins that exist — they are recorded below as
  * the measured baseline. It forbids the inventory from drifting in either
@@ -169,11 +169,10 @@ const SHARED_TRANSPORTS = {
   // backend is only its own deps struct (recorded in KNOWN_TWINS) and, on the
   // CLI, dropping model-bound state after a step lands.
   decideRefinement: 'decideRefinementRoute',
-  // Both bodies were the SAME eight-field literal binding each live plane to the
-  // store that answers it — `agentDynamicContext` owned which planes exist, but
-  // which store fed each one was stated once per backend. state/dynamic-context.ts
-  // now holds that binding, so each side passes only what it alone knows: its
-  // turn's memory tail and its own unreachable-MCP roster.
+  // `agentDynamicContext` owns which planes exist and state/dynamic-context.ts
+  // holds which store feeds each one, so each side passes only what it alone
+  // knows: its turn's memory tail and its own unreachable-MCP roster. Stated
+  // per backend it is the SAME eight-field literal twice.
   dynamicContextSnapshot: 'collectDynamicContext',
   // The precedence — the live turn's profile when a turn is open, else resolve
   // one now — is the policy, and MODEL_ROUTE_POLICY is read against whatever it
@@ -225,10 +224,6 @@ const SHARED_TRANSPORTS = {
   makeScaffoldLLMStream: 'createScaffoldLLMStream',
   markChangelogSeen: 'markChangelogSeen',
   pickAlternateTake: 'pickAlternateTake',
-  // `recordLandedSteers` was here while a cf actor class and the CLI session
-  // both transported core's `describeLandedSteers`. The facet cutover left it a
-  // private method on ActorAgent alone, so it is neither a twin nor a
-  // two-sided transport any more — removed, not hoisted.
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
   requestRefinement: 'requestRefinement',
@@ -431,11 +426,10 @@ describe('interrupted work is reconciled at start of life on BOTH backends', () 
   });
 
   test('neither surface sweeps the job registry outside that gate', () => {
-    // The ordering used to be asserted on SOURCE POSITION here — reconcile before
-    // resume, within one method — because no runtime observation distinguished
-    // them. It is now structural instead: the reconciler marks the stale rows,
-    // calls the gate, and retires what the gate refused, so the order is one
-    // function's control flow and cannot be got wrong by an edit at a call site.
+    // The ordering is STRUCTURAL rather than a source-position assertion here:
+    // the reconciler marks the stale rows, calls the gate, and retires what the
+    // gate refused, so the order is one function's control flow and cannot be
+    // got wrong by an edit at a call site.
     // What a composition surface must NOT do is sweep the registry beside the
     // gate, because a job re-driven before the marking is a job the gate then has
     // nothing to report, and the run it was continuing gets retired.
@@ -530,10 +524,10 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
-    // Which store answers each live plane of a turn. Both bodies used to state
-    // the binding themselves — two eight-field literals differing only in how
-    // each side named its own fields — and `state/dynamic-context.ts` now holds
-    // it once. The fixture is the assembled snapshot itself.
+    // Which store answers each live plane of a turn. `state/dynamic-context.ts`
+    // holds the binding ONCE; stated per body it is two eight-field literals
+    // differing only in how each side names its own fields. The fixture is the
+    // assembled snapshot itself.
     seam: 'workspace planes',
     coreSymbol: 'collectDynamicContext',
     // The pin is the BINDING both composition surfaces must name. There is no

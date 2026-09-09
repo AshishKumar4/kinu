@@ -1,8 +1,8 @@
 // DeviceSocketHub — the hibernation-aware device-socket lifecycle behind the
 // /pc/connect upgrade (accept inside the DO, tag-based liveness, tunnel
-// rebuild on wake). Regression coverage for the WS-over-RPC break: the
-// upgrade path used to pass a WebSocket as a DO-RPC argument, which workerd
-// cannot serialize, so the tunnel 500'd on every connect.
+// rebuild on wake). Regression coverage for the WS-over-RPC break: workerd
+// cannot serialize a WebSocket as a DO-RPC argument, so an upgrade path that
+// passes one 500s the tunnel on every connect.
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { readFileSync } from 'node:fs';

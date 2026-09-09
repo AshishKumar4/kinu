@@ -127,8 +127,8 @@ export async function cloudflareTokenToCredential(
   // an accounts API that is down — must still yield a stored credential with
   // its refresh token: isCloudflareCredentialUsable already reports a missing
   // account as "Connect Cloudflare Workers AI", whereas throwing here loses
-  // the whole login. Sign-in was once gated on this lookup and broke for
-  // everyone; it must never be able to fail again.
+  // the whole login. Gating sign-in on this lookup breaks sign-in for everyone
+  // the moment the lookup fails; it must never be able to fail again.
   let accounts: CloudflareAccount[] = [];
   try {
     accounts = await fetchCloudflareAccounts(accessToken);

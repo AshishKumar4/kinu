@@ -2,13 +2,13 @@
  * The composer's pending attachments, and the one aggregate budget they spend.
  *
  * The cap is PER MESSAGE and shared by every pending part, so admitting a file
- * is a reservation against capacity the other pending parts already hold. The
- * shape this replaced computed the remaining capacity from render-time state,
- * awaited the base64 conversion, and appended what it had sized against a list
- * that no longer existed — so two additions started before either finished
- * (paste racing a drop, a drop racing the picker) each saw the full remaining
- * capacity and both spent it. The combined message then exceeded the cap the
- * row it persists into cannot hold.
+ * is a reservation against capacity the other pending parts already hold.
+ * Computing the remaining capacity from render-time state, awaiting the base64
+ * conversion, then appending what was sized against a list that has since moved
+ * on is how two additions started before either finished (paste racing a drop,
+ * a drop racing the picker) each see the full remaining capacity and both spend
+ * it. The combined message then exceeds the cap the row it persists into
+ * cannot hold.
  *
  * Here the sizing happens inside the reducer, which React runs against the
  * CURRENT list: a second addition sees the first one's parts, because the budget

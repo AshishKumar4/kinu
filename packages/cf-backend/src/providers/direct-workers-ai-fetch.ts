@@ -13,8 +13,7 @@
  *  1. `run` streams. With `inputs.stream = true` the upstream answers
  *     `text/event-stream` and `run` returns the untouched `res.body`, so bytes
  *     reach the caller as the model produces them. There is no reason to buffer
- *     a completion and replay it as one synthetic frame, which is what this
- *     adapter used to do.
+ *     a completion and replay it as one synthetic frame.
  *  2. `options.returnRawResponse` is the only way to get the HTTP envelope.
  *     Without it `run` throws `InferenceUpstreamError` for any non-ok status and
  *     the status code is lost, and it decides JSON by comparing the content type
@@ -204,12 +203,12 @@ function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObje
   delete inputs.model;
   if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
   // @ai-sdk/openai-compatible asks for stream usage only when its `includeUsage`
-  // config is set, and workers-ai.ts does not set it. This adapter used to read
-  // usage off a buffered completion, which always carries it; a real stream
-  // carries it only when asked, so without this a streamed turn would report no
-  // tokens at all. `stream_options.include_usage` is declared on the
-  // chat-completions input the binding accepts (@cloudflare/workers-types
-  // `ChatCompletionsStreamOptions`), and a caller that states its own keeps it.
+  // config is set, and workers-ai.ts does not set it. A buffered completion
+  // always carries usage; a real stream carries it only when asked, so without
+  // this a streamed turn would report no tokens at all.
+  // `stream_options.include_usage` is declared on the chat-completions input
+  // the binding accepts (@cloudflare/workers-types `ChatCompletionsStreamOptions`),
+  // and a caller that states its own keeps it.
   if (route.stream && inputs.stream_options === undefined) {
     inputs.stream_options = { include_usage: true };
   }

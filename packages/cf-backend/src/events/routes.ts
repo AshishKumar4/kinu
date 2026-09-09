@@ -54,10 +54,10 @@ import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
  * smaller delivery. A notification is the shape this carries; a payload
  * transfer is what the Files routes are for.
  *
- * The knock budget is no longer what stands between an anonymous POST and a
+ * The knock budget is not what stands between an anonymous POST and a
  * persistent Durable Object — the route capability in the URL is
  * (`webhook-route.ts`), and it is checked before any of this. What the budget
- * still buys is a bound on a URL that leaked: the capability names a workspace
+ * buys is a bound on a URL that leaked: the capability names a workspace
  * for as long as the trigger lives, and one sender should not be able to spend
  * the object's whole minute at the edge. `lib/ingress-budget.ts` states that
  * control's exact residuals.

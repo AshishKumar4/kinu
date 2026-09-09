@@ -24,10 +24,10 @@ import {
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /**
- * One 500 from this file, counted. The route used to answer with a rendered cause
- * and record nothing, so a workspace whose history was unreachable produced no
- * fleet signal at all — the failure was visible to the one person looking at the
- * panel and to nobody else.
+ * One 500 from this file, counted. Answering with a rendered cause and recording
+ * nothing leaves a workspace whose history is unreachable producing no fleet
+ * signal at all — the failure visible to the one person looking at the panel and
+ * to nobody else.
  *
  * The workspace NAME is not a field. It is mission-derived user text; naming the
  * SURFACE instead answers the question this row exists for, which is which route

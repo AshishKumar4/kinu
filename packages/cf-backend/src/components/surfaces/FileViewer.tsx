@@ -55,10 +55,10 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
    *
    * `useAsyncResource` owns the generation: its identity check makes the
    * rendered value "loading" the instant the identity changes, and only its
-   * newest run may publish. The shape this replaced fired the RPC from an
-   * effect and wrote whatever came back, so a reply for the file the reader had
-   * already left could land on the file they were looking at — and nothing
-   * re-read a file whose bytes had changed underneath the pane.
+   * newest run may publish. An effect that fired the RPC and wrote whatever
+   * came back would let a reply for the file the reader had already left land
+   * on the file they are looking at, and would never re-read a file whose
+   * bytes changed underneath the pane.
    *
    * Image and PDF panes read nothing here; their bytes ride the raw route the
    * download uses, and the read model refuses them as text on purpose.

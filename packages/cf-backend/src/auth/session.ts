@@ -39,8 +39,8 @@ export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
  * agent-controlled guest code (`lib/preview-request.ts`), and it strips it by
  * importing this set rather than by keeping a copy. So a cookie is registered
  * here when its name is declared, above, and not in a second list somewhere
- * else: the copy that used to live beside the sanitizer had drifted in both
- * directions, stripping a name no setter wrote and missing one a setter did.
+ * else: a second copy beside the sanitizer drifts in both directions,
+ * stripping a name no setter wrote and missing one a setter did.
  */
 export const KINU_COOKIE_NAMES: readonly string[] = [
   SESSION_COOKIE_NAME,

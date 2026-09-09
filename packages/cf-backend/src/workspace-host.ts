@@ -148,9 +148,9 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
 
 /**
  * The URL an exposed port is reachable at, or why this deployment cannot mint
- * one for this workspace. The reason is written for the Ports surface: a
- * port that is listening and has no URL used to vanish from it, and the one
- * message the surface had blamed a missing preview host whatever the cause.
+ * one for this workspace. The reason is written for the Ports surface: without
+ * one, a port that is listening and has no URL vanishes from that surface, and
+ * a single fixed message blames a missing preview host whatever the cause.
  */
 export type WorkspacePreviewUrl =
   | { readonly url: string; readonly unavailable?: undefined }
@@ -281,12 +281,11 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // both are real here.
         const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
-        // The guard that used to refuse the network `git` subcommands and the
-        // fetching `npm` subcommands here is gone. `git clone` and friends now
-        // reach their dynamic-worker facets through the composed fabric, and
-        // `npm install` streams in process — one tarball entry at a time,
-        // never a buffered whole — so neither exhausts this isolate the way
-        // the guard's refusal claimed they would.
+        // Nothing here refuses the network `git` subcommands or the fetching
+        // `npm` subcommands. `git clone` and friends reach their dynamic-worker
+        // facets through the composed fabric, and `npm install` streams in
+        // process — one tarball entry at a time, never a buffered whole — so
+        // neither exhausts this isolate.
         return programmaticHost(session, portRegistry, deps, portOwners);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for

@@ -103,10 +103,11 @@ export interface ToolInfo {
 	 * `native` = a tool definition in the turn's ToolSet, `codemode` = only from
 	 * inside an `execute_tools` program, `both` = both, over one dispatcher.
 	 *
-	 * This used to be derived as `nativeNames.has(name) ? "native" : "codemode"`,
-	 * a binary with no way to say "neither" — so the one deps-gated builtin
-	 * (`report`) read "code mode" on an orchestrator, which has it on no surface
-	 * at all. A crafted tool has no registry row and is codemode by construction.
+	 * Deriving this as `nativeNames.has(name) ? "native" : "codemode"` is a
+	 * binary with no way to say "neither" — the one deps-gated builtin
+	 * (`report`) then reads "code mode" on an orchestrator, which has it on no
+	 * surface at all. A crafted tool has no registry row and is codemode by
+	 * construction.
 	 */
 	exposure: "native" | "codemode" | "both";
 	/**

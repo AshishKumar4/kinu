@@ -51,15 +51,15 @@ export class OwnedModelServices {
    * The cache POLICY is core's (`ProviderListingCache`): one sweep at a time
    * with concurrent callers joining it, complete listings only, a generation
    * guard so an invalidation landing mid-sweep still answers its caller without
-   * poisoning the cache, and expiry by signal rather than by clock. Every one of
-   * those four rules used to be written here and again in the CLI, holding the
-   * key — `revision` — that every other cache is kept against.
+   * poisoning the cache, and expiry by signal rather than by clock. All four
+   * rules live there once, keyed on `revision` — the key every other cache is
+   * kept against — rather than here and again in the CLI.
    *
    * What stays here is the SWEEP and its trigger: `invalidate()` is the hook
    * every credential mutation, model rebind and owner claim already reaches, and
-   * that is genuinely this platform's half. A turn used to pay a full credential
-   * sweep — models.dev, Codex, every connected provider — before it could stream
-   * a single byte.
+   * that is genuinely this platform's half. Nothing makes a turn pay a full
+   * credential sweep — models.dev, Codex, every connected provider — before it
+   * can stream a single byte.
    */
   private readonly providerListings = new ProviderListingCache(
     () => this.sweepProviderListing(),
@@ -97,8 +97,9 @@ export class OwnedModelServices {
   /** The resolved model for `spec`, memoized on the NORMALIZED spec.
    *
    *  Cached here rather than in each caller: Think asks for the model once per
-   *  turn and a head asked for it once per STEP, rebuilding the registry lookup
-   *  every time. `invalidate()` drops it with the rest of the owner-bound state. */
+   *  turn and a head asks for it once per STEP, which without this rebuilds the
+   *  registry lookup every time. `invalidate()` drops it with the rest of the
+   *  owner-bound state. */
   resolveModel(spec?: string | null): LanguageModel {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
@@ -110,7 +111,8 @@ export class OwnedModelServices {
 
   /** The same memoized model plus the reasoning-effort provider options for it.
    *  One implementation of "normalize the spec, resolve it, derive its effort
-   *  options" — the head path needs the pair and used to rebuild both per call. */
+   *  options" — the head path needs the pair and would otherwise rebuild both
+   *  per call. */
   resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);

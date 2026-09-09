@@ -27,10 +27,10 @@ export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
 /**
  * The orchestrator's per-activation MCP tool cache, keyed by the HASH OF THE
- * DESCRIPTOR CONTENT — never by a mutation watermark. UserDO previously
- * carried a `_userMcpUpdatedAt` integer that reset to zero on every cold start
- * while its durable server rows and OAuth state survived; a reader that treated
- * zero as "never configured" silently stripped every MCP tool after an
+ * DESCRIPTOR CONTENT — never by a mutation watermark. A watermark like a
+ * `_userMcpUpdatedAt` integer on UserDO resets to zero on every cold start
+ * while its durable server rows and OAuth state survive; a reader that treats
+ * zero as "never configured" silently strips every MCP tool after an
  * eviction, and any revision mirror can miss a deletion. Deriving the key from
  * what was actually fetched has neither failure mode: cold reconstruction,
  * update, deletion and OAuth completion each invalidate exactly when the
@@ -381,12 +381,13 @@ export function storedMcpOptionsCarryCredential(raw: string | null | undefined):
  * authorized. The one condition that justifies re-probing a live connection,
  * and it is decided by CLASS, never by prose.
  *
- * What this replaces: `/\b401\b|unauthorized/i` over `renderThrownChain`, which
- * is the whole rendered cause chain of whatever `callTool` threw. A remote tool
- * that answers "401 unauthorized from the upstream API" hands that sentence back
- * as a JSON-RPC error, the SDK raises it as an `McpError` carrying the server's
- * own words, and the matcher then tore down and re-authorized a connection that
- * was authorized fine. The text belonged to a third party; the decision did not.
+ * Why not a text matcher: `/\b401\b|unauthorized/i` over `renderThrownChain`
+ * reads the whole rendered cause chain of whatever `callTool` threw. A remote
+ * tool that answers "401 unauthorized from the upstream API" hands that
+ * sentence back as a JSON-RPC error, the SDK raises it as an `McpError`
+ * carrying the server's own words, and such a matcher tears down and
+ * re-authorizes a connection that was authorized fine. The text belongs to a
+ * third party; the decision does not.
  *
  * The pinned SDK classifies this itself, so nothing needs guessing:
  *
