@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/events/hub/log.ts b/packages/core/src/events/hub/log.ts
+index 96407350e..5a4b42172 100644
 --- a/packages/core/src/events/hub/log.ts
 +++ b/packages/core/src/events/hub/log.ts
-@@ -320,7 +320,7 @@
-       FROM agent_log
-       WHERE kind = 'event'
+@@ -425,7 +425,7 @@ export class EventLog {
+       WHERE actor_id = ?
+         AND kind = 'event'
          AND turn_id IS NULL
 -        AND (step_idx IS NULL OR step_idx >= 0)
 +        AND (step_idx IS NULL OR step_idx >= -1)
      `;
-     const bindings: SqlValue[] = [];
-
+     const bindings: SqlValue[] = [this.actorId];
+ 
