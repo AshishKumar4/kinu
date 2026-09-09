@@ -1,18 +1,22 @@
 /**
  * Trees for the conformance battery: generated, held live, and compared.
  *
- * WHY A SECOND TREE MODEL BESIDE `capture/model.ts`. The capture model is a
- * LOG — `MutationLog` exists to prove that a capture equals one prefix of a
- * mutation sequence — and what an arm serves is not a log but a state: a set
- * of paths, each with bytes, a mode, an owner, times, xattrs, a symlink target
- * or an inode shared with another path. The battery needs to WRITE such a
- * state into an arm's workspace, read the state the arm serves after a wake,
- * and say WHICH PROPERTY differs. So this module holds a live tree as the
- * capture model's own `NodeEntry` rows (the shipped shape every codec consumes,
- * never a third vocabulary), generates trees from a seed so a 1e5-file tree is
- * a number rather than a fixture file, and compares two trees property by
- * property so a restore that split a hardlink, filled a hole or dropped an
- * xattr is named by that word.
+ * WHAT AN ARM SERVES IS A STATE, NOT A LOG: a set of paths, each with bytes, a
+ * mode, an owner, times, xattrs, a symlink target or an inode shared with
+ * another path. The battery needs to WRITE such a state into an arm's
+ * workspace, read the state the arm serves after a wake, and say WHICH
+ * PROPERTY differs. So this module holds a live tree, generates trees from a
+ * seed so a 1e5-file tree is a number rather than a fixture file, and compares
+ * two trees property by property, so a restore that split a hardlink, filled a
+ * hole or dropped an xattr is named by that word.
+ *
+ * THE NODE VOCABULARY IS OWNED HERE. It used to be imported from a capture
+ * model that the shipped strategy never used — the strategy archives an
+ * overlay upper, so there is no manifest of rows in the product at all — and a
+ * test model borrowing a shape from code it does not exercise is a shape
+ * nobody keeps honest. What the battery needs is exactly what is below: a
+ * file's logical content as dense bytes or sparse runs, POSIX identity, and a
+ * canonical serialization to compare two trees by.
  *
  * SPARSE FILES ARE NEVER EXPANDED HERE. A 1 GiB file with 1 MiB of data is
  * held as its runs, digested over its runs, and compared over its runs; the
@@ -22,16 +26,136 @@
 
 import { createHash } from 'node:crypto';
 
-import { paintedSegments } from '../../src/candidates/merkle-pack/chunk';
-import {
-  canonicalManifestBytes,
-  contentSize,
-  type Capture,
-  type FileContent,
-  type NodeEntry,
-  type PosixMetadata,
-  type SparseRun,
-} from '../../src/capture/model';
+export type NodeKind = 'file' | 'dir' | 'symlink';
+
+/** One resident byte range of a sparse file. Runs may overlap and arrive
+ *  unsorted; {@link paintedSegments} resolves them last-writer-wins. */
+export interface SparseRun {
+  readonly offset: number;
+  readonly bytes: Uint8Array;
+}
+
+/** A file's logical content: every byte held, or the runs that are held with
+ *  holes between them. */
+export type FileContent =
+  | { readonly kind: 'dense'; readonly bytes: Uint8Array }
+  | { readonly kind: 'sparse'; readonly size: number; readonly runs: readonly SparseRun[] };
+
+/** The logical length, holes included. */
+export function contentSize(content: FileContent): number {
+  return content.kind === 'dense' ? content.bytes.byteLength : content.size;
+}
+
+/** POSIX metadata that affects restore semantics independently of file bytes. */
+export interface PosixMetadata {
+  readonly uid: number;
+  readonly gid: number;
+  readonly atimeNs: string;
+  readonly mtimeNs: string;
+  readonly ctimeNs: string;
+  /** Canonical base64 values, keyed by xattr name. */
+  readonly xattrs: Readonly<Record<string, string>>;
+}
+
+/** One node of a served tree. Two file entries sharing `ino` are hardlinks. */
+export interface NodeEntry {
+  readonly path: string;
+  readonly kind: NodeKind;
+  readonly mode: number;
+  readonly ino: number;
+  readonly metadata?: PosixMetadata;
+  /** Symlinks only. */
+  readonly target?: string;
+  /** Files only. */
+  readonly content?: FileContent;
+}
+
+/** One row of {@link canonicalTreeBytes}: a node reduced to the fields two
+ *  trees are compared by. */
+interface ManifestRow {
+  path: string;
+  kind: NodeKind;
+  mode: number;
+  ino: number;
+  metadata: PosixMetadata;
+  target?: string;
+  sha256?: string;
+  size?: number;
+}
+
+interface Segment {
+  readonly zeros: boolean;
+  /** Absolute start offset in the logical file. */
+  readonly start: number;
+  readonly end: number;
+  readonly view?: Uint8Array;
+}
+
+/** A file's logical bytes as an ordered segment list, plus the logical size. */
+interface LogicalLayout {
+  readonly segments: Segment[];
+  readonly size: number;
+}
+
+interface Claim {
+  readonly start: number;
+  readonly end: number;
+  readonly view: Uint8Array;
+}
+
+function subtract(pieces: Array<[number, number]>, start: number, end: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const [from, to] of pieces) {
+    if (to <= start || from >= end) {
+      out.push([from, to]);
+      continue;
+    }
+    if (from < start) out.push([from, start]);
+    if (end < to) out.push([end, to]);
+  }
+  return out;
+}
+
+/**
+ * Canonical segment layout of a sparse file. Runs are applied LAST-WRITER-WINS
+ * in array order — exactly the semantics of `out.set(run.bytes, run.offset)` —
+ * so the painted result matches a plain expansion byte for byte even when runs
+ * overlap or arrive unsorted. Unpainted gaps become explicit zero segments,
+ * which is what keeps hole handling O(runs).
+ */
+export function paintedSegments(content: FileContent): LogicalLayout {
+  if (content.kind === 'dense') {
+    return {
+      segments: [{ zeros: false, start: 0, end: content.bytes.byteLength, view: content.bytes }],
+      size: content.bytes.byteLength,
+    };
+  }
+  // Paint from the last run backwards so earlier runs only fill unclaimed
+  // ranges; whatever a later run covered already stays later-run-owned.
+  const claims: Claim[] = [];
+  for (let i = content.runs.length - 1; i >= 0; i--) {
+    const run = content.runs[i]!;
+    const start = Math.min(Math.max(run.offset, 0), content.size);
+    const end = Math.min(run.offset + run.bytes.byteLength, content.size);
+    if (end <= start) continue;
+    let pieces: Array<[number, number]> = [[start, end]];
+    for (const claim of claims) pieces = subtract(pieces, claim.start, claim.end);
+    for (const [from, to] of pieces) {
+      claims.push({ start: from, end: to, view: run.bytes.subarray(from - run.offset, to - run.offset) });
+    }
+  }
+  claims.sort((a, b) => a.start - b.start);
+
+  const segments: Segment[] = [];
+  let cursor = 0;
+  for (const claim of claims) {
+    if (claim.start > cursor) segments.push({ zeros: true, start: cursor, end: claim.start });
+    segments.push({ zeros: false, start: claim.start, end: claim.end, view: claim.view });
+    cursor = claim.end;
+  }
+  if (cursor < content.size) segments.push({ zeros: true, start: cursor, end: content.size });
+  return { segments, size: content.size };
+}
 
 /** A seeded generator: the same seed gives the same tree on every run. */
 export class Seeded {
@@ -236,7 +360,6 @@ export function textOf(entry: NodeEntry): string | undefined {
 
 function expandSmall(content: FileContent): Uint8Array {
   if (content.kind === 'dense') return content.bytes;
-  if (content.kind === 'sealed') throw new Error('sealed content is not held by this tree model');
   if (content.size > 64 * 1024 * 1024) throw new Error(`refusing to expand ${content.size} sparse bytes`);
   const out = new Uint8Array(content.size);
   for (const run of content.runs) out.set(run.bytes.subarray(0, Math.max(0, content.size - run.offset)), run.offset);
@@ -283,7 +406,6 @@ export function heldBytes(entries: readonly NodeEntry[]): number {
 
 export function runBytes(content: FileContent): number {
   if (content.kind === 'dense') return content.bytes.byteLength;
-  if (content.kind === 'sealed') return 0;
   return content.runs.reduce((sum, run) => sum + run.bytes.byteLength, 0);
 }
 
@@ -449,7 +571,6 @@ export class LiveTree {
       throw new Error(`pwrite: no file at ${path}`);
     }
     const content = inode.content;
-    if (content.kind === 'sealed') throw new Error('pwrite: sealed content is not live');
     if (content.kind === 'dense') {
       const end = offset + bytes.byteLength;
       if (end > content.bytes.byteLength) {
@@ -487,7 +608,6 @@ export class LiveTree {
       throw new Error(`hydrate: no file at ${path}`);
     }
     const content = inode.content;
-    if (content.kind === 'sealed') throw new Error('hydrate: sealed content is not live');
     if (content.kind === 'dense') {
       if (offset + bytes.byteLength > content.bytes.byteLength) {
         throw new Error(`hydrate: ${path} is ${content.bytes.byteLength} bytes, page ends at ${offset + bytes.byteLength}`);
@@ -510,7 +630,6 @@ export class LiveTree {
       throw new Error(`dehydrate: no file at ${path}`);
     }
     const content = inode.content;
-    if (content.kind === 'sealed') throw new Error('dehydrate: sealed content is not live');
     const size = contentSize(content);
     const runs = content.kind === 'dense'
       ? [{ offset: 0, bytes: content.bytes }]
@@ -631,7 +750,6 @@ function touched(metadata: PosixMetadata): PosixMetadata {
 
 export function cloneContent(content: FileContent): FileContent {
   if (content.kind === 'dense') return { kind: 'dense', bytes: content.bytes.slice() };
-  if (content.kind === 'sealed') return { ...content, extents: content.extents.map((extent) => ({ ...extent })) };
   return { kind: 'sparse', size: content.size, runs: content.runs.map((run) => ({ offset: run.offset, bytes: run.bytes.slice() })) };
 }
 
@@ -749,7 +867,7 @@ export function canonicalTreeBytes(
 ): Uint8Array {
   const normalizedIno = new Map<number, number>();
   let nextIno = 1;
-  const normalized = sortedByPath(entries).map((entry): NodeEntry => {
+  const rows = sortedByPath(entries).map((entry) => {
     let ino: number;
     if (refused.has('hardlink')) ino = nextIno++;
     else {
@@ -760,25 +878,30 @@ export function canonicalTreeBytes(
       } else ino = seen;
     }
     const source = entry.metadata ?? DEFAULT_METADATA;
-    const metadata: PosixMetadata = {
-      uid: refused.has('owner') ? 0 : source.uid,
-      gid: refused.has('owner') ? 0 : source.gid,
-      atimeNs: refused.has('times') ? '0' : source.atimeNs,
-      mtimeNs: refused.has('times') ? '0' : source.mtimeNs,
-      ctimeNs: refused.has('times') ? '0' : source.ctimeNs,
-      xattrs: refused.has('xattrs') ? {} : { ...source.xattrs },
+    const row: ManifestRow = {
+      path: entry.path,
+      kind: entry.kind,
+      mode: refused.has('mode') ? 0 : entry.mode,
+      ino,
+      metadata: {
+        uid: refused.has('owner') ? 0 : source.uid,
+        gid: refused.has('owner') ? 0 : source.gid,
+        atimeNs: refused.has('times') ? '0' : source.atimeNs,
+        mtimeNs: refused.has('times') ? '0' : source.mtimeNs,
+        ctimeNs: refused.has('times') ? '0' : source.ctimeNs,
+        xattrs: refused.has('xattrs')
+          ? {}
+          : Object.fromEntries(Object.entries(source.xattrs).sort(([a], [b]) => a.localeCompare(b))),
+      },
     };
-    const row: NodeEntry = { ...entry, mode: refused.has('mode') ? 0 : entry.mode, ino, metadata };
-    if (entry.kind === 'symlink' && refused.has('symlink')) return { ...row, target: '' };
+    if (entry.kind === 'symlink') row.target = refused.has('symlink') ? '' : entry.target;
+    if (entry.content !== undefined) {
+      row.sha256 = logicalDigest(entry.content);
+      row.size = contentSize(entry.content);
+    }
     return row;
   });
-  const capture: Capture = {
-    mechanism: 'mutation-journal',
-    cut: 1,
-    generation: 1,
-    entries: normalized,
-  };
-  return canonicalManifestBytes(capture);
+  return new TextEncoder().encode(`${JSON.stringify({ entries: rows })}\n`);
 }
 function sameXattrs(a: Readonly<Record<string, string>>, b: Readonly<Record<string, string>>): boolean {
   const names = Object.keys(a);

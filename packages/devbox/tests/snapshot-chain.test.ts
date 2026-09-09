@@ -1070,7 +1070,7 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
-      // Adopted from overlay-cas after it drew the distinction I had missed: my
+      // Adopted from a review that drew the distinction I had missed: my
       // skips reported `undefined`, which conflates "moved nothing" with
       // "cannot say". A skip KNOWS it moved nothing — no PUT was attempted —
       // and that is measurable. A failure cannot know: a checkpoint that threw
@@ -2086,8 +2086,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.kind).toBe('committed');
       // ONE MEANING FOR `bytes`: what this box durably holds after the commit,
       // which is base plus delta. The delta's own size is not the same
-      // quantity, and reporting it here made this field mean layer-size on this
-      // strategy and corpus-size on r2fs — two measurements under one name.
+      // quantity, and reporting it here made this field mean layer-size where
+      // the caller compares held bytes — two measurements under one name.
       expect(outcome.bytes).toBe(BASE_BYTES + DELTA_BYTES);
       // The changed set, not the tree — under the SAME excludes as the base.
       // See the commit path: applying them to one side only delivered no saving

@@ -2,23 +2,23 @@
  * The one storage seam.
  *
  * A devbox runs on a container whose disk is ephemeral. Something has to make
- * the disk look permanent, and there is more than one defensible way to do it,
- * so the choice is a seam rather than a branch. The seam is three methods
- * because three is what the strategies need:
+ * the disk look permanent, and a box with no store at all is a real state
+ * rather than a broken one, so the two live behind an interface. It is three
+ * methods because three is what making an ephemeral disk look permanent needs:
  *
  *   attach      — make the durable bytes readable at the work directory
  *   checkpoint  — commit what changed since the last commit
  *   discard     — forget the durable bytes entirely
  *
- * `attach()` takes no deadline. The container-start hook is what has a budget,
- * and `withContainerStartDeadline` in lifecycle.ts applies it around the whole attach.
- * No strategy would read a deadline argument, so none gets one.
+ * `attach()` takes no deadline. The restoration is what has a budget, and the
+ * box spends it around the whole attach: `openStartBudget` opens it and
+ * `racedRestoreSteps` in lifecycle.ts is what every step is raced against. The
+ * attach itself would not read a deadline argument, so it does not get one.
  */
 
 /**
- * Why a checkpoint is happening. The strategies read it differently and
- * those readings are real, so the caller states the occasion and the strategy
- * decides what it means.
+ * Why a checkpoint is happening. The occasion decides what a commit may
+ * decline for, so the caller states the occasion rather than passing flags.
  *
  * `tick`    — the periodic commit. May decline: nothing changed, or the
  *             minimum interval has not elapsed.
@@ -65,13 +65,9 @@ export interface CheckpointOutcome {
   /**
    * Durable bytes this box holds after the commit, for `committed` only.
    *
-   * ONE QUANTITY, EVERY STRATEGY, and it is bytes HELD rather than "bytes this
-   * commit wrote". That second question has a different answer per strategy —
-   * the snapshot chain's new layer size, r2fs's whole prefix — so one field
-   * naming both leaves a caller comparing two strategies comparing nothing.
-   * And r2fs cannot answer it at all: s3fs uploads a file when its last handle
-   * closes, so there is no commit boundary to attribute bytes to. Bytes held is
-   * a question every strategy can answer, and does.
+   * BYTES HELD, NOT BYTES THIS COMMIT WROTE. Held bytes are what the store
+   * actually contains once the commit lands, so a caller can check the number
+   * against the prefix; "bytes written" can only be taken on trust.
    *
    * Required rather than decorative. A commit that reports success without a
    * byte count is indistinguishable from a commit that archived nothing, and
@@ -82,8 +78,8 @@ export interface CheckpointOutcome {
    */
   readonly bytes: number | undefined;
   /**
-   * Bytes THIS checkpoint moved into the store, where that is a question the
-   * strategy can answer. `undefined` means it cannot, not that it moved none.
+   * Bytes THIS checkpoint moved into the store, where the commit can answer
+   * that. `undefined` means it cannot, not that it moved none.
    *
    * THREE ANSWERS, AND THEY ARE DIFFERENT CLAIMS. A `committed` outcome
    * reports what it moved. A `skipped` outcome reports 0: a skip KNOWS it
@@ -94,37 +90,28 @@ export interface CheckpointOutcome {
    * this field exists to avoid.
    *
    * A SECOND QUANTITY, deliberately, after refusing one earlier in this
-   * package's life. The refusal was right at the time — two strategies, no
-   * consumer, and a field naming what another field measures is decoration.
-   * Both halves of that changed. There are five strategies now, and a caller
-   * was found DERIVING this number by differencing consecutive `bytes`
-   * readings, which is invalid across a fold or a rebase: it produced NEGATIVE
-   * per-tick costs on two ticks of a real run, because held bytes legitimately
-   * fall when a generation is superseded. A consumer already computing a
-   * quantity, and computing it wrongly because the interface withheld it, is
-   * the bar for adding a field.
-   *
-   * `bytes` is unchanged and stays the comparable cross-strategy figure. This
-   * one is not comparable and is not meant to be: r2fs answers `undefined`
-   * because s3fs uploads a file when its last handle closes, so there is no
-   * commit boundary to attribute bytes to — the same asymmetry `bytes` above
-   * records, stated once more where it would otherwise read as a gap.
+   * package's life. A caller was found DERIVING this number by differencing
+   * consecutive `bytes` readings, which is invalid across a fold or a rebase:
+   * it produced NEGATIVE per-tick costs on two ticks of a real run, because
+   * held bytes legitimately fall when a generation is superseded. A consumer
+   * already computing a quantity, and computing it wrongly because the
+   * interface withheld it, is the bar for adding a field.
    */
   readonly movedBytes: number | undefined;
 }
 
-/** The failure stamp every strategy carries on its durable state row, so a
- *  repeatedly failing checkpoint stays visible across restarts. */
+/** The failure stamp the durable state row carries, so a repeatedly failing
+ *  checkpoint stays visible across restarts. */
 export interface RecordedFailure {
   readonly at: number;
   readonly reason: string;
 }
 
-/** Any strategy's durable row, seen only as the one field a stamp writes. */
+/** A durable row, seen only as the one field a stamp writes. */
 type StampableRow = { readonly lastFailure: RecordedFailure | undefined };
 
 /** What writing a failure stamp needs: the row's writer, a clock and a
- *  console. Every strategy's port set already satisfies it. */
+ *  console. The chain's port set already satisfies it. */
 export interface FailureStampDeps<S> {
   readonly writeState: (next: S) => Promise<void>;
   readonly log: (line: string) => void;
@@ -165,11 +152,11 @@ export async function stampFailure<S extends StampableRow>(
  *
  * A scheduled callback reduces a throw to a console line, so a failure that
  * matters has to be something the caller can turn into an incident. One
- * implementation for every strategy: two copies of this body drifted once.
+ * implementation, shared: two copies of this body drifted once.
  *
- * THE DIAGNOSTIC GOES FIRST, because it is the only part that cannot fail.
- * Following the stamp, the one storage failure that could suppress it would be
- * a storage failure — the case where a reader most needs the line.
+ * THE DIAGNOSTIC GOES FIRST, because it is the only part that cannot fail. It
+ * used to follow the stamp, so the one storage failure that could suppress it
+ * was a storage failure — the case where a reader most needs the line.
  *
  * `bytes`/`movedBytes` are `undefined`, not 0: a checkpoint that threw
  * mid-flight may have landed objects before it failed, so "how much moved" is
@@ -197,26 +184,14 @@ export interface DevboxStorage {
    */
   attach(): Promise<AttachOutcome>;
   /**
-   * Re-establish live serving state on the same already-attached container
-   * without replaying the durable head. Used only after boot identity proves
-   * the container survived an isolate reset or a stop.
-   *
-   * ANSWERS WHAT IT SERVES, in the same terms as `attach`: the box writes this
-   * down as its attach record on every drive that takes the repair, so a wake
-   * on the same instance is judged by what it serves rather than by whatever
-   * the last full attach found.
-   */
-  repairAttached?(): Promise<AttachOutcome>;
-  /**
    * Commit what changed. Returns its outcome; does not throw for an ordinary
    * failure.
    *
-   * A FAILURE TO RECORD A FAILURE IS ORDINARY, and it is the case that broke
-   * this contract in all four implementations at once: the durable write a
-   * refusal is stamped with can be refused by the same storage. So recording is
-   * best effort everywhere — see {@link stampFailure} — the classification is
-   * always the operation's own, and an outcome that had already committed stays
-   * `committed`.
+   * A FAILURE TO RECORD A FAILURE IS ORDINARY, and it is the defect this
+   * contract was written around: the durable write a refusal is stamped with
+   * can be refused by the same storage. So recording is best effort — see
+   * {@link stampFailure} — the classification is always the operation's own,
+   * and an outcome that had already committed stays `committed`.
    */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
   /** Release live mounts that the host SDK tracks before the container stops. */
@@ -239,33 +214,20 @@ export interface DevboxStore {
   readonly bucket: R2Bucket;
 }
 
-/** The five storage strategies, by name. A devbox picks one and keeps it:
- * bytes written by one format are not readable by another, so the choice
- * belongs to the class, not a call. */
-export type DevboxStrategyName =
-  | 'snapshot-chain'
-  | 'r2fs'
-  | 'overlay-cas'
-  | 'bounded-layers'
-  | 'merkle-pack';
+/** The storage strategy, by name. One name, because bytes written by one
+ * format are not readable by another: the choice belongs to the class rather
+ * than a call, and it is carried as a name so a box records which format its
+ * bytes are in. */
+export type DevboxStrategyName = 'snapshot-chain';
 
-/** The strategy a devbox uses unless its class says otherwise: the arm the
- * decisive comparison kept. `bench/measure-first/DECISIVE-2026-09-05.md`
- * states the run and the numbers; a change here is a new decision and gets a
- * new dated report beside that one, never an edit to the incumbent's. */
+/** The strategy a devbox uses unless its class says otherwise. The measured
+ * basis is `bench/measure-first/DECISIVE-2026-09-05.md`, which states the run
+ * and the numbers; a change here is a new decision and gets a new dated report
+ * beside that one, never an edit to the incumbent's. */
 export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
 
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
-  if (
-    value === 'snapshot-chain' ||
-    value === 'r2fs' ||
-    value === 'overlay-cas' ||
-    value === 'bounded-layers' ||
-    value === 'merkle-pack'
-  ) {
-    return value;
-  }
-  return null;
+  return value === 'snapshot-chain' ? value : null;
 }
 
 /**

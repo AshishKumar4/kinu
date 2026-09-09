@@ -69,8 +69,8 @@ export interface ArmEvidence {
   /** Whether this arm's numbers may be ranked. Must be false for every
    *  non-candidate kind. */
   readonly rankEligible: boolean;
-  /** The red witnesses this arm MUST produce, preregistered before the run:
-   *  e.g. overlay-cas's unbounded restore claim, r2fs's known semantic gaps.
+  /** The red witnesses this arm MUST produce, preregistered before the run —
+   *  a documented defect of the strategy the arm is.
    *  Empty for an arm with no preregistered defect. These are MEASURED COSTS
    *  reproduced to prove the instrument still sees them; a competing arm may
    *  carry them and still win on its numbers. */
