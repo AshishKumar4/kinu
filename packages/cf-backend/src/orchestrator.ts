@@ -19,13 +19,16 @@ import {
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
-  explorationActorKey, buildHeadToolSet, collectDynamicContext, subordinateDelegatesOf,
+  explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
-  type ActorHost, type BoundActor, type DynamicContext, type HeadCapture, type HeadInput,
+  agentsProfileContext, buildActorTools, createTeamToolDeps, delegationExhausted,
+  mintSubordinateName, withHeadCaptureRecording,
+  type ActorHost, type ActorToolsetDeps, type AgentsForkDeps, type AgentsToolDeps,
+  type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -35,18 +38,18 @@ import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  reclaimSettledExplorationActors,
+  hostNodeSeat, reclaimSettledExplorationActors,
   type ExplorationHostSeams,
 } from "./exploration-hosting";
 import {
-  admitHostedTask, relayHostedReport, reportSettlesRun, runHostedTask,
-  type HostedReportLedger, type SubordinateHostSeams,
+  admitHostedTask, hostedDelegationBudget, hostedSubordinateRuntime, relayHostedReport,
+  reportSettlesRun, runHostedTask,
+  type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
 import { createExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
 import type { SubordinateReportStatus } from "@kinu.run/core";
 import type { ToolSet } from "ai";
-import type { CFRuntime } from "./runtime";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "./events/webhook-route";
@@ -769,7 +772,7 @@ export class OrchestratorAgent extends ActorAgent {
       // told a `scribe` child it had the workspace's whole surface.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
-      taskTools: (actor, runtime, reports, input, capture) => this.hostedTaskTools(actor, runtime, reports, input, capture),
+      taskTools: (turn) => this.hostedTaskTools(turn),
       dynamic: (actor) => this.hostedActorDynamicContext(actor),
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
@@ -781,24 +784,35 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * The tool surface a hosted actor's DELEGATED turn admits.
    *
-   * Built over THAT actor's runtime, so every file and command it reaches acts
-   * as its own uid on both planes, and narrowed to the confined builtin set a
-   * reporting agent gets — the same set a head runs on, because a delegated
-   * task and a head are the same shape of agent: given work, does it, reports.
-   * The one thing added is the `report` lane, and it writes the ledger the
-   * relay decision reads afterwards.
+   * THE FULL-AGENT SURFACE, built by the SAME `buildActorTools` the workspace
+   * root's own turns are built by, over THAT actor's runtime — so every file
+   * and command it reaches acts as its own uid on both planes, its memory and
+   * task rows are its own `actor_id`-scoped rows, and its delegation rungs
+   * carry its own depth. A hire is a colleague with a role: docs/TOOLS.md and
+   * AGENTS.md promise it the eight builtins gated by the deps this workspace
+   * wires for it, and the confined head set gave it four — no `agents`, no
+   * `memory`, no `tasks`, and not even the `report` lane the manifest declares
+   * for exactly this root.
    *
-   * `preBuiltExecuteTool` rather than `executeTools`: this is a CONFINED
-   * surface, so it finishes itself rather than carrying the actor clamp and the
-   * effect claim an owner chat's surface carries.
+   * What it does NOT get is `peers`: `hire scope=workspace` mints the root of a
+   * fresh tree, so a subordinate holding the peer transport could leave its own
+   * subtree in one call and the depth cap below would be decorative.
+   *
+   * `executeTools` rather than a pre-built entry: the sandbox declares every
+   * other tool as `tools.<name>`, so it is built last over the finished surface
+   * and keeps the clamp and the effect claim the registry declares for it.
+   *
+   * The whole surface is then wrapped so every call this turn makes lands in
+   * the run's own capture, which is what puts a tool tally in the report when
+   * the turn ends without closing prose. Core's rule for that wrapper is not to
+   * apply it to a self-recording builder, and the two that record themselves —
+   * the head accumulators — are not on this surface: a delegated turn reports
+   * upward through `report`, it does not bank findings for a merge.
    */
-  private hostedTaskTools(
-    actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger,
-    input: HeadInput, capture: HeadCapture,
-  ): ToolSet {
+  private hostedTaskTools(turn: HostedTaskTurn): ToolSet {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     const factory = createExecuteToolsFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
+      loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
       // `report.*` in the sandbox as well as at the top level, on the factory's
       // own provider seam — the same wiring the CLI gives the same capability.
@@ -808,38 +822,129 @@ export class OrchestratorAgent extends ActorAgent {
     });
     const report = {
       report: async (input: { status: SubordinateReportStatus; content: string }) => {
-        const relayed = await relayHostedReport(this.subordinateSeams(), actor, {
+        const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
-          mode: 'build', sequenceId: `live:${actor.record.name}:${nanoid()}`,
+          mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
         });
-        reports.spoke = true;
+        turn.reports.spoke = true;
         // Only a run-SETTLING report counts as the answer. The same predicate
         // the ingress settles a waiter on, so the child cannot come to believe
         // it has answered while its caller is still waiting.
-        reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+        turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
-    // The CONFINED builtin set a reporting agent gets — the same one a head
-    // runs on, because a delegated task and a head are the same shape of agent:
-    // given work, does it, reports. An owner chat with this actor is a different
-    // surface and is built where owner chats are built.
-    //
-    // THE CALLER'S `HeadInput` AND THE CALLER'S CAPTURE, not second ones built
-    // here. The runner claims the turn under that exact input and recovery
-    // verifies the claim, so a literal rebuilt at this site is how a turn gets
-    // claimed under one shape and tooled under another; and the capture these
-    // tools write is the one the runner reads into the report, so a fresh one
-    // here is where a turn's decisions, evidence and tool calls go to be
-    // forgotten. `delegatedHeadInput` is the one builder and `runHostedTask`
-    // owns the one capture.
-    return buildHeadToolSet({
-      input,
-      capture,
-      rt: runtime,
-      executeTool: (finished: ToolSet) => factory.toolFor(finished),
+    const deps: ActorToolsetDeps = {
+      rt: turn.runtime,
+      workMode: turn.input.mode,
+      // Keyed on the TURN this surface was built for, because that is the id a
+      // recovery re-admits: an effect claimed under a fresh id would replay on
+      // the turn that is already holding it.
+      effectClaims: {
+        actor: turn.actor.handle,
+        sql: turn.runtime.storage.sql,
+        turnId: () => turn.input.id,
+      },
+      executeTools: ({ native }) => factory.toolFor(native),
+      agents: this.hostedAgentsToolDeps(turn),
+      // This actor's own semantic index and its own keyed world model — the
+      // rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite
+      // what the workspace observed under the same words.
+      vectorStore: turn.runtime.vectorStore,
+      facts: turn.actor.stores.facts,
       webSearch,
-      split: () => { throw new KinuError('denied', 'a delegated task reports; it does not split'); },
+    };
+    // THE ASSIGNED TURN'S LANE, added after the surface's own fields for the
+    // same reason the cli adds it after its own (`local-session.ts`'s
+    // `reportGateOpen`): `report` belongs to a turn the PARENT drove, and an
+    // owner chat with this actor must not carry it. The gate is satisfied at
+    // the call site here — `runHostedTask` is the only caller and a delegated
+    // task is by definition parent-driven — where the cli, whose surface is
+    // cached across turns, has to re-ask per turn.
+    deps.report = report;
+    return withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+  }
+
+  /**
+   * The delegation deps ONE hosted actor's turn holds.
+   *
+   * Both rungs are that actor's own: the search substrate runs over its
+   * runtime and its model, and the roster rung is bounded by ITS depth off the
+   * directory row — at the cap the team deps are absent and hire/ask/send/list
+   * /dismiss vanish from the enum, which is the recursion bound stated as
+   * structure rather than as a refusal.
+   */
+  private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
+    const seams = this.explorationSeams();
+    const fork: AgentsForkDeps = {
+      rt: turn.runtime,
+      model: turn.model,
+      resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
+      // The same catalog session that answers the context window and prices the
+      // mission ledger, so a search's estimate and the ledger that debits it
+      // read one rate.
+      costModel: () => ({
+        spec: this.effectiveModelSpec(),
+        pricing: this.modelCatalog.pricing(),
+      }),
+      // Each node's own actor, asked when the wave reaches it. Workspace-level
+      // seams, because a node is an actor of the WORKSPACE whoever spawned it.
+      hostNode: (node) => hostNodeSeat(seams, node),
+      provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
+      reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
+      announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
+    };
+    const deps: AgentsToolDeps = {
+      mode: turn.input.mode,
+      fork,
+      budget: this.budget,
+    };
+    // THIS turn's own resolution, not a second one: the rungs narrow by the
+    // role and tier the claim recorded.
+    deps.profile = () => agentsProfileContext(turn.profile.profile, turn.profile.inputs);
+    const team = this.hostedTeamToolDeps(turn.actor);
+    if (team !== null) deps.team = team;
+    return deps;
+  }
+
+  /**
+   * The roster rung one hosted actor holds over its OWN subtree, or null at the
+   * delegation cap.
+   *
+   * Every part is that actor's: the rows it hires into, the child substrate
+   * that registers them under it, and the depth the directory says it is at. A
+   * rung built from the workspace root's roster would let a hire of a hire land
+   * as a sibling of its own parent.
+   *
+   * No `temporary` port, and that absence is a boundary rather than an
+   * oversight: the port holds live `run` promises and must outlive the turn
+   * that parked them, and the one the report ingress resolves waiters through
+   * is the HIRING actor's. So a hosted actor gets the two durable rungs — hire,
+   * ask by name, send, list, dismiss — and no role-targeted temporary of its
+   * own.
+   */
+  private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
+    const seams = this.subordinateSeams();
+    const delegation = hostedDelegationBudget(seams, actor);
+    if (delegationExhausted(delegation)) return null;
+    const roster = seams.roster(actor);
+    roster.ensureSchema();
+    return createTeamToolDeps({
+      delegation,
+      roster,
+      runtime: hostedSubordinateRuntime(seams, () => actor),
+      now: () => Date.now(),
+      // This actor's own transcript, capped — what a child it hires inherits.
+      inheritedContext: () => this.readInheritedContext(actor.handle),
+      // The WORKSPACE's purpose, which is the same fact for every actor in it:
+      // an agent added here is here for what this workspace is for.
+      ownMission: () => this.ownMission(),
+      createName: mintSubordinateName,
+      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => this.broadcastSubordinateEvent({
+        kind: 'task',
+        ...event,
+      }),
     });
   }
 

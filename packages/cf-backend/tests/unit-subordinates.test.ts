@@ -6,7 +6,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEPS_GATED_TOOLS, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport } from '@kinu.run/core';
+import {
+  BUILTIN_TOOLS, DEPS_GATED_TOOLS, observedActionEnum, REPORT_TOOL, TASK_TURN_ENDINGS, terminalTaskReport,
+} from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
@@ -157,11 +159,11 @@ describe('subordinate wiring', () => {
     expect(hosting).not.toContain('seedSoul(');
   });
 
-  test('delegated tools are confined to the head-shaped set with the report lane, without team, memory, or tasks', async () => {
-    // Absence is structural: asserted on the BUILT ToolSet, not on a gate
-    // function — what ships is the surface the production builder builds over
-    // the child's own runtime. `release` is not a native tool at all
-    // (release.* is codemode-only), so it needs no gate here.
+  test('delegated tools are the full-agent surface, with the report lane and without the peer rung', async () => {
+    // Asserted on the BUILT ToolSet, not on a gate function: what ships is the
+    // surface the production builder builds over the child's own runtime.
+    // `release` is not a native tool at all (release.* is codemode-only), so it
+    // needs no gate here.
     const workspace = orchestratorHarness();
     const orchTools = workspace.agent.observeRawTools();
     expect(Object.keys(orchTools)).not.toContain(REPORT_TOOL);
@@ -173,13 +175,19 @@ describe('subordinate wiring', () => {
     });
     const subTools = await workspace.agent.observeHostedTaskTools(child.actor, 'prove confinement');
     const subKeys = Object.keys(subTools);
-    // No team to hire through, no memory or task stores of its own: a
-    // delegated task reports; it does not branch the workspace.
-    expect(subKeys).not.toContain('agents');
-    expect(subKeys).not.toContain('memory');
-    expect(subKeys).not.toContain('tasks');
-    expect(subKeys).toContain('execute_tools');
-    // …and the report lane it DOES get lives in the sandbox: the delegated
+    // A hire is a colleague with a role: it gets the same builtins the
+    // workspace root gets, plus the report lane, over its OWN stores.
+    expect(BUILTIN_TOOLS.filter((name) => !subKeys.includes(name))).toEqual([]);
+    // And not the head's accumulators: a delegated turn reports upward through
+    // `report` rather than banking findings for a merge.
+    expect(subKeys).not.toContain('record_evidence');
+    expect(subKeys).not.toContain('record_decision');
+    // The one rung it does NOT hold. `hire scope=workspace` mints the root of a
+    // fresh tree, so a subordinate holding the peer transport could leave its
+    // own subtree in one call and its depth cap would be decorative.
+    expect(observedActionEnum(subTools.agents)).not.toContain('reply');
+    expect(observedActionEnum(subTools.agents)).toContain('hire');
+    // …and the report lane it gets lives in the sandbox too: the delegated
     // execute_tools declares the report namespace the root's never does.
     expect(subTools.execute_tools?.description).toContain('declare const report:');
     expect(orchTools.execute_tools?.description).not.toContain('declare const report:');

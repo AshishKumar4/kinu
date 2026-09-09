@@ -18,10 +18,10 @@
  * turn answered "completed without producing a textual summary" however much
  * work it had done.
  *
- * TWO TESTS BECAUSE THE SYNTHESIS HAS TWO ARMS. Decisions and the tool tally
- * cannot both appear in one summary — the tally renders only when there is no
- * decision and no finding — so one turn cannot show both halves of the capture.
- * Each test drives one arm through the production runner.
+ * ONE ARM, because the synthesis renders the tool tally only when the turn
+ * banked no decision and no finding — and a delegated turn banks neither: the
+ * head accumulators are not on its surface (it reports upward through
+ * `report` instead), so the tally is the arm its capture can reach.
  */
 import { expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
@@ -86,23 +86,12 @@ async function delegated(name: string, model: MockLanguageModelV3) {
   return await workspace.agent.runHostedTaskTurn(child.actor, 'Record what you find.');
 }
 
-test("a delegated turn's decision reaches the answer its caller gets", async () => {
-  const turn = await delegated('decider', turnCalling('record_decision', {
-    question: 'which parser', choice: 'the streaming one', rationale: 'it holds no whole file',
-  }));
-
-  // The decision the turn recorded, in the caller's own answer — which is the
-  // report's summary verbatim, and the same text the relay carries to the
-  // hiring parent: the tools and the runner wrote ONE capture, so the
-  // synthesis had it to read.
-  expect(turn.text).toBe('Decisions: which parser → the streaming one');
-});
-
 test("a delegated turn's tool call reaches the answer its caller gets", async () => {
   const turn = await delegated('reader', turnCalling('file', { action: 'list', path: '/home/user' }));
 
-  // No decision and no finding, so the synthesis falls to the tally — which is
-  // empty unless the CONFINED BUILTIN's own call landed in the run's capture,
-  // and those tools are wrapped by the surface builder rather than the runner.
+  // The turn banked no decision and no finding, so the synthesis falls to the
+  // tally — which is empty unless the BUILTIN's own call landed in the run's
+  // own capture, and the builtins are wrapped by the surface builder rather
+  // than by the runner that reads the report.
   expect(turn.text).toBe('Ran 1 tool call(s): file');
 });
