@@ -54,6 +54,10 @@ describe('a stale attempt\'s boot-id stamp does not overwrite the successor\'s',
     // after the successor has fully settled if the fence is missing.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
+    // IN-GATE, the parked attempt is a delivered one: the hook fails on its
+    // claim write before any stamp, so the stamp pause below catches the
+    // delivered attempt exactly where the old test staged it.
+    harnessed.storage.faultOn('devbox:attach-recovery', new Error('hook claim refused'));
     const parked = gate();
     container.stampGate = parked;
     const stale = box.devboxStartup();
