@@ -559,6 +559,30 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     expect(spill.detail).toContain(`${String(spill.eligible)} readable spills`);
   }, 0);
 
+  test('output_cap: the arm reports whether the provider cut the answer, per episode', async () => {
+    const scores = await run('wiring-cap', [
+      { tool: 'file', input: { action: 'write', path: 'capped.txt', content: 'done' } },
+    ]);
+
+    // The row LANDS. Dropping it from the arm's array is the plausible bug this
+    // guards: nothing else in the record would go missing, and the tier would
+    // quietly stop reporting the share of attempts an output limit ended — the
+    // one statistic that says whether the cap costs anything.
+    const cap = scoreOf(scores, 'output_cap');
+
+    // UNMEASURED under a scripted provider, and that is the honest verdict
+    // rather than a gap in this test: the fixture supplies the PROVIDER-level
+    // finish shape, so nothing reaches the accumulator's `lastFinishReason` and
+    // the episode closes no step with a reason to read (target-seam.test.ts says
+    // the same about the same field). A `1` here would be the failure the
+    // asymmetry exists to prevent — a clean cap verdict over an episode nobody
+    // measured — so the assertion is that it declines to score, not that it
+    // passes.
+    expect(cap.eligible).toBe(0);
+    expect(cap.rate).toBeNull();
+    expect(cap.detail).toContain('UNMEASURED');
+  }, 0);
+
   test('the harness REFUSES a runtime with no executor surface, before spending anything', async () => {
     // The positive direction is covered by the three tests above: they all run,
     // which means the real harness path satisfies the precondition. What this
