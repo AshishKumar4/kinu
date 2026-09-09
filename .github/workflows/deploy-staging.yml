@@ -45,6 +45,11 @@ jobs:
       # checkout has to be a real commit rather than an export.
       - uses: actions/checkout@v4
         with:
+          # `scripts/deploy.sh` runs `gate:commit-message`, which reads every
+          # commit from the convention's boundary to HEAD. The default depth-1
+          # checkout has no such range and the gate refuses one. Same setting and
+          # same reason as security-scan.yml.
+          fetch-depth: 0
           # The deploy reads the tree and `git rev-parse`; it never pushes. A
           # persisted token would sit in `.git/config` for the whole run, inside
           # the job that runs 53 gates' worth of repository code.
