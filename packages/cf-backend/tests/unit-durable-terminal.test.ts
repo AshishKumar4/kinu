@@ -1096,9 +1096,9 @@ describe('a turn releases its tool claims only when no response can still run', 
   /**
    * The defect. The isolate died while an auto-continuation was executing a
    * claimed tool, so the fresh activation resuming the EARLIER response has
-   * `_inFlight` clear while `active_durable_turn` still names the turn. A close
-   * that deleted the continuation's claim there leaves chat recovery replaying
-   * the continuation with nothing left to refuse the second call.
+   * `_inFlight` clear while the durable claim ledger still identifies the turn
+   * and a chat fiber can replay its continuation. Closing the earlier response
+   * must retain the continuation's tool claim until no response can still run.
    */
   test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
     const harness = orchestratorHarness();

@@ -16,7 +16,8 @@
  *     assumed;
  *   · every radius role equals the Tailwind rung `index.css` maps it to;
  *   · the pre-paint theme script resolves the four cases it claims;
- *   · no public page shows the retired product name, anywhere in the document.
+ *   · every public document uses the Kinu product identity in its visible
+ *     copy, URLs and attributes.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -285,7 +286,7 @@ const RETIRED_NAME = ['prot', 'eus'].join('');
 
 describe('public copy', () => {
   for (const [name, html] of Object.entries(DOCUMENTS)) {
-    test(`${name} shows no trace of the retired product name`, () => {
+    test(`${name} uses Kinu branding throughout the document`, () => {
       // Not only the visible text: the repository URL, the icon href and every
       // attribute are the places a rename leaves a survivor behind.
       expect(html.toLowerCase()).not.toContain(RETIRED_NAME);

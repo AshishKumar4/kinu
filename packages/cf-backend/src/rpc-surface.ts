@@ -469,20 +469,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /**
- * THERE IS NO SECOND ACTOR SURFACE, and this section is where that is stated.
+ * Hosted actors are acquired and run through root-owned objects, not remote
+ * stubs (`host.acquire`, `host.run`); containment is enforced by actor-scoped
+ * rows, directory identity and each actor's uid on both planes.
  *
- * A hosted actor is not addressable over a stub at all: there is no object to
- * hold a stub TO, no seed to push, and no mode to be told. So there is no
- * allowlist here for one, and nothing narrows an instance at runtime the way a
- * seal over a wire would have to if a single class hosted several modes and a
- * stub could reach any method on it. Acquiring and running a hosted actor is a
- * call on an object the root already holds (`host.acquire`, `host.run`),
- * reachable only by code inside this object, and containment rides the ACTOR —
- * its `actor_id`-scoped rows, its own uid on both planes, its own directory
- * row — rather than a seal over a wire.
- *
- * A hosted actor's CHAT surface is the orchestrator's own `@callable` surface,
- * bound to that actor by the request path (`agent-routing.ts`), so it is
- * governed by `ORCHESTRATOR_RPC_SURFACE` above and by nothing else.
+ * Their public chat uses the orchestrator's callable surface bound to the actor
+ * resolved from the request path (`agent-routing.ts`), so it is governed by
+ * `ORCHESTRATOR_RPC_SURFACE` above and by nothing else.
  */
 
