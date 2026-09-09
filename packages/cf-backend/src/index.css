@@ -984,6 +984,13 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-accent-on) !important;
 }
 
+/* The landing page's sample dashboard: bars rise from the baseline and the
+   weekly lines draw from left to right once, then hold. */
+@keyframes landing-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes landing-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.landing-rise { transform-origin: bottom; animation: landing-rise 700ms var(--ease-out-strong) both; }
+.landing-draw { stroke-dasharray: 1; animation: landing-draw 1100ms ease-out both; }
+
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
   .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
@@ -999,6 +1006,10 @@ body { background: var(--c-bg); color: var(--c-text); }
   .p-btn:active, .p-btn-quiet:active { transform: none; }
   /* The dot still marks the run as in progress; it just holds. */
   .p-dot-pulse { animation: none; }
+  /* The dashboard is drawn settled: every bar at its height, every line whole. */
+  .landing-rise, .landing-draw { animation: none; }
+  /* A running job's icon still says running; it just holds. */
+  .animate-spin { animation: none; }
 }
 
 /* Plannotator is hosted as a document primitive, not as a second app or theme.
