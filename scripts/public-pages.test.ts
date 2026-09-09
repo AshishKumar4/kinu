@@ -54,7 +54,7 @@ interface Facts {
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
-  interactions?: { workspace: boolean; decision: boolean; tui: boolean; cli: boolean; evolution: boolean };
+  interactions?: { workspace: boolean; decision: boolean; plan: boolean; slate: boolean; tui: boolean; cli: boolean; evolution: boolean };
   command?: string;
   copied?: boolean;
   homeLink?: { visible: boolean; hasGraphic: boolean };
@@ -205,22 +205,45 @@ beforeAll(async () => {
       facts.workspace = surfaces.workspace;
       facts.tui = surfaces.tui;
       facts.cli = surfaces.cli;
+      // The frames are the product's own components, loaded as their own
+      // chunk; `networkidle0` has fetched it, this proves it mounted.
+      await page.waitForSelector('[data-landing-frame="checkout"] textarea', { timeout: 10_000 });
+      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]', { timeout: 10_000 });
+      await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]', { timeout: 10_000 });
       await page.evaluate(() => {
-        const root = document.querySelector('[data-workspace-mode]');
+        const root = document.querySelector('[data-landing-frame="checkout"]');
         const supervise = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
           .find((button) => button.textContent?.trim() === 'Supervise');
         supervise?.click();
       });
       await page.waitForFunction(
-        () => document.querySelector('[data-workspace-mode]')?.getAttribute('data-workspace-mode') === 'supervise',
+        () => document.querySelector('[data-landing-frame="checkout"]')?.getAttribute('data-workspace-mode') === 'supervise'
+          && document.querySelector('[data-workspace-panel="supervise"]')?.textContent?.includes('Curriculum') === true,
       );
       await page.evaluate(() => {
-        const retry = [...document.querySelectorAll<HTMLButtonElement>('[data-decision-state] button')]
-          .find((button) => button.textContent?.trim() === 'Retry');
-        retry?.click();
+        const root = document.querySelector('[data-landing-frame="checkout"]');
+        const run = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+          .find((button) => button.textContent?.trim() === 'Run');
+        run?.click();
       });
+      await page.waitForSelector('[data-landing-frame="checkout"] button[aria-label="Retry"]');
+      await page.click('[data-landing-frame="checkout"] button[aria-label="Retry"]');
       await page.waitForFunction(
-        () => document.querySelector('[data-decision-state]')?.getAttribute('data-decision-state') === 'retried',
+        () => document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
+      );
+      // The plan frame follows the product's decision rule: one annotation
+      // on the plan enables Request changes alone; deciding records it.
+      const planDecisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
+        buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
+      ));
+      expect(planDecisions).toEqual([
+        { label: 'Request changes', disabled: false },
+        { label: 'Approve & implement', disabled: true },
+      ]);
+      expect(await page.$eval('[data-landing-frame="plan"]', (frame) => frame.querySelectorAll('.annotation-highlight').length)).toBeGreaterThan(0);
+      await page.click('[data-landing-frame="plan"] [data-plan-decisions] button');
+      await page.waitForFunction(
+        () => document.querySelector('[data-landing-frame="plan"] [data-plan-footer]')?.textContent?.includes('preparing the next revision') === true,
       );
       expect(await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
@@ -281,8 +304,10 @@ beforeAll(async () => {
         () => document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
       );
       facts.interactions = await page.evaluate(() => ({
-        workspace: document.querySelector('[data-workspace-panel="supervise"]') !== null,
-        decision: document.querySelector('[data-decision-state="retried"]') !== null,
+        workspace: document.querySelector('[data-landing-frame="checkout"] [data-workspace-panel="run"] textarea') !== null,
+        decision: document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
+        plan: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Revision requested',
+        slate: document.querySelectorAll('[data-landing-frame="slate"] [data-slate-dashboard] .landing-draw').length === 2,
         tui: document.querySelector('[data-tui-agent="jarvis"]') !== null,
         cli: document.querySelector('[data-cli-mode="ci"] pre')?.textContent?.includes('kinu exec --workspace') === true,
         evolution: document.getElementById('evolution')?.getAttribute('data-evolution-stage') === '1',
@@ -316,7 +341,7 @@ beforeAll(async () => {
           ['cloud title', '#platform article h3'],
           ['cloud body', '#platform article p'],
           ['local heading', '[data-showcase="tui"] h2'],
-          ['workspace body', '[data-showcase="workspace"] p'],
+          ['workspace body', '[data-landing-frame="checkout"] [data-workspace-panel] p'],
           ['terminal body', '[data-showcase="tui"] p'],
           ['section title', '#platform h2'],
           ['section body', '#platform p'],
@@ -412,6 +437,8 @@ beforeAll(async () => {
         const viewport = document.documentElement.clientWidth;
         return [
           document.querySelector('[aria-label="Kinu workspace interface preview"]'),
+          document.querySelector('[data-landing-frame="plan"]'),
+          document.querySelector('[data-landing-frame="slate"]'),
           document.querySelector('[aria-label="Kinu terminal interface preview"]'),
           document.querySelector('[aria-label="Kinu command line preview"]'),
         ].every((element) => {
@@ -503,10 +530,12 @@ describe('the standalone landing runs', () => {
     expect(new Set([workspace.text, tui.text, cli.text]).size).toBe(3);
   });
 
-  test('workspace, TUI, CLI, and evolution controls change their surfaces', () => {
+  test('workspace, plan, slate, TUI, CLI, and evolution controls change their surfaces', () => {
     const interactions = required(facts.interactions, 'landing interactions');
     expect(interactions.workspace).toBeTrue();
     expect(interactions.decision).toBeTrue();
+    expect(interactions.plan).toBeTrue();
+    expect(interactions.slate).toBeTrue();
     expect(interactions.tui).toBeTrue();
     expect(interactions.cli).toBeTrue();
     expect(interactions.evolution).toBeTrue();
