@@ -484,9 +484,9 @@ describe('ChatApp terminal interaction', () => {
 
   // A workspace switch clears the hub and re-reads it, and that read is
   // asynchronous — the CLI's own reader asks the profile authority, which is a
-  // network read on a signed-in machine. A key pressed inside that window used
-  // to be dropped on the floor: the surface stayed closed, nothing was said,
-  // and no later frame could recover it, because only another keypress could.
+  // network read on a signed-in machine. A key pressed inside that window opens
+  // the hub anyway; dropped on the floor it would leave the surface closed with
+  // nothing said, and no later frame could recover it — only another keypress.
   test('the hub key pressed while its read is in flight still opens the hub', async () => {
     const client = fakeClient({ name: 'slowhub' });
     const read = Promise.withResolvers<void>();
@@ -506,10 +506,10 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('slowhub · main');
   });
 
-  // No unit test may read the developer's home. The hub's re-read used to go
+  // No unit test may read the developer's home. The hub's re-read must not go
   // through the CLI's own profile reader, whose account authority is a live
-  // network read of the machine's signed-in session — measured at 1,567 ms
-  // against the real home, inside a unit test. The runner's preload mints a
+  // network read of the machine's signed-in session — 1,567 ms against the real
+  // home, inside a unit test. The runner's preload mints a
   // throwaway home so that read cannot leave the machine, and the fixture
   // answers from memory so it never even reaches a store; this test holds
   // both: a switch's hub refresh crosses no network boundary at all.

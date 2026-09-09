@@ -1,11 +1,11 @@
-// GEPA on the local backend — the capability that did not exist.
+// GEPA on the local backend.
 //
-// The optimisation pass was written as a `@callable()` on OrchestratorAgent, so
-// a flagship self-improvement loop with nothing Cloudflare-shaped in it could
-// only ever run in the cloud. The driver now lives in core
-// (evolution/control.ts) and a LocalAgentSession supplies the surface; this
-// runs the whole pass through that session and checks the artifacts it is
-// supposed to leave behind.
+// The driver lives in core (evolution/control.ts) and a LocalAgentSession
+// supplies the surface, so a self-improvement loop with nothing
+// Cloudflare-shaped in it runs here rather than only in the cloud — a
+// `@callable()` on OrchestratorAgent would confine it there. This runs the
+// whole pass through that session and checks the artifacts it is supposed to
+// leave behind.
 //
 // Deterministic: the chat model answers, the judge scores from a script, and
 // the reflection LM returns a candidate scaffold. Nothing here reaches a

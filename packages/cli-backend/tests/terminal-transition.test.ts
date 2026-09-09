@@ -2,10 +2,10 @@
 //
 // A local turn's answer is only half of what the turn causes. The other half —
 // the alternate-takes claim, the completion gate, the evolution recording, the
-// shadow trial, the auto title — used to be straight-line code that released
-// its turn claims as soon as the transcript hit disk, with no recovery at all.
-// A laptop killed anywhere inside that sequence lost every remaining step, and
-// nothing on disk said which ones had happened.
+// shadow trial, the auto title — is a claimed, recoverable sequence. As
+// straight-line code releasing its turn claims as soon as the transcript hit
+// disk, a laptop killed anywhere inside it loses every remaining step with
+// nothing on disk saying which ones had happened.
 //
 // So the subject here is not "does the sequence run" — the ordinary session
 // tests cover that. It is: kill the process at an exact point inside the
@@ -218,10 +218,10 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     expect(asked()).toBe(1);
     expect(probed.length).toBeGreaterThan(0);
-    // STILL OWED, and that is the fix. Pushing a queue item is a RAM act, so the
-    // effect reports owed until the confirming turn's own durable row exists —
-    // before, it reported `completed` over a queue a process death erased, and
-    // the pruned row meant nothing ever asked again.
+    // STILL OWED, and that is the point. Pushing a queue item is a RAM act, so
+    // the effect reports owed until the confirming turn's own durable row
+    // exists. Reporting `completed` over a queue a process death erases prunes
+    // the row, and then nothing ever asks again.
     expect(stillOwed(gated).map((row) => row.effect_name)).toEqual(['completion_gate']);
     await next.end();
 
@@ -406,9 +406,9 @@ describe('a killed CLI process is recovered by the next start', () => {
 /**
  * Three recovery decisions that are not about one effect body: WHO may re-drive
  * an interrupted lane, WHAT gate state its verdict was earned under, and WHOSE
- * auto-evolution setting a recorded turn is recorded with. Each used to be read
- * off the session that found the work instead of off the record, so the answer
- * depended on which process happened to open the workspace next.
+ * auto-evolution setting a recorded turn is recorded with. Each is read off the
+ * RECORD, never off the session that found the work — read off the session, the
+ * answer depends on which process happened to open the workspace next.
  */
 describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';

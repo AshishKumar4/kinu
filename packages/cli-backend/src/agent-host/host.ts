@@ -160,9 +160,9 @@ export interface LocalAgentHostOptions {
    * after the process started becomes reachable without a restart.
    *
    * The refs are the authority on which roots exist and which virtual
-   * workspace each belongs to. A root with no ref is not hosted: it has no
-   * `cwd` to bind its plane to and no peer group, and binding it from the
-   * mere existence of an `agent.db` is the inference this cutover removes.
+   * workspace each belongs to. A root with no ref is not hosted: the mere
+   * existence of an `agent.db` is not the inference, a ref is — a root without
+   * one has no `cwd` to bind its plane to and no peer group.
    */
   roster(): readonly HostedAgentRef[];
   /** Build one already-created ROOT agent over the host-owned handle. The ref
@@ -945,7 +945,7 @@ export class LocalAgentHost {
       // whoever opened the workspace, and `createTopLevel`'s own catch deletes
       // the whole tree — host, hold, runtimes map and database — so releasing
       // an actor from a host that is about to be dropped achieves nothing and
-      // the refusal it now earns would bury the REAL failure inside an
+      // the refusal it earns would bury the REAL failure inside an
       // AggregateError: a failed open would report "did not release" instead of
       // the drain error that actually failed it. A child's release is the case
       // this cleanup exists for, and its host is one the retry will reuse.
@@ -1125,12 +1125,12 @@ export class LocalAgentHost {
   /**
    * One agent's pass, then each subordinate's.
    *
-   * Every actor is bracketed separately, and the bracket is now two gates
-   * rather than one: the tree's cross-process lease says whether this process
-   * may convert anything here, and `host.run` serializes THIS actor's
-   * conversions. A subordinate used to be gated on a lease token nobody had
-   * taken for it, which meant its triggers, drains and evolution silently never
-   * ran on a cold host.
+   * Every actor is bracketed separately, and the bracket is two gates, not
+   * one: the tree's cross-process lease says whether this process may convert
+   * anything here, and `host.run` serializes THIS actor's conversions. Neither
+   * gate is a per-subordinate lease token — gating a subordinate on a token
+   * nobody takes for it strands its triggers, drains and evolution silently on
+   * a cold host.
    *
    * `ran` describes THIS agent's pass. A subordinate that is busy elsewhere
    * does not make its parent's pass a non-event, but its schedule still rides
@@ -1162,7 +1162,7 @@ export class LocalAgentHost {
     if (entry.parentKey === null) {
       // A retirement this process interrupted, finished. The bytes are the only
       // thing outside the database, and the rows the retirement releases are
-      // this tree's own — so there is no file walk here any more, just the
+      // this tree's own — so there is no file walk here, just the
       // storage path the directory recorded.
       await recoverLocalActorRetirements(entry.ws.rt.actor, async (path) => {
         const storageKey = path[path.length - 1];
@@ -1201,11 +1201,12 @@ export class LocalAgentHost {
   /**
    * Track what a child's turn IS, for the relay decision its own roster makes.
    *
-   * No `turn-end` branch any more. The automatic report used to be started from
-   * here as an untracked promise, so a process that died before the parent's
-   * ingress admitted it left nothing recording that a retry was owed. The child's
-   * terminal roster owns it now, through {@link parentRelayFor} — which reads the
-   * same two facts this keeps, while the turn's answer is still being committed.
+   * No `turn-end` branch. The child's terminal roster owns the automatic
+   * report, through {@link parentRelayFor} — which reads the same two facts
+   * this keeps, while the turn's answer is still being committed. Starting it
+   * from here as an untracked promise would let a process die before the
+   * parent's ingress admitted it, leaving nothing recording that a retry was
+   * owed.
    *
    * No `tool-call` branch either. The reported flag is set by the report dep
    * itself (see buildEntry), which is the only place that sees BOTH the native
@@ -1227,14 +1228,14 @@ export class LocalAgentHost {
    * Every decision stays where it already lived: whether a DURABLE turn relays is
    * core's `subordinateRelaysTurnEnd` over the state {@link observeChildTurn}
    * keeps, and which words a TASK child's ending earns is core's closed
-   * `terminalTaskReport` map. What changes is that the child's ledger now holds
-   * the obligation, so an interruption before the parent admitted it leaves a row
-   * a later start replays.
+   * `terminalTaskReport` map. The child's LEDGER holds the obligation, so an
+   * interruption before the parent admitted it leaves a row a later start
+   * replays.
    *
-   * There is no `error` branch and no `turn-end` branch here any more. Both used
-   * to start their own detached relay, which is how one failing turn — an `error`
-   * event AND a `turn-end` event — could reach the parent twice. The session
-   * declares one report per ending now, and this port only answers which.
+   * There is no `error` branch and no `turn-end` branch here. Two branches each
+   * starting their own detached relay is how one failing turn — an `error` event
+   * AND a `turn-end` event — reaches the parent twice. The session declares one
+   * report per ending, and this port only answers which.
    */
   private parentRelayFor(child: HostEntry): LocalParentRelay {
     return {
@@ -1304,11 +1305,12 @@ export class LocalAgentHost {
       roster: parent.roster,
       vfs: parent.ws.rt.storage.vfs,
       // REAL, over the workspace's ONE connection — both writes land in the
-      // same file, which is now also the file the child wrote its answer in.
+      // same file, which is also the file the child wrote its answer in.
       // Core's replay fast path reads the dedupe key and answers `already_held`
-      // without re-applying the report, so an interruption between the event
-      // insert and the roster update used to leave a completed child `working`
-      // in its parent's eyes forever, with no retry able to correct it.
+      // without re-applying the report, so nothing but this transaction keeps an
+      // interruption between the event insert and the roster update from leaving
+      // a completed child `working` in its parent's eyes forever, with no retry
+      // able to correct it.
       transaction: (body) => parent.tree.db.transaction(body)(),
       announce: (report: AdmittedSubordinateReport) => {
         const metadata: JsonObject = {
@@ -1677,10 +1679,10 @@ export class LocalAgentHost {
     }
     parent.tree.runtimes.delete(reference.actorId);
     parent.tree.orchestrations.delete(reference.actorId);
-    // KEEP HISTORY IS NOW LITERAL. A dismissed hire's rows stay in the one
+    // KEEP HISTORY IS LITERAL. A dismissed hire's rows stay in the one
     // workspace database, addressable by its actor id, and only its scratch
-    // bytes go — so "keep the history" no longer means "leave a file behind
-    // that nothing points at".
+    // bytes go — the history is readable rows, not a file left behind that
+    // nothing points at.
     const retirement: Parameters<ActorHost['retire']>[1] = {
       reference, name, destroy: !keepHistory,
     };

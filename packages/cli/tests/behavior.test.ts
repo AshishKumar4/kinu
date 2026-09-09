@@ -804,9 +804,9 @@ describe("kinu create — an unusable model is named at creation", () => {
   }, 120_000);
 });
 
-// A provider rejection used to reach the terminal twice — once as the AI SDK's
-// default `console.error(rawPayload)` dump, once as our own `error
-// [object Object]` — and never said which command fixed it.
+// A provider rejection reaches the terminal ONCE, in the provider's own words,
+// with the command that fixes it — not the AI SDK's default
+// `console.error(rawPayload)` dump plus our own `error [object Object]`.
 describe("kinu exec — provider failures are legible and actionable", () => {
   const BILLING_ERROR: JsonObject = {
     error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
@@ -875,10 +875,10 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   }, 120_000);
 });
 
-// `kinu exec "prompt"` blocked on stdin until EOF whenever stdin was not a
-// TTY. A harness or CI runner that spawns the CLI with an inherited, idle pipe
-// never sends EOF, so every scripted use hung forever and needed a `</dev/null`
-// incantation to work. Measured before the fix: the full 15s timeout; after: ~0.6s.
+// `kinu exec "prompt"` does not block on stdin until EOF when stdin is not a
+// TTY: a harness or CI runner spawns the CLI with an inherited, idle pipe that
+// never sends EOF, so waiting on it hangs every scripted use forever — the full
+// 15s timeout for a ~0.6s run, and a `</dev/null` incantation to get out of it.
 describe("kinu exec — stdin must not hang a scripted run", () => {
   test("returns promptly when argv carries the prompt and stdin stays open", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");

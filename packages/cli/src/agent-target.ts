@@ -14,7 +14,7 @@ export interface AgentTarget {
   cloudName: string;
   localName: string;
   /** Recorded project placement. Present only for a configured local ref —
-   *  a legacy workspace gets one when `resolveLocalAgent` adopts it. */
+   *  an unplaced workspace gets one when `resolveLocalAgent` adopts it. */
   cwd?: string;
   workspaceId?: string;
 }

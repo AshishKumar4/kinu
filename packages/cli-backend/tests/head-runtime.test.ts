@@ -28,7 +28,7 @@ import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CL
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
 import { openLocalActor } from '../src/actor-identity';
 
-// A head owns NO store of its own any more: it is a logical actor of the
+// A head owns NO store of its own: it is a logical actor of the
 // workspace it forks, so there is no KINU_HOME scratch boundary to point
 // anywhere and no per-head file for a test to sweep. What a head has instead is
 // its own actor-keyed rows in the parent's one database and its own home in the
@@ -91,10 +91,10 @@ interface RouteProbe {
  *  `profile` and `bindMergeModel` are the merge's whole local surface: core's
  *  `headMergeLLM` resolves the `judge` route off the profile and hands the
  *  resolution here, so this binder records the routed decision and answers with
- *  the merge model. It deliberately does NOT answer with `model` — the merge
- *  used to run the session's chat model at a hardcoded `'low'` effort while
- *  filing `judge` spend, and a binder that ignored the route could not tell
- *  that regression from the fix. */
+ *  the merge model. It deliberately does NOT answer with `model`: a binder that
+ *  ignored the route could not tell a merge on the routed judge tier from one
+ *  on the session's chat model at a hardcoded `'low'` effort filing `judge`
+ *  spend. */
 function headDeps(
   model: LanguageModel,
   // `parentRuntime` narrowed to `LocalParent`: the host below needs the SAME
@@ -328,7 +328,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
     // The DEEP tier's effort, derived from the routed decision by the binder —
-    // not the `'low'` this seam used to name for itself.
+    // not a `'low'` this seam names for itself.
     expect(mergeOptions?.providerOptions).toEqual({
       openai: { reasoningEffort: MERGE_POLICY_BINDING.effort },
     });

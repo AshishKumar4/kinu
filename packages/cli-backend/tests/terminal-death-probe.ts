@@ -9,7 +9,7 @@
  * `finally`, no flush, no close — which is what an interrupted laptop actually
  * does and what a thrown fault cannot imitate.
  *
- * Three instants, and each is a claim the fix has to answer:
+ * Three instants, and each is a claim recovery has to answer:
  *
  *   • `before-claim` — the answer and the roster it owes are committed; the
  *     terminal claim is NOT. Killed from the `run_end` run-event, which

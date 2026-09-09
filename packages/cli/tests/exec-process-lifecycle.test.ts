@@ -151,13 +151,13 @@ async function runCli(
  * on disk rather than a pid to chase across process groups.
  *
  * It records its own pid because "it stops on its own once the temp home goes
- * away" — what this comment used to claim — is a RACE, and the race was
- * measured: the loop reopens the log with `>>` every second, so a removal that
- * unlinks the log and then rmdirs the home loses to the next append, and
- * `rmSync(force: true)` swallows the resulting ENOTEMPTY and returns as if it
- * had succeeded. Two homes survived every run of this file that way, with the
- * same inode as before the removal — the directory was never gone, and nothing
- * said so. `afterEach` now stops the writer first.
+ * away" is a RACE, and the race is measured: the loop reopens the log with
+ * `>>` every second, so a removal that unlinks the log and then rmdirs the
+ * home loses to the next append, and `rmSync(force: true)` swallows the
+ * resulting ENOTEMPTY and returns as if it had succeeded. Two homes survived
+ * every run of this file that way, with the same inode as before the removal —
+ * the directory was never gone, and nothing said so. `afterEach` stops the
+ * writer first.
  *
  * `seconds` is deliberately much longer than the exit deadline asserted below:
  * that gap IS the test. A shell that waits for this process to finish cannot

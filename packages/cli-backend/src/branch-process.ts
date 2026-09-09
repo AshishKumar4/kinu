@@ -5,9 +5,9 @@
  * — a `workspace_actors` row like every other actor — that happens to run its
  * rollouts in a separate OS process. What a branch needs isolated is the
  * PROCESS (an unbounded LLM loop that must not share this event loop), never
- * the store: it used to open `<agent>/branches/<key>.db`, which gave one
- * logical actor two state stores and left the parent unable to read what its
- * own branch had written.
+ * the store: an `<agent>/branches/<key>.db` of its own would give one logical
+ * actor two state stores and leave the parent unable to read what its own
+ * branch had written.
  *
  * On CF: subAgent to a SubordinateAgent facet in branch mode uses Facets (co-located DOs)
  * On Linux: child_process.fork(branch-worker.ts) over the root's database
@@ -28,22 +28,21 @@ import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from
 
 
 /**
- * A branch RPC carries NO wall clock any more.
+ * A branch RPC carries NO wall clock.
  *
- * It carried core's former per-turn envelope — "an `explore` is a whole agent
- * turn" — and that constant is gone by owner ruling (2026-08-21): no wall
- * clock over a turn, only one LLM call's silence window plus its retries, which
- * lives inside every branch worker's own loop and fails the explore from there.
+ * By owner ruling (2026-08-21): no wall clock over a turn, only one LLM call's
+ * silence window plus its retries, which lives inside every branch worker's own
+ * loop and fails the explore from there. An `explore` IS a whole agent turn, so
+ * a per-turn envelope around this RPC would be a clock over exactly that.
  *
  * What makes a clock unnecessary is wiring, not patience: the two ways a promise
  * here could hang are both handled at their cause. A child that DIES has its
- * pending RPCs rejected by the exit hook in `call` below (this file previously let
- * them dangle — the clock was silently doing that job too). A child that LIVES but
- * stops answering is bounded from inside its own turns, and its failure arrives as
- * an error message over this same pipe. The residue — a live worker wedged outside
- * every instrumented await — is the same residue every unbounded surface carries
- * under the ruling, disclosed rather than papered over with a number nobody
- * measured.
+ * pending RPCs rejected by the exit hook in `call` below — that rejection is the
+ * hook's job, never a clock's. A child that LIVES but stops answering is bounded
+ * from inside its own turns, and its failure arrives as an error message over
+ * this same pipe. The residue — a live worker wedged outside every instrumented
+ * await — is the same residue every unbounded surface carries under the ruling,
+ * disclosed rather than papered over with a number nobody measured.
  *
  * Startup carries no clock either. The wait ends on the worker's ready reply,
  * on its error, or on its exit. A non-zero exit rejects with the code. A zero
@@ -234,8 +233,8 @@ export function createBranchSpawner(
 /**
  * What a call reply carries for the method that was called. Presence, not
  * truthiness, decides failure: an error whose message is empty is still a
- * failure, and treating it as success used to surface far away as a
- * TypeError inside the search loop.
+ * failure, and treating it as success surfaces far away as a TypeError inside
+ * the search loop.
  */
 function resultOf(reply: BranchCallReply, method: BranchMethod): BranchExploration {
   if ('error' in reply) throw new Error(reply.error || `Branch worker failed ${method} without a message`);

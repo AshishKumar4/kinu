@@ -152,8 +152,8 @@ describe('peers over one directory', () => {
     // one restore point for that directory, and nothing else.
     expect(child.cwd).toBe(resolve(project));
     expect(child.checkpoints).toBe(parent.checkpoints);
-    // ONE DATABASE, one physical store — and the separation that used to be a
-    // second file is now the actor the rows are keyed to.
+    // ONE DATABASE, one physical store — the separation between parent and
+    // child is the actor the rows are keyed to, not a second file.
     expect(child.actor.actorId).not.toBe(parent.actor.actorId);
     expect(existsSync(join(state, 'child'))).toBe(false);
   });
@@ -196,8 +196,8 @@ describe('a fork over the bound directory', () => {
     const parentShell = parent.shell;
     if (!parentShell) throw new Error('a bound workspace runs the host shell');
     expect((await parentShell.exec('echo "$HOME"')).stdout.trim()).toBe(process.env.HOME ?? '');
-    // Its own SCAFFOLD POINTER, in the parent's database. What used to be a
-    // separate file is now the actor the row is keyed to, which is why the
+    // Its own SCAFFOLD POINTER, in the parent's database. The separation is the
+    // actor the row is keyed to rather than a separate file, which is why the
     // parent still reads none while the head reads its own.
     await head.identity.scaffold.write('// head\n');
     expect(await head.identity.scaffold.read()).toBe('// head\n');

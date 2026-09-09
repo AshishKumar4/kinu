@@ -43,13 +43,13 @@ export interface AcpAgentDeps {
 /** Kinu's builtin tools, mapped to the kind ACP clients use to pick an icon
  *  and a presentation. Crafted and MCP tools fall through to 'other'.
  *
- *  `skills` and `release` are not in this map on purpose: neither is a tool
- *  name a live turn can produce anymore (skills are workspace.* file calls;
- *  release is a release.* codemode call, both surfacing as `execute_tools`,
- *  already mapped below) — keeping their entries would be dead code with no
- *  "old transcript" justification, since ACP maps calls as they happen
- *  rather than rendering stored history. Same reasoning retired `experience`
- *  when it left the tool surface for an owner-only RPC. */
+ *  `skills`, `release` and `experience` are absent on purpose: none of the
+ *  three is a tool name a live turn produces. Skills are workspace.* file
+ *  calls and release is a release.* codemode call — both surface as
+ *  `execute_tools`, already mapped below — and experience is an owner-only
+ *  RPC, off the tool surface entirely. Entries for them would be dead code
+ *  with no "old transcript" justification, since ACP maps calls as they
+ *  happen rather than rendering stored history. */
 const TOOL_KINDS = new Map<string, ToolKind>([
   ['run', 'execute'],
   ['execute_tools', 'execute'],
@@ -86,9 +86,9 @@ function toolTitle(name: string, args: JsonObject): string {
  *
  *  "Don't ask again" names the rules and the machine it covers, because that
  *  is exactly what it buys: a standing grant for those rules on that executor,
- *  and nothing else. It used to read "Allow and don't ask again" and switch
- *  the whole agent to allow_all — one click that turned the gate off
- *  everywhere. There is deliberately no persistent REJECT: a standing refusal
+ *  and nothing else. A blanket "Allow and don't ask again" would switch the
+ *  whole agent to allow_all — one click that turns the gate off everywhere.
+ *  There is deliberately no persistent REJECT: a standing refusal
  *  is a different store nobody has asked for, and `deny_all` in settings
  *  already spells "stop running these" without pretending to be per-command. */
 function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {

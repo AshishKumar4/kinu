@@ -162,7 +162,8 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   // Item 11.2: the owner runs on the native Workers AI model because it is the
   // one he is not billed per-token for. Every BYO credential shape at once, and
   // no chosen model, must still resolve to it — a key sitting on disk is not a
-  // selection. `openaiCompat` was the hole: its branch matched unconditionally.
+  // selection. `openaiCompat` is the one to watch: a branch that matched
+  // unconditionally would answer for every one of them.
   test("no chosen model lands on the native default however many BYO credentials are stored", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,

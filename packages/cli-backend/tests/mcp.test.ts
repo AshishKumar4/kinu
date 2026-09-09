@@ -76,10 +76,10 @@ function sessionWithModel(model: LanguageModel) {
 describe('connectMcpServers', () => {
   test('keys tools with the same core rule the cf backend uses', async () => {
     // A prompt or skill that names an MCP tool has to resolve to the same tool
-    // on both backends. cf used to key on its random registration id
-    // (`tool_<nanoid>_<name>`) while the CLI keyed on the server name — so no
-    // reference to an MCP tool was portable. Both now go through mcpToolKey,
-    // via core's `describeMcpTool`.
+    // on both backends, so both go through mcpToolKey, via core's
+    // `describeMcpTool`. Keying on a random registration id
+    // (`tool_<nanoid>_<name>`) on one side and the server name on the other
+    // makes no reference to an MCP tool portable.
     const conn = await connectMcpServers(mcpServers());
     try {
       expect(conn.descriptors.map((d) => d.toolKey)).toEqual(
@@ -93,10 +93,10 @@ describe('connectMcpServers', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test('a tool call outlives every bound this module used to impose', async () => {
-    // The 5s startup timeout used to apply to tool calls too, and then a 60s
-    // SDK default replaced it. Neither is here now: the fixture sleeps past the
-    // first, and only a server's own `timeoutMs` config would bound it.
+  test("a tool call outlives the 5s startup bound and the SDK's 60s default", async () => {
+    // Neither the 5s startup bound nor the MCP SDK's 60s default applies to a
+    // tool call: the fixture sleeps past the first, and only a server's own
+    // `timeoutMs` config bounds it.
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });

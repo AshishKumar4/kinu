@@ -177,12 +177,11 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
  *
  * NO WINDOW, on either arm. Both figures are summed over the whole log by
  * `workspaceSpend`, so there is nothing for `--limit` to bound and nothing for
- * the two surfaces to disagree about. This used to pass a 2000-row window
- * commented "one number for both surfaces, so the same workspace does not report
- * two totals" — which was false as written, because the deployment clamped the
- * request to its own smaller bound and answered a different question than the
- * one asked. The cloud arm therefore sends no `steps` at all: that argument only
- * ever bounded the step telemetry this command does not print.
+ * the two surfaces to disagree about. A row window here would NOT buy one
+ * number for both surfaces: the deployment clamps the request to its own
+ * smaller bound and answers a different question than the one asked. The cloud
+ * arm therefore sends no `steps` at all — that argument only ever bounds the
+ * step telemetry this command does not print.
  */
 export async function spendCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);

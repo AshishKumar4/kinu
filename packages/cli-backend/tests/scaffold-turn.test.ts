@@ -1,14 +1,14 @@
 // The mutable scaffold on a LOCAL workspace, end to end through
-// LocalAgentSession — the two properties that were broken:
+// LocalAgentSession — the two properties it pins:
 //
-//   1. A promoted scaffold actually drives the turn. processTurn used to call
-//      runChat directly, so a promoted local scaffold had no effect on any
-//      turn at all — the flagship self-evolution feature was write-only
-//      outside the cloud.
-//   2. A proposal can be resolved, so the loop cannot deadlock. Nothing local
-//      ran shadow evaluation, and EvolutionEngine.maybeEvolveScaffold refuses
-//      to propose while a pending version exists — so a local agent proposed
-//      exactly one scaffold ever and then blocked forever.
+//   1. A promoted scaffold actually drives the turn. A processTurn that calls
+//      runChat directly leaves a promoted local scaffold with no effect on any
+//      turn at all — the flagship self-evolution feature write-only outside
+//      the cloud.
+//   2. A proposal can be resolved, so the loop cannot deadlock. With no local
+//      shadow evaluation, EvolutionEngine.maybeEvolveScaffold refuses to
+//      propose while a pending version exists — so a local agent proposes
+//      exactly one scaffold ever and then blocks forever.
 //
 // Driven by the authentic createCLIRuntime (real workspace filesystem + in-process
 // executor) with fake models, so the whole path — transform, codemode host
@@ -110,8 +110,8 @@ const streamed = (events: SessionEvent[]) =>
     .join('');
 
 describe('a promoted scaffold drives a local turn', () => {
-  // Fails before the fix: processTurn drove runChat directly, so this streamed
-  // "the default loop answered" no matter what the scaffold said.
+  // A processTurn that drives runChat directly streams "the default loop
+  // answered" no matter what the scaffold says.
   test('the scaffold answers, not the default loop', async () => {
     const { db, rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
@@ -197,9 +197,9 @@ function markerJudge(pendingMarker: string): LLM {
 }
 
 describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => {
-  // Fails before the fix: no local code path ran shadow evaluation, so the
-  // pending stayed pending forever and maybeEvolveScaffold's
-  // "skip while a pending exists" guard blocked every future proposal.
+  // With no local code path running shadow evaluation the pending stays
+  // pending forever, and maybeEvolveScaffold's "skip while a pending exists"
+  // guard blocks every future proposal.
   test('sampled shadow eval promotes a winning pending, unblocking the next proposal', async () => {
     const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {

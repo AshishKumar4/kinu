@@ -717,8 +717,8 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
   });
 
-  // Restore used to stop at the newest 40 messages — a number nothing ever
-  // passed, applied on every reconnect. A session past 40 messages lost
+  // Restore must not stop at the newest 40 messages — a number nothing ever
+  // passes, applied on every reconnect. A session past 40 messages would lose
   // everything older each time the CLI restarted, silently: no marker in the
   // transcript, and no way for the model to ask what it had lost.
   describe('restoring a long transcript', () => {
@@ -1202,7 +1202,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       ...resolverRest,
     };
     // The authority is read live, so the tier the account moves to arrives on
-    // its own — the listing is the half that used to be frozen for the session.
+    // its own — and the listing re-sweeps on the revision rather than staying
+    // frozen for the session.
     let tierModel = 'local/a';
     const envelope = (): ProfileCatalogEnvelope => {
       const catalog = { roles: {}, tiers: { default: { model: tierModel } } };
@@ -1666,13 +1667,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await waitFor(() => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
   });
 
-  test('recoverBackgroundJobs re-drives an orphaned agents fork job (the post-unification kind)', async () => {
+  test('recoverBackgroundJobs re-drives an orphaned agents job whose row names the fork action', async () => {
     const { db, rt, session } = setup('resumed fork answer');
-    // A row written by a surface that no longer exists. It is HISTORY rather
-    // than a prompt: `action:'fork'` names a rung this tool dropped, so the row
-    // is TRANSLATED onto the action that runs ephemeral nodes today instead of
-    // being refused — a refusal here would strand exactly the work resume
-    // exists for. The briefs are on the row because that is what the era stored.
+    // A row whose `action` is `'fork'` — a rung this tool does not offer. It is
+    // HISTORY rather than a prompt, so the row is TRANSLATED onto the action
+    // that runs ephemeral nodes instead of being refused: a refusal here would
+    // strand exactly the work resume exists for. The briefs sit on the row
+    // because that is the shape it was written in.
     const input = JSON.stringify({
       action: 'fork', task: 'finish the interrupted exploration',
       forks: [
@@ -1738,10 +1739,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('settleBackgroundWork drives a detached job\'s wake turn to completion', async () => {
-    // The bug this pins: a one-shot `kinu exec` used to close right after the
-    // user turn, cutting off the wake turn a backgrounded job triggers (its
-    // turn-start streamed, its turn-end never did). settleBackgroundWork drains
-    // the fiber AND the wake turn it enqueues before the caller closes.
+    // The bug this pins: a one-shot `kinu exec` closing right after the user
+    // turn cuts off the wake turn a backgrounded job triggers (its turn-start
+    // streams, its turn-end never does). settleBackgroundWork drains the fiber
+    // AND the wake turn it enqueues before the caller closes.
     const { db, rt, session, events } = setup('synthesized the background result');
     // A non-resumable orphaned job: recover fails it, then wakes the agent.
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-w', 'run', 'build', 'running', 1)`);
@@ -1848,7 +1849,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('a one-shot drain then close pays the grace once, not twice', async () => {
     // runOneShot calls settleBackgroundWork() and then close() → end(), back to
     // back, on the same never-settling job. Two independent graces would double
-    // the idle tail this whole change exists to remove.
+    // the idle tail a one-shot run makes the owner wait through.
     const { db, rt, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200, wakesAfterTurn: true },
     });
@@ -2386,10 +2387,10 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
     await session.end();
     const endedAt = performance.now();
 
-    // A bare `void runAdvisorLane(...)` gave this lane no durable fiber row and
+    // A bare `void runAdvisorLane(...)` gives this lane no durable fiber row and
     // no membership in the set end() and settleBackgroundWork() join, so a
-    // one-shot `kinu exec` exited straight through the review: no note, no
-    // signal, and no statement that anything had been dropped.
+    // one-shot `kinu exec` exits straight through the review: no note, no
+    // signal, and no statement that anything was dropped.
     expect(notes(db)).toEqual([NOTE]);
     expect(reviewedAt).toBeGreaterThan(0);
     expect(endedAt).toBeGreaterThanOrEqual(reviewedAt);
@@ -2733,7 +2734,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const roles = second.map((m) => m.role);
     expect(roles.lastIndexOf('user')).toBeGreaterThan(roles.lastIndexOf('tool'));
 
-    // ONE turn: the event no longer waits for a programmatic turn of its own.
+    // ONE turn: the event rides the live turn rather than waiting for a
+    // programmatic turn of its own.
     expect(turnStarts(events)).toHaveLength(1);
     expect(hub(db).pending()).toEqual([]);
 
@@ -2971,8 +2973,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // The interruption is recorded as one: the turn did not finish.
     expect(events.some((e) => e.type === 'error')).toBe(true);
 
-    // The next turn is the assertion. Before the fix, `streamText` threw on
-    // assembly and this model was never called a second time.
+    // The next turn is the assertion: a `streamText` that throws on assembly
+    // never calls this model a second time.
     const before = prompts.length;
     await session.send('what did you find?');
     expect(prompts.length).toBeGreaterThan(before);
@@ -3180,13 +3182,12 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     await session.end();
   });
 
-  // A BEHAVIOUR CHANGE, recorded as one: this turn's takes used to be purged.
-  // The claim read `acc.hadError`, which the accumulator raises from the
-  // transport discriminator on any failed tool result — so a turn that hit one
-  // bad tool call, recovered and answered dropped its captures, while the cf
-  // backend claimed them. The credit decision is now core's `creditedTurnId`
-  // and reads whether the turn ENDED, which is what "an answer that no longer
-  // exists" was reaching for.
+  // The credit decision is core's `creditedTurnId`, and it reads whether the
+  // turn ENDED — which is what "an answer that no longer exists" is asking.
+  // Reading `acc.hadError` instead purges this turn's takes: the accumulator
+  // raises that flag from the transport discriminator on any failed tool
+  // result, so a turn that hit one bad tool call, recovered and answered drops
+  // its captures while the cf backend claims them.
   test('a turn that answered despite a failing tool call still claims its takes', async () => {
     let step = 0;
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -3286,11 +3287,10 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
       provider: 'fake',
       modelId: 'fake-model',
       // THE LIVE TURN IS THE FIRST STREAM, and every later one is a branch head.
-      // The two used to be told apart by METHOD — the live turn streamed, the head
-      // called `doGenerate` — and that stopped being true when every agent kind
-      // started issuing its request through the streaming path. Ordinal, because it
-      // is the one thing the fixture actually knows: `session.send` opens the live
-      // stream and holds the gate before `session.branch` is ever called.
+      // METHOD cannot tell the two apart: every agent kind issues its request
+      // through the streaming path. Ordinal, because it is the one thing the
+      // fixture actually knows: `session.send` opens the live stream and holds
+      // the gate before `session.branch` is ever called.
       doStream: async ({ prompt, abortSignal }) => {
         streams += 1;
         if (streams > 1) {
@@ -4398,17 +4398,17 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     + '"unresolved_questions":[],"recommendations":["ship it"]}';
 
   /**
-   * What the source-shape version of this test could only assert by grepping
-   * two construction roots, asserted on the runtime a fork actually gets.
+   * Asserted on the runtime a fork actually gets, never on the source text of
+   * its construction sites.
    *
-   * The two roots are now ONE builder (`headRuntimeOptions`), so "they hand
-   * over the same sinks" is true by construction; what still needs proving is
-   * that the runtime installed by a MODEL REBIND — the one every fork receives,
-   * since `headRuntime` claims the session model before handing it over — has
-   * the three properties the roots were grepped for: per-fork model resolution,
-   * a merge routed off the profile through the local binder, and the session's
-   * own spend sinks. The rebind root used to omit `resolveModel` outright, so
-   * `agents fork`'s per-fork model was a silent no-op on this backend.
+   * ONE builder (`headRuntimeOptions`) constructs it, so "they hand over the
+   * same sinks" is true by construction; what needs proving is that the runtime
+   * installed by a MODEL REBIND — the one every fork receives, since
+   * `headRuntime` claims the session model before handing it over — has the
+   * three properties that matter: per-fork model resolution, a merge routed off
+   * the profile through the local binder, and the session's own spend sinks. A
+   * rebind that omits `resolveModel` makes `agents fork`'s per-fork model a
+   * silent no-op on this backend.
    */
   test('the head runtime a model rebind installs resolves per-fork models and reports its merge to the session', async () => {
     const asked: string[] = [];

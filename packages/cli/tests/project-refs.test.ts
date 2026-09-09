@@ -4,7 +4,7 @@
 // The policy under test is metadata-only. `~/.kinu/<name>/agent.db` is still the
 // one state path, so a virtual workspace GROUPS agents and never nests them, and
 // a relabel moves nothing. These assertions exist because the two ways to get
-// this wrong are both silent: attributing every legacy workspace to whichever
+// this wrong are both silent: attributing every unplaced workspace to whichever
 // directory the CLI started in, and inferring a backend from a file's existence.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -15,13 +15,13 @@ import { createCliAgent, renameLocalAgent, type CreatedCliAgent } from '../src/a
 import { resolveAgentTarget } from '../src/agent-target';
 import {
   AGENT_HOME,
-  adoptLegacyLocalAgent,
+  adoptUnplacedLocalAgent,
   agentDbPath,
   agentDir,
   defaultVirtualWorkspaceId,
   listAgentDirs,
-  listLegacyAgentNames,
   listLocalRefsAllProjects,
+  listUnplacedAgentNames,
   loadConfigFile,
   localWorkspaceMembers,
   readWorkspaceDisplayName,
@@ -100,9 +100,9 @@ async function create(name: string, cwd: string, workspaceId?: string): Promise<
   });
 }
 
-/** A workspace as it existed before placement was recorded: a database under
- *  `~/.kinu/<name>` and no ref naming a project. */
-function legacyWorkspace(name: string, identityId: string): string {
+/** An unplaced workspace: a database under `~/.kinu/<name>` and no ref naming
+ *  a project. */
+function unplacedWorkspace(name: string, identityId: string): string {
   mkdirSync(agentDir(name), { recursive: true });
   workspaces.push(name);
   const dbPath = agentDbPath(name);
@@ -252,7 +252,7 @@ describe('renaming changes no identity and moves no database', () => {
     // The recorded directory is gone, so the ref places nothing and the agent
     // reads as unplaced — visible, rather than missing from every roster.
     expect(listAgentDirs(from)).toEqual([]);
-    expect(listLegacyAgentNames()).toEqual(['moved-project']);
+    expect(listUnplacedAgentNames()).toEqual(['moved-project']);
 
     const rebound = resolveLocalAgent('moved-project', { cwd: to, workspaceId: 'bound' });
     expect(rebound.placement).toBe('adopted');
@@ -265,7 +265,7 @@ describe('renaming changes no identity and moves no database', () => {
 
 describe('a backend is stated, not inferred from a file', () => {
   test('a configured cloud ref wins over a local database of the same name', () => {
-    legacyWorkspace('twin', 'ws-twin');
+    unplacedWorkspace('twin', 'ws-twin');
     upsertAgentConfig({ name: 'twin', mode: 'cloud', cloudName: 'twin' });
 
     expect(resolveAgentTarget('twin').mode).toBe('cloud');
@@ -273,7 +273,7 @@ describe('a backend is stated, not inferred from a file', () => {
   });
 
   test('an unconfigured name addressing both is refused, naming both candidates', () => {
-    const dbPath = legacyWorkspace('both-ways', 'ws-both');
+    const dbPath = unplacedWorkspace('both-ways', 'ws-both');
     upsertAgentConfig({ name: 'remote-key', mode: 'cloud', cloudName: 'both-ways' });
 
     const message = messageOf(() => resolveAgentTarget('both-ways'));
@@ -300,50 +300,50 @@ describe('a backend is stated, not inferred from a file', () => {
   });
 });
 
-describe('a legacy workspace is adopted one at a time', () => {
+describe('an unplaced workspace is adopted one at a time', () => {
   test('an unplaced workspace belongs to no project until something opens it', () => {
     const cwd = project();
-    legacyWorkspace('legacy-one', 'ws-legacy-one');
-    legacyWorkspace('legacy-two', 'ws-legacy-two');
+    unplacedWorkspace('unplaced-one', 'ws-unplaced-one');
+    unplacedWorkspace('unplaced-two', 'ws-unplaced-two');
 
-    // The deleted behaviour: an empty project used to report every workspace on
-    // the machine as its own.
+    // An empty project claims nothing: neither workspace on this machine reads
+    // as its own.
     expect(listAgentDirs(cwd)).toEqual([]);
-    expect(listLegacyAgentNames()).toEqual(['legacy-one', 'legacy-two']);
+    expect(listUnplacedAgentNames()).toEqual(['unplaced-one', 'unplaced-two']);
 
     // A read states the placement it would use without recording it.
-    const read = resolveLocalAgent('legacy-one', { cwd, adopt: false });
+    const read = resolveLocalAgent('unplaced-one', { cwd, adopt: false });
     expect(read.placement).toBe('unplaced');
-    expect(read.dbPath).toBe(agentDbPath('legacy-one'));
-    expect(listLegacyAgentNames()).toEqual(['legacy-one', 'legacy-two']);
+    expect(read.dbPath).toBe(agentDbPath('unplaced-one'));
+    expect(listUnplacedAgentNames()).toEqual(['unplaced-one', 'unplaced-two']);
 
     // An open adopts exactly the one it opened.
-    const opened = resolveLocalAgent('legacy-one', { cwd, workspaceId: 'adopted' });
+    const opened = resolveLocalAgent('unplaced-one', { cwd, workspaceId: 'adopted' });
     expect(opened.placement).toBe('adopted');
     expect(opened.cwd).toBe(cwd);
     expect(opened.workspaceId).toBe('adopted');
-    expect(listAgentDirs(cwd)).toEqual(['legacy-one']);
-    expect(listLegacyAgentNames()).toEqual(['legacy-two']);
+    expect(listAgentDirs(cwd)).toEqual(['unplaced-one']);
+    expect(listUnplacedAgentNames()).toEqual(['unplaced-two']);
   });
 
   test('adoption records the database identity, and re-adoption is a no-op', () => {
     const cwd = project();
-    legacyWorkspace('keyed', 'ws-keyed');
+    unplacedWorkspace('keyed', 'ws-keyed');
 
-    adoptLegacyLocalAgent('keyed', { cwd, workspaceId: 'first' });
+    adoptUnplacedLocalAgent('keyed', { cwd, workspaceId: 'first' });
     expect(loadConfigFile().agents?.keyed?.identityId).toBe('ws-keyed');
 
     // Already placed: adopting again does not re-point it at another project.
     const other = project();
-    expect(adoptLegacyLocalAgent('keyed', { cwd: other, workspaceId: 'second' }).cwd).toBe(cwd);
+    expect(adoptUnplacedLocalAgent('keyed', { cwd: other, workspaceId: 'second' }).cwd).toBe(cwd);
     expect(resolveLocalAgent('keyed', { cwd }).placement).toBe('recorded');
     expect(listAgentDirs(other)).toEqual([]);
   });
 
   test('a name reused for a different database is refused, not silently rebound', () => {
     const cwd = project();
-    legacyWorkspace('recycled', 'ws-original');
-    adoptLegacyLocalAgent('recycled', { cwd, workspaceId: 'bound' });
+    unplacedWorkspace('recycled', 'ws-original');
+    adoptUnplacedLocalAgent('recycled', { cwd, workspaceId: 'bound' });
 
     const db = new Database(agentDbPath('recycled'));
     try {
@@ -358,7 +358,7 @@ describe('a legacy workspace is adopted one at a time', () => {
   });
 
   test('adopting a name with no database is refused', () => {
-    expect(messageOf(() => adoptLegacyLocalAgent('never-existed'))).toContain('not found at');
+    expect(messageOf(() => adoptUnplacedLocalAgent('never-existed'))).toContain('not found at');
   });
 });
 
@@ -372,10 +372,10 @@ describe('the project directory holds no state', () => {
     expect(createdDbPath(created)).toBe(join(AGENT_HOME, 'no-litter', 'agent.db'));
   });
 
-  test('adopting a legacy workspace writes nothing under the project', () => {
+  test('adopting an unplaced workspace writes nothing under the project', () => {
     const cwd = project();
-    legacyWorkspace('no-litter-legacy', 'ws-no-litter');
-    adoptLegacyLocalAgent('no-litter-legacy', { cwd, workspaceId: 'solo' });
+    unplacedWorkspace('no-litter-unplaced', 'ws-no-litter');
+    adoptUnplacedLocalAgent('no-litter-unplaced', { cwd, workspaceId: 'solo' });
 
     expect(readdirSync(cwd)).toEqual([]);
   });

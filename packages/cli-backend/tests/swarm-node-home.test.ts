@@ -127,9 +127,9 @@ function nodeHomeWiring(rt: CLIRuntime) {
  * `register` — because the mapping from a node id to the key its home is named
  * for is the directory's to state, and resolving it also asserts the row is
  * still there and still active. Naming the home from `nodeAgentName(nodeId)`
- * instead would assert the rule this cutover deleted with
- * `agentHomeNodeProvisioner`: a rename would move an actor's home, and two
- * nodes sharing a name across a retirement would share a directory.
+ * instead would assert a rule this workspace does not hold: a rename would
+ * move an actor's home, and two nodes sharing a name across a retirement would
+ * share a directory.
  */
 function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
   return nodeAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
@@ -246,9 +246,9 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
       expect(homes).toContain(home);
       expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ isDir: true });
     }
-    // NOT the node ids: a home named for one would mean the deleted
-    // `agentHomeNodeProvisioner` rule came back, and every id below is absent
-    // from `/home` precisely because the storage keys above are what own it.
+    // NOT the node ids: a home named for one would move with a rename, and
+    // every id below is absent from `/home` precisely because the storage keys
+    // above are what own it.
     for (const { node } of settled) expect(homes).not.toContain(nodeAgentName(node));
 
     // The uid each home was chown'ed to, read back through the production

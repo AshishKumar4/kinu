@@ -305,7 +305,7 @@ function workspaceRowKey(agent: ListedAgent, projectRoot: string): string {
 /**
  * Project one loaded page into navigator rows: the current project's virtual
  * workspaces first (each header followed by its peer agents when expanded),
- * then unplaced legacy agents, then the cloud section, then the explicit
+ * then unplaced agents, then the cloud section, then the explicit
  * paging row. Every row is selectable; subordinates render under their peer
  * agent's row and are not rows themselves.
  */

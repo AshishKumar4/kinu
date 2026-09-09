@@ -84,7 +84,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
   // A second turn on the same run whose provider reported nothing at all — the
-  // shape that used to disappear into `tokensIn += 0` and read as a free turn.
+  // shape that must not disappear into `tokensIn += 0` and read as a free turn.
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 1 });
   recorder.emit('run-old', { type: 'run_end', reason: 'completed' });
 
@@ -132,19 +132,19 @@ function seedInvestigationWorkspace(dbPath: string): void {
   mcts.converge('search-old', 0, 1500);
   // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
   // invariant mcts/engine.ts holds by construction (iteration + remaining
-  // budget == the original total), and the exact shape that used to render
-  // as the misleading "iter=6/4" fraction (looks like an overrun) instead of
-  // "iter=6/10 (4 left)".
+  // budget == the original total), and the exact shape that renders as
+  // "iter=6/10 (4 left)" rather than the misleading "iter=6/4" fraction, which
+  // looks like an overrun.
   mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
   mcts.checkpoint('search-new', 0, 6, 4, 5300);
 
   // ── Background jobs: the job the run above detached and got polled, PLUS
   // one still running — the exact shape a 12-hour-old job with no visible
   // progress needs a duration/heartbeat readout for. ──
-  // job-1 is the call that run recorded, from before tree search moved to
-  // `action:'swarm'`: its label is the form jobs/runner.ts wrote back then,
-  // `fork(settle=<policy>): <task>`. The bundle reads history, so it has to
-  // keep printing rows naming a settle no current call can produce.
+  // job-1 is the call that run recorded, labelled
+  // `fork(settle=<policy>): <task>` — a label naming a settle no current call
+  // can produce. The bundle reads history, so it has to keep printing rows in
+  // that shape.
   const jobs = new BackgroundJobStore(sql, actor);
   jobs.create({
     id: 'job-1', kind: 'agents', workMode: 'build',
