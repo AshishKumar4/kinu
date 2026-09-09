@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-09",
   "files": 2060,
-  "functions": 52089,
+  "functions": 52085,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -18,12 +18,12 @@
       "complexity": 114
     },
     {
-      "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
-      "complexity": 92
-    },
-    {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
       "complexity": 87
+    },
+    {
+      "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
+      "complexity": 79
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#measureArm",
