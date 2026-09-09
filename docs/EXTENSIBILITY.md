@@ -8,7 +8,7 @@ it is.
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
 | `ModelProvider` | `core/providers/types.ts` | `packages/core/src/providers/` (platform agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
-| `ActorAgent` | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent, SubordinateAgent |
+| `ActorAgent` | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent |
 | `KinuExtension` | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, event injection, CLI steering |
 
 Only `ModelProvider` is a production registry. `AgentProviderRegistry` holds
@@ -16,12 +16,7 @@ stateless implementations. Per-call state flows through `ProviderDeps`.
 `ActorAgent` is class-level. `KinuExtension` is per-turn, and
 [EXTENSIONS.md](./EXTENSIONS.md) documents it separately.
 
-There is no fourth point. `ExplorationStrategy`, a plug-in seam over "explore N
-candidates, score them, return the best" dispatched from a `StrategyRegistry`,
-is not one: no production path builds that registry, and MCTS, heads and
-single-shot have no reader outside the eval. The harness's own A/B contract
-(two arms, one task, a cost) lives at `core/src/eval/strategy.ts`, where its
-only consumers are.
+Exploration is not a production extension registry: its engines are reached through their own paths — lifetime evolution calls `runMCTS`, branching work runs through `HeadController`, `agents.swarm()` calls `runSwarm`. The eval-only A/B contract (two arms, one task, a cost) lives at `core/src/eval/strategy.ts`, where its only consumers are.
 
 ## Registration is not reachability
 
@@ -75,8 +70,7 @@ export class MyAgent extends ActorAgent {
   protected get engine(): EvolutionEngine { /* your evolution engine */ }
   protected notifyOwner(subject: string, body: string): void { /* … */ }
   protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
-  facetClass(): SubAgentClass<SubordinateAgent> { /* the class every facet runs as */ }
-  facetHomes(): HostedFacetHomes { /* where this actor's facets get their homes */ }
+  protected actorHost(): ActorHost { /* the workspace's one host, which acquires every logical actor */ }
   protected ownMission(): string { /* the mission text titling names you after */ }
   protected persistAutoTitle(displayName: string): Promise<boolean> { /* where a title lands */ }
   protected promptIdentity(): Promise<PromptIdentity> { /* the identity the prompt renders */ }

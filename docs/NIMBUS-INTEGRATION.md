@@ -73,10 +73,7 @@ that possible: it owns no transport, no session and no Durable Object of its own
 
 `createHostedWorkspace()` is the only constructor, and the object's own name is
 the workspace's, so execution, export, forking, preview routing and destruction
-all address one place. A subordinate or exploration facet has its own SQLite for
-its own ledgers and reaches the workspace over one RPC
-(`OrchestratorAgent.workspaceBoxOp`); it never composes a filesystem, which
-would be a second, empty workspace.
+all address one place. A subordinate, head, node or branch actor is a logical entry in that same `ctx.storage.sql`, acquired from the workspace's one `ActorHost`; it never composes a filesystem, which would be a second, empty workspace.
 
 Destruction is one object's teardown: `this.destroy()` drops the filesystem with
 the conversation, so a same-name recreate cannot find half a workspace. Every
@@ -134,8 +131,8 @@ keeps each keyed shell's state separately. The filesystem and the process
 registry stay shared.
 
 Each actor's automatic scaffold lifecycle targets a distinct path. The default
-agent uses `scaffold/agent.js`; facets use their internal actor path. Routine
-bootstrap and evolution writes therefore stay separate. Actors deliberately
+agent uses `scaffold/agent.js`; any other actor uses its own actor-keyed path under `.kinu/`.
+Routine bootstrap and evolution writes therefore stay separate. Actors deliberately
 share an unrestricted workspace VFS. Treat that separation as a convention.
 It is not an ACL.
 
