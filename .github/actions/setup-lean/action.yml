@@ -1,18 +1,20 @@
 name: Set up Lean
 description: Install elan from a checksum-verified release artifact, then restore the toolchain and build cache.
 
-# WHY THIS IS NOT THREE `curl … | sh` LINES ANY MORE.
+# WHY THIS INSTALLS FROM A CHECKSUMMED RELEASE ARTIFACT, NOT `curl … | sh`.
 #
-# All three workflows that verify the Lean proofs ran the same installer:
+# All three workflows that verify the Lean proofs install elan through this one
+# action. The upstream one-liner —
 #
 #   curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
 #
-# That is `master` of somebody else's repository, piped into a shell, fetched
-# fresh on every run — and in `deploy-staging.yml` the toolchain it installs then
-# runs inside the step that holds `CLOUDFLARE_API_TOKEN`, because `verify:lean` is
-# one of the deploy's required gates. Whoever can move that branch can run code in
-# a job that can deploy. Nothing about the installer was pinned: not a version,
-# not a hash, and the script's own downloads were whatever it decided to fetch.
+# is `master` of somebody else's repository, piped into a shell, fetched fresh
+# on every run, and nothing about it is pinned: not a version, not a hash, and
+# the script's own downloads are whatever it decides to fetch. In
+# `deploy-staging.yml` the toolchain it installs then runs inside the step that
+# holds `CLOUDFLARE_API_TOKEN`, because `verify:lean` is one of the deploy's
+# required gates. Whoever can move that branch can run code in a job that can
+# deploy.
 #
 # So: a NAMED RELEASE artifact, a sha256 checked before anything executes, and the
 # binary run from the extracted archive. The digest is the release asset's, taken
@@ -25,10 +27,10 @@ description: Install elan from a checksum-verified release artifact, then restor
 # A version bump edits the two values below together. A tampered or truncated
 # download fails the checksum and the job stops before `elan-init` runs at all.
 #
-# ONE PLACE FOR THE CACHE TOO. The caches had drifted apart: this caches BOTH
-# `~/.elan` (the toolchain) and `lean/.lake` (the build), where `ci.yml` and
-# `lean-verify.yml` cached only the toolchain and therefore rebuilt 330 theorems —
-# about fifteen minutes — on every single run.
+# ONE PLACE FOR THE CACHE TOO. This action caches BOTH `~/.elan` (the toolchain)
+# and `lean/.lake` (the build), and `ci.yml`, `lean-verify.yml` and
+# `deploy-staging.yml` all take it from here. Caching the toolchain alone
+# rebuilds 330 theorems — about fifteen minutes — on every single run.
 
 runs:
   using: composite

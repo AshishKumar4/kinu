@@ -314,12 +314,11 @@ theorem a_tick_past_the_ratio_still_uploads_unexcluded_delta
   shared by every box, so a sweep that enumerated it would be reading
   other boxes' live generations. The record is the truth.
 
-  This replaces an earlier finding. The delete used to follow the state
-  write with nothing naming the superseded generation, so a crash in
-  that window orphaned it forever and the stored count was provably
-  unbounded. That theorem is DELETED rather than kept, because the
-  property it described is gone from the code and a theorem whose
-  failure mode no longer exists cannot fail. -/
+  The ORDER is what buys that. A delete running with nothing naming
+  the superseded generation orphans it forever on a crash in the
+  window, and the stored count is then unbounded. No theorem states
+  that failure, because the code has no such window and a theorem
+  whose failure mode is unreachable cannot fail. -/
 
 /-- Referenced-or-in-flight generations: one after commit, two while a
     rebase has PUT the new generation and not yet deleted the old. -/

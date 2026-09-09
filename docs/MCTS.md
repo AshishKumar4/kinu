@@ -261,7 +261,9 @@ Pruning requires `value < pruneThreshold` (0.25) and
 
 `mcts/convergence.ts` takes the argmax over `terminal` and `open` values.
 Rivals within `takesEpsilon` (0.1) run one shared suite and compare satisfied
-shares; all-pass and all-fail used to fall back to value order.
+shares — the measured share, not the pass bit, so two of four separates from
+none of four. Value order stands only when no candidate carries runnable code
+or nothing measured beats the argmax winner's own share.
 
 It refuses a winner below `minAcceptableScore` (0.3), or Undifferentiated
 textually distinct approaches with exactly equal values. Then `ORDER BY value

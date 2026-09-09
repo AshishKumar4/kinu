@@ -47,10 +47,10 @@ actors that work inside it.
   address (`<name>@EMAIL_DOMAIN`, `cf-backend/src/email/inbound.ts:35`), and the
   registry row all key on the workspace name. The default agent has no separate
   name. It is the workspace's voice.
-- A workspace preview hostname carries the name too, and a hostname label is
-  narrower than the old name grammar: lowercase letters, digits and hyphens, at
-  most 31 characters, no case. That grammar is now the one workspace address
-  rule (`core/src/identity/naming.ts`, `workspaceAddressRefusal`,
+- A workspace preview hostname carries the name too, so a workspace name is a
+  hostname label: lowercase letters, digits and hyphens, at most 31 characters,
+  no case. That grammar is the one workspace address rule
+  (`core/src/identity/naming.ts`, `workspaceAddressRefusal`,
   `WORKSPACE_ADDRESS_MAX`): every auto-minted slug fits, a generated fork name
   is a fresh slug rather than `<source>-fork-<id>`, and a name chosen with
   `kinu create <name>`, the REST `name` field or a fork dialog is refused at
