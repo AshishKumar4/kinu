@@ -11,9 +11,10 @@
  *
  * This list covers each conditional at least once in each direction: the two
  * plan-submission spellings, both model-family overlays, each built-in role,
- * the background resume overlay, an offline laptop, a preview-capable
- * executor, the empty tool surface, the delegation rungs one at a time, and a
- * workspace carrying instruction files in both trust tiers.
+ * an offline laptop, a preview-capable executor, the empty tool surface, the
+ * delegation rungs one at a time, and a workspace carrying instruction files
+ * in both trust tiers. No resume case: provenance is turn-local and renders
+ * no system section at all (prompting/volatile-context.ts).
  *
  * Consumers (`unit-prompt-sections.test.ts`): the per-section override
  * controls, which compare two LIVE renderings, and the whole-matrix byte
@@ -174,10 +175,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       workMode: 'plan',
       planSubmissionAvailable: false,
     },
-  },
-  {
-    name: 'background-resume',
-    opts: { availableTools: ['run'], provenance: 'background_resume', backend: 'cf' },
   },
   ...Object.entries(BUILTIN_ROLE_DEFINITIONS).map(([id, role]) => rolePromptCase(id, role)),
   {

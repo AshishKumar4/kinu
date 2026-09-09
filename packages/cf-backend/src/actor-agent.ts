@@ -5936,7 +5936,14 @@ export abstract class ActorAgent extends Think<Env> {
     agentsMd: AgentsMdSources,
     activeSkills: ActiveSkillSet | undefined,
   ): ModelMessage[] {
-    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = { deviceNotice };
+    // Provenance rides here, not in the system prompt: it flips whenever a
+    // background job lands mid-session, and at system placement that flip
+    // rewrote the whole cacheable prefix twice — once into the wake and once
+    // back out (core prompting/volatile-context.ts).
+    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = {
+      deviceNotice,
+      provenance: this.turnProvenance(),
+    };
     if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
     const turnLocal = turnLocalContextMessage(turnLocalOptions);
     const unverified = unverifiedInstructionsMessage(
@@ -6156,7 +6163,6 @@ export abstract class ActorAgent extends Think<Env> {
         .map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
       workMode,
-      provenance: this.turnProvenance(),
       roleSection: profile.role,
       planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
       model,

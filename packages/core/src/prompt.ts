@@ -132,7 +132,6 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   return render(OPERATING_GUIDANCE, {
     kimi: family === 'kimi',
     gpt: family === 'gpt',
-    backgroundResume: surface.provenance === 'background_resume',
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
   });

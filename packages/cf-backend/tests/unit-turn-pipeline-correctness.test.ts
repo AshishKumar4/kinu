@@ -915,21 +915,33 @@ describe('turn-pipeline correctness wiring', () => {
     expect(closeArgs).toContain('craft: this.orch.craft.snapshot()');
   });
 
-  test("the per-turn system prompt carries permission, provenance, and role", () => {
-    const beforeTurn = actor.slice(
-      actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
-      actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
-    );
-    expect(beforeTurn).toContain('workMode,');
-    expect(beforeTurn).toContain('provenance: this.turnProvenance()');
-    expect(beforeTurn).toContain('roleSection: profile.role');
-    const turnMode = actor.slice(
-      actor.indexOf('protected turnWorkMode(): WorkMode'),
-      actor.indexOf('/** What this turn was started BY:'),
-    );
-    expect(turnMode).toContain('workModeForTurnMetadata(this.turnDrivingMetadata())');
-    expect(turnMode).toContain('turnProvenanceForMetadata(this.turnDrivingMetadata())');
-    expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
+  // Observed on the TurnConfig the model is handed, not on the source text of
+  // `beforeTurn`: a grep for `provenance: this.turnProvenance()` passed while
+  // that field was buying a full prefix rewrite on every chat↔wake transition,
+  // and it would have failed for the fix that stopped it. The two axes reading
+  // from different metadata keys is core's own behavioural test
+  // (unit-prompt.test.ts, "the two axes are read from different metadata
+  // keys"); this one is about which TIER each fact lands in on the prompt this
+  // backend actually ships.
+  test('the role rides the cacheable prefix; provenance never does', async () => {
+    const { agent } = orchestratorHarness();
+    const config = await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'summarise this file' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+    const system = config?.system ?? '';
+    // The turn's resolved role is a prefix fact: it changes on a deliberate
+    // agent event and nothing else.
+    expect(system).toContain('## Role: General (general)');
+    // Provenance is not. The resume sentence must not appear at system
+    // placement on ANY turn, because it flips mid-session and the prefix
+    // cannot: it rides `turnLocalTail` instead.
+    expect(system).not.toContain('the referenced job result first');
+    expect(system).not.toContain('Background-resume');
   });
 
   test('the turn prompt advertises the temporary rung the child substrate always wires', async () => {
