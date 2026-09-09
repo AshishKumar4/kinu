@@ -16,9 +16,9 @@ import { renderThrownChain } from '@kinu.run/core/obs';
  *
  * A startup spawns a third-party stdio child and lists its tools. It ends when
  * that child answers, when the child exits or errors (the SDK rejects every
- * pending request on transport close), or when the operator stops `kinu`. The
- * 5_000 ms that used to bound it said PENDING MEASUREMENT in its own comment,
- * and it cost a slow `npx` server its whole tool set for the session.
+ * pending request on transport close), or when the operator stops `kinu`. A
+ * 5_000 ms bound here would be a number nobody measured, and it costs a slow
+ * `npx` server its whole tool set for the session.
  *
  * A tool CALL is the server doing real work — a fetch, a query, a build. It
  * ends the same three ways, plus the turn's own AbortSignal, which `call`

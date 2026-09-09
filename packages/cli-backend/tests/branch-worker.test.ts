@@ -43,7 +43,7 @@ function forkedChild(): ChildProcess {
 
 // The spawner is handed the workspace's ONE database — the same file the parent
 // runtime holds, which is what a branch's own process opens to bind its actor
-// row. It is no longer a base path the spawner decorates: `branch-worker.ts`
+// row. It is not a base path the spawner decorates: `branch-worker.ts`
 // refuses a `KINU_ROOT_DB` its root-issued bootstrap does not name, so a
 // fixture that passes anything but the runtime's own `dbPath` gets a child that
 // exits before `ready`.
@@ -159,7 +159,7 @@ describe('branch-worker protocol — no self-rating', () => {
     expect(reflectMessages.at(-1)?.content).toContain(BRANCH_ANSWER);
   });
 
-  test("'evaluate' is not part of the protocol anymore", async () => {
+  test("an 'evaluate' message is not in the protocol, so the worker answers nothing", async () => {
     const { proc, release } = await spawnWorker();
     const seen: Array<JsonValue> = [];
     const listener = (message: JsonValue): void => {
@@ -212,9 +212,9 @@ describe('branch-worker protocol — no self-rating', () => {
 });
 
 // A branch failure must arrive as a legible error, never as a silently
-// "successful" empty result. A provider error whose .message is empty used to
-// pass the parent's truthiness check, resolve `undefined`, and surface much
-// later as a TypeError inside the MCTS engine — the real provider error lost.
+// "successful" empty result. A provider error whose .message is empty passes a
+// truthiness check, resolves `undefined`, and surfaces much later as a
+// TypeError inside the MCTS engine — the real provider error lost.
 describe('branch worker failure replies', () => {
   test("an error reply always carries a message, and it is the provider's", async () => {
     const endpoint = startModelEndpoint();
@@ -228,8 +228,8 @@ describe('branch worker failure replies', () => {
       if (parsed.success) replies.push(parsed.output);
     });
     try {
-      // A real provider failure whose own message is empty — the shape that used
-      // to travel back as `error: ''`.
+      // A real provider failure whose own message is empty — the shape that
+      // would travel back as `error: ''`.
       endpoint.reply.status = 400;
       endpoint.reply.body = { error: { message: '' } };
       await expect(handle.explore(HISTORY, [], LANGUAGES, 'plan', [])).rejects.toThrow();

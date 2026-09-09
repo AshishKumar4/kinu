@@ -182,14 +182,14 @@ describe('kinu export / import', () => {
   // on a finite run, stated with its measurement, not a detector.
   }, 20_000);
 
-  test('a database file from an older export still restores', async () => {
-    const home = scratch('kinu-export-legacy-');
-    const out = scratch('kinu-export-legacy-out-');
+  test('a bare workspace database file imports, not only an archive', async () => {
+    const home = scratch('kinu-export-bare-db-');
+    const out = scratch('kinu-export-bare-db-out-');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
-    const legacy = join(out, 'oldbot.agent.db');
-    seedWorkspace(legacy);
+    const bareDatabase = join(out, 'oldbot.agent.db');
+    seedWorkspace(bareDatabase);
 
-    const imported = await result(runCli(home, ['import', legacy]));
+    const imported = await result(runCli(home, ['import', bareDatabase]));
     expect(imported.stderr).toBe('');
     expect(imported.exitCode).toBe(0);
 

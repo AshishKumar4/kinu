@@ -751,7 +751,7 @@ describe('device-connect install hardening', () => {
     // The hub's first ticket answer is a 404 the daemon retries a second
     // later; the second is a 401, so the daemon logs the rejection and exits
     // 4 about 1.2 s in. That exit is the definitive failure, and the wait
-    // ends on it. It used to wait out a 20 s bound and report the bound as
+    // ends on it. Waiting out the 20 s bound instead reports the bound as
     // the daemon's failure (red 2026-09-05: `{"kind":"timeout"}` after
     // 20429 ms, 20 list polls).
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404, 401] });
@@ -1182,20 +1182,20 @@ describe('/connect slash command', () => {
 });
 
 describe('desktop command reuses device-connect', () => {
-  // WHAT THIS USED TO BE, and why it changed: seven assertions over
-  // `desktop.ts`'s TEXT — `toContain('connectDevice')`, and a blocklist of
-  // `not.toContain('spawn' | 'writeFileSync' | 'registerCloudDevice' | ...)`.
-  // None could fail on the defect it named. A duplicated installer spelled
+  // This asserts BEHAVIOUR, never `desktop.ts`'s text. Substring assertions
+  // over source — `toContain('connectDevice')` plus a blocklist of
+  // `not.toContain('spawn' | 'writeFileSync' | 'registerCloudDevice' | ...)` —
+  // cannot fail on the defect they name: a duplicated installer spelled
   // `Bun.write`, `child_process.fork`, or an inline `fetch` of the device
   // route passes every one of those substrings, while a COMMENT containing
-  // the word "spawn" fails all of them. It was a ratchet on wording.
+  // the word "spawn" fails all of them. That is a ratchet on wording.
   //
   // The observable half of "thin shell" is that the desktop surface reports
   // the paths the module owns. Both are derived from KINU_HOME at import, so
   // a second copy in `desktop.ts` — the actual duplication — prints a
   // different path than the module's own constant and fails here.
   //
-  // NOT RECOVERED, stated rather than pretended: a byte-identical duplicate
+  // NOT COVERED, stated rather than pretended: a byte-identical duplicate
   // that never drifts is invisible to any runtime probe, because it behaves
   // identically by definition. That claim is a review concern, not a test.
   test('desktop status and logs report the paths device-connect owns', async () => {

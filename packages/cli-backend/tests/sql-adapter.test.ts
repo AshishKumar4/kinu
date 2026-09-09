@@ -1,13 +1,13 @@
 // The local SQL adapters (`makeSql`, `makeSqlExec` in src/runtime.ts) stand in
 // for a Durable Object's `ctx.storage.sql`, which returns whatever rows a
-// statement produces. Both used to decide that by sniffing the leading keyword
-// and ran anything outside SELECT/WITH/PRAGMA through `stmt.run()`, answering
-// `[]` — so every core statement that RETURNS rows from a write performed the
-// write and reported nothing, on this backend only.
+// statement produces. Deciding that by sniffing the leading keyword — anything
+// outside SELECT/WITH/PRAGMA through `stmt.run()`, answering `[]` — makes every
+// core statement that RETURNS rows from a write perform the write and report
+// nothing, on this backend only.
 //
 // Driven through the real stores rather than against the adapter alone: the
-// symptom was never a wrong row shape, it was a caller reading "nothing
-// matched" out of a write that had just succeeded.
+// symptom is never a wrong row shape, it is a caller reading "nothing matched"
+// out of a write that had just succeeded.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { DeferredApprovalStore, EventLog, initWorkspaceSchema, type ActorHandle } from '@kinu.run/core';
@@ -69,7 +69,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
     expect(store.standing('rm -rf ./build', 'laptop', Date.now())).toBeNull();
     if (!claimed) throw new Error('the approved grant must be claimable');
 
-    // `settle` is the other keyword this adapter used to swallow:
+    // `settle` is the other keyword a leading-keyword sniff swallows:
     // `DELETE … RETURNING`, whose row is how the caller knows THIS call is
     // what closed the spend rather than a replay of one already closed.
     expect(store.settle(claimed.spend, 'spent')).toBe(true);

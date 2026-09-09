@@ -230,7 +230,7 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
 
   test('a provider may not take one of the fixed namespaces', async () => {
     // `new Function` rejects duplicate parameter names, so a provider called
-    // `tools` used to be a crash waiting to happen rather than a shadowed name.
+    // `tools` would be a crash rather than a shadowed name.
     const provider: CodemodeProvider = {
         name: 'tools',
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },

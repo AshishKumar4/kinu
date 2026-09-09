@@ -3,8 +3,8 @@
 // Asserted through the surface that makes the row matter — the agent's own
 // execution block (`, runs: …`), which is where the model decides to send work —
 // and by moving PATH, because the point of this module is that the row FOLLOWS
-// the machine instead of describing a machine like it. `git` and `npm` used to
-// be claimed unconditionally.
+// the machine instead of describing a machine like it — an unconditional claim
+// of `git` and `npm` is what that rules out.
 import { describe, expect, test } from 'bun:test';
 import { renderDynamicContextBlock } from '@kinu.run/core';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/host-toolchain';

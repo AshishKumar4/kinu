@@ -199,8 +199,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     // A non-zero exit explained ENTIRELY by paths it may not read is not a
     // failure: everything readable is staged and `write-tree` is clean. An
     // unexplained diagnostic, or a non-zero exit with nothing to explain it,
-    // still fails — an incomplete snapshot nobody knows about is the defect
-    // this replaces, not the fix for it.
+    // still fails — an incomplete snapshot nobody knows about is the defect, so
+    // this throws rather than returning a tree that is quietly short.
     if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
       throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
     }

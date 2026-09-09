@@ -293,7 +293,7 @@ export interface LocalAgentRef {
 }
 
 /** `recorded` — placement written when the agent was created. `adopted` — this
- *  resolve bound a legacy `~/.kinu/<name>` workspace to the caller's project.
+ *  resolve bound an unplaced `~/.kinu/<name>` workspace to the caller's project.
  *  `unplaced` — read without binding anything. */
 export type LocalPlacement = 'recorded' | 'adopted' | 'unplaced';
 
@@ -302,7 +302,7 @@ export interface ResolvedLocalAgent extends LocalAgentRef {
 }
 
 /** The ref as a placed local agent, or null when it records no placement —
- *  which is what makes a legacy workspace belong to no project, rather than to
+ *  which is what makes an unplaced workspace belong to no project, rather than to
  *  whichever directory the CLI happened to start in. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
@@ -330,7 +330,7 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.name.localeCompare(b.name));
 }
 
-/** One project's refs. A legacy workspace with no recorded placement is NOT
+/** One project's refs. A workspace with no recorded placement is NOT
  *  attributed here — attribution is adoption, and adoption is per-agent. */
 function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
@@ -346,9 +346,9 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
   return listLocalRefs(cwd).map((ref) => ref.name);
 }
 
-/** Local workspaces on this machine that no ref places in a project: made
- *  before placement was recorded. Readable, and adopted one at a time. */
-export function listLegacyAgentNames(): string[] {
+/** Local workspaces on this machine that no ref places in a project: an
+ *  `~/.kinu/<name>` directory with an `agent.db`. Readable, and adopted one at a time. */
+export function listUnplacedAgentNames(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
   const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
   return readdirSync(AGENT_HOME)
@@ -401,18 +401,18 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   }
 }
 
-export interface AdoptLegacyAgentOptions {
+export interface AdoptUnplacedAgentOptions {
   cwd?: string;
   workspaceId?: string;
 }
 
 /**
- * Bind ONE legacy `~/.kinu/<name>` workspace to a project, keyed on that
+ * Bind ONE unplaced `~/.kinu/<name>` workspace to a project, keyed on that
  * database's own workspace identity. Bounded on purpose: it takes a name, so
- * nothing can sweep every legacy directory into whichever directory the CLI
+ * nothing can sweep every unplaced directory into whichever directory the CLI
  * happened to start in. An already-placed ref comes back unchanged.
  */
-export function adoptLegacyLocalAgent(name: string, opts: AdoptLegacyAgentOptions = {}): LocalAgentRef {
+export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): LocalAgentRef {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
     throw new Error(`Workspace "${name}" not found at ${dbPath}.`);
@@ -481,7 +481,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
   if (opts.adopt === false) {
     return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
   }
-  return { ...adoptLegacyLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
+  return { ...adoptUnplacedLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
 }
 
 /** A ref is bound to one durable workspace. When the recorded identity no
@@ -524,9 +524,8 @@ function writeConfigFileUnlocked(config: KinuConfig): void {
  * The ONE config writer. The mutator may edit the loaded config in place or
  * return a replacement, so a whole-file overwrite is `updateConfigFile(() =>
  * next)` under the same lock rather than a second exported entry point that
- * skips the read. There used to be one, and nothing in production called it:
- * every command here is read-modify-write, because a blind overwrite drops
- * whatever another process wrote since this one loaded.
+ * skips the read. Every command here is read-modify-write, because a blind
+ * overwrite drops whatever another process wrote since this one loaded.
  */
 export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | void): KinuConfig {
   return withConfigLock(CONFIG_PATH, () => {

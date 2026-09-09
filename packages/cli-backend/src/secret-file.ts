@@ -2,16 +2,16 @@
  * Owner-only files on disk — credentials, the config that holds them, the
  * daemon pid, a diagnostics bundle.
  *
- * Every one of these used to be written as
+ * Writing one of these as
  *
  *     writeFileSync(path, data, { mode: 0o600 });
  *     try { chmodSync(path, 0o600); } catch {}
  *
- * which is wrong twice. `writeFileSync`'s `mode` applies only when the file is
- * CREATED, so rewriting a file that an older version left group-readable keeps
- * the old bits; and the `chmod` that was supposed to narrow them was the one
- * call whose failure was discarded. The net effect is a refresh token in a
- * world-readable file with nothing anywhere saying so.
+ * is wrong twice. `writeFileSync`'s `mode` applies only when the file is
+ * CREATED, so rewriting a file that was left group-readable keeps the wide
+ * bits; and the `chmod` meant to narrow them is the one call whose failure is
+ * discarded. The net effect is a refresh token in a world-readable file with
+ * nothing anywhere saying so.
  *
  * So the mode is not requested, it is VERIFIED. A filesystem that cannot
  * express POSIX modes reports that truthfully here instead of being silently

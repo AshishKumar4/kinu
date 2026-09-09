@@ -122,8 +122,8 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
  * Run one GEPA optimisation pass over a local workspace's scaffold.
  *
  * The pass itself is core's evolution control plane — the same one the cloud
- * backend drives. It used to be a Durable Object method, so this was simply
- * not reachable from a local workspace at all.
+ * backend drives, which is what makes it reachable from a local workspace at
+ * all instead of only through a Durable Object.
  */
 export async function runLocalGepa(
   name: string,
