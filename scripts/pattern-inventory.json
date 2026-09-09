@@ -10,15 +10,15 @@
     {
       "file": "lean/check-traceability.mjs",
       "kind": "hand-parser",
-      "owner": "stripLeanComments",
-      "sourceSha256": "4a5420a0a95d58800ff4693a18ad8ac80c02f0885b6443b0f13a2c32d780b537",
+      "owner": "stripLeanAttributes",
+      "sourceSha256": "2a404829b77cd1c1095d58a3da524962dda9873cb374532157375540a3a14dc8",
       "decision": "traceability"
     },
     {
       "file": "lean/check-traceability.mjs",
       "kind": "hand-parser",
-      "owner": "stripLeanAttributes",
-      "sourceSha256": "2a404829b77cd1c1095d58a3da524962dda9873cb374532157375540a3a14dc8",
+      "owner": "stripLeanComments",
+      "sourceSha256": "4a5420a0a95d58800ff4693a18ad8ac80c02f0885b6443b0f13a2c32d780b537",
       "decision": "traceability"
     },
     {
@@ -44,16 +44,9 @@
     },
     {
       "file": "packages/cf-backend/src/email/inbound.ts",
-      "kind": "hand-parser",
-      "owner": "stripQuotedReply",
-      "sourceSha256": "43104f74097991a3b61c85883cc7835fa65cc2b0965ed67bffea8945a090fa53",
-      "decision": "framing"
-    },
-    {
-      "file": "packages/cf-backend/src/email/inbound.ts",
       "kind": "regex-literal",
       "owner": "htmlToText",
-      "sourceSha256": "70c5c1f05af2adf80ebf31e370e79d11a70bd93d39cee81ec9e8ff2280218d97",
+      "sourceSha256": "019e0b8a6822d20e835f355b340ffa40264181fd90425c4239d244981a5b4750",
       "decision": "html"
     },
     {
@@ -67,7 +60,7 @@
       "file": "packages/cf-backend/src/email/inbound.ts",
       "kind": "regex-literal",
       "owner": "htmlToText",
-      "sourceSha256": "019e0b8a6822d20e835f355b340ffa40264181fd90425c4239d244981a5b4750",
+      "sourceSha256": "70c5c1f05af2adf80ebf31e370e79d11a70bd93d39cee81ec9e8ff2280218d97",
       "decision": "html"
     },
     {
@@ -76,6 +69,13 @@
       "owner": "htmlToText",
       "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
       "decision": "html"
+    },
+    {
+      "file": "packages/cf-backend/src/email/inbound.ts",
+      "kind": "hand-parser",
+      "owner": "stripQuotedReply",
+      "sourceSha256": "43104f74097991a3b61c85883cc7835fa65cc2b0965ed67bffea8945a090fa53",
+      "decision": "framing"
     },
     {
       "file": "packages/cf-backend/src/hooks/use-kinu.ts",
@@ -122,20 +122,6 @@
     {
       "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
       "kind": "regex-literal",
-      "owner": "switches",
-      "sourceSha256": "7f6929db704b3e760e5050891972065b3d682b68b81c8f2382abf8024fe0dd02",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
-      "kind": "regex-literal",
-      "owner": "visibleFix",
-      "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
-      "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
       "decision": "lexical"
@@ -145,6 +131,20 @@
       "kind": "regex-literal",
       "owner": "buttons",
       "sourceSha256": "f2e28a28d357e04d5c7af9172a1f60e9cdf5ad1af117d62232d684ba0f78f7be",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "switches",
+      "sourceSha256": "7f6929db704b3e760e5050891972065b3d682b68b81c8f2382abf8024fe0dd02",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "visibleFix",
+      "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
       "decision": "lexical"
     },
     {
@@ -219,13 +219,6 @@
     },
     {
       "file": "packages/cli-backend/src/claude-cli-provider.ts",
-      "kind": "hand-parser",
-      "owner": "parseFunctionCalls",
-      "sourceSha256": "5cdd3e68dc5a94e6ac008ba70b8aeca7fe39df2ba8c89139c675709b3e7fb315",
-      "decision": "xml"
-    },
-    {
-      "file": "packages/cli-backend/src/claude-cli-provider.ts",
       "kind": "regex-literal",
       "owner": "invokeRe",
       "sourceSha256": "ad35066877f0eb7bd5619c8f37c6043c3c95bf292d8a72bc31d0df1c281a22bc",
@@ -241,6 +234,13 @@
     {
       "file": "packages/cli-backend/src/claude-cli-provider.ts",
       "kind": "hand-parser",
+      "owner": "parseFunctionCalls",
+      "sourceSha256": "5cdd3e68dc5a94e6ac008ba70b8aeca7fe39df2ba8c89139c675709b3e7fb315",
+      "decision": "xml"
+    },
+    {
+      "file": "packages/cli-backend/src/claude-cli-provider.ts",
+      "kind": "hand-parser",
       "owner": "parseNdjson",
       "sourceSha256": "af792550e292a1da30b812a00c5c34454982b5abcdd8b4b0b90251e24ddc52fd",
       "decision": "framing"
@@ -248,15 +248,15 @@
     {
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
-      "owner": "isDynamicBlock",
-      "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
+      "owner": "<module>",
+      "sourceSha256": "b5655ca420e00e99ffbc726891db4c7aa09b0578193baf902bbdc5ea8c9cc009",
       "decision": "lexical"
     },
     {
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "b5655ca420e00e99ffbc726891db4c7aa09b0578193baf902bbdc5ea8c9cc009",
+      "owner": "isDynamicBlock",
+      "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
       "decision": "lexical"
     },
     {
@@ -325,15 +325,15 @@
     {
       "file": "packages/core/src/events/ingress/email.ts",
       "kind": "regex-literal",
-      "owner": "angled",
-      "sourceSha256": "70cc8fd5cd44305dfbb0b0a0025c7f2f6929798dbce0783f6f38445658b43db7",
+      "owner": "MSG_ID",
+      "sourceSha256": "ef67a9a241d45e20f66c8ff8ce1e9f029cf267ee3478c7fe5fb3e87bf90c520e",
       "decision": "lexical"
     },
     {
       "file": "packages/core/src/events/ingress/email.ts",
       "kind": "regex-literal",
-      "owner": "MSG_ID",
-      "sourceSha256": "ef67a9a241d45e20f66c8ff8ce1e9f029cf267ee3478c7fe5fb3e87bf90c520e",
+      "owner": "angled",
+      "sourceSha256": "70cc8fd5cd44305dfbb0b0a0025c7f2f6929798dbce0783f6f38445658b43db7",
       "decision": "lexical"
     },
     {
@@ -459,14 +459,14 @@
       "file": "packages/core/src/web/markdown.ts",
       "kind": "regex-literal",
       "owner": "htmlToMarkdown",
-      "sourceSha256": "4734e77cbbdcf77bb0e2181ac11c3f587b1d4ab58bb67988d635fbbc9eca27e1",
+      "sourceSha256": "0b1244bdf6bb0b931d05c44ed7707a8a13039933ba792a7577484669583c2d23",
       "decision": "html"
     },
     {
       "file": "packages/core/src/web/markdown.ts",
       "kind": "regex-literal",
       "owner": "htmlToMarkdown",
-      "sourceSha256": "ac20c291ee60f67cc6dabf55d05bc6d4b717f128103d37584f63298ceef921c5",
+      "sourceSha256": "4734e77cbbdcf77bb0e2181ac11c3f587b1d4ab58bb67988d635fbbc9eca27e1",
       "decision": "html"
     },
     {
@@ -487,20 +487,6 @@
       "file": "packages/core/src/web/markdown.ts",
       "kind": "regex-literal",
       "owner": "htmlToMarkdown",
-      "sourceSha256": "0b1244bdf6bb0b931d05c44ed7707a8a13039933ba792a7577484669583c2d23",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
-      "sourceSha256": "e51ecb88265e9e8d23f80e0c1e130aab2b435579d257dd4fce51924f06939bc6",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/markdown.ts",
-      "kind": "regex-literal",
-      "owner": "htmlToMarkdown",
       "sourceSha256": "65f8eee795cbba1130a02b2310e4c43b960a9f1f309cba864a0a017a05c8d695",
       "decision": "html"
     },
@@ -514,8 +500,15 @@
     {
       "file": "packages/core/src/web/markdown.ts",
       "kind": "regex-literal",
-      "owner": "stripTags",
-      "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "ac20c291ee60f67cc6dabf55d05bc6d4b717f128103d37584f63298ceef921c5",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "htmlToMarkdown",
+      "sourceSha256": "e51ecb88265e9e8d23f80e0c1e130aab2b435579d257dd4fce51924f06939bc6",
       "decision": "html"
     },
     {
@@ -526,10 +519,10 @@
       "decision": "html"
     },
     {
-      "file": "packages/core/src/web/provider.ts",
-      "kind": "hand-parser",
-      "owner": "parseDuckDuckGoHtml",
-      "sourceSha256": "27a8471dad56783a87159945e5a53cd6b85dfc447f6311db505ec71e442fa694",
+      "file": "packages/core/src/web/markdown.ts",
+      "kind": "regex-literal",
+      "owner": "stripTags",
+      "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
       "decision": "html"
     },
     {
@@ -542,29 +535,36 @@
     {
       "file": "packages/core/src/web/provider.ts",
       "kind": "regex-literal",
-      "owner": "snippetRe",
-      "sourceSha256": "f76dad9e0761568a5027fcca4d47ed682e4bebf9da0f7c212fbacb8b0e9d21bd",
-      "decision": "html"
-    },
-    {
-      "file": "packages/core/src/web/provider.ts",
-      "kind": "regex-literal",
       "owner": "m",
       "sourceSha256": "ea46e30ffdff6ee4d93bfa439c9f7ffe2d87d7e88cbcd1c8864bc48b67f5ee06",
       "decision": "html"
     },
     {
-      "file": "packages/core/tests/contract-model-call-reporting.test.ts",
+      "file": "packages/core/src/web/provider.ts",
+      "kind": "hand-parser",
+      "owner": "parseDuckDuckGoHtml",
+      "sourceSha256": "27a8471dad56783a87159945e5a53cd6b85dfc447f6311db505ec71e442fa694",
+      "decision": "html"
+    },
+    {
+      "file": "packages/core/src/web/provider.ts",
       "kind": "regex-literal",
-      "owner": "callableSource",
-      "sourceSha256": "a81994554bbed86b3822c249213a17aff0efdf86f2d172d2fc830cd928fbd2a6",
-      "decision": "sourceGate"
+      "owner": "snippetRe",
+      "sourceSha256": "f76dad9e0761568a5027fcca4d47ed682e4bebf9da0f7c212fbacb8b0e9d21bd",
+      "decision": "html"
     },
     {
       "file": "packages/core/tests/contract-model-call-reporting.test.ts",
       "kind": "regex-literal",
       "owner": "callableSource",
       "sourceSha256": "9149ec376b582535afed4221335baef0324a129d79484dd297862497a826c3c9",
+      "decision": "sourceGate"
+    },
+    {
+      "file": "packages/core/tests/contract-model-call-reporting.test.ts",
+      "kind": "regex-literal",
+      "owner": "callableSource",
+      "sourceSha256": "a81994554bbed86b3822c249213a17aff0efdf86f2d172d2fc830cd928fbd2a6",
       "decision": "sourceGate"
     },
     {
@@ -619,50 +619,50 @@
     {
       "file": "packages/core/tests/unit-volatile-context.test.ts",
       "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/tests/unit-volatile-context.test.ts",
+      "kind": "regex-literal",
       "owner": "BLOCK_OPEN",
       "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
       "decision": "lexical"
-    },
-    {
-      "file": "packages/core/tests/unit-volatile-context.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/core/tests/unit-volatile-context.test.ts",
-      "kind": "regex-literal",
-      "owner": "<module>",
-      "sourceSha256": "fe9344e37b1186ef060516de4ba141f58e056c3c1c79c08b4d895d5947b028d4",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/devbox/src/cas/overlay-runner.ts",
-      "kind": "regex-literal",
-      "owner": "list",
-      "sourceSha256": "a716e05581296fc759dbda05550c3162634424b5ff1fda753061606e35aade2b",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/src/cas/overlay-runner.ts",
-      "kind": "regex-literal",
-      "owner": "next",
-      "sourceSha256": "12e964e6ebff3855800b1692251f8c0e3a31f861323f572dd93fa0293460823a",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/src/cas/overlay-runner.ts",
-      "kind": "hand-parser",
-      "owner": "scanUpper",
-      "sourceSha256": "3a328f0eb4b33b34c318cc3461f599b33ff7d744908319577e7c514b57e8a77e",
-      "decision": "protected"
     },
     {
       "file": "packages/devbox/src/lifecycle.ts",
       "kind": "hand-parser",
       "owner": "parseWorkdirHolders",
       "sourceSha256": "39b9e1b50f37490d11224d9fc7a3eea65573a40a41fbad768e0effcf7295532f",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "awaited",
+      "sourceSha256": "0749d4d9aedec7019130bf5ad26f5c2b5e5100bd507eb8df17f70255ff928131",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "awaited",
+      "sourceSha256": "0749d4d9aedec7019130bf5ad26f5c2b5e5100bd507eb8df17f70255ff928131",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "bound",
+      "sourceSha256": "13703f60d970a85ece9092d0ef0dd52ab0a59810c85e77473016282062b729f5",
       "decision": "protected"
     },
     {
@@ -682,29 +682,15 @@
     {
       "file": "packages/devbox/tests/snapshot-chain.test.ts",
       "kind": "regex-literal",
-      "owner": "awaited",
-      "sourceSha256": "0749d4d9aedec7019130bf5ad26f5c2b5e5100bd507eb8df17f70255ff928131",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "unmounted",
-      "sourceSha256": "8bcc54deea93c6b680935e857ab00368bb359e04df5668c7652037a5c33c5bcb",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "reset",
-      "sourceSha256": "0b547fc6e3ca35a5cd80b4457df0b845173cacca082233271896040158988104",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
       "owner": "layer",
       "sourceSha256": "865a469ffac9139176fd87367220f8557c56782282988aeafa94f8554161f577",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "listed",
+      "sourceSha256": "320354dfe13b714135d91d08dd7f15b2879717c3a9e8ca17cbb32e628549cb7e",
       "decision": "protected"
     },
     {
@@ -717,6 +703,20 @@
     {
       "file": "packages/devbox/tests/snapshot-chain.test.ts",
       "kind": "regex-literal",
+      "owner": "published",
+      "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "reset",
+      "sourceSha256": "0b547fc6e3ca35a5cd80b4457df0b845173cacca082233271896040158988104",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
       "owner": "squash",
       "sourceSha256": "f2d74facaee416a5897392edc7032302403ab1f4ac5d42038ac39073e3917762",
       "decision": "protected"
@@ -724,50 +724,15 @@
     {
       "file": "packages/devbox/tests/snapshot-chain.test.ts",
       "kind": "regex-literal",
-      "owner": "published",
-      "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
+      "owner": "unmounted",
+      "sourceSha256": "8bcc54deea93c6b680935e857ab00368bb359e04df5668c7652037a5c33c5bcb",
       "decision": "protected"
     },
     {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "listed",
-      "sourceSha256": "320354dfe13b714135d91d08dd7f15b2879717c3a9e8ca17cbb32e628549cb7e",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
       "owner": "awaited",
       "sourceSha256": "0749d4d9aedec7019130bf5ad26f5c2b5e5100bd507eb8df17f70255ff928131",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "bound",
-      "sourceSha256": "13703f60d970a85ece9092d0ef0dd52ab0a59810c85e77473016282062b729f5",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "squash",
-      "sourceSha256": "5bb82d0eedd6bb9d81ade8e96de2bd4a1ec209a42f01e876cf63404882bdeb37",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "published",
-      "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "source",
-      "sourceSha256": "30eca2a4f6d1afeda6e96cbb3d1788f6a7bebfa8888927a87f7e2ec88f635b0f",
       "decision": "protected"
     },
     {
@@ -780,8 +745,8 @@
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "awaited",
-      "sourceSha256": "0749d4d9aedec7019130bf5ad26f5c2b5e5100bd507eb8df17f70255ff928131",
+      "owner": "layer",
+      "sourceSha256": "865a469ffac9139176fd87367220f8557c56782282988aeafa94f8554161f577",
       "decision": "protected"
     },
     {
@@ -794,8 +759,22 @@
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "root",
-      "sourceSha256": "bd663d9a9da32dd8d316d5d2edf52dde1d3f3c912b26038560d9a6b89b7abbb3",
+      "owner": "overlay",
+      "sourceSha256": "847b6ab21babb41e2ab2ba7412a3beeed4dda50808311ee17a69c6f58dea5712",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "packed",
+      "sourceSha256": "5bb82d0eedd6bb9d81ade8e96de2bd4a1ec209a42f01e876cf63404882bdeb37",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "published",
+      "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
       "decision": "protected"
     },
     {
@@ -808,29 +787,8 @@
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "layer",
-      "sourceSha256": "865a469ffac9139176fd87367220f8557c56782282988aeafa94f8554161f577",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "overlay",
-      "sourceSha256": "847b6ab21babb41e2ab2ba7412a3beeed4dda50808311ee17a69c6f58dea5712",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "seed",
-      "sourceSha256": "b6ce9cd60fd86764fbb89bd763fc3c1e740610c26eed92a918d80b478c1046d9",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "statted",
-      "sourceSha256": "8bc0d342e033d2446280d438063069130812e4246a5b1537a37a04b3b24d5c2a",
+      "owner": "removed",
+      "sourceSha256": "54c8d8a423a4c57ffbc012a30ffae74d020a90aaa43aa1805639eb7508b1cec4",
       "decision": "protected"
     },
     {
@@ -843,15 +801,36 @@
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "removed",
-      "sourceSha256": "54c8d8a423a4c57ffbc012a30ffae74d020a90aaa43aa1805639eb7508b1cec4",
+      "owner": "root",
+      "sourceSha256": "bd663d9a9da32dd8d316d5d2edf52dde1d3f3c912b26038560d9a6b89b7abbb3",
       "decision": "protected"
     },
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "packed",
+      "owner": "seed",
+      "sourceSha256": "b6ce9cd60fd86764fbb89bd763fc3c1e740610c26eed92a918d80b478c1046d9",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "source",
+      "sourceSha256": "30eca2a4f6d1afeda6e96cbb3d1788f6a7bebfa8888927a87f7e2ec88f635b0f",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "squash",
       "sourceSha256": "5bb82d0eedd6bb9d81ade8e96de2bd4a1ec209a42f01e876cf63404882bdeb37",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "statted",
+      "sourceSha256": "8bc0d342e033d2446280d438063069130812e4246a5b1537a37a04b3b24d5c2a",
       "decision": "protected"
     },
     {
@@ -892,13 +871,6 @@
     {
       "file": "scripts/bench-devbox-strategies.ts",
       "kind": "regex-literal",
-      "owner": "listObjects",
-      "sourceSha256": "12e964e6ebff3855800b1692251f8c0e3a31f861323f572dd93fa0293460823a",
-      "decision": "xml"
-    },
-    {
-      "file": "scripts/bench-devbox-strategies.ts",
-      "kind": "regex-literal",
       "owner": "key",
       "sourceSha256": "a078070c2846ca6a074cdc837b32604244069de11122f3ce50889a7f0ac6caa4",
       "decision": "xml"
@@ -906,9 +878,23 @@
     {
       "file": "scripts/bench-devbox-strategies.ts",
       "kind": "regex-literal",
-      "owner": "uploadId",
-      "sourceSha256": "a7c1d5f3b2c0f43f0cbb30a8e3d50a69942620acfbb9c09fc25e9d7665deea0b",
+      "owner": "listObjects",
+      "sourceSha256": "12e964e6ebff3855800b1692251f8c0e3a31f861323f572dd93fa0293460823a",
       "decision": "xml"
+    },
+    {
+      "file": "scripts/bench-devbox-strategies.ts",
+      "kind": "hand-parser",
+      "owner": "parseOptions",
+      "sourceSha256": "2c61e685ff6326d33fc4dc1f01278866c16623eac0e0c7c7c62cbe4cbb787792",
+      "decision": "cli"
+    },
+    {
+      "file": "scripts/bench-devbox-strategies.ts",
+      "kind": "hand-parser",
+      "owner": "parseOptions",
+      "sourceSha256": "4c99b6ad50426b4e447504f8c11071a96dce01034b1d1b9ae07040679ea6aec0",
+      "decision": "cli"
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
@@ -919,10 +905,10 @@
     },
     {
       "file": "scripts/bench-devbox-strategies.ts",
-      "kind": "hand-parser",
-      "owner": "parseOptions",
-      "sourceSha256": "4c99b6ad50426b4e447504f8c11071a96dce01034b1d1b9ae07040679ea6aec0",
-      "decision": "cli"
+      "kind": "regex-literal",
+      "owner": "uploadId",
+      "sourceSha256": "a7c1d5f3b2c0f43f0cbb30a8e3d50a69942620acfbb9c09fc25e9d7665deea0b",
+      "decision": "xml"
     },
     {
       "file": "scripts/bench.test.ts",
@@ -1129,10 +1115,10 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "kind": "hand-parser",
-      "owner": "parseRuleRegistry",
-      "sourceSha256": "c67e4ce33e44f075fdf33ca7096ae2e586a6c3b58ac54dfc10d45e87d24319e7",
-      "decision": "sourceGate"
+      "kind": "regex-literal",
+      "owner": "directive",
+      "sourceSha256": "3f3bdb4f981fd5a0047a98a39654cb32820f29fd05e6dd49a07032b5ffdfeb94",
+      "decision": "lexical"
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
@@ -1143,10 +1129,10 @@
     },
     {
       "file": "tools/oxlint/anti-slop/gate.test.ts",
-      "kind": "regex-literal",
-      "owner": "directive",
-      "sourceSha256": "3f3bdb4f981fd5a0047a98a39654cb32820f29fd05e6dd49a07032b5ffdfeb94",
-      "decision": "lexical"
+      "kind": "hand-parser",
+      "owner": "parseRuleRegistry",
+      "sourceSha256": "c67e4ce33e44f075fdf33ca7096ae2e586a6c3b58ac54dfc10d45e87d24319e7",
+      "decision": "sourceGate"
     },
     {
       "file": "tools/oxlint/anti-slop/import-extension.gate.test.ts",
