@@ -54,7 +54,7 @@ async function observeSubordinate(
     nameOrigin: 'user',
     mission: 'prove the subordinate surface',
   });
-  const tools = workspace.agent.observeHostedTaskTools(child.actor, 'prove the subordinate surface');
+  const tools = await workspace.agent.observeHostedTaskTools(child.actor, 'prove the subordinate surface');
   await workspace.agent._kinuTerminalRetryTick();
   return {
     root: 'cf-subordinate',

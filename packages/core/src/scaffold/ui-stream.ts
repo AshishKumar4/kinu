@@ -26,6 +26,30 @@ import { uiMessageChunkSchema, type UIMessageChunk, type ModelMessage } from 'ai
 import { renderToolResult } from '../prompts/evidence-window';
 import type { ScaffoldRunResult, ScaffoldEmitFn } from './executor';
 import { pumpScaffoldEvents } from './event-pump';
+import type { JsonValue } from '../utils/json';
+
+/**
+ * What one `ui_chunk` event contributes to the outer stream — the chunk to
+ * forward, or `undefined` when it contributes nothing.
+ *
+ * Three shapes contribute nothing: a chunk the UI schema does not recognise,
+ * the inner stream's own `start`/`finish` (the envelope belongs to the
+ * adapter), and a reasoning part when the caller asked not to send reasoning.
+ * Everything else passes through verbatim.
+ */
+async function forwardedUIChunk(
+  raw: JsonValue,
+  sendReasoning: boolean | undefined,
+): Promise<UIMessageChunk | undefined> {
+  const validation = await uiMessageChunkSchema().validate?.(raw);
+  if (validation === undefined || !validation.success) return undefined;
+  const chunk = validation.value;
+  if (chunk.type === 'start' || chunk.type === 'finish') return undefined;
+  const reasoning = chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta'
+    || chunk.type === 'reasoning-end';
+  if (reasoning && sendReasoning === false) return undefined;
+  return chunk;
+}
 
 /** Run a scaffold (via the supplied runner) and yield a UI message stream. */
 export async function* scaffoldEventsToUIStream(
@@ -118,13 +142,8 @@ export async function* scaffoldEventsToUIStream(
         break;
       }
       case 'ui_chunk': {
-        const validation = await uiMessageChunkSchema().validate?.(ev.chunk);
-        if (validation?.success) {
-          const chunk = validation.value;
-          const hiddenReasoning = opts.sendReasoning === false &&
-            (chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta' || chunk.type === 'reasoning-end');
-          if (!hiddenReasoning && chunk.type !== 'start' && chunk.type !== 'finish') yield chunk;
-        }
+        const chunk = await forwardedUIChunk(ev.chunk, opts.sendReasoning);
+        if (chunk !== undefined) yield chunk;
         break;
       }
       case 'text_delta': yield* delta('text', ev.text); break;

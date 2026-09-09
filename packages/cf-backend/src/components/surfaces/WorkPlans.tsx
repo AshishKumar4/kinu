@@ -15,6 +15,45 @@ interface ReadPage { path: string[]; active: boolean; view: 'plans' | 'children'
 const keyOf = ({ plan, path }: OwnedPlan) => JSON.stringify([path, plan.id, plan.revision]);
 const ownerOf = (path: readonly string[]) => path.length ? path.join(' / ') : 'Main';
 
+/**
+ * ONE presentation policy, derived once for every row, because the dropdown
+ * label, the read-only banner and the review affordance all answer the same
+ * question. They used to disagree: a priority record arrives with no scanned
+ * status, so a label read off the record said "retained" about an actor the
+ * selection had already decided was live. A direct actor is live exactly when
+ * the root's roster still lists it; deeper history keeps what the traversal
+ * observed; the root itself always is.
+ *
+ * The selection rides with the rows for the same reason: which row is picked,
+ * and whether it belongs to THIS pane, are read off the merged list and cannot
+ * be asked before it exists.
+ */
+function planSelection(
+  held: { readonly plans: readonly OwnedPlan[] } | null,
+  current: OwnedPlan | null,
+  activeActors: readonly string[],
+  selected: string | null,
+  owner: string,
+) {
+  const merged = held?.plans.slice() ?? [];
+  if (current) {
+    const index = merged.findIndex(item => keyOf(item) === keyOf(current));
+    if (index < 0) merged.unshift(current); else merged[index] = current;
+  }
+  const plans = merged.map(item => ({
+    ...item,
+    active: item.path.length === 0
+      || (item.path.length === 1 ? activeActors.includes(item.path[0] ?? '') : item.active),
+  }));
+  const picked = plans.find(candidate => keyOf(candidate) === selected) ?? plans[0] ?? null;
+  return {
+    plans,
+    picked,
+    inline: picked !== null
+      && (picked.path.length === 0 || (picked.path.length === 1 && picked.path[0] === owner)),
+  };
+}
+
 /** Read existing actors, including retained descendants. Each user page permits
  * four sequential inspection reads; the remaining frontier is explicit. */
 export function WorkPlans({ active, rpc, rootRpc, owner = 'main', arrival, activeActors = [], onPresence, onNewPlan, onReviewActor }: {
@@ -79,25 +118,7 @@ export function WorkPlans({ active, rpc, rootRpc, owner = 'main', arrival, activ
   const { resource, reload } = useAsyncResource(load, useCallback(() => 4000, []));
   const held = lastValue(resource);
   const current: OwnedPlan | null = active ? { plan: active, path: owner === 'main' ? [] : [owner], active: true } : null;
-  const merged = held?.plans.slice() ?? [];
-  if (current) {
-    const index = merged.findIndex(item => keyOf(item) === keyOf(current));
-    if (index < 0) merged.unshift(current); else merged[index] = current;
-  }
-  // ONE presentation policy, derived once for every row, because the dropdown
-  // label, the read-only banner and the review affordance all answer the same
-  // question. They used to disagree: a priority record arrives with no scanned
-  // status, so a label read off the record said "retained" about an actor the
-  // selection had already decided was live. A direct actor is live exactly when
-  // the root's roster still lists it; deeper history keeps what the traversal
-  // observed; the root itself always is.
-  const plans = merged.map(item => ({
-    ...item,
-    active: item.path.length === 0
-      || (item.path.length === 1 ? activeActors.includes(item.path[0] ?? '') : item.active),
-  }));
-  const picked = plans.find(candidate => keyOf(candidate) === selected) ?? plans[0] ?? null;
-  const inline = picked !== null && (picked.path.length === 0 || (picked.path.length === 1 && picked.path[0] === owner));
+  const { plans, picked, inline } = planSelection(held, current, activeActors, selected, owner);
   const reviewRpc = picked?.path.length === 0 ? rootRpc : rpc;
   const openReview = async () => {
     const name = picked?.path[0];

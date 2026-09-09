@@ -120,7 +120,6 @@ import { selectFrontierNode } from '../mcts/frontier';
 import { diagnostics, type Logger } from '../obs/index';
 import { renderCauseChain, type Refusal } from '../obs/error';
 import { usageTotal, type Usage, addUsage } from '../usage';
-import type { NodeLoopHost } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
@@ -264,23 +263,6 @@ export interface SwarmRunDeps {
   /** How a node's own runtime is built once it has a home — see
    *  {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  /**
-   * Where a TOOL-USING node's loop runs.
-   *
-   * Present hands each answer node to a host that gives it its own
-   * storage and its own shell state — on the Cloudflare backend a
-   * the same hosted-actor path a fork's head already runs on. Absent
-   * runs the loop in this isolate, which is the honest answer for a backend with
-   * no facets rather than a refusal: the body is the same function either way, so
-   * an absent host costs a node nothing but its storage boundary.
-   *
-   * `unit:'thought'` NEVER reaches this, and that is the rule rather than an
-   * omission: a thought node is one toolless `generateText` call that acquires no
-   * tools, no journal row and no shell, so there is nothing for a facet to
-   * isolate and the storage-isolation proof already covers it for exactly that
-   * reason. The dispatch that enforces it is `agentNodes` below.
-   */
-  readonly host?: NodeLoopHost;
   /** Backend-built `execute_tools` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
   readonly executeTool?: unknown;
@@ -627,7 +609,6 @@ export async function runSwarm(
     signal: deps.signal, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    host: deps.host,
     executeTool: deps.executeTool, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });

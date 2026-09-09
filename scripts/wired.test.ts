@@ -389,6 +389,44 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     expect(census(corpus)).toEqual([PROVISION_HOME]);
   });
 
+  test('is NOT reported when a field is ASSIGNED onto a binding of a project-local MAPPED alias', () => {
+    // `cli-backend/src/local-session.ts:333` writes
+    // `type Writable<T> = { -readonly [K in keyof T]: T[K] }` and finishes a
+    // terminal roster on `const parts: Writable<TerminalTurnParts> = {}`, so
+    // `parts.parentReport = …` at :3325 is the ONLY supply of that field in the
+    // tree. Credited to `Writable` — a name no interface declares — it read as
+    // connected at neither end while both ends were wired. The same blind spot
+    // put `TerminalTurnParts.completionGate` in the lock.
+    const body = "  type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"
+      + "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
+      + "  runIt({ rt: 'r' });";
+    expect(census(fixture(body))).toEqual([PROVISION_HOME]);
+  });
+
+  test('a SUBSET mapped alias supplies nothing of the interface', () => {
+    // The failing direction of the arm above. `{ [P in K]: T[P] }` is the shape
+    // `Pick` has, and a value of it need not carry the keys outside K — so
+    // crediting it would report every other field as supplied by nothing, which
+    // is exactly why `Pick` is absent from INSTANCE_UTILITIES. Only a
+    // `keyof`-constrained mapping carries the interface's keys whole.
+    const body = "  type Subset<T, K extends keyof T> = { [P in K]: T[P] };\n"
+      + "  const opts: Subset<RunDeps, 'mission'> = { mission: 'm' };\n  opts.logger = 'l';\n"
+      + "  runIt({ rt: 'r' });";
+    expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
+  test('a mapped alias another file declares and this one never imported credits nothing', () => {
+    // A name is not an identity. The table is keyed by DECLARING file and read
+    // through the caller's own import, so a second file's `Writable` cannot
+    // lend this one its meaning — breaking exactly that key is how the three
+    // collisions `8c313fcb1` repaired got in.
+    const alias = `${BASE}strategy/shape.ts`;
+    const body = "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
+      + "  runIt({ rt: 'r' });";
+    const corpus = fixture(body, [[alias, "export type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"]]);
+    expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
+  });
+
   test("is NOT reported when a binding annotated `I['k']` supplies it", () => {
     // `const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts }`. The
     // indexed access used to yield the OWNER, which is wrong in both directions
