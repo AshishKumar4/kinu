@@ -1,6 +1,6 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces.
  * Preview identity comes from the existing slate and executor owners. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
@@ -112,6 +112,8 @@ export interface WorkSurfaceProps {
    *  which keeps every tab visible — unknown is not empty. */
   tabPresence?: TabPresence;
   rpc: Rpc;
+  /** Signed-out sample content in place of a network preview. */
+  slateBody?: (slate: SlateSummary) => ReactNode;
 }
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
@@ -160,8 +162,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
   // A surface can be selected without being clicked (a deep link, a restored
   // tab) — keep the current one in view when the strip has to scroll.
   useEffect(() => {
-    strip.current?.querySelector('[aria-current="true"]')
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const container = strip.current;
+    const selected = container?.querySelector('[aria-current="true"]');
+    if (!container || !selected) return;
+    const viewport = container.getBoundingClientRect();
+    const tab = selected.getBoundingClientRect();
+    const left = viewport.left + container.clientLeft;
+    const right = left + container.clientWidth;
+    if (tab.left < left) container.scrollLeft += tab.left - left;
+    else if (tab.right > right) container.scrollLeft += tab.right - right;
   }, [surface]);
 
   return (
@@ -266,7 +275,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
           {openSlate !== null && (openSlateSummary
-            ? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />
+            ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
             : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
         </ErrorBoundary>
       </div>

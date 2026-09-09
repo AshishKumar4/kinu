@@ -10,6 +10,17 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { PREVIEW_SANDBOX, isPreviewUrl } from "@/lib/preview-origin";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
+/** URL-only header shared with the signed-out sample, which cannot host an iframe. */
+export function PreviewChrome({ url }: { url: string }) {
+  return (
+    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
+      <code className="text-[10px] p-text-3 font-mono truncate flex-1">{url}</code>
+      <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
+      <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
+    </div>
+  );
+}
+
 export function PreviewFrame({ url, label }: {
   url: string;
   /** The frame's accessible name — a tab title or a port label. The header
@@ -31,17 +42,7 @@ export function PreviewFrame({ url, label }: {
   }
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-        <code className="text-[10px] p-text-3 font-mono truncate flex-1">{url}</code>
-        <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-text-3 hover:p-text p-1 shrink-0"
-          title="Open in new tab"
-        ><ArrowSquareOutIcon size={11} /></a>
-      </div>
+      <PreviewChrome url={url} />
       <iframe
         src={url}
         title={label ?? url}
