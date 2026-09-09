@@ -9,8 +9,8 @@
  * actor two state stores and leave the parent unable to read what its own
  * branch had written.
  *
- * On CF: subAgent to a SubordinateAgent facet in branch mode uses Facets (co-located DOs)
- * On Linux: child_process.fork(branch-worker.ts) over the root's database
+ * On CF: a hosted logical actor of kind `branch` over the workspace's one
+ * SQLite (`exploration-hosting.ts`).
  */
 
 import { explorationActorKey, type ActorHandle, type BranchExploration, type BranchHandle, type JsonValue, type SpawnBranch, type AbortBranch, type LLMProviderConfig } from '@kinu.run/core';
