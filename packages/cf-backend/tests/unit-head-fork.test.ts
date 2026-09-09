@@ -107,7 +107,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
    * CFRuntime at the construction site. Core's `AgentRuntime` narrows the
    * declared return type and never the value, which is why the concrete type
    * has to be recovered rather than inferred. `exploration-hosting.ts`'s
-   * `hostHead` and the harness's `observeHostedTaskTools` state the same. */
+   * `hostHead` and `subordinate-hosting.ts`'s `runHostedTask` state the same. */
   const rt = head.actor.runtime as CFRuntime;
   const home = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
   return { workspace, head, rt, home };

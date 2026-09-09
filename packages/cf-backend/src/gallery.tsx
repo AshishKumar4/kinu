@@ -2196,6 +2196,17 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
 }
 
 /**
+ * The beat `?stage=N` pins, clamped to the stages that exist. A query with no
+ * `stage` — or one that is not a number — pins nothing, and `ForkLiveFrame`
+ * then advances itself; see it for why liveness needs both.
+ */
+function pinnedLiveStage(search: string): number | null {
+  const asked = new URLSearchParams(search).get("stage");
+  const wanted = asked === null ? Number.NaN : Number(asked);
+  return Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null;
+}
+
+/**
  * The Exploration surface over a search that is happening.
  *
  * Advances itself when the frame asked for no particular stage, so the thing a
@@ -5216,14 +5227,7 @@ async function mount() {
   else if (frame === "forkrunning") {
     node = <Shell surface="Exploration" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
-  else if (frame === "forklive") {
-    // `?stage=N` pins the beat. Absent, the frame advances itself — see
-    // ForkLiveFrame for why liveness needs both.
-    const asked = new URLSearchParams(location.search).get("stage");
-    const wanted = asked === null ? Number.NaN : Number(asked);
-    node = <ForkLiveFrame
-      pinned={Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null} />;
-  }
+  else if (frame === "forklive") node = <ForkLiveFrame pinned={pinnedLiveStage(location.search)} />;
   else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
     // The one dynamic import in this dispatch, and it stays one: the page pulls d3
     // and the whole tree renderer, so every frame that does not open it must not

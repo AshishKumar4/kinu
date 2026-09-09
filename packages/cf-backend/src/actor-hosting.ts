@@ -199,7 +199,7 @@ export type HostedActorHomeKind = 'node' | 'head' | 'subordinate';
 /** The one home namespace, by kind: `node-<id>`, `head-<id>`, `sub-<slug>`.
  *  Derived from the kind and the id the directory holds, so an actor names what
  *  it IS and never the directory it wants. */
-export function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
+function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
   switch (kind) {
     case 'node': return nodeAgentName(id);
     case 'head': return headAgentName(id);
@@ -209,7 +209,7 @@ export function hostedActorAgentName(kind: HostedActorHomeKind, id: string): str
 
 /** Which actor kinds own a home. `main` runs as the session user — the tree is
  *  its own — and a branch acquires no plane, so neither has one. */
-export function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
+function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
   if (record.kind === 'main' || record.kind === 'branch') return null;
   return record.kind;
 }
@@ -230,7 +230,7 @@ export function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | nu
 
 /** The shell state an actor's commands accumulate under. Kind-prefixed so a
  *  head's cwd and a subordinate's cannot collide on one id. */
-export function hostedActorShellId(record: WorkspaceActor): string {
+function hostedActorShellId(record: WorkspaceActor): string {
   if (record.kind === 'main') return `agent:${record.name}`;
   return `${record.kind}:${record.storageKey}`;
 }

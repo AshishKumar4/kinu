@@ -203,7 +203,13 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     // without this the case would hold just as well over an empty table.
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    await harness.agent.harnessResumeTerminalTransitions();
+    // THE WAKE FRAME, not `resumeAll()` in isolation. `_kinuTerminalRetryTick`
+    // is the public callback the platform's alarm dispatches, and it runs the
+    // stale-lease sweep BEFORE the terminal replay. Both must leave this lease
+    // exactly as it is — the replay because no answer exists to send, the sweep
+    // because `RECENT` is inside its grace — so the assertion below is "nothing
+    // moved" against the whole frame instead of one half of it.
+    await harness.agent._kinuTerminalRetryTick();
 
     expect(lease(harness, 'ev-silent')).toEqual({ turn_id: 'evt-silent', consumed_at: RECENT });
   });
@@ -217,7 +223,8 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
     harness.agent.harnessBeginTerminalTransition('u-blank');
     expect(harness.agent.harnessOwedWorkExists()).toBe(true);
 
-    await harness.agent.harnessResumeTerminalTransitions();
+    // The same public wake frame as above.
+    await harness.agent._kinuTerminalRetryTick();
 
     expect(lease(harness, 'ev-blank')).toEqual({ turn_id: 'evt-blank', consumed_at: RECENT });
   });

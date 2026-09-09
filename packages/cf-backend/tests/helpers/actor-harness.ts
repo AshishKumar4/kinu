@@ -49,13 +49,12 @@ import {
 } from '@kinu.run/core';
 import type { ExplorationHostSeams } from '../../src/exploration-hosting';
 import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
-import type { CFRuntime } from '../../src/runtime';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 mockAgentsSdk();
 
 const { OrchestratorAgent } = await import('../../src/orchestrator');
-const { delegatedHeadInput, runHostedTask } = await import('../../src/subordinate-hosting');
+const { runHostedTask } = await import('../../src/subordinate-hosting');
 
 /** The scaffold precondition a turn checks, declared satisfied — the harness
  *  workspace is empty, so nothing has written one. The soul is not declared:
@@ -572,29 +571,46 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  rather than a re-declaration of it. */
   observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
 
-  /** A hired child's DELEGATED-turn ToolSet, built by the production builder.
+  /** A hired child's DELEGATED-turn ToolSet, as the delegated head received it.
    *
    * The same surface a delegated turn runs: confined builtins over the child's
    * own runtime plus the report lane. Suites that assert the subordinate's
    * model-facing profile (conformance, tool confinement) read this rather than
    * re-declaring the wiring — a re-declaration would agree with itself while
-   * the product drifted. The runtime narrowing is stated once here instead of
-   * at each call site, for the reason src states where it narrows the same
-   * seam: `ActorHostDeps.runtimeFor` IS `createCFRuntime`, so the core type
-   * narrows only the return type, never the value. The input comes from the
-   * one builder production claims under, never a second literal. */
-  observeHostedTaskTools(child: HostedActor, task: string): ToolSet {
-    /* SAFETY: this backend CONSTRUCTS every hosted runtime with `createCFRuntime`
-     * — `ActorHostDeps.runtimeFor` here IS that function, so the value is a
-     * CFRuntime at the construction site. Core's `AgentRuntime` narrows the
-     * declared return type and never the value, which is why the concrete type
-     * has to be recovered rather than inferred. `unit-head-fork.test.ts` and
-     * `exploration-hosting.ts`'s `hostHead` state the same. */
-    const runtime = child.runtime as CFRuntime;
-    return this.subordinateSeams().taskTools(
-      child, runtime, { spoke: false, settled: false },
-      delegatedHeadInput(child.record, { body: task, mode: 'build' }),
-    );
+   * the product drifted.
+   *
+   * OBSERVED THROUGH THE PRODUCTION RUNNER rather than built beside it.
+   * `runHostedTask` is where a delegated turn's `HeadInput` is built, and it
+   * hands that ONE value to `taskTools` and to the runner together; what this
+   * captures at that seam is therefore the surface the head really got. Building
+   * an input here to build a surface from would be the two-shapes-for-one-turn
+   * the builder exists to end, and it would keep agreeing with itself after
+   * production's shape moved. The runtime narrowing moved with it: the runner
+   * recovers the concrete `CFRuntime` at the one place that needs it.
+   *
+   * The turn behind the observation reaches the model and fails there — the
+   * harness resolves a provider it cannot call under bun — which costs the
+   * observation nothing, because the surface is built before the first request.
+   * A suite that wants the turn itself injects a model and drives
+   * `runHostedTaskTurn` below.
+   */
+  async observeHostedTaskTools(child: HostedActor, task: string): Promise<ToolSet> {
+    const seams = this.subordinateSeams();
+    // Collected rather than assigned to a nullable: one delegated turn builds
+    // one surface, and an EMPTY array is the honest reading of "the runner never
+    // reached its tool seam" — which is a broken observation, not an empty one.
+    const built: ToolSet[] = [];
+    await runHostedTask({
+      ...seams,
+      taskTools: (actor, runtime, reports, input) => {
+        const tools = seams.taskTools(actor, runtime, reports, input);
+        built.push(tools);
+        return tools;
+      },
+    }, child.reference, { body: task, mode: 'build', sequenceId: crypto.randomUUID() });
+    const [tools] = built;
+    if (tools === undefined) throw new Error('the delegated turn never built its tool surface');
+    return tools;
   }
 
   /** Drive one delegated task turn for a hired child through the production

@@ -9,7 +9,7 @@ export const ActorReferenceSchema = v.strictObject({
   parentActorId: v.nullable(v.pipe(v.string(), v.nonEmpty())),
 });
 export type ActorReference = Readonly<v.InferOutput<typeof ActorReferenceSchema>>;
-export const ActorIdentitySchema = v.strictObject({
+const ActorIdentitySchema = v.strictObject({
   ...ActorReferenceSchema.entries, name: v.pipe(v.string(), v.nonEmpty()), storageKey: v.pipe(v.string(), v.nonEmpty()),
 });
 export type ActorIdentity = Readonly<v.InferOutput<typeof ActorIdentitySchema>>;

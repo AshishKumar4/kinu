@@ -269,8 +269,14 @@ interface HostSlot {
  * behind under an id another actor can be issued. `workspace_actors` is
  * excluded because the directory owns that row's lifecycle, and the FTS shadow
  * tables are excluded because they are rebuilt from their virtual table.
+ *
+ * MODULE-LOCAL, and it stays that way: the only caller is
+ * {@link purgeActorRows} below, and nothing outside this file has any business
+ * with a table list — a caller holding one is a second cleanup pass whose
+ * exclusions are its own. A reader that wants the property this derives asks
+ * the host to retire an actor and looks at the rows.
  */
-export function actorScopedTables(sql: SqlExecutor): readonly string[] {
+function actorScopedTables(sql: SqlExecutor): readonly string[] {
   const rows = sql<{ name: string; sql: string }>`
     SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`;
   const names: string[] = [];
