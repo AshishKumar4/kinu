@@ -1,5 +1,5 @@
 {
-  "measured": "9a8b98760: 962 test files, 868 runnable suites, 12234 tests, 36 runners, 64 non-public product members",
+  "measured": "368bce9b2: 931 test files, 842 runnable suites, 11593 tests, 36 runners, 64 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -30,7 +30,7 @@
       "count": 1
     },
     {
-      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: the HTTP dispatcher consumes THIS table \u2014 no second scope policy anywhere :: declared mirror",
+      "key": "mirror :: packages/cf-backend/tests/unit-rpc-gate.test.ts :: the HTTP dispatcher consumes THIS table — no second scope policy anywhere :: declared mirror",
       "count": 2
     },
     {
@@ -366,7 +366,7 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a failed warm is contained \u2014 nothing reaches the settled turn :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: a failed warm is contained — nothing reaches the settled turn :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -374,7 +374,7 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: an aborted turn warms \u2014 the next turn still needs its connections :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: an aborted turn warms — the next turn still needs its connections :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -382,11 +382,11 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: one settle asks the one UserDO authority exactly once, with this actor\u2019s caller :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: one settle asks the one UserDO authority exactly once, with this actor’s caller :: harness bridge to a non-public member",
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the next settle retries \u2014 a failure needs no record to be retryable :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-mcp-settle-warmup.test.ts :: the next settle retries — a failure needs no record to be retryable :: harness bridge to a non-public member",
       "count": 2
     },
     {
@@ -602,10 +602,6 @@
       "count": 1
     },
     {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the per-turn system prompt carries permission, provenance, and role :: expect(<source text>).toContain",
-      "count": 3
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-workers-ai-auth.test.ts :: UserDO refreshes expiring Cloudflare credentials and persists the rotation :: expect(<source text>).toContain",
       "count": 6
     },
@@ -702,11 +698,11 @@
       "count": 1
     },
     {
-      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws \u2014 never -1 \u2014 naming the file and the needle :: anchor() over source text",
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws — never -1 — naming the file and the needle :: anchor() over source text",
       "count": 1
     },
     {
-      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws \u2014 never -1 \u2014 naming the file and the needle :: expect(<source text>).toThrow",
+      "key": "source_text :: packages/test-utils/tests/source.test.ts :: throws — never -1 — naming the file and the needle :: expect(<source text>).toThrow",
       "count": 1
     },
     {
@@ -738,26 +734,6 @@
       "count": 1
     },
     {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: carries every file the generated Dockerfile COPYs out of it :: expect(<source text>).toBe",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every layer path the proof restates is the constant its strategy declares :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: every layer path the proof restates is the constant its strategy declares :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no minute-scale route is posted as a blocking request any more :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no minute-scale route is posted as a blocking request any more :: reads a source file",
-      "count": 1
-    },
-    {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: no verifier probe carries a destructive command :: expect(<source text>).toContain",
       "count": 1
     },
@@ -779,26 +755,6 @@
     },
     {
       "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the driver has no monolithic verification request :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: expect(<source text>).not.toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the proof asks whether the STORE is mounted, never the lower itself :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the restated attach kinds are the product's own list :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/bench-devbox-decision.test.ts :: the state reply decodes every restoration phase the product can report :: reads a source file",
       "count": 1
     },
     {
@@ -894,7 +850,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the budget changes \u2014 two envelopes are not comparable :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the budget changes — two envelopes are not comparable :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -902,7 +858,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the repeat count changes \u2014 pass^3 is not pass^1 :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-bench-report.test.ts :: changes when the repeat count changes — pass^3 is not pass^1 :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -934,15 +890,15 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different bodies \u2192 different keys :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different bodies → different keys :: expected side computed by the code under test",
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different time buckets \u2192 different keys :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different time buckets → different keys :: expected side computed by the code under test",
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different webhook_id \u2192 different keys even for same body :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different webhook_id → different keys even for same body :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -950,7 +906,7 @@
       "count": 1
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: same body within same 5-min bucket \u2192 same key :: expected side computed by the code under test",
+      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: same body within same 5-min bucket → same key :: expected side computed by the code under test",
       "count": 1
     },
     {
@@ -979,14 +935,6 @@
     },
     {
       "key": "tautology_suspect :: packages/core/tests/unit-swarm-preset-resolution.test.ts :: all six resolve, and none of them resolves into a refusal :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-swarm-unit-axis.test.ts :: a bare axis string is not a unit \u2014 the tag IS the value :: weak-only test",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-swarm-unit-axis.test.ts :: the removed spellings are UNREPRESENTABLE, not merely refused :: weak-only test",
       "count": 1
     },
     {

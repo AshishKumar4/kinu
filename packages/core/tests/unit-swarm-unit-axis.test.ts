@@ -22,6 +22,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
+import type { JsonValue } from '../src/utils/json';
 import {
   resolveSwarm, swarmValidity, SWARM_CONTEXTS, SWARM_UNITS,
   type BranchContext, type SwarmUnitSetting,
@@ -76,18 +77,27 @@ describe('the unit axis names what a node produces, and nothing else', () => {
     expect([...SWARM_UNITS]).toEqual(['answer', 'thought']);
   });
 
+  /** Where the schema points when it refuses `input`: one dotted path per issue.
+   *  A refusal that names another axis, or none, is a different defect from
+   *  acceptance, and `toThrow()` alone cannot tell the three apart. */
+  function refusedAt(input: JsonValue): string[] {
+    const result = v.safeParse(SwarmConfigSchema, input);
+    if (result.success) throw new Error(`parsed a cut spelling: ${JSON.stringify(input)}`);
+    return result.issues.map((issue) => (issue.path ?? []).map((step) => String(step.key)).join('.'));
+  }
+
   test('the cut spellings are UNREPRESENTABLE, not merely refused', () => {
     // The one-spelling guard. `trajectory` named the shape two of the three values
     // have, and `step` never executed — accepting either beside the current set is the
     // second spelling *One spelling per axis* exists to prevent.
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'trajectory', inherit: true } })).toThrow();
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'step' } })).toThrow();
+    expect(refusedAt({ unit: { kind: 'trajectory', inherit: true } })).toEqual(['unit.kind']);
+    expect(refusedAt({ unit: { kind: 'step' } })).toEqual(['unit.kind']);
     // And no unit carries a parameter: inheritance is the `context` axis.
-    expect(() => v.parse(SwarmConfigSchema, { unit: { kind: 'answer', inherit: true } })).toThrow();
+    expect(refusedAt({ unit: { kind: 'answer', inherit: true } })).toEqual(['unit.inherit']);
   });
 
   test('a bare axis string is not a unit — the tag IS the value', () => {
-    expect(() => v.parse(SwarmConfigSchema, { unit: 'answer' })).toThrow();
+    expect(refusedAt({ unit: 'answer' })).toEqual(['unit']);
   });
 
   test('every declared unit resolves, so no declared value is unreachable', () => {
