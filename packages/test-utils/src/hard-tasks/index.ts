@@ -16,7 +16,7 @@
  * cases from {@link HARD_TASKS} makes the drift impossible rather than merely
  * unlikely, and it is why `hardTaskCases` returns cases instead of being a file.
  */
-import type { EvalCase, VFS } from '@kinu.run/core';
+import type { EvalBudget, EvalCase, VFS } from '@kinu.run/core';
 import { outcomeRow, ratioOutcome, type VerifierContext } from '../eval-outcome';
 import type { EvalScoreRow } from '../eval-run';
 import type { HardTask } from './cost-model';
@@ -36,6 +36,24 @@ export { HARD_TASKS } from './tasks';
 export const HARD_TASK_ENV = 'hard-task';
 
 /**
+ * What one hard task may spend. One shape for the tier rather than per-task
+ * sizing, for the reason the probes state where they are declared: nobody has
+ * measured this tier's cost distribution yet, so per-task ceilings would
+ * pretend to a precision the run record has not earned. These ceilings are set
+ * to catch a runaway episode — a search stuck looping, a verifier hammered a
+ * hundred times — not to rank efficiency: a competent hard-task episode closes
+ * far fewer than 120 steps, and the recorded `measured` beside every verdict
+ * is what a later tightening sizes from. Generous on purpose; the judges
+ * record rather than gate, so a ceiling that fires is a finding, never a red.
+ */
+export const HARD_TASK_BUDGET: EvalBudget = {
+  steps: 120,
+  tokens: 1_000_000,
+  toolErrorRate: 0.6,
+  wallMs: 1_800_000,
+};
+
+/**
  * The corpus as eval cases, ready to concatenate with any other corpus.
  *
  * `rubric` and `reference` are deliberately absent: this tier's ground truth is
@@ -51,6 +69,7 @@ export function hardTaskCases(): EvalCase[] {
     // The instance size, so a record says what was actually solved. A stored score
     // whose instance is not recorded beside it is a score nobody can re-derive.
     params: { ...task.problem.params },
+    budget: { ...HARD_TASK_BUDGET },
   }));
 }
 
