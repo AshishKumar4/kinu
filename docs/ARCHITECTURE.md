@@ -476,7 +476,7 @@ graph TB
         Core["core/<br/>turn pipeline + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>hosted actors over one SQLite, UserDO, React UI"]
         Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
-        Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · r2fs · overlay-cas · supervision · ports)"]
+        Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
@@ -590,11 +590,11 @@ event logs, Think session tables. Schema and boundaries:
 [STORAGE.md](./STORAGE.md). The vendored filesystem is in
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 485 named declarations
+Selected core algorithms are modeled in Lean 4 (`lean/`): 366 named declarations
 cover abstract models of agent, evolution, execution, exploration, MCTS, safety,
-and storage properties. The traceability map enrolls 380 proved-in-abstract-model
-entries and 105 by-construction witnesses against 52 requirements, with no `sorry`
-(measured 2026-08-30 by `lean/check-traceability.mjs`). Axiom reports
+and storage properties. The traceability map enrolls 276 proved-in-abstract-model
+entries and 90 by-construction witnesses against 46 requirements, with no `sorry`
+(measured 2026-09-09 by `lean/check-traceability.mjs`). Axiom reports
 use only the Lean three kernel axioms. One separate SQLite FTS5 assumption is
 documented and enrolled. CI (`.github/workflows/lean-verify.yml`,
 `scripts/verify-lean.sh`) gates compilation, negative consistency, axiom
