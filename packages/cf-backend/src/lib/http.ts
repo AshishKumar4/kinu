@@ -181,7 +181,8 @@ const PRINTABLE_FIELD_VALUE = /^[\x20-\x7E]+$/;
  *
  * No length bound is invented here. The suffix arrived as an HTTP header on an
  * intercepted request, so the runtime's own header limit already bounded it,
- * and it was previously forwarded to the same upstream verbatim.
+ * and the same bytes reach the same upstream whether or not this token is
+ * prepended.
  */
 export function kinuUserAgent(callerUserAgent: string | null): string {
   const caller = callerUserAgent?.trim() ?? '';

@@ -238,10 +238,11 @@ describe('the socket retires a delta on every fact that ends one', () => {
 
   test('a dropped socket forgets every head — the gap is unheard, not empty', () => {
     // The chat socket's own close, not the lightweight RPC hook's above it.
-    // The hook no longer reads close codes itself — the SDK classifies a
-    // terminal close (`isTerminalCloseEvent`) and publishes `connectionError`,
-    // so the pin is the close handler that BOTH marks the gap and drops the
-    // live paint; a second code-reading authority here was deleted on purpose.
+    // The hook does not read close codes itself — the SDK classifies a terminal
+    // close (`isTerminalCloseEvent`) and publishes `connectionError`, so the pin
+    // is the close handler that BOTH marks the gap and drops the live paint. A
+    // second code-reading authority here would be a second answer to the same
+    // question.
     const at = HOOK.indexOf('// No close-code list here.');
     expect(at).toBeGreaterThan(-1);
     const onClose = HOOK.slice(at, HOOK.indexOf('onError: useCallback', at));

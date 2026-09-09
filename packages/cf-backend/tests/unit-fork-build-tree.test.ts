@@ -1,10 +1,10 @@
 /**
  * buildTree roots the rendered MCTS tree at the NEWEST search.
  *
- * The regression this pins: rows for several searches arrive together (the
- * server used to send the whole search_nodes table) and the old fold kept the
- * FIRST parentless row — the oldest root — so the workspace's first failed
- * search shadowed every later one. One stale node, no depth, forever.
+ * The regression this pins: rows for several searches arrive together, and a
+ * fold that keeps the FIRST parentless row — the oldest root — lets the
+ * workspace's first failed search shadow every later one. One stale node, no
+ * depth, forever.
  */
 
 import { describe, test, expect } from 'bun:test';

@@ -7,19 +7,19 @@
  * it — and, because the tools were named `sandbox_*`, reported "found nothing"
  * rather than "no access".
  *
- * WHAT THE CUTOVER CHANGED HERE, AND WHAT IT DID NOT. A head is a hosted actor
- * of the workspace it forks: same database, same container, same Nimbus session,
- * same device consent, and the workspace's own file plane keyed by the
- * REGISTERED workspace rather than by the head's own name. So the reads this
- * file exists for are direct now — no `parent` executor, no `workspaceBoxOp`
- * forwarding RPC, no second Durable Object over async RPC.
+ * THE READ HALF. A head is a hosted actor of the workspace it forks: same
+ * database, same container, same Nimbus session, same device consent, and the
+ * workspace's own file plane keyed by the REGISTERED workspace rather than by
+ * the head's own name. So the reads this file exists for are direct — no
+ * `parent` executor, no `workspaceBoxOp` forwarding RPC, no second Durable
+ * Object over async RPC.
  *
- * The WRITE half is genuinely different and is asserted as such below rather
- * than preserved: a head is provisioned its own home and its own credential
- * (`hostedHomeKind` answers `'head'`), so it reads the shared tree and writes
- * only its own subtree, exactly as a hired subordinate does. The old
- * expectation — a head writing `/home/user/shared/notes.md` into the canonical
- * tree — describes a facet that shared its parent's uid and no longer holds.
+ * THE WRITE HALF is not symmetric with it, and is asserted as such below. A
+ * head is provisioned its own home and its own credential (`hostedHomeKind`
+ * answers `'head'`), so it reads the shared tree and writes only its own
+ * subtree, exactly as a hired subordinate does. A head writing
+ * `/home/user/shared/notes.md` into the canonical tree would mean an actor
+ * sharing its parent's uid, which is not what a head is.
  */
 
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -189,24 +189,23 @@ describe('a head forks its parent workspace', () => {
     await handle.exec('true');
     await handle.exec('true');
 
-    // Zero, and the second touch is what makes it a regression test: with an
-    // EMPTY key the old wrapper marked the container restored having restored
-    // nothing, one-shot and never retried, so every later call execed against
-    // whatever state it found. An actor that cannot mark the container restored
-    // cannot mark it falsely.
+    // Zero, and the second touch is what makes it a regression test: a wrapper
+    // that marks the container restored from an EMPTY key restores nothing,
+    // one-shot and never retried, so every later call execs against whatever
+    // state it found. An actor that cannot mark the container restored cannot
+    // mark it falsely.
     expect(restoresPerformed).toBe(0);
   });
 
   /**
-   * The write half, and the one expectation the cutover genuinely reversed.
+   * The write half: a head reads the shared tree and writes only its own.
    *
-   * A facet shared its parent's uid on the workspace tree, so a head's write
-   * landed in the canonical filesystem and the test here asserted exactly that.
    * A hosted head is provisioned its own home and its own credential — the same
    * `hostedHomeKind` arm a hired subordinate takes — so the shared tree is
-   * READ-ONLY to it and its writes go to its own subtree. Asserted as a pair,
-   * because a refusal alone would also hold for a head with no file plane at
-   * all, which is the original defect wearing a different face.
+   * READ-ONLY to it and its writes go to its own subtree. An actor sharing its
+   * parent's uid would land a head's write in the canonical filesystem instead.
+   * Asserted as a pair, because a refusal alone would also hold for a head with
+   * no file plane at all, which is the original defect wearing a different face.
    */
   test('a head reads the canonical workspace and writes only its own home', async () => {
     const { rt, home, workspace } = await hostedHead({ 'repo/parser.ts': 'one\ntwo\n' });
@@ -248,31 +247,20 @@ describe('a head forks its parent workspace', () => {
 });
 
 /**
- * FOUR BOOTSTRAP TESTS ARE GONE WITH THE BOOTSTRAP THEY DESCRIBED.
+ * A HOSTED HEAD HAS NO BOOTSTRAP SEQUENCE, SO THE PROPERTIES ONE WOULD OWE ARE
+ * ANSWERED ELSEWHERE.
  *
- * They were:
- *   • 'a facet cannot change its registered parent workspace' — `setSharedParent`
- *     was a seed RPC pushed at a fresh facet, and a second call had to be
- *     refused because the facet's parent lived in its own `actor_identity` row.
- *     A hosted head's parent is `workspace_actors.parent_actor_id`, written by
+ *   • Its registered parent is `workspace_actors.parent_actor_id`, written by
  *     the directory under the parent's authority and re-validated on every
- *     binding, so there is no seed to send twice.
- *   • 'an MCTS branch — seeded without a parent workspace — cannot fork at all'
- *     — `spawnBranchFacet` seeded `setOwner` and nothing else. A branch is a
- *     `'branch'` directory row now and `hostBranch` hands it two model calls;
- *     the containment property is asserted in
+ *     binding. Nothing seeds a parent at a fresh actor, so there is no second
+ *     seed call to refuse.
+ *   • A branch is a `'branch'` directory row and `hostBranch` hands it two
+ *     model calls; the containment property is asserted in
  *     unit-exploration-containment.test.ts, which drives `hostBranch` and shows
  *     it acquires no home.
- *   • 'a facet evicted between initHead and runAsHead activates from its stored
- *     row' and 'a stored activation that no longer matches its schema refuses by
- *     name' — both were about `facet_activation`, the durable row a two-RPC
- *     bootstrap needed because the Durable Object could hibernate between
- *     `initHead` and `runAsHead`. `hostHead` takes its `HeadInput` as an
- *     argument and runs in the caller's isolate: there is one call, no window to
- *     hibernate in, and no persisted work spec to re-validate. Recovery of an
- *     interrupted head is a journal question now (`markInterrupted`, and
- *     `ActorHost.resumable` over unsettled claims), which is where it is tested.
- *
- * Each of those refusals was correct for the shape it guarded. Re-pointing them
- * would have meant inventing a seed sequence the backend no longer has.
+ *   • `hostHead` takes its `HeadInput` as an argument and runs in the caller's
+ *     isolate: one call, no window for the Durable Object to hibernate in, and
+ *     no persisted work spec to re-validate. Recovery of an interrupted head is
+ *     a journal question — `markInterrupted`, and `ActorHost.resumable` over
+ *     unsettled claims — which is where it is tested.
  */

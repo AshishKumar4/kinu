@@ -85,12 +85,12 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
 
 /**
  * The agents-SDK facet protocol: the `_cf_`-prefixed methods the SDK invokes on
- * a stub rather than on `this`. Kinu registers no facet class of its own any
- * more, but the SDK still invokes this protocol on the ROOT object — clones,
- * connection metadata and the root alarm owner all ride it — so sealing these
- * would break the platform's own bookkeeping,
- * facet schedules, and sub-agent WebSocket bridging. Only the agent family
- * needs them; `UserDO` neither is a facet nor spawns one.
+ * a stub rather than on `this`. Kinu registers no facet class of its own, but
+ * the SDK still invokes this protocol on the ROOT object — clones, connection
+ * metadata and the root alarm owner all ride it — so sealing these would break
+ * the platform's own bookkeeping, facet schedules, and sub-agent WebSocket
+ * bridging. Only the agent family needs them; `UserDO` neither is a facet nor
+ * spawns one.
  *
  * Derived by reading `agents/dist/index.js` for `_cf_` calls whose receiver is
  * not `this`, so it is the SDK's actual cross-stub surface and not a prefix
@@ -433,20 +433,18 @@ const ORCHESTRATOR_METHODS = [
   'startExecutorFileDownload',
   'transitionReleaseChange',
   'writeExecutorFileChunk',
-  // The workspace's byte plane, for the facets that share it. Here rather than
+  // The workspace's byte plane, for the facets that share it.
   // `routeWorkspacePreview` is reached only by the preview edge, which has
   // already verified the hostname's signature, and re-checks the capability
-  // handle inside the object. `workspaceBoxOp` is GONE with the facets: it was
-  // a monomorphic file-forwarding RPC that existed because a facet was a
-  // separate object sharing its parent's tree, and `NimbusExecOptions.cred`
-  // names a uid, so it was the single widest thing on this transport. Hosted
-  // actors share the root's box directly, so nothing forwards a file operation
-  // and there is nothing to keep shut.
+  // handle inside the object. Nothing forwards a file operation — hosted actors
+  // share the root's box directly — so no monomorphic file-forwarding RPC sits
+  // on this transport, and one would be the single widest thing on it, since
+  // `NimbusExecOptions.cred` names a uid.
   'routeWorkspacePreview',
   // A hosted actor's chat address, resolved through the directory: the edge
   // refuses a name this workspace does not host before the request reaches the
-  // object. Answers a refusal, never a storage key — the physical key stopped
-  // appearing in a client-visible URL with the facet hop.
+  // object. Answers a refusal, never a storage key: no physical key appears in
+  // a client-visible URL.
   'resolveHostedActorRoute',
   'applyActorDirectory',
   // Introduced bindings return through the stub transport, each stamping the
@@ -472,27 +470,17 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /**
- * THERE IS NO SECOND ACTOR SURFACE ANY MORE, and that is the whole of what this
- * section used to hold.
+ * THERE IS NO SECOND ACTOR SURFACE, and this section is where that is stated.
  *
- * Four exported allowlists lived here — `SUBORDINATE_RPC_SURFACE`,
- * `EXPLORATION_RPC_SURFACE`, `SUBORDINATE_AGENT_BOOT_SURFACE` and the two
- * method arrays behind them — because one facet class hosted four modes and a
- * STUB could reach any method on it. Containment therefore had to be a runtime
- * seal: a fresh facet sealed to the union of both families in its constructor,
- * and whichever seed arrived (`setSubordinateIdentity` or `setSharedParent`)
- * narrowed the instance so a head could not reach a subordinate seed and a
- * subordinate could not reach `runAsHead`.
- *
- * None of it has anything left to protect. A hosted actor is not addressable
- * over a stub at all: there is no object to hold a stub TO, no seed to push, and
- * no mode to be told. `initHead`/`runAsHead`/`initNode`/`runAsNode`/
- * `explore`/`generateReflection`/`setOwner`/`setSharedParent`/
- * `setSubordinateIdentity`/`enqueueSubordinateTask` are all gone with the
- * class; what replaced them are calls on objects the root already holds
- * (`host.acquire`, `host.run`), reachable only by code inside this object.
- * Containment rides the ACTOR — its `actor_id`-scoped rows, its own uid on both
- * planes, its own directory row — instead of riding a seal over a wire.
+ * A hosted actor is not addressable over a stub at all: there is no object to
+ * hold a stub TO, no seed to push, and no mode to be told. So there is no
+ * allowlist here for one, and nothing narrows an instance at runtime the way a
+ * seal over a wire would have to if a single class hosted several modes and a
+ * stub could reach any method on it. Acquiring and running a hosted actor is a
+ * call on an object the root already holds (`host.acquire`, `host.run`),
+ * reachable only by code inside this object, and containment rides the ACTOR —
+ * its `actor_id`-scoped rows, its own uid on both planes, its own directory
+ * row — rather than a seal over a wire.
  *
  * A hosted actor's CHAT surface is the orchestrator's own `@callable` surface,
  * bound to that actor by the request path (`agent-routing.ts`), so it is

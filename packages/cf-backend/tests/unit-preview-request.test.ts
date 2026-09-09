@@ -3,11 +3,10 @@
  *
  * A preview request crosses into agent-controlled guest code, and the strip
  * list decides which of the browser's cookies and which bearer go with it. The
- * list used to be a hand-kept copy of two other modules' enumerations, and it
- * drifted in both directions: it stripped a cookie no setter in the tree
- * writes, and it let a cookie `cli/routes.ts` does set through. So the list is
- * derived here from the modules that own it, and this file holds the two sides
- * of that derivation to the same set.
+ * list is derived from the modules that own it, never hand-kept beside their
+ * enumerations: a copy drifts in both directions, stripping a cookie no setter
+ * in the tree writes and letting a cookie `cli/routes.ts` does set through.
+ * This file holds the two sides of that derivation to the same set.
  */
 import { describe, expect, test } from 'bun:test';
 import { sanitizePreviewRequestHeaders } from '../src/lib/preview-request';

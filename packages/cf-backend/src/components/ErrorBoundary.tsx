@@ -7,16 +7,14 @@
  * other tabs and the chat panel keep working, and the user sees a clear
  * recovery action. (STABILITY-AUDIT §D2.)
  *
- * It also REPORTS. What it used to do instead was write the error to `console`
- * under a comment claiming "production builds get the same stack via the
- * browser's existing error reporting"; no such reporting existed, so a
- * whitescreened view in front of a user produced no line anywhere an operator
- * reads. `client-error/report.ts` sends one bounded, same-origin report per
- * caught error, and `client-error/route.ts` writes it to Workers Logs against
- * the build the page was running. The console line is gone rather than kept
- * beside it: the fallback below already renders the message and the stack on
- * screen, so a developer loses nothing, and one destination is easier to trust
- * than two.
+ * It also REPORTS. The browser has no error reporting of its own to inherit,
+ * so an error written only to `console` leaves a whitescreened view in front of
+ * a user with no line anywhere an operator reads. `client-error/report.ts`
+ * sends one bounded, same-origin report per caught error, and
+ * `client-error/route.ts` writes it to Workers Logs against the build the page
+ * was running. There is no console line beside it: the fallback below already
+ * renders the message and the stack on screen, so a developer loses nothing,
+ * and one destination is easier to trust than two.
  */
 
 import { Component, type ReactNode, type ErrorInfo } from "react";

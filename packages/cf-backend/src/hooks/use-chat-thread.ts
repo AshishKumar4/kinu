@@ -6,26 +6,25 @@
  * the socket has streamed since. Anything older exists only in storage and is
  * reached one cursored page at a time, over `getChatHistoryPage`.
  *
- * One hook because there is one contract and two panes. The workspace column had
- * the walk; the subordinate column had a comment saying it did not need one — "a
- * subordinate facet's transcript is one delegation, and the SDK's seed already
- * carries all of it" — which is not a property of a subordinate. A facet runs
- * `initWorkspaceSchema` against its own storage and keeps its own conversation,
- * and a helper that worked for an hour has more of one than the window holds. So
- * everything past the window was not slow to reach, it was unreachable, and the
- * pane had no affordance saying so. Copying the workspace column's four hooks
- * across would have made that one contract into two.
+ * One hook because there is one contract and two panes. Both columns need the
+ * walk. A subordinate facet's transcript is not one delegation the SDK's seed
+ * already carries whole: a facet runs `initWorkspaceSchema` against its own
+ * storage and keeps its own conversation, and a helper that worked for an hour
+ * has more of one than the window holds. Without the walk everything past the
+ * window is not slow to reach, it is unreachable, and the pane has no
+ * affordance saying so. Copying the workspace column's four hooks across would
+ * make that one contract into two.
  *
  * ── Why the derivation is staged (KINU-072) ─────────────────────────────────
- * Every streamed token replaces the live list, and the thread used to be
- * re-derived from scratch on each one: the merge rebuilt a Set of live ids and
- * re-projected every restored row, then `buildTranscript` walked the whole
- * merged list and built a second Set — cost growing with the conversation, per
- * token, plus fresh row identities that broke `memo(MessageView)` for every
- * historical message. The stages below pin what cannot have changed inside a
- * tick: the restored projection moves only when a page lands, the overlap
- * filter only when the live window's ID SET changes, and the settled half's
- * fold only when either of those does. A token re-folds the live window alone.
+ * Every streamed token replaces the live list. Re-deriving the thread from
+ * scratch on each one would rebuild a Set of live ids and re-project every
+ * restored row, then walk the whole merged list in `buildTranscript` and build
+ * a second Set — cost growing with the conversation, per token, plus fresh row
+ * identities that break `memo(MessageView)` for every historical message. The
+ * stages below pin what cannot have changed inside a tick: the restored
+ * projection moves only when a page lands, the overlap filter only when the
+ * live window's ID SET changes, and the settled half's fold only when either of
+ * those does. A token re-folds the live window alone.
  */
 import { useCallback, useMemo } from "react";
 import * as v from "valibot";

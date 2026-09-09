@@ -57,17 +57,17 @@ const SignalCardEventSchema = v.variant('state', [
  * The provenance of a message, or null when the operator really did type it.
  *
  * The decision is `turnAuthor`'s and is made from written markers — the author
- * stamp the enqueue seam puts on every programmatic row, or, on rows written
- * before that stamp existed, the `kinuEvent` metadata and the
- * `programmatic:` id prefix. Nothing here reads the prose.
+ * stamp the enqueue seam puts on every programmatic row, or, on a row that
+ * carries no stamp, the `kinuEvent` metadata and the `programmatic:` id
+ * prefix. Nothing here reads the prose.
  *
  * Five events have a card that says what happened without the harness's
  * wording; everything else harness-authored is `system_event`, which shows the
- * event's name and keeps its words folded away. That fallback is the point:
- * this used to be an allowlist of those four, so every event kind added after
- * it — `fork_interrupted`, `completion_gate`, `take_pick`, `overflow_retry` —
- * arrived in the owner's own bubble, and five `fork_interrupted` rows were
- * sitting in the owner's live transcripts saying so.
+ * event's name and keeps its words folded away. That fallback is the point: an
+ * allowlist instead puts every event kind added after it — `fork_interrupted`,
+ * `completion_gate`, `take_pick`, `overflow_retry` — in the owner's own bubble,
+ * which is how five `fork_interrupted` rows end up in live transcripts
+ * claiming the owner typed them.
  *
  * `deferred_approval` is the odd one: the OWNER did decide it, in the queue.
  * But the words in the turn are the harness's, not theirs, and rendering them

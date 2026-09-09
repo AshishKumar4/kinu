@@ -220,9 +220,9 @@ describe('CLI control routes', () => {
 
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
-    // A ticket is a bearer credential in a JSON body. It used to say `no-store`
-    // because this route remembered to; it says the account policy now because
-    // `json()` applies it to every authenticated answer.
+    // A ticket is a bearer credential in a JSON body, and it carries the
+    // account-wide policy because `json()` applies it to every authenticated
+    // answer rather than this route remembering to say `no-store`.
     expect(handled(ticket).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
     expect(v.parse(TicketResponseSchema, await handled(ticket).json()))
       .toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });

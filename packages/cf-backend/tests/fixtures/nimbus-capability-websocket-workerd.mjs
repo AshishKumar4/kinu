@@ -193,14 +193,14 @@ try {
   await baseline.dispose();
 }
 
-// This used to pin workerd's "your Worker's code had hung" teardown diagnostic
-// (server.c++:5535). That failure mode is gone, not moved: miniflare 5 no
-// longer leaves the socket's request outstanding when the runtime goes down, so
-// nothing is cancelled and nothing is logged. Measured rather than assumed —
-// workerd 1.20260820.1 driven under the pre-5 raw-stdio path still prints it
-// (at server.c++:6573 now), while the same binary under miniflare 5 writes zero
-// bytes to stdout and stderr for this flow, taken from a tee wrapper on the
-// runtime's own streams via MINIFLARE_WORKERD_PATH.
+// workerd's "your Worker's code had hung" teardown diagnostic
+// (server.c++:6573) is not available as a control here: miniflare 5 does not
+// leave the socket's request outstanding when the runtime goes down, so nothing
+// is cancelled and nothing is logged. Measured rather than assumed — workerd
+// 1.20260820.1 driven under the raw-stdio path still prints it, while the same
+// binary under miniflare 5 writes zero bytes to stdout and stderr for this
+// flow, taken from a tee wrapper on the runtime's own streams via
+// MINIFLARE_WORKERD_PATH.
 //
 // So the control is the guest's own line instead of platform noise: the
 // one-Worker baseline proves the channel carries runtime diagnostics at all,

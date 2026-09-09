@@ -65,7 +65,7 @@ export async function createCloudWorkspaceForUser(
   const menu = await listAvailableModels(env, userId, caller);
   // The CHOICE is core's (`defaultSpecFor`): a configured default wins only if
   // the account can actually serve it, else the native Workers AI model, else
-  // nothing — never the first entry in the menu, which used to sign new
+  // nothing — never the first entry in the menu, which would sign new
   // workspaces up to a paid BYO provider. The COPY below stays here, because the
   // remedy is this surface's: the CLI's counterpart names `kinu auth`.
   const model = defaultSpecFor(
@@ -86,14 +86,13 @@ export async function createCloudWorkspaceForUser(
     throw new Error(`Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
   }
   const entry = registered.entry;
-  // ALREADY SOMEBODY'S. Creating over a live workspace used to run the whole
-  // birth sequence on it — re-seeding SOUL.md from this request's mission,
-  // resetting the Output baseline the workspace measures its diff against, and
-  // opening a SECOND genesis turn beside whatever it was already doing. Two
-  // creates racing on one name did it to each other, and a retried request did
-  // it to itself. The name is taken by a workspace this owner already has, so
-  // the honest answer is that workspace, unchanged and byte-stable across
-  // retries.
+  // ALREADY SOMEBODY'S. Running the whole birth sequence over a live workspace
+  // re-seeds SOUL.md from this request's mission, resets the Output baseline
+  // the workspace measures its diff against, and opens a SECOND genesis turn
+  // beside whatever it was already doing — which is what two creates racing on
+  // one name do to each other, and what a retried request does to itself. The
+  // name is taken by a workspace this owner already has, so the honest answer
+  // is that workspace, unchanged and byte-stable across retries.
   if (registered.status === 'active') return entry;
   try {
     const initialization: InitializeOrchestratorInput = {
@@ -158,9 +157,9 @@ export async function createCloudWorkspaceForUser(
  * account owns: it tears the Durable Object down first and fails closed if that
  * teardown fails. But when the create failed BECAUSE the object already belongs
  * to somebody else, that teardown is a call into a victim's workspace which
- * correctly refuses — and the refusal used to leave this account's roster row in
+ * correctly refuses — and that refusal leaves this account's roster row in
  * place, pointing at a workspace it does not own, which every later ownership
- * check then had to catch. `releaseWorkspaceReservation` exists for exactly this
+ * check then has to catch. `releaseWorkspaceReservation` exists for exactly this
  * case: it drops the one row this create inserted, matched on its own
  * `createdAt`, and never contacts the target object at all.
  *
@@ -171,7 +170,7 @@ export async function createCloudWorkspaceForUser(
  * tolerated. The release path touches nothing but this account's own roster, so
  * a failure there is not a state this undo knows how to leave behind: it
  * propagates to the create, which records it beside the fault that started the
- * rollback. Returning nothing for both was how a rollback that never ran read
+ * rollback. Returning nothing for both is how a rollback that never ran reads
  * exactly like one that did.
  */
 async function rollbackRegistration(input: {

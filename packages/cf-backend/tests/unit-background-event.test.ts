@@ -45,9 +45,9 @@ describe('programmatic turn provenance', () => {
   });
 
   test('a harness event with no card of its own is still not the owner', () => {
-    // THE REGRESSION. This used to be an allowlist of four event names and
-    // everything else fell through to the owner's bubble. Measured 2026-08-20
-    // on the owner's live workspaces: `fork_interrupted` rows reading "23
+    // THE REGRESSION. An allowlist of event names lets everything else fall
+    // through to the owner's bubble. Measured 2026-08-20 on the owner's live
+    // workspaces: `fork_interrupted` rows reading "23
     // head(s) across 6 fork run(s) were still marked running…" in
     // sunlit-stone-4a20, stone-ash-71f2 and principal-machine-f1296946.
     expect(classifyProgrammaticTurn({ kinuEvent: FORK_INTERRUPTED_SIGNAL, heads: 23 }))
@@ -155,11 +155,11 @@ describe("the gallery's advisor fixture", () => {
     }
   });
 
-  test('the key the fixture used to stamp is not a card at all', () => {
-    // Why the drift was invisible for as long as it was: an unread event key is
-    // not a wrong card, it is NO card, and no card is the owner's own bubble.
-    // The key is assembled from parts: the pre-rename spelling survives as a
-    // regression case without surviving as a literal anyone can grep for.
+  test('a metadata event key nothing reads is not a card at all', () => {
+    // Why such a drift is invisible: an unread event key is not a wrong card,
+    // it is NO card, and no card is the owner's own bubble. The key is assembled
+    // from parts, so the retired spelling is a regression case without being a
+    // literal anyone can grep for.
     const retiredKey = `${['prot', 'eus'].join('')}Event`;
     expect(classifyProgrammaticTurn(
       { [retiredKey]: ADVISOR_SIGNAL_KIND, [ADVISOR_SEVERITY_METADATA_KEY]: 'blocker' },

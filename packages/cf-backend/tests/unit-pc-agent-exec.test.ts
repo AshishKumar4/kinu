@@ -176,10 +176,10 @@ describe('pc-agent exec RPC', () => {
 /**
  * Cancellation, at the only layer that can prove it: real processes.
  *
- * A cancelled command used to mean a cancelled WAIT. The daemon had no method
- * to stop anything, kept no record of what it had started, and answered a
- * command's own exit by unref'ing the child — so a `sleep &` inside the command
- * kept running on the user's machine after Kinu reported the turn stopped.
+ * A cancelled command means a cancelled PROCESS, not a cancelled WAIT. A daemon
+ * with no method to stop anything, no record of what it had started, and a
+ * command's own exit answered by unref'ing the child leaves a `sleep &` inside
+ * the command running on the user's machine after Kinu reports the turn stopped.
  *
  * So each test below reads a real descendant's pid out of the command itself and
  * asks the kernel about it. The `alive before` assertion in the first test is
@@ -481,7 +481,7 @@ describe('pc-agent command cancellation', () => {
     // Built over the root while it is still empty, so it holds no entry for
     // the request below. That is the live window: the supervisor publishes
     // its state before `register` runs, and a socket dropping in between
-    // used to leave the command running with nothing left to name it.
+    // would leave the command running with nothing left to name it.
     const detached = v.parse(SupervisorRegistrySchema2, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
     const ws = recorder();
     handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);

@@ -52,8 +52,8 @@ import { builtinModules } from 'node:module';
  * with oxc, whose only decorator support is the LEGACY (pre-standard) form. On a
  * decorated module oxc strips the types and emits the `@` unchanged, so the
  * module reaches the runtime as `SyntaxError: Invalid or unexpected token`. That
- * is why this layer hosted only undecorated probe classes and could not load a
- * production Agent: not a charter decision, a transform gap. KINU-065.
+ * is what would confine this layer to undecorated probe classes and keep it from
+ * loading a production Agent: not a charter decision, a transform gap. KINU-065.
  *
  * Turning on oxc's `decorator.legacy` would be worse than the gap. Legacy
  * semantics hand the decorator the PROTOTYPE where the standard hands it the

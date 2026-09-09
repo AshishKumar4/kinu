@@ -220,9 +220,9 @@ describe('a background job whose executor died', () => {
     ));
 
     // `completed` is the mark that moves a managed row off `interrupted`, and it
-    // now means "this row's obligation has a carrier" rather than "the job ran":
-    // a settled job's re-drive delivers a WAKE, and a wake resolves only when the
-    // turn it queues ends, so no classification can wait for it.
+    // means "this row's obligation has a carrier", not "the job ran": a settled
+    // job's re-drive delivers a WAKE, and a wake resolves only when the turn it
+    // queues ends, so no classification can wait for it.
     expect(result.status).toBe('completed');
     expect(result).toMatchObject({ snapshot: { lane: 'bg:search', redrive: 'background-job' } });
     // The carrier itself, durable and visible: a fresh `cf_agents_runs` row under
@@ -563,12 +563,12 @@ describe('a sandbox lifecycle failure', () => {
   });
 
   test('every stage the CONTAINER can emit is queued, not rejected', async () => {
-    // Driven from the PRODUCER's list, which is the whole point. The two sides
-    // used to keep separate ones — Devbox emitted `attach` and `checkpoint`,
-    // this schema admitted neither — so both classes of failure the seam exists
-    // for were answered `rejected`, frozen in the container's ledger as a
-    // caller defect, never retried and never seen by the agent. A test that
-    // iterated the CONSUMER's list agreed with itself and saw none of it.
+    // Driven from the PRODUCER's list, which is the whole point. Two separate
+    // lists let the sides drift — Devbox emits `attach` and `checkpoint`, and a
+    // schema admitting neither answers `rejected` to both classes of failure
+    // the seam exists for, freezing them in the container's ledger as a caller
+    // defect, never retried and never seen by the agent. A test that iterated
+    // the CONSUMER's list would agree with itself and see none of it.
     const { agent } = orchestratorHarness();
     const texts: string[] = [];
     Object.defineProperty(agent, 'submitMessages', {

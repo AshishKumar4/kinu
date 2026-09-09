@@ -130,9 +130,8 @@ describe('a server name is one identity, enforced by the database', () => {
   });
 
   test('a rename obeys the SAME name rule an add does', async () => {
-    // The rename path used to carry its own copy of the bounds under its own
-    // sentence, so the two write paths onto one UNIQUE index could disagree
-    // about what a name is.
+    // Rename and add run the SAME bounds, so the two write paths onto one
+    // UNIQUE index cannot disagree about what a name is.
     const h = harness();
     await seedServer(h, 'srv1', { name: 'github' });
     const owner = await testOwner();
@@ -414,8 +413,8 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   test('a cold activation over storage a pre-change build wrote scrubs it', async () => {
     const first = harness();
     await seedServer(first, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
-    // The SDK's own storage as the previous implementation left it: the
-    // credential as data, replayed from there on every reconnect.
+    // The SDK's own storage with the credential as DATA — a plaintext row this
+    // build never writes, replayed from there on every reconnect.
     seedSdkMcpServer('srv1', { type: 'auto', requestInit: { headers: { Authorization: 'Bearer mcp-secret' } } });
     expect(persistedServerOptions('srv1')).toContain('mcp-secret');
 
@@ -434,18 +433,17 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
   });
 
   test('a row whose credential column is NULL is scrubbed too, not replayed', async () => {
-    // The custody hole this closes: the scrub used to be a side effect of
-    // registering a CREDENTIALED row, so it was keyed on a column that can be
-    // null. Clear the credential — or let the old build's best-effort
-    // re-register fail — and the column goes NULL while the SDK's own row keeps
-    // the plaintext, which every reconnect then spends. Once NULL, nothing
-    // reached the row again.
+    // The custody hole this closes: a scrub that is a side effect of registering
+    // a CREDENTIALED row is keyed on a column that can be null. Clear the
+    // credential — or let a best-effort re-register fail — and the column goes
+    // NULL while the SDK's own row keeps the plaintext, which every reconnect
+    // then spends. Once NULL, nothing would reach the row again.
     const first = harness();
     await seedServer(first, 'srv1');
-    // Exactly the shape a plaintext-era build left: `buildMcpHeaderTransportOpts`
-    // returned `requestInit: { headers }` beside an `eventSourceInit` wrapper
-    // (`7ba56550e^:src/user/mcp.ts:270-287`), and the closure half of that
-    // wrapper does not survive JSON.
+    // Exactly the shape a stored plaintext row has: `requestInit: { headers }`
+    // beside an `eventSourceInit` wrapper (`buildMcpHeaderTransportOpts` at
+    // `7ba56550e^:src/user/mcp.ts:270-287`), whose closure half does not survive
+    // JSON.
     seedSdkMcpServer('srv1', {
       type: 'auto',
       eventSourceInit: {},
@@ -700,9 +698,10 @@ describe('an authorization failure converges to the reconnect state', () => {
     // `discoverIfConnected` is the SDK's own reauthorization path: an
     // unauthorized probe moves the connection to AUTHENTICATING and persists the
     // authorize URL, which is what the UI renders as "Open authorize". The
-    // assertions below observe THAT state — the previous version of this test
-    // asserted only that the re-probe was attempted, and passed whether or
-    // not the convergence it names actually happened.
+    // assertions below observe THAT state — the persisted `authenticating`
+    // status and the `authUrl` behind the button. An assertion that the
+    // re-probe was merely attempted would pass whether or not the convergence
+    // this test names actually happened.
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.status).toBe('authenticating');
@@ -755,9 +754,9 @@ describe('an authorization failure converges to the reconnect state', () => {
     // clear the connection's cached tools (the SDK reassigns them only on the
     // success paths), so after convergence the same server must appear in
     // exactly one channel: absent from the descriptors the model plans with,
-    // named once in the `unavailable` the model reads as absence. Before the
-    // fix it appeared in both — tools that now 401 on every call, offered
-    // alongside the notice that they are gone.
+    // named once in the `unavailable` the model reads as absence. Both at once
+    // would offer tools that 401 on every call alongside the notice that they
+    // are gone.
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);

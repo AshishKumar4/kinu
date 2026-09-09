@@ -2,9 +2,9 @@
  * The composer's Stop, against a command that is running on the user's machine.
  *
  * A turn can start a build, a test suite or an install on the owner's own
- * computer, and stopping that turn used to be a statement about this side only:
- * the local AbortControllers were aborted, the wait was rejected, and the
- * command kept running with nothing left that could reach it. So this suite
+ * computer, and stopping that turn has to be more than a statement about this
+ * side: aborting the local AbortControllers and rejecting the wait leaves the
+ * command running with nothing left that could reach it. So this suite
  * drives the whole rail as production has it — a real `OrchestratorAgent`
  * holding the capability token a real `UserDO` minted for it, a device socket
  * that answers like the daemon — and asks the three questions that make Stop a

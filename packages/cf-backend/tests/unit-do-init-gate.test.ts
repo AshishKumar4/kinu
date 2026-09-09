@@ -41,9 +41,8 @@ const { OrchestratorAgent } = await import('../src/orchestrator');
  *  with the shape its gate is ALLOWED to have. The orchestrator is async by
  *  the owner's 2026-08-31 ruling — bounded once-per-start work stays in the
  *  gate, concretely the workspace boot — and `gate:do-init` holds every await
- *  in it to the pinned admitted list. The subordinate facet class a second
- *  entry used to pin is gone — hired children are hosted actors with no
- *  activation of their own — so the inventory is one class, and a second
+ *  in it to the pinned admitted list. The inventory is ONE class — hired
+ *  children are hosted actors with no activation of their own — and a second
  *  Durable Object class added later must add its entry here. UserDO declares
  *  no override, MonitorDO is a plain DurableObject with no partyserver gate,
  *  and KinuSandbox is a third-party base. */

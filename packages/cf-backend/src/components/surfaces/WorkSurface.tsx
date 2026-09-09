@@ -150,7 +150,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const openSlateReloadKey = openSlate === null ? 0 : (props.slateReloads?.get(openSlate) ?? 0);
   // Linking a machine is asked for from three places in this column — an
   // offline Environment card, that card's call-to-action, and the drive's
-  // offline row — and all three used to be links to Account settings, which
+  // offline row — and none of them is a link to Account settings, which
   // is a page change in the middle of a job. One dialog, owned here, because
   // only one of those surfaces is mounted at a time.
   const [connecting, setConnecting] = useState(false);
@@ -166,10 +166,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
-      {/* Activity sits OUTSIDE the scrolling strip. It used to be pinned right
-          by `ml-auto`, which worked only while the tabs fit; once Kinu can
-          append its own, the strip overflows and an `ml-auto` button scrolls
-          away with everything else. */}
+      {/* Activity sits OUTSIDE the scrolling strip. Pinning it right with
+          `ml-auto` holds only while the tabs fit; Kinu can append its own, so
+          the strip overflows and an `ml-auto` button scrolls away with
+          everything else. */}
       <div className="border-b p-border shrink-0 flex items-stretch">
         {/* Text labels match the mock and fit at its 430px inspector width.
             The longer route names stay internal; the visible words are

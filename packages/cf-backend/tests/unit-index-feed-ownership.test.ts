@@ -1,19 +1,19 @@
 /**
  * The control-plane index learns a workspace exists only from an OWNED request.
  *
- * THE DEFECT THIS COVERS. The Worker used to observe the identity and the
- * workspace together, at the auth gate — before `ensureAgentOwnership`. So the
- * name in `/api/workspaces/<name>` was indexed on the strength of the caller
- * having typed it: any signed-in user could grow `ControlPlaneDO`'s SQLite index
- * and pollute the operator's cross-account workspaces list with names they do
- * not own, one row per invented string, and the 403 they earned changed nothing.
- * A request under that path proves a workspace is live only once the ownership
- * gate has agreed the caller has it.
+ * THE DEFECT THIS COVERS. Observing the identity and the workspace together at
+ * the auth gate — before `ensureAgentOwnership` — indexes the name in
+ * `/api/workspaces/<name>` on the strength of the caller having typed it: any
+ * signed-in user grows `ControlPlaneDO`'s SQLite index and pollutes the
+ * operator's cross-account workspaces list with names they do not own, one row
+ * per invented string, and the 403 they earn changes nothing. A request under
+ * that path proves a workspace is live only once the ownership gate has agreed
+ * the caller has it.
  *
  * Driven through the real `server.ts` fetch entry, because the ORDER is the
  * substance. Every other way of asserting it — reading the source, calling
  * `observeWorkspaceUse` directly — would still be green if somebody moved the
- * call back above the gate.
+ * call above the gate.
  */
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -160,7 +160,7 @@ describe('the workspace index feed sits behind the ownership gate', () => {
 
   test('an invented name in the same session never reaches the index', async () => {
     // The shape that made this exploitable: one signed-in session, many names.
-    // Each one is a distinct memo key, so each one used to be a separate row.
+    // Each one is a distinct memo key, so each one would be a separate row.
     const h = harness(['mine']);
     for (const name of ['made-up-1', 'made-up-2', 'made-up-3']) {
       const response = await worker.fetch(appRequest(`/api/workspaces/${name}/state`), h.env, h.ctx);

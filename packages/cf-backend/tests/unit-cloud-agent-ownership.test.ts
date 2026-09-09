@@ -225,11 +225,11 @@ describe('cloud agent ownership safety', () => {
     // The cross-user shape, and the reason `removeWorkspace` is the WRONG undo
     // here. A workspace name is unique inside one UserDO while
     // `OrchestratorAgent` is addressed globally, so two accounts can register
-    // the same string and only one claim can win. The loser's rollback used to
-    // call `removeWorkspace`, whose `destroyAgent` correctly refuses against
-    // somebody else's workspace — and the refusal left the loser's roster row in
-    // place, pointing at an object it does not own, which every later ownership
-    // check then had to catch. `releaseWorkspaceReservation` drops exactly the
+    // the same string and only one claim can win. A rollback through
+    // `removeWorkspace` hits a `destroyAgent` that correctly refuses against
+    // somebody else's workspace — and the refusal leaves the loser's roster row
+    // in place, pointing at an object it does not own, for every later
+    // ownership check to catch. `releaseWorkspaceReservation` drops exactly the
     // row this create inserted and never contacts the target at all.
     const calls: string[] = [];
     const index = indexFeed();

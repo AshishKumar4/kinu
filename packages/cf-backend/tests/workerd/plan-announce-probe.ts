@@ -1,19 +1,16 @@
 /**
  * `sealRpcSurface` as WORKERD enforces it, over a real Durable Object stub.
  *
- * WHAT THIS USED TO PROVE, AND WHY IT MOVED. The probe was written for the
- * plan-arrival announcement: a `SubordinateAgent` facet resolving its workspace
- * the way `workspaceOwner()` did and calling `announceSubordinatePlan` across
- * the boundary, because the first version of that producer shipped calling the
- * inherited `broadcast` instead and every in-process fixture was green — the
- * seal shadows an unlisted member as an OWN property, which leaves it callable
- * in process and unresolvable only over a stub. The cutover deleted both ends
- * of that hop: there is no facet class, and the cutover's own diff removed
- * `'announceSubordinatePlan'` from `ORCHESTRATOR_METHODS` along with its single
- * caller, so the method it named is now unreachable and unreferenced (reported
- * to the src owner; the feature's fate is a scope call above this file).
+ * WHY A REAL STUB HOP. The seal shadows an unlisted member as an OWN property,
+ * which leaves it callable IN PROCESS and unresolvable only over a stub. So a
+ * producer that reaches the inherited `broadcast` instead of a listed name is
+ * green in every in-process fixture and refused only on the wire. No producer
+ * in the tree makes that hop: there is no facet class, and
+ * `'announceSubordinatePlan'` is absent from `ORCHESTRATOR_METHODS` and has no
+ * caller, so it is unreachable over a stub and the feature's fate is a scope
+ * call above this file.
  *
- * WHAT DID NOT MOVE is the mechanism, and it carries MORE weight than before.
+ * THE MECHANISM is what this measures, and it carries the whole weight.
  * A hosted actor is not addressable over a stub at all, so this allowlist is
  * the whole of what stands between a stub-holder — the owner's UserDO, a peer
  * workspace, the container's own object, the preview edge, the CLI transport —
@@ -129,9 +126,10 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       // same as trusted, and the distinct error is what proves the listed name
       // ran the callee's logic rather than merely resolving on its prototype.
       second: await hop(async () => target.claimOwner('a-different-user')),
-      // The call the shipped plan producer made. TypeScript accepts it — the
-      // stub type is derived from the class and the seal is a runtime shadow
-      // the type system does not model — which is exactly why that shipped.
+      // The unlisted inherited member a producer reaches for by accident.
+      // TypeScript accepts it — the stub type is derived from the class and the
+      // seal is a runtime shadow the type system does not model — so nothing
+      // upstream of this hop can refuse it.
       broadcast: await hop(async () => target.broadcast(SMUGGLED)),
       // The SDK's state writer, the other inherited member worth stealing: a
       // stub-holder that reached it would rewrite the callee's own state.

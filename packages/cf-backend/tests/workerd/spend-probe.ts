@@ -3,13 +3,12 @@
  *
  * WHY THIS IS A PLATFORM TEST AND NOT A SQL-SHAPE ONE. The totals the Activity
  * panel renders are summed by ONE query (`RunEventRecorder.spendByProducer`)
- * whose whole method is SQLite features the repository had never asked a Durable
- * Object for on a production read path: `WITH` common table expressions and the
- * JSON1 function `json_extract` over the `run_events.payload` column. The
- * recorder's own docstring used to say the opposite — "no production query has
- * ever depended on SQLite's JSON functions being available on both of them" —
- * and every other test of this read runs under `bun test`, i.e. against
- * `bun:sqlite`, whose feature set says nothing whatever about workerd's.
+ * whose whole method is SQLite features no other production read path asks a
+ * Durable Object for: `WITH` common table expressions and the JSON1 function
+ * `json_extract` over the `run_events.payload` column. It is the one production
+ * query that depends on SQLite's JSON functions being available on both
+ * SqlExecutors, and every other test of this read runs under `bun test`, i.e.
+ * against `bun:sqlite`, whose feature set says nothing whatever about workerd's.
  *
  * So the question is not whether our SQL is right. It is whether the platform
  * answers it at all. A workerd SQLite built without JSON1 would throw

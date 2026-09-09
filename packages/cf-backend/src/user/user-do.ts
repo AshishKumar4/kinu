@@ -1012,12 +1012,12 @@ export class UserDO extends Agent<Env> {
    * existence probe below is deliberately blind to the flag, so a pending
    * reservation still refuses a second reservation of the same name.
    *
-   * IT ALSO CARRIES A LEASE, because "the transfer has not happened yet" used
-   * to have no end. The sender streams frames from another Durable Object; when
-   * that object died between frames nothing ran its cleanup, and the row stayed
-   * `create_pending` forever — invisible to every roster read, so the owner
-   * could not delete it, and refusing every retry of the same name, so they
-   * could not have it back either. A reservation whose lease has lapsed is
+   * IT ALSO CARRIES A LEASE, which is what bounds "the transfer has not
+   * happened yet". The sender streams frames from another Durable Object; if
+   * that object dies between frames nothing runs its cleanup, and an unbounded
+   * row stays `create_pending` forever — invisible to every roster read, so the
+   * owner cannot delete it, and refusing every retry of the same name, so they
+   * cannot have it back either. A reservation whose lease has lapsed is
    * therefore ADOPTED here: its half-written target is torn down and the name
    * is reserved afresh for the caller asking for it now.
    */
@@ -3577,11 +3577,11 @@ export class UserDO extends Agent<Env> {
    * Seal every stored credential under the CURRENT key. Runs once per DO
    * instance, on the first credential access.
    *
-   * One mechanism covers two migrations, because they are the same operation:
-   * a row written before encryption existed, and a row still sealed under a
-   * retired key after a rotation. The marker in `user_schema_meta` is the key
-   * id the whole store is known to be sealed under, so the pass is skipped
-   * entirely once it matches.
+   * One mechanism covers two stored shapes, because re-sealing is the same
+   * operation for both: a row that carries no envelope at all, and a row still
+   * sealed under a retired key after a rotation. The marker in
+   * `user_schema_meta` is the key id the whole store is known to be sealed
+   * under, so the pass is skipped entirely once it matches.
    *
    * A row that cannot be opened is left alone and the pass continues. Failing
    * the pass would take every provider down over one damaged row; leaving it
@@ -4720,12 +4720,12 @@ export class UserDO extends Agent<Env> {
    * could not promise here, because sealing a row's headers is an await and both
    * callers passed the SELECT while the other was sealing.
    *
-   * It holds WITHOUT the UNIQUE index, which is what lets a database carrying
-   * historical duplicates keep working: the constraint cannot be BUILT over
-   * those rows — it raises — so `schema.ts` reads for a collision first and
-   * skips the build when it finds one, recording that it did. Nothing about a
-   * new write depends on the index; where it exists it refuses the same thing
-   * with the same sentence.
+   * It holds WITHOUT the UNIQUE index, which is what lets a database that
+   * already carries duplicate names keep working: the constraint cannot be
+   * BUILT over those rows — it raises — so `schema.ts` reads for a collision
+   * first and skips the build when it finds one, recording that it did. Nothing
+   * about a new write depends on the index; where it exists it refuses the same
+   * thing with the same sentence.
    *
    * `write` MUST NOT await. The type says so — a synchronous body is what
    * `transactionSync` commits atomically; an async one would commit at its first

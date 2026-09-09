@@ -18,9 +18,9 @@
  * `target` is the method function and that key matches. Under legacy decorator
  * semantics `target` would be the prototype, every key would be wrong, and
  * `getCallableMethods()` would return an empty map. The browser would then get
- * "Method X is not callable" for all 127 declared RPCs, and nothing in this
- * repository would notice: `bun test` does not load these classes and the
- * workerd layer hosted only purpose-built probe classes.
+ * "Method X is not callable" for all 127 declared RPCs, and nothing else in this
+ * repository would notice: `bun test` does not load these classes, and a
+ * purpose-built probe class exercises its own decorators, not the shipped ones.
  *
  * WHY THIS FILE IS IN THE WORKERD LAYER AND NOT IN `bun test`. The assertion is
  * about the SHIPPED transform. `bun test` runs its own TypeScript pipeline, so a
@@ -110,14 +110,13 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
  * regression cannot be hidden by a floor of zero. The numbers were read off a
  * real run of this layer, never guessed.
  *
- * TWO classes, where there were three. `SubordinateAgent` is gone with the
- * facets: a hired subordinate, a head, a node and a rollout branch are logical
- * actors hosted over the root's one database, and their chat surface IS the
- * orchestrator's own `@callable` surface bound to an actor by the request path.
- * So there is no second decorated root whose transform could break
- * independently — which also means the inherited-surface check below is the
- * only remaining witness that `getCallableMethods` still walks a prototype
- * CHAIN rather than one class's own registry.
+ * TWO decorated classes, and only two: a hired subordinate, a head, a node and
+ * a rollout branch are logical actors hosted over the root's one database, and
+ * their chat surface IS the orchestrator's own `@callable` surface bound to an
+ * actor by the request path. So there is no second decorated root whose
+ * transform could break independently — which also means the inherited-surface
+ * check below is the only witness that `getCallableMethods` still walks a
+ * prototype CHAIN rather than one class's own registry.
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
@@ -134,13 +133,13 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
     }
   });
 
-  // A test asserting that every REGISTERED name resolves to a function used to
-  // sit here. It was vacuous and the lint pass is what made me look: the SDK's
-  // `getCallableMethods` only records a name when `typeof prototype[name] ===
-  // "function"` already holds, so the assertion restated its own oracle and
-  // could not fail. `resolvesToFunction` survives because the NEGATIVE describe
-  // below genuinely needs it: there, a method's absence and a method's
-  // non-exposure are different defects and only one of them is acceptable.
+  // There is no positive "every REGISTERED name resolves to a function" test
+  // here: the SDK's `getCallableMethods` only records a name when `typeof
+  // prototype[name] === "function"` already holds, so such an assertion would
+  // restate its own oracle and could not fail. `resolvesToFunction` exists for
+  // the NEGATIVE describe below, which genuinely needs it: there, a method's
+  // absence and a method's non-exposure are different defects and only one of
+  // them is acceptable.
 
   test('the one actor root inherits the shared surface rather than redeclaring it', () => {
     // ActorAgent declares the chat, approval and steering RPCs once, and the
@@ -158,12 +157,11 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
 });
 
 /**
- * The negative direction, and the reason this file replaces source-string
- * assertions rather than adding to them.
+ * The negative direction, and the reason it is asserted against the registry
+ * rather than against our own source text.
  *
- * `unit-do-routing-security.test.ts` used to assert these by reading our own
- * TypeScript and matching the literal `'@callable()\n  async <name>'`. That
- * oracle passes for the wrong reasons: reformat the decorator onto one line,
+ * Reading the TypeScript and matching the literal `'@callable()\n  async <name>'`
+ * passes for the wrong reasons: reformat the decorator onto one line,
  * insert a blank line, add a JSDoc block between decorator and signature, or
  * rename the method, and the string stops matching while the method stays
  * exposed. It also cannot fail when a decorator is added somewhere the pattern

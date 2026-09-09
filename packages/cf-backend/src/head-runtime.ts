@@ -41,20 +41,18 @@ interface HeadRuntimeDeps {
    * actor host, whether the splitter is the main actor or a head splitting
    * further.
    *
-   * The old shape took a `FacetHost` plus an `identity()` thunk that carried
-   * the owner, the capability token and the ROOT workspace name down to each
-   * child, because a facet was a separate Durable Object that had to be TOLD
-   * whose credentials to run as and which workspace it was forking. A hosted
-   * child is a row in the workspace it already belongs to: the owner, the token
-   * and the workspace are the root's own, read from the seams, and there is
-   * nothing to propagate and nothing that can disagree. That is what stopped an
-   * intermediate head from ever becoming its subtree's workspace — not a rule
-   * about passing a value unchanged, but the absence of a second value.
+   * Seams alone, with no `identity()` thunk carrying the owner, the capability
+   * token and the ROOT workspace name down to each child. A hosted child is a
+   * row in the workspace it already belongs to: the owner, the token and the
+   * workspace are the root's own, read from the seams, so there is nothing to
+   * propagate and nothing that can disagree. That is what stops an intermediate
+   * head from ever becoming its subtree's workspace — not a rule about passing
+   * a value unchanged, but the absence of a second value.
    */
   readonly host: ExplorationHostSeams;
   /** The owner-scoped model services this actor already owns. Never a second
-   *  registry — that was the duplication. The merge's only use of them is
-   *  binding the route core resolved. */
+   *  registry — a second one is the duplication. The merge's only use of them
+   *  is binding the route core resolved. */
   readonly models: Pick<OwnedModelServices, 'resolveModelWithEffort'>;
   /** The profile the merge's `judge` route resolves against.
    *

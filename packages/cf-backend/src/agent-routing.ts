@@ -12,19 +12,17 @@ import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
  * the F1 account-takeover hole. This module is the one place that decides what
  * the transport will route.
  *
- * ── `/sub/` IS NOW FOREIGN, AND THAT IS THE POINT ────────────────────────
+ * ── `/sub/` IS FOREIGN, AND THAT IS THE POINT ────────────────────────────
  *
- * The grammar used to ADMIT one `/sub/<class-slug>/<key>` hop, because a
- * subordinate really was a separate Durable Object and the SDK's own facet
- * router resolved that segment. There is no facet class any more: every actor
- * in a workspace — a hired subordinate, an ask-by-role temporary, a head, a
- * node, a rollout branch — is a LOGICAL actor hosted by the one root object. So
- * the `sub` marker no longer names anything reachable, and admitting it would
- * leave the SDK's recursive facet resolution addressable from the public
- * transport with nothing legitimate behind it. It is refused here, with every
- * other namespace, BEFORE ownership lookup and before `routeAgentRequest`.
+ * There is no facet class: every actor in a workspace — a hired subordinate, an
+ * ask-by-role temporary, a head, a node, a rollout branch — is a LOGICAL actor
+ * hosted by the one root object. So a `/sub/<class-slug>/<key>` hop names
+ * nothing reachable, and admitting it would leave the SDK's recursive facet
+ * resolution addressable from the public transport with nothing legitimate
+ * behind it. It is refused here, with every other namespace, BEFORE ownership
+ * lookup and before `routeAgentRequest`.
  *
- * A hosted actor's chat is addressed instead by its LOGICAL NAME under the
+ * A hosted actor's chat is addressed by its LOGICAL NAME under the
  * workspace that owns it — `/actor/<name>` — and the root serves it. No path is
  * rewritten on the way in: there is no second object to rewrite it towards.
  */
@@ -38,11 +36,11 @@ const ROOT_AGENT_PATH = `/agents/${ORCHESTRATOR_AGENT_SLUG}`;
  * it by appending this segment to the agent URL
  * (`agents/chat/react.js` → `defaultGetInitialMessagesFetch`), and the DO answers
  * it in `onRequest` (`@cloudflare/ai-chat` → `pathname.split('/').pop() === 'get-messages'`).
- * The grammar was once closed against it, so the socket at
- * `/agents/orchestrator-agent/<name>` connected while every mount of it also
- * logged `GET /agents/orchestrator-agent/<name>/get-messages 404`:
- * `isForeignAgentNamespacePath` called the SDK's own history fetch foreign, and
- * the hook swallowed the 404 into an empty history. The pane then rendered only
+ * Closing the grammar against it costs the history pane: the socket at
+ * `/agents/orchestrator-agent/<name>` connects while every mount of it also
+ * logs `GET /agents/orchestrator-agent/<name>/get-messages 404`, because
+ * `isForeignAgentNamespacePath` calls the SDK's own history fetch foreign and
+ * the hook swallows the 404 into an empty history. The pane then renders only
  * what arrived live after mount, which reads to the owner as "all my messages
  * are gone" while the conversation sits intact in the DO.
  *
@@ -65,7 +63,7 @@ const TRANSPORT_TAIL = `(?:/(?:${TRANSPORT_ENDPOINTS.join('|')}))?/?`;
 
 // The public agent transport has exactly two shapes: the workspace itself, and
 // one hosted actor beneath it addressed by its logical name. Every other
-// namespace — and every `/sub/` facet hop, which now names nothing — stays
+// namespace — and every `/sub/` facet hop, which names nothing — stays
 // unroutable.
 const ORCHESTRATOR_AGENT_PATH_RE = new RegExp(
   `^${ROOT_AGENT_PATH}/([^/]+)(?:${TRANSPORT_TAIL}`
@@ -104,12 +102,11 @@ const HOSTED_ACTOR_PATH = new RegExp(
  * The hosted actor a public path addresses, or null for the workspace itself.
  *
  * Returns the LOGICAL name and the tail, and deliberately no prefix to rewrite:
- * the old shape handed `server.ts` a `prefix` so it could substitute a facet's
- * physical storage key into the SDK's `/sub/<class>/<key>` hop. There is no
- * second object and no physical key in the URL any more — the root receives
- * this path as-is and resolves the name through its own directory — so the
- * rewrite, and the storage key's appearance in a client-visible address, both
- * go.
+ * there is no second object and no physical key in the URL — the root receives
+ * this path as-is and resolves the name through its own directory. Handing
+ * `server.ts` a `prefix` would mean substituting a facet's physical storage key
+ * into the SDK's `/sub/<class>/<key>` hop, which is both a rewrite nothing needs
+ * and a storage key in a client-visible address.
  */
 export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;

@@ -5,12 +5,11 @@
  * mission, no role. It is hired with a blank display name, and a rename sets
  * the name the roster shows and the config keeps — on both sides, once.
  *
- * What is NOT here any more is the first-message auto-title race suite. That
- * machinery turned on the child's own chat turn (`titleFromFirstMessage` on the
- * facet, firing a naming model and reconciling two writers), and hosted
- * children hold no chat session: there is no turn to fire it from and no
- * second writer to race. A hire keeps the display name it was hired with until
- * the owner renames it, which is what these tests pin.
+ * There is no first-message auto-title race to pin. Auto-titling is a terminal
+ * effect of a chat turn — it fires a naming model and races the owner's own
+ * rename — and hosted children hold no chat session: there is no turn to fire
+ * it from and no second writer to race. A hire keeps the display name it was
+ * hired with until the owner renames it, which is what these tests pin.
  */
 
 import { describe, expect, test } from 'bun:test';

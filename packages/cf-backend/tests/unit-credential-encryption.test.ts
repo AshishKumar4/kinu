@@ -78,7 +78,7 @@ describe('the credential store is sealed at rest', () => {
 describe('migration and rotation', () => {
   test('a plaintext row written before encryption keeps working and stops being plaintext', async () => {
     const harness = createTestUserDO();
-    // Exactly what setCredential used to write.
+    // A plaintext row: the JSON credential stored verbatim, unsealed.
     sqlExec(harness.db).exec(`
       CREATE TABLE IF NOT EXISTS user_credentials (
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,

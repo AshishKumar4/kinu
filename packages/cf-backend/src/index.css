@@ -177,11 +177,11 @@ html, body, #root {
   /* Radii — the mock's own measures, stated as roles. Outer cards and the
      composer are 14px; the grouped cards INSIDE a surface (tool rows,
      journal, key-value tables) stay at Tailwind's 12px rung; rows and
-     fields 8px; controls 6px; actions and chips are pills. The old
-     aliasing of `--r-card`/`--r-overlay` onto Tailwind rungs is gone — the
-     mock's two 14px measures sit between Tailwind's 12 and 16, and a role
-     that means "outer card" should not have to negotiate with a library
-     scale to say so. Locked by unit-radius-scale.test.ts. */
+     fields 8px; controls 6px; actions and chips are pills. `--r-card` and
+     `--r-overlay` alias no Tailwind rung — the mock's two 14px measures sit
+     between Tailwind's 12 and 16, and a role that means "outer card" should
+     not have to negotiate with a library scale to say so. Locked by
+     unit-radius-scale.test.ts. */
   --r-control: var(--radius-sm);   /*  6px — chips, inline code, segment items */
   --r-row:     var(--radius-md);   /*  8px — buttons, fields, rows */
   --r-card:    0.875rem;           /* 14px — outer cards, panels, notices */
@@ -908,11 +908,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* The streaming caret, drawn INSIDE the last block the markdown emitted.
 
-   It used to be a sibling <span> after the rendered markdown. Markdown emits
-   block-level elements, so a span placed after one starts a new line: the
-   caret sat under the paragraph instead of trailing the word being written,
-   which is what the bug report shows. As `::after` on the last block it is
-   part of that block's inline flow and lands after the final character —
+   Markdown emits block-level elements, so a sibling <span> placed after the
+   rendered markdown starts a new line: the caret sits under the paragraph
+   instead of trailing the word being written. As `::after` on the last block
+   it is part of that block's inline flow and lands after the final character —
    including inside a code fence, where the last block is the <pre>. */
 .p-streaming > :last-child::after {
   content: "";

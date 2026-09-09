@@ -22,9 +22,9 @@
  *             way, `{type:'resize'}` out, `ready`/`exit`/`error` in.
  *
  *   LINE  — every environment with no pseudo-terminal. A command in, its
- *           output back, and the pane SAYS it is line mode. This is the honest
- *           version of what the whole pane used to be: an emulated prompt over
- *           one-shot exec that looked like a shell and could not run one.
+ *           output back, and the pane SAYS it is line mode. Saying so is the
+ *           honest half: an emulated prompt over one-shot exec looks like a
+ *           shell and cannot run one.
  *
  * The lane decides PTY or line, and the route agrees with it because both read
  * the same table. Which PTY driver runs inside that family is this file's own

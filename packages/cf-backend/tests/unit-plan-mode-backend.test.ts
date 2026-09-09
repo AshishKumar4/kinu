@@ -20,28 +20,23 @@ import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /**
- * THE PLAN SURFACE IS THE WORKSPACE ROOT'S, AND THAT IS THE CUTOVER'S ANSWER
- * RATHER THAN THIS FILE'S CHOICE.
+ * THE PLAN SURFACE IS THE WORKSPACE ROOT'S, AND NOTHING ELSE HAS ONE.
  *
- * `HarnessSubordinateAgent` is gone with the facet class, and there is nothing
- * to replace it with: `submitPlan` reaches a turn only through
- * `actorToolDeps()`, which the orchestrator declares for its own pipeline, and a
- * hosted actor's delegated turn runs `hostedTaskTools` — the confined builtin
- * set plus `report`. `AgentStores` carries no plan-review store either, so a
- * hosted actor has no plan plane at all. Every test in this file therefore
- * drives the ROOT, and the child-side ones that used to sit here are recorded
- * where they were removed rather than rewritten against a surface that would
- * have to be invented to receive them.
+ * `submitPlan` reaches a turn only through `actorToolDeps()`, which the
+ * orchestrator declares for its own pipeline, and a hosted actor's delegated
+ * turn runs `hostedTaskTools` — the confined builtin set plus `report`.
+ * `AgentStores` carries no plan-review store either, so a hosted actor has no
+ * plan plane at all. Every test in this file therefore drives the ROOT; a
+ * child-side case would need a surface invented to receive it.
  */
 type HarnessAgent = HarnessOrchestratorAgent;
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
 
-/** The frame type a facet's submitted plan used to put on the workspace
- *  connection. It has no producer left, which is exactly why the forged-content
- *  test below replays it as plan TEXT: the name is what a payload must never be
- *  able to become. */
+/** A frame type with no reachable producer on the workspace connection, which
+ *  is exactly why the forged-content test below replays it as plan TEXT: the
+ *  name is what a payload must never be able to become. */
 const REFERENCE_EVENT = 'workspace_plan_updated';
 const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
 
@@ -195,15 +190,7 @@ describe('Plan mode tool lifecycle', () => {
   });
 
   /**
-   * THE ADDITIONAL-AGENT PLAN TURN IS NOT ASSERTED HERE ANY MORE, AND IT IS NOT
-   * BECAUSE THE FIXTURE GOT HARDER — THE FEATURE HAS NO SURFACE LEFT.
-   *
-   * A test stood here that drove a hired facet's own owner Plan turn end to end:
-   * `submit_plan` present and `report` absent, the Plan system prompt on the
-   * submitting arm, a revision persisted in the child's own tables, annotations,
-   * an approval queued on the child's own host — and then the delegated arm,
-   * where `submit_plan` is absent, `report` is present, and the prompt says to
-   * report to the parent's Plan turn instead.
+   * THE ADDITIONAL-AGENT PLAN TURN HAS NO SURFACE, SO NOTHING HERE ASSERTS ONE.
    *
    * Three facts make it unreachable, and none of them is about this file:
    *   • `submitPlan` reaches a turn only through `actorToolDeps()`
@@ -213,18 +200,18 @@ describe('Plan mode tool lifecycle', () => {
    *   • `AgentStores` carries no plan-review store. `ActorAgent.planReviews` is
    *     built from `this.actorHandle()`, the root's, so there is no per-hosted-
    *     actor plan plane for a revision to land in.
-   *   • `OrchestratorAgent.announceSubordinatePlan` still exists but has no
-   *     caller anywhere in packages/, and the cutover's own diff removed it from
-   *     ORCHESTRATOR_METHODS — so it is unreachable over a stub as well. The
-   *     client still parses and handles the `workspace_plan_updated` frame it
-   *     published (hooks/use-kinu.ts), which now has zero producers.
+   *   • `OrchestratorAgent.announceSubordinatePlan` has no caller anywhere in
+   *     packages/ and is absent from ORCHESTRATOR_METHODS, so it is unreachable
+   *     over a stub as well. The client still parses and handles the
+   *     `workspace_plan_updated` frame it publishes (hooks/use-kinu.ts), which
+   *     therefore has no reachable producer.
    *
-   * Reported to the src owner rather than papered over: the producer was the
-   * facet's `submitPlanEdits` override, and restoring the feature needs an
-   * actor-scoped plan store in core plus `submitPlan` on a hosted actor's chat
-   * surface. Writing a fixture that agreed with the gap would have made the
-   * regression permanent and invisible, and re-pointing this test at the root
-   * would have renamed the root's own lifecycle test below.
+   * Giving an additional agent its own Plan turn — `submit_plan` present and
+   * `report` absent on the submitting arm, the Plan system prompt on it, a
+   * revision in the child's own tables, an approval queued on the child's own
+   * host — needs an actor-scoped plan store in core plus `submitPlan` on a
+   * hosted actor's chat surface. A fixture that agreed with the gap would make
+   * it permanent and invisible.
    */
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
@@ -414,21 +401,14 @@ describe('Plan mode tool lifecycle', () => {
 });
 
 /**
- * WHAT THE PLAN PLANE STILL OWES, once the facet-side half of it is gone.
+ * WHAT THE PLAN PLANE OWES ON THE ROOT.
  *
- * Six tests stood here over the `workspace_plan_updated` reference event: its
- * one writer, its closed payload, and the four refusals a diverged facet met
- * (`The actor has no valid workspace plan lineage`, `The workspace no longer
- * owns this plan actor`). None of those strings exists in src any more, and the
- * event has no producer at all — see the block above `describe('submit,
- * annotations…')` for the three reasons. An assertion that no reference event
- * appears would now hold for a channel nothing can ever write, which is a
- * tautology rather than a guard, so those are removed rather than kept green.
- *
- * Two properties in that block do survive with live subjects, and they are the
- * two below. Both drive the REAL root and the REAL broadcast rail: a stubbed
- * `broadcast` would have made either pass against a fixture that never spoke to
- * a workspace.
+ * `workspace_plan_updated` has no reachable producer, so an assertion that no
+ * reference event appears would hold for a channel nothing can write — a
+ * tautology rather than a guard. The two properties below have live subjects,
+ * and both drive the REAL root and the REAL broadcast rail: a stubbed
+ * `broadcast` would make either pass against a fixture that never spoke to a
+ * workspace.
  */
 describe('the plan plane admits no forged protocol frame and vouches for no forged id', () => {
   test('a reference-shaped body carried as ordinary content never becomes a protocol frame', async () => {

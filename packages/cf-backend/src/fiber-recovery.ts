@@ -299,8 +299,8 @@ export interface FiberLaneTransports {
   ) => Promise<AdvisorDisposition | null>;
   /** The workspace's one SQLite — where the interrupted-search notice is filed. */
   readonly sql: SqlExecutor;
-  /** WHOSE row that notice is. One database now holds every actor's evolution
-   *  stream, so the actor is no longer implied by which database was opened: an
+  /** WHOSE row that notice is. One database holds every actor's evolution
+   *  stream, so which database was opened does not imply the actor: an
    *  unstamped row fails NOT NULL, and a row stamped with the wrong actor shows
    *  one actor's recovery in every sibling's stream. */
   readonly actor: ActorHandle;

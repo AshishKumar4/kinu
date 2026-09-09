@@ -58,12 +58,12 @@ describe('AgentProviderRegistry composition', () => {
 
   test('an admission count is keyed on the spec the request will use, for every BC form', () => {
     // The turn's admission counter parses the profile tier's spec to pick the
-    // provider it asks for a count. It used to parse the RAW spec while the
-    // submitted model came from `resolveModel`, which normalises first — so the
-    // two disagreed on exactly the forms normalisation exists to accept. A bare
+    // provider it asks for a count, and it parses the NORMALISED spec — the same
+    // one `resolveModel` submits — so the two cannot disagree on exactly the
+    // forms normalisation exists to accept. Off the RAW spec they do: a bare
     // model id has no slash and `parseModelSpec` THROWS on it, inside turn
     // assembly; a bare `@cf/…` parses to provider `@cf`, which no registry
-    // knows, so the count was asked of a provider that does not exist.
+    // knows, so the count is asked of a provider that does not exist.
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     for (const raw of ['@cf/moonshotai/kimi-k2.6', 'gpt-5.5', 'codex/gpt-5.5', '']) {
       const keyed = parseModelSpec(reg.normalizeSpecSync(raw));
@@ -72,8 +72,8 @@ describe('AgentProviderRegistry composition', () => {
       // And it is the same spec the model resolution would take.
       expect(`${keyed.provider}/${keyed.modelId}`).toBe(reg.normalizeSpecSync(raw));
     }
-    // The two directions that used to break, stated as themselves: raw parsing
-    // throws on the bare id and mis-keys the bare `@cf/…`.
+    // The two directions raw parsing breaks in, stated as themselves: it throws
+    // on the bare id and mis-keys the bare `@cf/…`.
     expect(() => parseModelSpec('gpt-5.5')).toThrow(/expected "<provider>\/<modelId>"/);
     expect(parseModelSpec('@cf/moonshotai/kimi-k2.6').provider).toBe('@cf');
     expect(reg.registry.get('@cf')).toBeUndefined();
@@ -105,9 +105,9 @@ describe('AgentProviderRegistry composition', () => {
             usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
           };
         }
-        // A streamed turn goes over the binding as a real event stream. It is
-        // never a finished completion replayed as one frame: that is what the
-        // adapter refuses, so a stub answering the old way would fail here.
+        // A streamed turn goes over the binding as a real event stream. The
+        // adapter refuses a finished completion replayed as one frame, so a stub
+        // answering `{ response, usage }` for `stream: true` would fail here.
         return new Response([
           'data: {"response":"direct binding"}\n\n',
           'data: {"response":"","usage":{"prompt_tokens":2,"completion_tokens":2,"total_tokens":4}}\n\n',
@@ -143,10 +143,9 @@ describe('AgentProviderRegistry composition', () => {
   });
 
   // The owner runs on the native Workers AI model precisely because it is the
-  // one he does not pay per-token for. There used to be a second, async spec
-  // resolver that surveyed which BYO credential happened to be stored and
-  // preferred it whenever Cloudflare was not connected; it had no production
-  // caller and it contradicted this. There is now one resolver.
+  // one he does not pay per-token for. ONE resolver decides that: a second,
+  // async one surveying which BYO credential happened to be stored and
+  // preferring it whenever Cloudflare was not connected would contradict it.
   test('an unchosen model is the native default, not whichever BYO credential is stored', () => {
     const reg = createAgentProviderRegistry({
       env: {},
@@ -246,10 +245,10 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
 });
 
 describe('default-agent prompt model context', () => {
-  // Regression: the orchestrator used to build prompts from the RAW stored
-  // model id — null on default-configured agents — so resolveFamily saw ''
-  // and nothing family-gated rendered on the primary hosted path. The prompt
-  // context must come from the RESOLVED spec rather than an empty raw value.
+  // The prompt context comes from the RESOLVED spec, never the RAW stored model
+  // id: that id is null on a default-configured agent, so off the raw value
+  // resolveFamily sees '' and nothing family-gated renders on the primary
+  // hosted path.
   test('an unset stored model resolves to DeepSeek V4 Pro before prompt construction', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     const storedModelId: string | null = null; // default-configured agent
@@ -269,11 +268,11 @@ describe('default-agent prompt model context', () => {
 });
 
 describe('the model a new workspace starts on', () => {
-  // The RULE is core's `defaultSpecFor` now; what is asserted here is what this
-  // backend hands it — the specs of the models the ACCOUNT can serve, projected
-  // off the credential menu exactly as `createCloudWorkspaceForUser` projects
-  // them. The rule used to be a cf-local `pickInitialModel` while the CLI
-  // answered the same question its own way.
+  // The RULE is core's `defaultSpecFor`, one answer for this backend and the
+  // CLI both; what is asserted here is what this backend hands it — the specs of
+  // the models the ACCOUNT can serve, projected off the credential menu exactly
+  // as `createCloudWorkspaceForUser` projects them. A cf-local rule beside it
+  // would answer the same question a second way.
   const native: ModelMenuEntry = {
     spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
   };
@@ -292,10 +291,10 @@ describe('the model a new workspace starts on', () => {
     expect(defaultSpecFor('openai/gpt-5.5', servable([native, byo]))).toBe('openai/gpt-5.5');
   });
 
-  // Regression: this used to fall through to `models[0]`, so a user who signed
-  // in with Google and pasted one API key had every new workspace silently
-  // created on that paid provider. No native model available and nothing
-  // chosen is now an error the caller reports, not a guess.
+  // No native model available and nothing chosen is an error the caller reports,
+  // not a guess: falling through to `models[0]` silently creates every new
+  // workspace of a user who signed in with Google and pasted one API key on
+  // that paid provider.
   test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
     expect(defaultSpecFor(null, servable([byo]))).toBeNull();
     expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]))).toBeNull();
