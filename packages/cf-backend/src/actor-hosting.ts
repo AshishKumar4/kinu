@@ -69,7 +69,7 @@ import {
   type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
   type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
   type SqlValue, type WorkMode,
-  type WorkspaceActor, type WorkspaceActorDirectory,
+  type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
@@ -190,6 +190,23 @@ export interface WorkspaceHostSeams {
    * with, and the host asks that question back at first acquire.
    */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
+  /**
+   * The write observer a RUN named for this actor, or null when none did.
+   *
+   * THE SAME SHAPE AS {@link chosenLoopOrigin}, and for the same structural
+   * reason: the host builds the runtime, only the CALLER knows something that
+   * runtime needs, and `ActorHostDeps.runtimeFor` deliberately takes the
+   * binding and nothing the caller invented. So the answer is a register the
+   * caller fills before `acquire` and this reads — never a widened core seam.
+   * The cli states the same rule over its own slot (`local-session.ts`'s
+   * `pendingWriteObserver`).
+   *
+   * What fills it is a head run's own `HeadCapture.files`: file attribution is
+   * per RUN over that actor's own workspace view, so it can be a property of
+   * neither the actor nor this workspace. Null leaves the actor's file plane
+   * unwatched, which is every actor but a head reporting what it changed.
+   */
+  chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
 /** The home kinds the workspace provisions credentials for. A branch is not
@@ -370,6 +387,17 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         },
       };
       if (home !== null) hooks.workspaceExecution = await home;
+      // THE WATCHER THE RUN NAMED, when a run named one. Assigned rather than
+      // declared in the literal above for the same reason the home is:
+      // `createCFRuntime` reads PRESENCE to decide whether this actor's own
+      // file view is wrapped at all, so absent has to be an absent key rather
+      // than a key holding undefined. Read here and not earlier because this
+      // is the one place that builds the plane the writes land on — a head's
+      // `HeadReport.fileChanges` is its capture's snapshot and nothing else
+      // fills it, so a runtime built past this line unwatched reports that the
+      // head changed nothing however much it wrote.
+      const writes = seams.chosenWriteObserver(bound.record);
+      if (writes !== null) hooks.workspaceObserver = writes;
       const runtime = createCFRuntime(seams.agent, {
         env: seams.env,
         ctx: seams.ctx,

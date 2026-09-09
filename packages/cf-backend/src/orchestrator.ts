@@ -25,7 +25,7 @@ import {
   type ActorHost, type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type WorkspaceActor,
+  type SqlExec, type SqlValue, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
@@ -564,6 +564,18 @@ export class OrchestratorAgent extends ActorAgent {
    *  activation; a later acquire finds the pointer already durable and the
    *  host's seed short-circuits before it reads an origin at all. */
   private readonly _chosenLoopOrigins = new Map<string, LoopOrigin>();
+  /**
+   * Write observers a live RUN named, read back by the host when it builds that
+   * actor's runtime.
+   *
+   * In memory and only in memory, and unlike the loop pointer beside it there
+   * is nothing durable underneath: a `HeadFileChanges` is one run's own
+   * accumulator, so an activation that lost it lost the run it belonged to as
+   * well. An entry lives exactly as long as the run that registered it —
+   * `hostHead` drops it in its `finally` — so a re-registered head cannot
+   * inherit a previous run's changes.
+   */
+  private readonly _actorWriteObservers = new Map<string, WriteObserver>();
 
   /**
    * THE workspace's one actor host.
@@ -659,6 +671,7 @@ export class OrchestratorAgent extends ActorAgent {
       deferrals: () => this.deferralChannel(),
       refinementLane: () => () => this.runRefinementLane(),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
+      chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
   }
 
@@ -690,6 +703,10 @@ export class OrchestratorAgent extends ActorAgent {
         });
         if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
         return entry.reference;
+      },
+      watchWrites: (reference, writes) => {
+        this._actorWriteObservers.set(reference.actorId, writes);
+        return () => { this._actorWriteObservers.delete(reference.actorId); };
       },
       // THIS actor's own role and tier, not the root's. The seam takes an
       // `actor` to say whose profile it wants; resolving the root's here is what

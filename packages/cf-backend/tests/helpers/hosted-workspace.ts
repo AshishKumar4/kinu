@@ -259,6 +259,10 @@ export async function hostedWorkspace(
     deferrals: () => undefined,
     refinementLane: () => () => Promise.resolve(),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
+    // No run in this fixture names a watcher, so no actor's file view is
+    // wrapped. A suite that wants one overrides this member — it is the same
+    // slot `hostHead` fills for the run that owns the capture.
+    chosenWriteObserver: () => null,
     ...overrides,
   };
   const host = createWorkspaceActorHost(seams);
