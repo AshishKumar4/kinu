@@ -86,10 +86,6 @@ describe('subordinate wiring', () => {
     // and the ingress a child reports into.
     expect(actor.match(/temporary: this\.temporaryAgentPort\(\),/gu)?.length).toBe(2);
 
-    // A `context_ref` is AUTHORIZED here and never read here: the bytes are the
-    // child's to fetch, which is the whole saving the channel exists for.
-    expect(actor).toContain('statRef: async (path) => (await this.rt.storage.vfs.stat(path)) !== null,');
-    expect(actor).not.toContain('vfs.readFile(path, { encoding: \'utf8\' })');
 
     expect(actor).toContain('new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle())');
   });
@@ -292,7 +288,7 @@ describe('subordinate wiring', () => {
     // construction, not by inspection of the last user turn.
     expect(hosting).toContain('reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,');
     // Which report is owed is decided from the ENDING by core's closed map: a
-    // task child answers on every ending because an `agents.ask` is blocked on
+    // task child answers on every ending because a task-lifetime `agents.hire` is blocked on
     // it, while a hire relays only a completed turn worth relaying — and both
     // are suppressed by a report that already SETTLED the run, so one question
     // never reaches the caller as two results.

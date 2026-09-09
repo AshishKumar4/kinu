@@ -198,9 +198,13 @@ describe('cli backend conformance', () => {
     expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(observed.planes.table!.size).toBeGreaterThanOrEqual(25);
     expect(observed.planes.tool!.has('execute_tools')).toBe(true);
-    // The peer transport reached the model: `reply` exists only when the host
-    // wired peers, so this is the local virtual workspace's mail showing up in
-    // the action enum a real model is handed.
-    expect(observed.planes['agents-action']!.has('reply')).toBe(true);
+    // The peer transport reached the model. `reply` used to witness it as its
+    // own action; the addressing verbs are one `msg` now, so the witness is the
+    // TARGET only peers can offer — `event_id`, which is in the advertised
+    // schema exactly when the host wired them. This is the local virtual
+    // workspace's mail showing up in what a real model is handed.
+    expect(observed.planes['agents-action']!.has('msg')).toBe(true);
+    expect(JSON.stringify(captured.find((tool) => tool.name === 'agents') ?? {}))
+      .toContain('event_id');
   }, 30_000);
 });

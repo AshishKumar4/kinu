@@ -67,7 +67,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
-      agentsActions: ['swarm', 'ask', 'hire'],
+      agentsActions: ['swarm', 'hire', 'msg'],
       temporaryAsk: true,
       registeredExecutors: [],
     });
@@ -75,7 +75,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
     expect(prompt).toMatch(/Its schema says what each action does/);
     expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(prompt).toMatch(/`ask` with `role` runs one temporary agent for one question/);
+    expect(prompt).toMatch(/`hire` with `lifetime:"task"` runs one agent for one question and returns its answer here/);
     expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
     expect(prompt).toMatch(/Subordinates share this workspace's files and sandbox/);
     // None of the removed advice survives: no shape test, no triggers, no
@@ -157,11 +157,11 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the agents schema description leads with the one-sentence lifetime frame', () => {
-    // Three rungs — ephemeral search, one-question temporary agent, persistent
-    // subordinate — keyed on lifetime alone. The frame names the three
-    // lifetimes in one sentence; the rungs that follow carry the mechanism.
+    // Two rungs — an ephemeral search, and one hire whose `lifetime` says
+    // whether the agent answers once or stays. The frame names both in one
+    // sentence; the rungs that follow carry the mechanism.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
-      /Use when: One delegation ladder, three rungs, keyed on lifetime/,
+      /Use when: One delegation ladder, two rungs: a search is ephemeral/,
     );
     // Which scorer runs when is stated once, on the search rung: the
     // caller's own verifier with an `objective`, a judge ensemble without.
@@ -223,7 +223,7 @@ describe('buildSystemPromptSync', () => {
     // orchestrator dismissed subordinates the moment they reported completed —
     // wiping their context. Persistence is now the doctrine in both surfaces.
     expect(DELEGATION_RUNGS.hire).toMatch(/reports and STAYS/);
-    expect(DELEGATION_RUNGS.hire).toMatch(/dismiss only a subordinate whose role is permanently over/);
+    expect(DELEGATION_RUNGS.hire).toMatch(/dismiss only one whose role is permanently over/);
     expect(DELEGATION_RUNGS.hire).not.toMatch(/retire it when done/);
     expect(DELEGATION_RUNGS.hire).not.toMatch(/cheap to create and dismiss/);
     // The prompt no longer says it a second time: the roster/re-engage/dismiss
@@ -545,9 +545,9 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const withTemporary = buildSystemPromptSync(rt, { backend: 'cf', temporaryAsk: true });
     expect(withTemporary).toMatch(/## Delegation/);
-    expect(withTemporary).toContain('`ask` with `role` runs one temporary agent for one question');
+    expect(withTemporary).toContain('`hire` with `lifetime:"task"` runs one agent for one question');
     expect(withTemporary).toMatch(/Code execution and learned capabilities/);
-    expect(withTemporary).not.toContain('agents.ask({ role');
+    expect(withTemporary).not.toContain('agents.ask(');
     expect(withTemporary).not.toContain('context_ref');
     expect(withTemporary).not.toContain('rlm.query');
 
@@ -556,7 +556,7 @@ describe('buildSystemPromptSync', () => {
     // the shared-spine parity, so it is always advertised.
     const withoutTemporary = buildSystemPromptSync(rt, { backend: 'cli-local' });
     expect(withoutTemporary).toMatch(/Code execution and learned capabilities/);
-    expect(withoutTemporary).not.toContain('`ask` with `role` runs one temporary agent');
+    expect(withoutTemporary).not.toContain('`hire` with `lifetime:"task"` runs one agent for one question');
     // The scaffold lane is still advertised where the temporary clause is not —
     // that is what this half of the test is for. It is advertised as the
     // NAMESPACE now rather than as a copied signature (see the note in the craft
@@ -566,7 +566,7 @@ describe('buildSystemPromptSync', () => {
     expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
     expect(agentSelfTypes()).toContain('proposeScaffold');
     const cliWithTemporary = buildSystemPromptSync(rt, { backend: 'cli-local', temporaryAsk: true });
-    expect(cliWithTemporary).toContain('`ask` with `role` runs one temporary agent for one question');
+    expect(cliWithTemporary).toContain('`hire` with `lifetime:"task"` runs one agent for one question');
   });
 
   test('does not advertise removed context tools or blocks', () => {

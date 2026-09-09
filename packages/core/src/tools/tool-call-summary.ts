@@ -39,7 +39,9 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['write', 'edit', 'append', 'delete', 'move', 'copy'])],
   ['tasks', new Set(['add', 'update'])],
   ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
-  ['agents', new Set(['swarm', 'fork', 'hire', 'ask', 'send', 'reply', 'dismiss'])],
+  // `fork`, `ask`, `send` and `reply` are stored history: rows recorded before
+  // those verbs left the picklist still have to classify.
+  ['agents', new Set(['swarm', 'fork', 'hire', 'msg', 'ask', 'send', 'reply', 'dismiss'])],
   ['release', new Set([
     'create', 'bind_source', 'transition', 'record_check', 'run_checks',
     'deploy', 'rollback', 'record_deployment', 'request_approval',
@@ -149,10 +151,19 @@ function summarizeAgents(input: JsonObject): string {
       const task = quoted(str(input, "task"), 56);
       return task ? `${label}: ${task}` : label;
     }
-    case "hire":
-      return str(input, "scope") === "workspace"
-        ? actionOn("hire workspace", agent, str(input, "mission"))
-        : actionOn(action, agent || str(input, "role"), agent ? str(input, "role") : "");
+    case "hire": {
+      if (str(input, "scope") === "workspace") return actionOn("hire workspace", agent, str(input, "mission"));
+      const role = str(input, "role");
+      // No `role` is a hire handed to an agent that already exists, and then
+      // `message` is the workstream rather than `mission`.
+      if (!role) return actionOn(action, agent, str(input, "message"));
+      return actionOn(str(input, "lifetime") === "task" ? "hire (task)" : action, agent || role, agent ? role : "");
+    }
+    case "msg":
+      return agent
+        ? actionOn(action, agent, str(input, "topic") || str(input, "message"))
+        : actionOn(action, undefined, str(input, "message"));
+    // Stored history: the three verbs `msg` replaced still have to render.
     case "ask":
     case "send":  return actionOn(action, agent, str(input, "topic") || str(input, "message"));
     case "reply": return actionOn(action, undefined, str(input, "message"));
@@ -391,9 +402,13 @@ function describeAgents(input: JsonObject): string {
       return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
     }
     case "hire":
-      return str(input, "scope") === "workspace"
-        ? "Hired a workspace"
-        : agent ? `Hired ${agent}` : "Hired a subordinate";
+      if (str(input, "scope") === "workspace") return "Hired a workspace";
+      // No `role` is a hire handed to an agent that already exists.
+      if (!str(input, "role")) return agent ? `Asked ${agent}` : "Asked a subordinate";
+      if (str(input, "lifetime") === "task") return agent ? `Asked ${agent} for one answer` : "Asked one agent for one answer";
+      return agent ? `Hired ${agent}` : "Hired a subordinate";
+    case "msg":     return agent ? `Messaged ${agent}` : "Answered an agent message";
+    // Stored history: the three verbs `msg` replaced still have to render.
     case "ask":     return agent ? `Asked ${agent}` : "Asked a subordinate";
     case "send":    return agent ? `Messaged ${agent}` : "Messaged a subordinate";
     case "reply":   return "Replied to a subordinate";

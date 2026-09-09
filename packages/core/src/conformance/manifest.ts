@@ -159,24 +159,18 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // own to under-wire.
     swarm: EVERYWHERE,
     hire: TEAM_RECURSES,
-    ask: TEAM_RECURSES,
-    send: TEAM_RECURSES,
-    reply: {
-      'cf-orchestrator': WIRED,
-      // The one team-adjacent action a subordinate does NOT get, and the reason
-      // is the depth cap: `hire scope=workspace` rides the peer transport and
-      // creates the ROOT of a fresh tree, so a subordinate holding peers could
-      // escape its own subtree in one call (tools/agents-tool.ts, AgentsToolDeps
-      // .peers). Cross-workspace reach is also an ownership boundary its parent
-      // owns and it is not party to.
-      'cf-subordinate': { absent: 'cross-workspace reach would let a subordinate mint a fresh tree root and escape its own depth cap; the peer boundary is its parent\'s to cross' },
-      // Wired locally too: a local virtual workspace groups several ROOT agents
-      // as equal peers over one directory, and LocalAgentHost gives each of them
-      // the same PeerHub transport the hosted backend runs. The boundary is the
-      // `{ cwd, workspaceId }` pair on their refs rather than an account plane,
-      // so being signed out withholds nothing.
-      cli: WIRED,
-    },
+    // Wired wherever a roster or a peer transport is, and its `event_id` half
+    // only beside the latter: a subordinate has no peer transport, so it
+    // addresses agents by name and never answers a cross-workspace event. That
+    // is the depth cap rather than tidiness — `hire scope=workspace` rides the
+    // peer transport and creates the ROOT of a fresh tree, so a subordinate
+    // holding peers could escape its own subtree in one call
+    // (tools/agents-tool.ts, AgentsToolDeps.peers) — and cross-workspace reach
+    // is also an ownership boundary its parent owns and it is not party to.
+    // Locally the whole action is wired: a local virtual workspace groups
+    // several ROOT agents as equal peers over one directory, and LocalAgentHost
+    // gives each of them the same PeerHub transport the hosted backend runs.
+    msg: TEAM_RECURSES,
     list: TEAM_RECURSES,
     dismiss: TEAM_RECURSES,
   },

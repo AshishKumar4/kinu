@@ -451,7 +451,7 @@ describe('what the live tool surface does with entry zero', () => {
     }
     // And the correction: what `hire` does take, so a caller can fix the call
     // from the message alone rather than guessing again.
-    expect(smuggle).toThrow(/action "hire" takes: agent, role, mission/);
+    expect(smuggle).toThrow(/action "hire" takes: role, mission, agent/);
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {

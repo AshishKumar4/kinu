@@ -21,9 +21,9 @@ describe('delegationFeatures', () => {
       call('agents', { action: 'list' }),
       call('agents', { action: 'dismiss', agent: 'a' }),
       call('agents', { action: 'swarm', task: 't' }),
-      call('agents', { action: 'ask', agent: 'b' }),
+      call('agents', { action: 'msg', agent: 'b' }),
       call('agents', { action: 'send', agent: 'b', text: 'hi' }),
-      call('agents', { action: 'reply', text: 'ok' }),
+      call('agents', { action: 'msg', event_id: 'e1', message: 'ok' }),
       call('run', { command: 'ls' }),
     ];
 

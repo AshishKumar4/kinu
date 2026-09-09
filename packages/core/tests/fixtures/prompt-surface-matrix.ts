@@ -236,25 +236,25 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     // ONE case, not the `code-execution-with/without-temporary-ask` pair this
     // replaces. `temporaryAsk` reaches the prompt only through the Delegation
-    // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('ask')`
+    // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('hire')`
     // (prompt.ts) — so on a surface carrying `execute_tools` and no `agents`
     // tool the flag renders nothing in either position, and the two cases were
     // one request under two names. The Code-execution section had its own
-    // `agents.ask` bullet until the 2026-09-03 delegation-nudge cutover; the
-    // pair outlived it.
+    // temporary-delegation bullet until the 2026-09-03 delegation-nudge
+    // cutover; the pair outlived it.
     name: 'code-execution',
     opts: { availableTools: ['execute_tools'], registeredExecutors: [] },
   },
   {
-    // The ask rung's TRUE direction, and the only case that renders it. Its
-    // false direction is `delegation-hire-only` above: the section branches on
-    // `hasTemporaryAsk`, not on why it is false, so a fourth case pairing these
-    // actions with `temporaryAsk: false` renders `delegation-hire-only`'s exact
-    // bytes and measures nothing.
-    name: 'delegation-temporary-ask',
+    // The task lifetime's TRUE direction, and the only case that renders it.
+    // Its false direction is `delegation-hire-only` above: the section branches
+    // on `hasTemporaryAsk`, not on why it is false, so a fourth case pairing
+    // these actions with `temporaryAsk: false` renders `delegation-hire-only`'s
+    // exact bytes and measures nothing.
+    name: 'delegation-task-lifetime',
     opts: {
       availableTools: ['agents'],
-      agentsActions: ['ask', 'hire', 'list'],
+      agentsActions: ['hire', 'msg', 'list'],
       temporaryAsk: true,
       registeredExecutors: [],
     },

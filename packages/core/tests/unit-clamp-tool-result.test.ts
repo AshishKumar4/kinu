@@ -198,7 +198,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const tightened = await run({ command: 'big-last' });
 
     expect(tightened.length).toBeLessThan(9_000);
-    expect(tightened).toContain('as `context_ref` on an agents ask');
+    expect(tightened).toContain('agents hire so that agent reads it');
     const restored = await rt.storage.vfs.readFile(markerPath(tightened), { encoding: 'utf8' });
     const restoredText = v.parse(v.string(), restored);
     expect(restoredText).toStartWith('UNIQUE-');
