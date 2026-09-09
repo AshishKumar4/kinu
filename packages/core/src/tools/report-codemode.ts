@@ -14,7 +14,7 @@ import { branchableToolCall } from './outcome';
 /** Positional args arrive untyped from the sandbox; narrowing them to two
  *  strings is this surface's only job. Which statuses exist, and what an empty
  *  body is refused with, belong to the one dispatcher both surfaces call — not
- *  to a second picklist here, which is what they used to disagree over. */
+ *  to a second picklist here, which is what would let the two disagree. */
 const PositionalSchema = v.tuple([v.string(), v.string()]);
 
 const STATUS_UNION = SUBORDINATE_REPORT_STATUSES.map((s) => `"${s}"`).join(' | ');

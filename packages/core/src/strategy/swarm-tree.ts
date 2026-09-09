@@ -154,8 +154,8 @@ export interface Expansion {
    * THE DISTINCTION THE RANKING DEPENDS ON. An agent node that was aborted, ran out of
    * steps or errored still returns a report, and that report's summary is deliberately
    * NOT its mid-flight text (`incompleteHeadSummary`) — but it IS a string, and a string
-   * is what {@link artifact} carries to the instrument. So an unfinished node used to be
-   * measured exactly like a finished one and took whatever the instrument said about its
+   * is what {@link artifact} carries to the instrument. So an unfinished node would be
+   * measured exactly like a finished one and take whatever the instrument said about its
    * own status line: on the live run that was "no runnable code", which blames the
    * verifier for a node the clock stopped. Worse where the summary happens to carry a
    * fence: then the unfinished node is SCORED, and the tree ranks on how far a node got
@@ -210,24 +210,19 @@ export interface Expansion {
  * re-narrow, and the barrier is the boundary where a promise's reason stops being a
  * language value and becomes this run's failure.
  *
- * There were three arms. The third was `silent` — a member the barrier gave up on after
- * {@link TURN_WALL_CLOCK_ENVELOPE_MS} of recording no step — and it is DELETED rather
- * than re-tuned, together with the clock that produced it. The clock was added to end a
- * sixty-three-minute hang and it did, but it was never a measured quantity: reusing a
- * measured constant does not measure a DIFFERENT thing, and a level barrier's patience
- * and one turn's wall clock are not the same thing. Its first live outing gave up on
- * three nodes at 600,002 / 600,028 / 600,029 ms and reported "a provider or transport
- * that is not answering" — while that provider answered a direct request in 1.5 s. It
- * was wrong about the cause, which is worse than slack: an unwarranted bound
- * manufactures false diagnoses.
+ * THERE IS NO ELAPSED-TIME ARM, and there must not be one. A node runs on the shared
+ * turn loop until it finishes, the caller cancels it, the mission governor refuses a
+ * step, or a provider or tool fails definitively. The barrier awaits that settled
+ * outcome and never diagnoses elapsed silence.
  *
- * What replaces it is not another bound. A node now runs on the shared turn
- * loop until it finishes, the caller cancels it, the mission governor refuses a
- * step, or a provider or tool fails definitively. The barrier awaits that
- * settled outcome and never diagnoses elapsed silence. It MUST NOT run a clock
- * here, because a node that can background work legitimately records nothing
- * while it awaits a wake: a node waiting an hour is healthy, and no elapsed-time
- * instrument can tell that from one that never began.
+ * A clock here is not slack, it is a wrong cause. A turn's wall-clock envelope does
+ * not measure a level barrier's patience — reusing a measured constant does not
+ * measure a DIFFERENT thing — and a barrier armed that way gave up on three nodes at
+ * 600,002 / 600,028 / 600,029 ms reporting "a provider or transport that is not
+ * answering" while that provider answered a direct request in 1.5 s. A node that can
+ * background work legitimately records nothing while it awaits a wake: a node waiting
+ * an hour is healthy, and no elapsed-time instrument can tell that from one that never
+ * began.
  */
 export type NodeAnswer =
   | { readonly kind: 'expanded'; readonly expansion: Expansion }

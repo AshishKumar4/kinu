@@ -167,11 +167,11 @@ export type RunEvent =
    *  `usage` is ALWAYS written, `{}` when the provider reported nothing,
    *  because the honest reading of a silent call is unmeasured spend, not free
    *  spend, and the workspace total's coverage fraction is built out of exactly
-   *  these. It stays OPTIONAL on the type only so rows written before that rule
-   *  still read back; every producer goes through `buildModelCallEvent`, which
-   *  is what makes the field present in practice. One backend used to omit it
-   *  instead, which left a reader unable to tell "unmeasured" from "not
-   *  recorded" — the one distinction this row exists to carry.
+   *  these. It stays OPTIONAL on the type only so rows written without it still
+   *  read back; every producer goes through `buildModelCallEvent`, which is what
+   *  makes the field present in practice. A producer that omitted it instead
+   *  would leave a reader unable to tell "unmeasured" from "not recorded" — the
+   *  one distinction this row exists to carry.
    *
    *  `usd` is that report at the CALL'S OWN model's catalog rate, absent
    *  when unpriced; a judge deliberately runs on a different model from the
@@ -448,13 +448,12 @@ export type RunEventInput = {
  * What a call that failed WITHOUT saying why records as.
  *
  * An empty `error` is no error to every reader — the one predicate they share
- * is `error != null && error !== ''` — and the producer used to manufacture
- * exactly that from a tool reporting `success: false` with a nullish error
- * (`String(c.error ?? '')`). So the worst calls in a turn were the ones that
- * vanished from it: a tool failing on a missing runtime method reported failure
- * with nothing to report, and the ledger scored it as a clean call. The
- * accumulator KNEW — it flips `hadError` on the same branch — and discarded it
- * at the event boundary.
+ * is `error != null && error !== ''`. So a tool reporting `success: false` with
+ * a nullish error must not be rendered as `String(c.error ?? '')`: that makes
+ * the worst calls in a turn the ones that vanish from it, a tool failing on a
+ * missing runtime method reporting failure with nothing to report while the
+ * ledger scores it as a clean call. The accumulator KNOWS — it flips `hadError`
+ * on the same branch — and would lose it at the event boundary.
  *
  * A sentinel and not prose because both the producer and the failure census
  * name it, and a reader that has to match prose is a reader that will drift

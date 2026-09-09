@@ -48,9 +48,9 @@ export interface TraceStepLike {
  *
  * Per step, not per run, because the trace is written AS the head runs: the
  * head hands each finished step to its journal, so a fork that is still
- * thinking already has a readable trace. A whole-run walk would only ever run
- * after the report, which is the state the Exploration surface used to be
- * stuck in.
+ * thinking already has a readable trace. A whole-run walk can only run after the
+ * report, which would leave the Exploration surface with nothing to show until
+ * then.
  */
 export function toHeadStep(step: TraceStepLike): HeadStep | null {
   const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];

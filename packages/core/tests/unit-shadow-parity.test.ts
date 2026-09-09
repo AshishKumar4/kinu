@@ -1,16 +1,15 @@
 import type { ChatEvent } from '../src/chat';
 /**
- * Shadow context parity — a context-dependent task no longer auto-loses in
- * the shadow eval.
+ * Shadow context parity — a context-dependent task does not auto-lose in the
+ * shadow eval.
  *
- * The live answer is produced with the full conversational context; before
- * the parity fix the shadow's pending got (a) a task-text-only
- * host.defaultInference reconstruction and (b) its ui_chunk output dropped
- * from the judged text — a delegating pending was structurally tie-prone or
- * worse. The orchestrator now replays the live turn's prepared streamText
- * opts into the shadow's defaultInference; these tests pin the core side of
- * that contract: the delegating pending's full-context output reaches the
- * judge verbatim.
+ * The live answer is produced with the full conversational context. Give the
+ * shadow's pending (a) a task-text-only host.defaultInference reconstruction
+ * and (b) its ui_chunk output dropped from the judged text, and a delegating
+ * pending is structurally tie-prone or worse. The orchestrator replays the live
+ * turn's prepared streamText opts into the shadow's defaultInference; these
+ * tests pin the core side of that contract: the delegating pending's
+ * full-context output reaches the judge verbatim.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -76,7 +75,7 @@ function uiStream(answer: string): () => AsyncIterable<ScaffoldDefaultInferenceC
 }
 
 describe('shadow context parity', () => {
-  test('a delegating pending with the live context no longer auto-loses on a context-dependent task', async () => {
+  test('a delegating pending with the live context does not auto-lose on a context-dependent task', async () => {
     const rt = await setup();
     const result = await runAutoShadowEval({
       rt,
@@ -84,8 +83,8 @@ describe('shadow context parity', () => {
       currentOutput: CONTEXT_AWARE_ANSWER, // the live answer, produced with full context
       judge: contextJudge,
       llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
-      // The orchestrator now replays the live turn's full streamText opts —
-      // so defaultInference yields the context-aware answer.
+      // The orchestrator replays the live turn's full streamText opts — so
+      // defaultInference yields the context-aware answer.
       defaultInference: uiStream(CONTEXT_AWARE_ANSWER),
       random: () => 0,
     });

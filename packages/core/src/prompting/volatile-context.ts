@@ -167,8 +167,9 @@ export interface MissingCapability {
  *  The words are the SURFACE's words, because this block is the model reading
  *  its own live state and it can only act on what the tool surface calls
  *  things. `swarm-run.ts` records every configured search into this journal, so
- *  a row here IS a search — it rendered as `(fork)`, an action the ladder no
- *  longer has, over "heads", which the prompt calls nodes. */
+ *  a row here IS a search, and it renders as a swarm node over "nodes" — not as
+ *  `(fork)`, an action the ladder does not have, over "heads", a word the
+ *  prompt does not use. */
 export function searchDelegates(
   runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
 ): DynamicDelegate[] {

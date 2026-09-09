@@ -4,10 +4,10 @@
  * read model built from it.
  *
  * This is deliberately a whole-pipeline test rather than a unit test of each
- * stage, because every stage used to re-introduce the zero independently: the
- * SDK adapter fabricated it, `chat.ts` merged it, the accumulator summed it, the
- * durable valibot schema demanded it, and the read model folded it with `?? 0`.
- * Any one of those regressing puts the zero back, and only a test that carries a
+ * stage, because every stage can re-introduce the zero independently: the SDK
+ * adapter can fabricate it, `chat.ts` can merge it, the accumulator can sum it,
+ * the durable valibot schema can demand it, and the read model can fold it with
+ * `?? 0`. Any one of those puts the zero back, and only a test that carries a
  * real provider payload through every stage catches all five.
  *
  * The stages, in order:

@@ -7,10 +7,10 @@
  * shape JavaScript allows for "a function": a bare arrow, a named function
  * declaration, `const name = async () => {}`, `module.exports = …`,
  * `export default …`, or a helper followed by the function that uses it. Only
- * the first of those is an expression. Storing the others verbatim used to
- * poison the whole sandbox: one `const` body inside the splice was a
- * SyntaxError for EVERY later `execute_tools` call in the workspace, and the
- * message named neither the tool nor the shape.
+ * the first of those is an expression. Storing the others verbatim poisons the
+ * whole sandbox: one `const` body inside the splice is a SyntaxError for EVERY
+ * later `execute_tools` call in the workspace, and the message names neither
+ * the tool nor the shape.
  *
  * So admission does two things, both with a real parser (acorn, the same one
  * `@cloudflare/codemode` normalizes model programs with):

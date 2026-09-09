@@ -227,7 +227,7 @@ export const UNBOUNDED_MAX_STEPS = Number.MAX_SAFE_INTEGER;
  * the `swarm.branch_failed` event a surface renders still carry these two
  * openings, and they distinguish two causes that need different answers — a
  * wedge is a fault to investigate, a rate limit is capacity to wait for or pace
- * against. Nothing produces the prose any more; the classifier below is what
+ * against. Nothing in the engine writes the prose; the classifier below is what
  * keeps the recorded rows readable. The prefixes stay module-scoped so no second
  * reader can grow its own copy of the vocabulary.
  */
@@ -610,13 +610,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     }
 
     // A DEFINITIVE provider or transport failure crosses as a CLASSIFIED failure
-    // when the caller did not cancel the turn. It used to be rethrown verbatim,
-    // which meant an `APICallError` reached the CLI and the chat surface with its
-    // raw `responseBody` still attached and its own message saying only
-    // "AI_APICallError" — so the overflow-recovery classifier read nothing usable
-    // while the user read the endpoint's whole body. `toProviderError` puts the
-    // provider's own reason (and its status/code) in the message and keeps the
-    // raw failure on `cause`, where diagnostics can still reach it.
+    // when the caller did not cancel the turn. Rethrown verbatim it would reach the
+    // CLI and the chat surface as an `APICallError` with its raw `responseBody`
+    // still attached and its own message saying only "AI_APICallError" — so the
+    // overflow-recovery classifier would read nothing usable while the user read
+    // the endpoint's whole body. `toProviderError` puts the provider's own reason
+    // (and its status/code) in the message and keeps the raw failure on `cause`,
+    // where diagnostics can still reach it.
     if (streamError !== undefined && !interrupted) {
       throw toProviderError({ doing: 'calling the model', cause: streamError });
     }
@@ -677,11 +677,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   //
   // A step that ends at OUTPUT_LIMIT_REACHED is a model that had more to say and
   // was not allowed to say it — after prose, and equally after a completed tool
-  // result, which is the case that used to publish a turn as finished with the
-  // work after the tool never done. The SDK's own loop does not continue it: it
+  // result, the case that would otherwise publish a turn as finished with the work
+  // after the tool never done. The SDK's own loop does not continue it: it
   // re-issues a request only while a step ended with tool calls whose outputs all
-  // landed, so a length finish with no pending call ends the loop, and the
-  // accumulated partial answer was accepted as the turn's.
+  // landed, so a length finish with no pending call ends the loop and the
+  // accumulated partial answer stands as the turn's.
   //
   // The continuation request is the SAME prefix plus what the turn has already
   // produced — every assistant message and every tool result, in order. So the

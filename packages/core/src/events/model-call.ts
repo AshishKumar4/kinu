@@ -6,9 +6,10 @@
  * turn loop never sees: the outcome-ensemble judges, the fast tier behind every
  * classification and title, the evolution engine's own reflection and GEPA,
  * exploration heads, MCTS rollout branches, compaction folds, an evolved
- * scaffold's own inference loop, and the memory embedder. Every one of them used to discard the provider's usage report on the
- * line that received it, so the panel's figure was the orchestrator's own turns
- * and said nothing about the rest — while looking like it said everything.
+ * scaffold's own inference loop, and the memory embedder. Discard the provider's
+ * usage report on the line that receives it and the panel's figure is the
+ * orchestrator's own turns, saying nothing about the rest — while looking like it
+ * says everything.
  *
  * NOT A SECOND STORE. This is one more row type in the durable run-event log the
  * step telemetry already reads, carrying the same {@link Usage} the step rows

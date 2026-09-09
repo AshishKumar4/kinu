@@ -3,21 +3,21 @@
  * import-cycle gate.
  *
  * The defect this is built from: `strategy/node-agent.ts` reads
- * `HEAD_BUILTIN_TOOLS` at MODULE SCOPE (`[...HEAD_BUILTIN_TOOLS, 'report']`), and
- * that constant used to live in `heads/head-tools.ts`, which sat on a five-module
- * value cycle:
+ * `HEAD_BUILTIN_TOOLS` at MODULE SCOPE (`[...HEAD_BUILTIN_TOOLS, 'report']`), so
+ * the constant has to be initialised before anything around it. Put it in
+ * `heads/head-tools.ts` and it sits on a five-module value cycle:
  *
  *   heads/head-tools -> tools/builtins -> tools/agents-tool
  *                    -> strategy/swarm-run -> strategy/node-agent -> heads/head-tools
  *
  * Enter that ring at `heads/*` and `head-tools` is still initialising when the
- * spread runs, so the spread hits the temporal dead zone. What made it expensive
- * is HOW it failed: the throw happened at module evaluation, so
- * `unit-fork-run-identity.test.ts` — which imports the heads barrel first — did
- * not fail six tests, it failed to LOAD, and its six tests disappeared from the
- * run's count. `bun test packages/core/tests/` passed at the same time, because
- * entering through the core barrel ordered the cycle the other way. A suite that
- * SHRINKS reads as green.
+ * spread runs, so the spread hits the temporal dead zone. What makes it
+ * expensive is HOW it fails: the throw happens at module evaluation, so
+ * `unit-fork-run-identity.test.ts` — which imports the heads barrel first —
+ * does not fail six tests, it fails to LOAD, and its six tests disappear from
+ * the run's count. `bun test packages/core/tests/` passes at the same time,
+ * because entering through the core barrel orders the cycle the other way. A
+ * suite that SHRINKS reads as green.
  *
  * `import/no-cycle` (.oxlintrc.json) catches the cycle statically. This catches
  * the initialisation behaviourally, and the two fail for different reasons: the
@@ -52,16 +52,16 @@ const srcUrl = (relative: string): string =>
   pathToFileURL(join(here, '..', 'src', relative)).href;
 
 /**
- * Every module that was on the ring, plus the two barrels a test or a backend
- * actually enters through. Each one is a first import somebody really performs,
- * so each is an order the constant has to survive. The heads barrel is first
- * because it is the order that broke.
+ * Every module on the ring, plus the two barrels a test or a backend actually
+ * enters through. Each one is a first import somebody really performs, so each
+ * is an order the constant has to survive. The heads barrel is first because it
+ * is the order that reaches `head-tools` mid-initialisation.
  */
 const ENTRY_POINTS: ReadonlyArray<readonly [label: string, specifier: string]> = [
-  ['the heads barrel — the order that broke', 'heads/index.ts'],
-  ['heads/head-tools — where the constant used to live', 'heads/head-tools.ts'],
-  ['heads/types — where it lives now', 'heads/types.ts'],
-  ['the core barrel — the order that masked it', 'index.ts'],
+  ['the heads barrel — the entry that reaches head-tools mid-init', 'heads/index.ts'],
+  ['heads/head-tools — the head tool surface on the ring', 'heads/head-tools.ts'],
+  ['heads/types — where the constant lives', 'heads/types.ts'],
+  ['the core barrel — the entry that orders the ring the other way', 'index.ts'],
   ['tools/builtins — the confined-surface factory', 'tools/builtins.ts'],
   ['tools/actor-tools — the actor surface that adds `agents`', 'tools/actor-tools.ts'],
   ['tools/agents-tool — the delegation tool', 'tools/agents-tool.ts'],
@@ -109,8 +109,8 @@ function observeAfterLoading(specifier: string): Observed {
 
 describe('module initialisation order', () => {
   // The reference every case is measured against, taken through the entry order
-  // that used to MASK the defect — so a reference that is itself broken shows up
-  // here rather than making the cases below vacuously true.
+  // that orders the ring so the read succeeds — so a reference that is itself
+  // broken shows up here rather than making the cases below vacuously true.
   const [, referenceSpecifier] = ENTRY_POINTS[3]!;
   const reference = observeAfterLoading(referenceSpecifier);
 

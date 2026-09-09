@@ -164,9 +164,9 @@ export const TERMINAL_EFFECT_NAMES = [
   // confirming turn it enqueues has already been enqueued.
   'completion_gate',
   // The settle spine, as five separately claimed boundaries rather than one
-  // compound effect. It used to be a single row, so a crash after the extension
-  // turn-end but before the window append lost the remaining suffix and nothing
-  // could tell which half had happened. Each of these is keyed on the turn's own
+  // compound effect. One row for all five loses the remaining suffix to a crash
+  // after the extension turn-end but before the window append, with nothing able
+  // to tell which half had happened. Each of these is keyed on the turn's own
   // durable identity and is idempotent at its own boundary.
   //
   // `overflow_retry` and `output_continuation` are the two follow-up turns a
@@ -175,7 +175,7 @@ export const TERMINAL_EFFECT_NAMES = [
   // turn that COMPLETED at the provider's output limit with more to say.
   'turn_end_extensions', 'overflow_retry', 'output_continuation',
   'turn_record', 'event_drain', 'improvement_lanes',
-  // Separate from the improvement lanes it used to sit inside: a queue that is
+  // Its own row rather than a part of the improvement lanes: a queue that is
   // full is a legitimate refusal, and the lanes' own model calls must not be
   // held behind it — nor repeated when it is retried.
   'shadow_trial',
@@ -609,10 +609,10 @@ export class TerminalEffectLedger {
   /** Run a claimed roster: arm, inline pass, then the detached tail. */
   async drive(sequenceId: string, claimed: readonly PendingRow[]): Promise<TerminalSequenceRun> {
     // ARMED HERE, before the first attempt. The rows now exist, so a recovery
-    // for them must exist too: an eviction inside the inline pass used to leave
-    // a claimed suffix with no wake and no fiber behind it, and a subordinate —
-    // whose activation runs no reconcile of its own — could owe its parent
-    // report indefinitely. One early wake that finds nothing to do is the
+    // for them must exist too: an eviction inside the inline pass would otherwise
+    // leave a claimed suffix with no wake and no fiber behind it, and a
+    // subordinate — whose activation runs no reconcile of its own — could owe its
+    // parent report indefinitely. One early wake that finds nothing to do is the
     // harmless failure; a suffix nothing retries is not.
     await this.armWake();
     for (const row of claimed) {
@@ -791,10 +791,10 @@ export class TerminalEffectLedger {
    * One attempt at one effect — the whole of the exactly-once boundary.
    *
    * The try/catch spans exactly this effect and nothing else. A sequence-wide
-   * catch is what made the old failures unattributable: one throw ended every
-   * effect after it, and the marker said only that the turn had not finished.
-   * Here a failure leaves THIS row owed with its classified reason, and the
-   * effects beside it are untouched.
+   * catch makes failures unattributable: one throw ends every effect after it,
+   * and the marker says only that the turn has not finished. Here a failure
+   * leaves THIS row owed with its classified reason, and the effects beside it
+   * are untouched.
    */
   private async attempt(sequenceId: string, row: PendingRow): Promise<void> {
     // A resumed row is governed by the schedule its last failure armed, however

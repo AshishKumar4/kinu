@@ -126,8 +126,9 @@ describe('a turn interrupted between a tool call and its result', () => {
       expect(first.threw).toBe('The turn was interrupted before it finished.');
       expect(first.events.some((e) => e.type === 'done')).toBe(true);
 
-      // The follow-up turn: the whole point. Before this fix, `streamText`
-      // threw AI_MissingToolResultsError here and never issued a request.
+      // The follow-up turn: the whole point. An orphaned call left in the
+      // history makes `streamText` throw AI_MissingToolResultsError here,
+      // before it issues a request at all.
       first.persisted.push({ role: 'user', content: 'what did you find?' });
       const replies: string[] = [];
       for await (const ev of runChat({
@@ -200,10 +201,10 @@ describe('a turn interrupted between a tool call and its result', () => {
 });
 
 describe('a history that already holds an orphaned call', () => {
-  // The already-bricked session: the orphan was persisted before this fix
-  // existed (or by the cf turn driver's partial-message persist). Turn assembly
-  // is the reconciliation point, so the next turn works without rewriting a
-  // single stored row.
+  // The already-bricked session: an orphan that is already in stored history —
+  // the cf turn driver's partial-message persist is one way it gets there. Turn
+  // assembly is the reconciliation point, so the next turn works without
+  // rewriting a single stored row.
   const bricked: ModelMessage[] = [
     { role: 'user', content: 'check the repo' },
     { role: 'assistant', content: [

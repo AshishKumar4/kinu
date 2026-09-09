@@ -55,8 +55,8 @@ export interface RateLimitRetryOptions {
  *
  *   - Every attempt goes out through {@link ProviderPacer.admit}, which spaces
  *     request STARTS against one host and holds each caller behind any wait the
- *     provider has already mandated. A whole swarm level starting at once used to
- *     arrive as N simultaneous first requests on one credential.
+ *     provider has already mandated. Without it a whole swarm level starting at once
+ *     arrives as N simultaneous first requests on one credential.
    *   - Every wait is declared before it is taken, so every sibling request for
    *     this host respects the same provider-mandated cooldown.
  */

@@ -14,12 +14,11 @@
  * is one judgment for the whole project and it lives in
  * `safety/egress-destination.ts`, which the backend's egress hop also calls.
  *
- * This module used to answer it a second time, with its own `parseIPv4` and
- * its own copy of the RFC1918 table, and the copies had drifted: the IPv6
- * test here was a string-prefix compare, so `[::ffff:10.0.0.1]` — the mapped
- * spelling of an RFC1918 address — passed the agent's guard while the
- * backend's refused it. Delegating removes the second answer, so a range
- * added to the classifier binds the agent's own fetches too.
+ * This module does NOT answer it a second time. A local `parseIPv4` and a local
+ * copy of the RFC1918 table drift: a string-prefix IPv6 test lets
+ * `[::ffff:10.0.0.1]` — the mapped spelling of an RFC1918 address — through the
+ * agent's guard while the backend's refuses it. One answer means a range added
+ * to the classifier binds the agent's own fetches too.
  *
  * Ported from hermes-agent/tools/url_safety.py, adapted for the Workers/Bun
  * runtime: there is NO DNS resolution here (Workers has no `dns`/socket

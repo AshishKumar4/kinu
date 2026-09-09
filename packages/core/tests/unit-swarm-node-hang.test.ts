@@ -3,14 +3,14 @@
  *
  * One live run left three nodes `running` with no steps after an upstream
  * credential expired, while their siblings recorded the authentication error.
- * The durable requirement survives the time-policy cutover: a provider or host
- * error must settle the node row and retain its cause, and a flat run must
- * return every failed candidate with that reason.
+ * The durable requirement: a provider or host error MUST settle the node row and
+ * retain its cause, and a flat run MUST return every failed candidate with that
+ * reason.
  *
- * Elapsed silence is deliberately not a failure now. The shared turn loop has
- * no watchdog or timeout retry, so this suite no longer invents a small clock to
- * turn a pending provider into an error. Its slow-node arm instead proves that
- * active work may outlive any former envelope and still complete.
+ * Elapsed silence is deliberately not a failure. The shared turn loop has no
+ * watchdog and no timeout retry, so this suite invents no small clock to turn a
+ * pending provider into an error. Its slow-node arm instead proves that active
+ * work may outlive any envelope and still complete.
  */
 import { describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';

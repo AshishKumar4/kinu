@@ -103,10 +103,10 @@ export interface HeadJournalPort {
  * because a recursive split always carries a `parentHeadId` and so never resolves a
  * top-level run. `HeadJournal` satisfies this structurally.
  *
- * ONE CAPABILITY, not two. `abandonRunning` used to be here as well, because
- * reclaiming a run also retired its heads. A re-drive now RE-OPENS them instead, and
- * the transition that does it is `insertSpawn`, which this port already carries — so
- * the terminal writer is no longer any of this controller's business.
+ * ONE CAPABILITY, not two. A re-drive RE-OPENS a run's heads rather than retiring
+ * them, and the transition that does it is `insertSpawn`, which this port already
+ * carries — so the terminal writer is none of this controller's business and
+ * `HeadJournal.abandonRunning` is deliberately absent from this port.
  */
 export interface HeadRootJournal extends HeadJournalPort {
   findResumableRun(task: string): HeadId | null;
@@ -156,13 +156,13 @@ export type SplitPhaseEvent =
 /**
  * NOTHING IS WRITTEN ON A BRANCH A RE-DRIVE TAKES OVER, and the absence is the fix.
  *
- * There used to be a `RECLAIMED_RUN_REASON` here — "Interrupted before it reported.
- * This fork was restarted, and the branches below it are the retry." — stamped onto
- * every unreported row of the reclaimed run by {@link HeadController.resolveTopLevelRun}
- * and rendered verbatim on the Exploration surface. It was the fork twin of the swarm's
- * own defect and it multiplied the same way: the run id was reclaimed, its rows were
- * retired, and then the split minted a FRESH id per head, so one request accumulated
- * `heads.length` aborted rows per re-drive. The owner read that as
+ * There is no `RECLAIMED_RUN_REASON` — nothing stamps "Interrupted before it
+ * reported. This fork was restarted, and the branches below it are the retry." onto
+ * the unreported rows of a reclaimed run in {@link HeadController.resolveTopLevelRun}
+ * for the Exploration surface to render verbatim. Such a stamp is the fork twin of the
+ * swarm's own defect and it multiplies the same way: the run id is reclaimed, its rows
+ * are retired, and then the split mints a FRESH id per head, so one request
+ * accumulates `heads.length` aborted rows per re-drive. The owner reads that as
  * `Systemfork interrupted` over a pile of failed branches.
  *
  * A head that was spawned and never reported is UNFINISHED WORK. A re-drive re-runs
@@ -510,9 +510,9 @@ export class HeadController {
    * With a grounding seam this is a k-sample median ensemble (mergeSamples
    * independent synthesis samples, each scored by the grounded judge; the
    * median-scored one is kept — parse-failed samples are dropped, never a 0).
-   * Without one it is the legacy n=1 call. Either way the prompt carries each
-   * head's FULL evidence + artifacts (no 6×200-char clipping) so no finding is
-   * lost on the way into the merge.
+   * Without one it is a single synthesis call, no ensemble. Either way the prompt
+   * carries each head's FULL evidence + artifacts (no 6×200-char clipping) so no
+   * finding is lost on the way into the merge.
    */
   async merge(
     reports: readonly HeadReport[],

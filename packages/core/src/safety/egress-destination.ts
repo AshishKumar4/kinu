@@ -3,16 +3,15 @@
  * untrusted code must never reach, as a pure judgment over a hostname.
  *
  * ── The one classifier, and its two enforcement points ───────────
- * Two of them existed. This module judged BACKEND egress
- * (`cf-backend/src/egress/outbound.ts`) while `web/url-safety.ts` judged the
- * agent's OWN fetches, each with its own hand-rolled `parseIPv4` and its own
- * copy of the seven-rule RFC1918 table — and they had drifted, so a fix to
- * one was not a fix to the other: `[::ffff:10.0.0.1]` was refused here and
- * reachable from the web tool, whose IPv6 test was a string-prefix compare.
- * There is now one judgment. `assertSafeUrl` keeps what is genuinely its own
- * (scheme, the secret-exfiltration test, its error type) and calls
- * `refusedHostname` for the host, so both enforcement points refuse exactly
- * the same set.
+ * ONE judgment, two enforcement points. This module judges BACKEND egress
+ * (`cf-backend/src/egress/outbound.ts`) and `assertSafeUrl` in
+ * `web/url-safety.ts` judges the agent's OWN fetches — keeping only what is
+ * genuinely its own (scheme, the secret-exfiltration test, its error type) and
+ * calling `refusedHostname` for the host, so both enforcement points refuse
+ * exactly the same set. Two hand-rolled `parseIPv4`s and two copies of the
+ * seven-rule RFC1918 table drift, and a fix to one is not a fix to the other: a
+ * string-prefix IPv6 test leaves `[::ffff:10.0.0.1]` refused here and reachable
+ * from the web tool.
  *
  * ── Why the judgment is provider-independent ─────────────────────
  * Every input is a standard: the hostname arrives WHATWG-canonical (the URL

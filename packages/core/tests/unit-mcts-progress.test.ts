@@ -8,10 +8,6 @@
  * worth watching: events arrive WHILE the search runs, carrying a tree that
  * has already grown — not one that settles whole at the end. Phase ordering,
  * failure reporting and grounding notices are covered in integration-mcts.
- *
- * The fork substrate's own dispatch-time resolution of this sink died with
- * `defaultOptions`, whose last reader was the removed `fork` action; nothing
- * consumed it any more.
  */
 import { describe, test, expect } from 'bun:test';
 import { runMCTS } from '../src/mcts/engine';

@@ -2,16 +2,15 @@
  * ActorHost — the root's runtime objects for every logical actor of ONE
  * workspace database.
  *
- * WHAT THIS REPLACES. A hired subordinate, an ask-by-role temporary, a
- * branching head and a swarm node each used to own a DATABASE: a facet Durable
- * Object with its own `ctx.storage` on the hosted backend, a `<child>/agent.db`
- * or a `heads/<key>.db` file on the local one. Their rows were therefore not in
- * the workspace, and "a SQL-only snapshot of this object contains the
- * workspace" held for the main actor alone. The stores' SQL port is a
- * SYNCHRONOUS tagged template (`SqlExecutor`), so forwarding a facet's state
- * through root RPC cannot make it a synchronous SQLite interface either — the
- * ledgers have to live in the one database, and the logical actor's runtime
- * objects have to live wherever that database is.
+ * WHY ONE DATABASE. A hired subordinate, an ask-by-role temporary, a branching
+ * head and a swarm node are logical actors of this workspace, not databases of
+ * their own: their rows are IN the workspace, so "a SQL-only snapshot of this
+ * object contains the workspace" holds for all of them and not for the main
+ * actor alone. The stores' SQL port is a SYNCHRONOUS tagged template
+ * (`SqlExecutor`), so forwarding a per-actor state through root RPC could not
+ * be a synchronous SQLite interface anyway — the ledgers have to live in the
+ * one database, and the logical actor's runtime objects have to live wherever
+ * that database is.
  *
  * SO: one physical workspace, N logical actors, one host. This class binds an
  * issued actor's {@link ActorHandle}, its {@link AgentStores} and its
@@ -146,11 +145,11 @@ export interface ActorHostDeps {
    * source an inheriting origin reads.
    *
    * Asked by the HOST, not by the caller that created the actor, and that is
-   * the whole point: a head and a hosted node used to open a fresh scaffold
-   * store, find no row and silently run the shipped bootstrap loop, so the two
-   * kinds whose job is to explore the workspace's own program explored with a
-   * program the workspace had replaced. Seeding here makes an unseeded hosted
-   * actor unrepresentable rather than merely discouraged.
+   * the whole point: an actor left to open its own scaffold store finds no row
+   * and silently runs the shipped bootstrap loop, so a head and a hosted node —
+   * the two kinds whose job is to explore the workspace's own program — would
+   * explore with a program the workspace has replaced. Seeding here makes an
+   * unseeded hosted actor unrepresentable rather than merely discouraged.
    *
    * `parent` is null for `builtin` and for the workspace's own main actor;
    * an inheriting origin with no parent runtime is refused by `seedActorLoop`.
@@ -238,8 +237,8 @@ export interface ActorHost {
  * The revocation token of ONE binding.
  *
  * Per binding rather than per actor id, and the difference is a real defect
- * this caught: a release that only removed the actor from a map left every
- * store it had handed out authorising statements, because the fence had nothing
+ * either way: a release that only removes the actor from a map leaves every
+ * store it has handed out authorising statements, because the fence has nothing
  * left to read. And a fence keyed on the id would be REVIVED by the next
  * acquisition of the same actor, handing a caller who still held the old stores
  * a working binding again. So the token is created with the binding, captured
@@ -463,12 +462,12 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         // discover its rows are gone; a retained dismissal waits for it.
         if (retirement.destroy) slot.actor.session.interrupt();
         else if (slot.actor.session.inFlight) {
-          // WAITS, as the line above says it does. It used to THROW here, which
-          // contradicted its own comment and broke the caller the wait was
-          // written for: a temporary agent's report is filed FROM INSIDE its
+          // WAITS, as the line above says it does, and the caller it is written
+          // for is why: a temporary agent's report is filed FROM INSIDE its
           // turn, so the rung that awaits the answer and then dismisses the
-          // child with history kept arrived one line later with the turn still
-          // in flight, and got `denied` instead of a completed handoff.
+          // child with history kept arrives one line later with the turn still
+          // in flight. Throwing here would hand it `denied` instead of a
+          // completed handoff.
           //
           // `queue` is this actor's own serialization tail, so awaiting it is
           // waiting for exactly the work that has to finish — and swallowing
@@ -622,12 +621,10 @@ export function childContextResolver(deps: {
  * THE ONLY RECOVERY PATH, and it lives here rather than in a backend because
  * nothing in it is platform-shaped: it reads {@link ActorHost.resumable},
  * acquires each actor through the same host every other caller uses, and
- * verifies the claim with core's own verifier. It used to exist once per
- * backend — written on the cf side and never called, with the cli's own
- * `resumable` exposure equally unreached — so BOTH backends promised resumable
- * hosted work and neither delivered it. One implementation, two callers, is the
- * whole point: a second copy is a second chance for one of them to be the
- * unreached one.
+ * verifies the claim with core's own verifier. One implementation, two callers,
+ * is the whole point: a per-backend copy is a per-backend chance to go
+ * unreached, which is how a backend promises resumable hosted work and never
+ * delivers it.
  *
  * There is no timer holding a run alive and no `waitUntil` finishing it in the
  * background. A hosted actor's unsettled claim IS the record that work is owed,
@@ -659,7 +656,7 @@ export async function recoverActorTurns(
   // DECIDED one: it is settled `indeterminate`, which is a durable statement
   // about how it ended. A turn whose actor could not be read at all is not
   // decided by anything — the row is still owed and the next activation will
-  // read it again. Folding both into `refused` made a caller unable to tell a
+  // read it again. Folding both into `refused` leaves a caller unable to tell a
   // settlement from a failure to look, and an operator unable to tell a
   // workspace that answered from one that could not be opened.
   const unreadable: string[] = [];

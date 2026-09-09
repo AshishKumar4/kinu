@@ -1,8 +1,7 @@
 // The swarm engine and the pieces a backend or the agents tool reaches it
-// through. The `ExplorationStrategy` seam that used to head this list is gone:
-// no production path built its registry, and its three adapters (mcts, heads,
-// single-shot) had no reader outside the eval harness, which now owns the
-// contract at `eval/strategy.ts`.
+// through. No `ExplorationStrategy` registry seam heads this list: no production
+// path builds one, and the mcts/heads/single-shot adapter contract has its only
+// reader in the eval harness, which owns it at `eval/strategy.ts`.
 export * from './objective';
 export * from './swarm';
 export * from './effort';
@@ -20,7 +19,7 @@ export * from './node-host';
 export * from './node-agent';
 export * from './node-workspace';
 // `BranchDecision` and the budget that issues it. On the surface because the
-// arbiter is now a seam a HOST calls across: a backend that answers
+// arbiter is a seam a HOST calls across: a backend that answers
 // `nodeArbitrate` has to name the verdict type it returns, and deriving it from
 // the arbiter's own signature is how a type stops having a name.
 export * from './swarm-budget';

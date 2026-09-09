@@ -78,9 +78,8 @@ export class HeadCapture {
   usage: Usage = {};
 
   /** Accumulate one step's report. Takes a whole {@link Usage} rather than bare
-   *  counts so a field the provider omitted stays omitted here — the boundary
-   *  where absence used to be flattened into 0 before it ever reached the
-   *  report. */
+   *  counts so a field the provider omitted stays omitted here — bare counts
+   *  would flatten absence into 0 before it ever reached the report. */
   recordStepUsage(usage: Usage): void {
     this.usage = addUsage(this.usage, usage);
   }
@@ -321,12 +320,12 @@ export function buildHeadSystemPrompt(
 /**
  * The head's conversation — the inherited messages, structurally, then its task.
  *
- * A head used to receive its whole inheritance flattened into ONE user message
- * of `[role/toolName] text` prose lines, while a hired subordinate received real
- * structured messages. That asymmetry is why a fork could not be watched the
- * way a subordinate can: there was no per-message structure left to render, so
- * clicking into a fork showed a wall of prose instead of a conversation. One
- * inherited message becomes one ModelMessage here, carrying its own role.
+ * One inherited message becomes one ModelMessage here, carrying its own role —
+ * the same structured shape a hired subordinate receives. Flatten the whole
+ * inheritance into ONE user message of `[role/toolName] text` prose lines and
+ * there is no per-message structure left to render, so clicking into a fork
+ * shows a wall of prose instead of a conversation and a fork cannot be watched
+ * the way a subordinate can.
  *
  * No re-windowing: `inheritedContext` arrives already capped per message at
  * EVIDENCE_BUDGETS.inheritedMessage by orchestrator/heads-support.ts, which is
@@ -435,12 +434,12 @@ export interface HeadInferenceDeps {
    * The HOSTED logical actor this run IS — its handle, its actor-scoped stores
    * over the one workspace database, its runtime and its session.
    *
-   * A head and a swarm node used to be handed a bare runtime and ran their
-   * inference inline: select the program, start the turn, write no claim. So
-   * two of the five full actor kinds took model and tool effects under no
-   * durable identity, and neither could be recovered, verified against the
-   * bytes it ran, or told apart from the activation that replaced it. They are
-   * actors; they run on the actor's session.
+   * A head and a swarm node ARE actors, and they run on the actor's session.
+   * Handed a bare runtime and running their inference inline — select the
+   * program, start the turn, write no claim — two of the five full actor kinds
+   * would take model and tool effects under no durable identity, recoverable by
+   * nothing, unverifiable against the bytes they ran, and indistinguishable from
+   * the activation that replaced them.
    */
   actor: HostedActor;
   /**
@@ -453,10 +452,10 @@ export interface HeadInferenceDeps {
    * How this actor's turn is profiled — the role, tier and allowed-tool
    * narrowing that an actor's chat turn already resolves.
    *
-   * REQUIRED, and required for the reason it was missing: a head ran with
-   * whatever toolset its spawner assembled and no role at all, so the one kind
-   * that reaches the shared workspace with full tools was the one kind no role
-   * restriction applied to. The backend resolves it, because the authority (an
+   * REQUIRED, and the requirement is the whole point: with no profile a head runs
+   * with whatever toolset its spawner assembled and no role at all, so the one
+   * kind that reaches the shared workspace with full tools is the one kind no
+   * role restriction applies to. The backend resolves it, because the authority (an
    * account catalog or the local one) is the backend's to know.
    */
   profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
@@ -628,10 +627,10 @@ const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.strin
  * a model that cannot call the tools it was given — IS the failure.
  *
  * THE CAUSE CHAIN, not the bare message, when it broke. `runNodeAgent`'s
- * transport catch renders one for the same column of the same store, and a run
- * whose LOOP failed used to get the outermost sentence only — so two terminal
- * rows written minutes apart read at different depths and the one with the
- * real reason in it was the one nobody had to debug.
+ * transport catch renders one for the same column of the same store, so a run
+ * whose LOOP failed getting the outermost sentence only would put two terminal
+ * rows written minutes apart at different depths — and the one with the real
+ * reason in it is the one nobody has to debug.
  *
  * Its own function because the two outputs are ONE reading: `status` and
  * `stopReason` must name the same cut, and a status derived in one place and a
@@ -717,7 +716,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // ONE counter across every turn, because `head_steps` is keyed `${id}-s${seq}`
   // and a per-turn counter would overwrite the first turn's trace with the
   // second's. A step with no prose, reasoning or tool call is padding and is not
-  // recorded, exactly as the whole-run walk used to drop it.
+  // recorded, exactly as the whole-run walk drops it.
   let recorded = 0;
   // `extractFinalText`'s two inputs, tracked as the steps land: the last
   // text-bearing step's prose, and the last reasoning. A whole-run walk is not
@@ -746,11 +745,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
   // The resolved model as the prompt layer names it, read off the model the
   // caller already resolved rather than asked for as a second dep nobody would
-  // set. It buys two things the fork loop had neither of: the real context
-  // window, which is what step-boundary tool-output pruning is measured against,
-  // and the tool-capability check the actor already refuses a turn on — a fork
-  // handed a model that cannot call tools used to burn its whole envelope
-  // producing none, and now says so in its report instead.
+  // set. It buys two things: the real context window, which is what
+  // step-boundary tool-output pruning is measured against, and the
+  // tool-capability check the actor already refuses a turn on — without it a
+  // fork handed a model that cannot call tools burns its whole envelope
+  // producing none instead of saying so in its report.
   //
   // PARSED, not type-narrowed: `LanguageModel` is the SDK's "constructed model OR
   // bare id", two representations of one domain value, and the third arm is a
@@ -805,10 +804,10 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     });
   };
 
-  // The spawner's cancellation, bridged onto the session's own abort. A head
-  // used to hand `deps.signal` straight to the SDK; the session owns the signal
-  // its steps run under, so an external cancel becomes the same interrupt an
-  // actor's own cancel is — one cancellation path for every kind.
+  // The spawner's cancellation, bridged onto the session's own abort rather than
+  // handed to the SDK as `deps.signal`: the session owns the signal its steps run
+  // under, so an external cancel becomes the same interrupt an actor's own cancel
+  // is — one cancellation path for every kind.
   const cancelled = (): void => { session.interrupt(); };
   deps.signal?.addEventListener('abort', cancelled, { once: true });
   try {

@@ -47,8 +47,8 @@ export function effectiveScore(
 /**
  * The ONE injection policy for crafted tools: drop tools whose time-decayed
  * effective score fell below the threshold. Every tool is born scored at the
- * neutral prior (the crafted_tools column defaults), so "unscored" no longer
- * exists and nothing passes by accident of a missing row.
+ * neutral prior (the crafted_tools column defaults), so there is no "unscored"
+ * state and nothing passes by accident of a missing row.
  *
  * Used by both injection paths — core's buildCraftedToolSetFromExecute and
  * the CF execute_tools sandbox — so the filter cannot drift between them.

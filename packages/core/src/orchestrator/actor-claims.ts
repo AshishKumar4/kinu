@@ -12,10 +12,9 @@
  * and nothing invents a build identity: a host that publishes none is recorded
  * as `null`, which reads back as unknown.
  *
- * WHY THE EPOCH. `active_durable_turn` on the hosted backend was a single row
- * keyed `id = 1` holding the turn id, so an evicted activation and the
- * activation that replaced it were indistinguishable, and nothing could refuse
- * the older one's writes. The epoch is that fence: an admission for a turn that
+ * WHY THE EPOCH. A ledger keyed only by turn id cannot tell an evicted
+ * activation from the activation that replaced it, so nothing can refuse the
+ * older one's writes. The epoch is that fence: an admission for a turn that
  * already has a claim takes the next epoch, and every write from an older epoch
  * is refused rather than merged. A recovered activation therefore cannot mutate
  * a newer claim, and the newer claim cannot be mistaken for the recovered one.
@@ -35,7 +34,7 @@
  * (`working-context.ts`) with its own numbering; each row here points at the
  * working revision it was rendered from. The two are not one sequence with two
  * names: taking a count from this table and slicing the raw array with it — the
- * shape the staged-edit path used to have — moves the protected tail by exactly
+ * shape the staged-edit path must never take — moves the protected tail by exactly
  * the number of woven dynamic-context blocks and pruned tool outputs, which
  * either re-sends the turn's own tool call or drops it.
  *

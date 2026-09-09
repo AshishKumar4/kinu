@@ -1,11 +1,10 @@
 /**
  * The ONE seam through which a swarm node gets a place to work and an identity
- * to work as — the sixth of a node's six properties, and the one that used to
- * be a promise.
+ * to work as — the sixth of a node's six properties.
  *
  * Specified by docs/EXPLORATION.md — "Isolation" and "Node identity".
  *
- * IT EXISTS ON BOTH BACKENDS NOW. A node's home is a real directory in the ONE
+ * IT EXISTS ON BOTH BACKENDS. A node's home is a real directory in the ONE
  * global view, owned by the node's own uid and moded `0o755`, its scratch is
  * `/tmp/node-<id>` at `0o700`, and BOTH the way a node runs commands and the
  * way its file tools read and write are credentialed as that uid — so the
@@ -14,7 +13,7 @@
  * implementation and `vfs/agent-home.ts` is the layout it provisions against.
  * The backend supplies it keyed on the node ACTOR's storage key
  * (`cli-backend/src/local-session.ts`'s `provisionNodeHome`), never on a raw
- * node id: a node is its own actor now, and its home has to follow the
+ * node id: a node is its own actor, and its home has to follow the
  * identity the directory issued rather than the id the search minted.
  *
  * Why permissions inside one filesystem and not a filesystem each: the
@@ -36,10 +35,10 @@
  * as the node (`execution/nimbus-agent-files.ts`) — same session, same bytes,
  * one identity.
  *
- * `shared-origin-plane` SURVIVES, and it is neither a confession nor the hosted
- * backend's state any more. It is what a runtime with no provisioner honestly
- * is: a harness runtime, or a head runtime built without a workspace host. The
- * value is REPORTED rather than hidden, because the grading consequence is real
+ * `shared-origin-plane` is neither a confession nor the hosted backend's state.
+ * It is what a runtime with no provisioner honestly is: a harness runtime, or a
+ * head runtime built without a workspace host. The value is REPORTED rather than
+ * hidden, because the grading consequence is real
  * — you cannot grade a node on what it changed when every node changed the same
  * tree, so a shared-plane run is graded on the candidate the node REPORTS,
  * never on a diff of the workspace.

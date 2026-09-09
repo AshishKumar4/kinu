@@ -29,9 +29,9 @@ import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
-/** The container's working directory, and the executor's default cwd. Kinu's
- *  own constant now: the durability machinery that used to define it moved to
- *  @kinu.run/devbox, and core must not depend on a host package. */
+/** The container's working directory, and the executor's default cwd. Declared
+ *  here rather than imported from the durability machinery in @kinu.run/devbox:
+ *  core must not depend on a host package. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
 
 /** Shell probe deciding whether anything listens on a container port. Any HTTP
@@ -104,17 +104,17 @@ export interface SandboxHandle {
    * `timeout` PRESENT means a caller asked for a deadline and wants the kill.
    * Nothing in this module ever sets one. A detach window bounds a WAIT; a lane
    * deadline silently outranks every window larger than itself, which is how a
-   * 30s detach that worked became a 60s kill on the 300s one-shot surface.
+   * 30s detach turns into a 60s kill on the 300s one-shot surface.
    *
    * `signal` CANCELS THE REMOTE WORK, not the wait. An adapter that takes it
    * must reach the process it started and kill it, and must not settle until
    * that process is definitively gone — killed, exited, or absent from the
    * container's own process table. Settling earlier reports `cancelled` over a
-   * command that is still writing to the workspace, which is exactly what this
-   * contract used to permit: core raced the signal against the wait, abandoned
-   * the wait, and told the agent the command "may still finish inside the
-   * container". An adapter whose transport has no kill must not accept a
-   * signal, so the gap stays visible in the type rather than in a sentence.
+   * command that is still writing to the workspace — racing the signal against
+   * the wait, abandoning the wait, and telling the agent the command "may still
+   * finish inside the container". An adapter whose transport has no kill must
+   * not accept a signal, so the gap stays visible in the type rather than in a
+   * sentence.
    */
   exec(command: string, opts?: SandboxExecOptions):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
@@ -229,9 +229,9 @@ export function isSandboxTransientError(error: Error | string): boolean {
  * `runtimeMissing`, whose definition is exactly this — an environment Kinu
  * never provisioned, neither a defect in the tool nor the work failing.
  *
- * It used to land nowhere at all: prose beginning `Sandbox executor not
- * configured` is not a failure to `isFailingResultText`, so an escalation into an
- * unconfigured sandbox was recorded as a clean `ok` call.
+ * The CODE is what makes it land: prose beginning `Sandbox executor not
+ * configured` is not a failure to `isFailingResultText`, so an escalation into
+ * an unconfigured sandbox would be recorded as a clean `ok` call.
  */
 const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
@@ -381,17 +381,17 @@ export function createSandboxExecutor(
         }
         const signal = readExecSignal({ context: args[1] });
         try {
-          // NO WORK DEADLINE — see SandboxHandle.exec. This call used to send
-          // `timeout: 60_000`, and the container echoed that number back as
+          // NO WORK DEADLINE — see SandboxHandle.exec. Sending
+          // `timeout: 60_000` makes the container echo that number back as
           // `Command timeout after 60000ms`, which is why the string appears
           // nowhere in this repository. A 60s lane ceiling outranks every
           // detach window above it, so a long command on the 300s one-shot
-          // surface was killed where it should have detached.
+          // surface is killed where it should have detached.
           //
           // THE SIGNAL GOES TO THE CONTAINER, and nothing here races it. The
           // adapter owns the process id, so it is the only layer that can kill
-          // the command an abort is about; racing the wait here instead let the
-          // turn move on while that command kept writing to /workspace. What
+          // the command an abort is about; racing the wait here instead lets the
+          // turn move on while that command keeps writing to /workspace. What
           // the signal still does locally is refuse to DISPATCH — once before
           // the first attempt and again before each retry, because a transient
           // failure must not start a second process for a caller that has
@@ -763,14 +763,14 @@ declare namespace sandbox {
   //                  the same way. RUNS them: `gcc`, `clang` and `make` are
   //                  absent, so nothing is COMPILED here.
   //   shell          `sh` and `bash`.
-  //   npm, git       both present. They are no longer the reason to come HERE,
-  //                  because the Nimbus workspace serves them too (execution/
-  //                  nimbus.ts, vfs/workspace-runtimes.ts) — what is still
-  //                  exclusive to the container is in the spec above.
+  //   npm, git       both present, and NOT a reason to come HERE: the Nimbus
+  //                  workspace serves them too (execution/nimbus.ts,
+  //                  vfs/workspace-runtimes.ts) — what is exclusive to the
+  //                  container is in the spec above.
   //
   // NOT `python`: `python3` and `python` both exit 127, so the workspace is the
   // only place Python runs at all. NOT `docker`: `docker` and `dockerd` both
-  // exit 127 too, and it was declared here once already.
+  // exit 127 too.
   const capabilities: ExecutorCapability[] = [
     'javascript', 'typescript', 'native_binary',
     'shell', 'npm', 'git', 'fs_owned',

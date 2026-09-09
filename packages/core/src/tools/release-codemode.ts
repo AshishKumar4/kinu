@@ -2,13 +2,12 @@
  * `release.*` — the governed release lane, projected into the codemode
  * sandbox.
  *
- * Left the top-level tool surface: a governed, high-blast-radius, occasional
- * lane (self-modifying deploys) does not earn a standing choice on every
- * turn it is not the answer to. The machinery — the ledger, the approval
- * gate, the execution engine — is untouched; only the caller changed, from a
- * dedicated schema to this namespace's members, both funneling into the SAME
- * `runReleaseAction` dispatcher (tools/release-tool.ts) so there is one
- * implementation and one gate.
+ * NOT on the top-level tool surface: a governed, high-blast-radius, occasional
+ * lane (self-modifying deploys) does not earn a standing choice on every turn
+ * it is not the answer to. This namespace's members are release's only reach
+ * and they funnel into the `runReleaseAction` dispatcher
+ * (tools/release-tool.ts), so the ledger, the approval gate and the execution
+ * engine sit behind one implementation and one gate.
  *
  * Two halves, never both on one actor: where an execution engine drives the
  * working copy, apply/runChecks/preview/deploy/rollback earn their results
@@ -16,8 +15,7 @@
  * assertions of what was never run. Where no engine is wired, the agent runs
  * the commands itself with `run`/`execute_tools` and recordCheck/
  * recordDeployment are the only way the ledger learns what happened. Which
- * half exists is read from `deps().engine`, same as the schema used to gate
- * on it.
+ * half exists is read from `deps().engine`, the same gate the schema reads.
  *
  * Flow with an engine: bindSource → create → update (store the unified
  * diff) → apply → runChecks → preview → requestApproval → deploy; rollback

@@ -3,12 +3,12 @@
  *
  * A head is a FORK of its parent turn — same workspace, same files, same
  * sandbox — so it gets the same open working envelope: no default wall clock,
- * step count, or token pool. It used to get a private one instead (a ~5 min
- * clock, a token pool divided by fan-out, and a step guard derived from that
- * pool), and a 6-wide fork of a real audit died at 32 steps having produced
- * nothing. These tests lock the envelope open, and lock the bounds that remain
- * to what they actually are: recursion depth, a deadline only a caller can ask
- * for, and cancellation by the spawner.
+ * step count, or token pool. A private envelope (a ~5 min clock, a token pool
+ * divided by fan-out, and a step guard derived from that pool) is what killed a
+ * 6-wide fork of a real audit at 32 steps having produced nothing. These tests
+ * lock the envelope open, and lock the bounds that remain to what they actually
+ * are: recursion depth, a deadline only a caller can ask for, and cancellation
+ * by the spawner.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -169,10 +169,10 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(report.summary).toBe('Leaf work complete.');
   });
 
-  test('runs far past the old 32-step guard and the old fan-out token pool', async () => {
+  test('runs 60 steps and 15x a fan-out-divided token pool', async () => {
     const capture = new HeadCapture();
-    // The old envelope for a 6-wide fork: 19,200 tokens and a 32-step guard.
-    // This head spends 15x the pool over 60 steps and finishes on its own terms.
+    // A private envelope for a 6-wide fork is 19,200 tokens and a 32-step guard.
+    // This head spends 15x that pool over 60 steps and finishes on its own terms.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({
       promptTokens: 40_000, outputTokens: 5_000,
       text: 'Here is what I found.', stopAfterSteps: 60,
@@ -186,10 +186,10 @@ describe('runHeadInference — a fork works until the work is done', () => {
     expect(report.summary).toBe('Here is what I found.');
   });
 
-  test('an old-pool-sized head is no longer stopped by spend', async () => {
+  test('a head spending 25,600 output tokens is not stopped by spend', async () => {
     const capture = new HeadCapture();
-    // 8 steps x 3,200 output = 25,600 — over the pool a 6-wide split used to
-    // divide out. Nothing meters it now.
+    // 8 steps x 3,200 output = 25,600 — over the pool a 6-wide split would
+    // divide out. Nothing meters it.
     const report = await runHeadInference(loopInput(), { ...await hostedHead(), model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
     tools: buildHeadAccumulatorTools(capture), capture,
     workspaceLayout: 'shared-workspace', isAborted: () => false, });

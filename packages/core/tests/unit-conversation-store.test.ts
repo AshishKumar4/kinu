@@ -2,16 +2,15 @@
  * The canonical conversation store: ONE default-chat authority per workspace,
  * and every reader served from it without any reconciliation write.
  *
- * The defect class this pins: the Cloudflare backend held two copies of the
- * default chat — the SDK's rich `assistant_messages` tree and a `messages`
- * projection kept level by a post-turn reconciler — and every reader except
- * the fork cut read the projection. An interrupted turn, or a sibling branch
- * that never became an ancestor of the newest leaf, existed in the tree and
- * was invisible to status counts, history paging, search and outcome
- * attribution until a reconciliation happened to project it. The store now
- * reads the authority directly, the reconciler is gone, and these tests hold
- * that completeness as data — including the reset case: deleting the former
- * projection cannot hide a row.
+ * The defect class this pins: two copies of the default chat — a rich
+ * `assistant_messages` tree and a `messages` projection kept level by a
+ * post-turn reconciler — with every reader except the fork cut served from the
+ * projection. An interrupted turn, or a sibling branch that never became an
+ * ancestor of the newest leaf, exists in the tree and is invisible to status
+ * counts, history paging, search and outcome attribution until a reconciliation
+ * happens to project it. The store reads the authority directly and nothing
+ * reconciles, and these tests hold that completeness as data — including the
+ * reset case: deleting a projection cannot hide a row.
  */
 
 import { describe, test, expect } from 'bun:test';

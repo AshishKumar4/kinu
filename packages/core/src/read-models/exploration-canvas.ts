@@ -1,27 +1,26 @@
 /**
  * The Exploration canvas, one page at a time.
  *
- * The surface used to fetch the fork list, then the selected run's tree, then
- * that run's detail — one request per thing on screen, each on its own
- * revalidation clock. That is why only one tree could ever be drawn: showing all
- * of a workspace's trees side by side would have meant N growing round trips,
- * and the list, the parameters and the trees could disagree about what exists.
+ * One request per thing on screen — the fork list, then the selected run's tree,
+ * then that run's detail — each on its own revalidation clock, is what caps a
+ * canvas at ONE tree: showing all of a workspace's trees side by side means N
+ * growing round trips, and the list, the parameters and the trees can disagree
+ * about what exists.
  *
  * So the composition happens here, once, against one snapshot of the storage.
  * And it composes into ONE ROW PER RUN rather than three parallel collections
- * the caller re-associates by id. That is not tidiness: the collections were
- * separately bounded, by different ordering keys, and at the boundary the canvas
- * drew a listed run with no tree beside a tree for a run it had not listed.
- * Three collections that have to agree about which runs exist is a fact that
- * can be stated twice, so it is now stated once.
+ * the caller re-associates by id. That is not tidiness: separately bounded
+ * collections, each with its own ordering key, disagree at the boundary — a
+ * listed run with no tree drawn beside a tree for a run that was never listed.
+ * Which runs exist is one fact, so it is stated once.
  *
  * The page is the run list's page. Every other field is derived from the runs on
  * it, so nothing here is bounded a second time and there is no second window to
  * disagree with — INCLUDING the journalled half. A run's journalled nodes are not
- * in `search_nodes`, and the surface used to fetch them as a separately bounded
- * `getHeadRuns` read: page two of the canvas then held runs whose nodes were
- * outside that window, so they drew as "no branches were ever written" while the
- * journal held them. Every half of a run now arrives on the page the run is on.
+ * in `search_nodes`, and fetching them as a separately bounded `getHeadRuns`
+ * read leaves page two's runs outside that window: they draw as "no branches
+ * were ever written" while the journal holds them. Every half of a run arrives
+ * on the page the run is on.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -61,8 +60,8 @@ export interface ParetoFrontier {
   }[];
 }
 
-/** A page of the canvas. Thirty is what the bare `LIMIT` was, kept so the first
- *  page is the window the surface already sized its list for. */
+/** A page of the canvas. Thirty is the window the surface sizes its list for,
+ *  so the first page is exactly that window. */
 const DEFAULT_CANVAS_PAGE = 30;
 
 /**
@@ -84,9 +83,9 @@ export function readExplorationCanvas(
  *
  * The same shape rather than a summary, because the drill-down that opens one run
  * is the surface with the most room to show what that run was dispatched with, and
- * the parameters used to travel only on the canvas page: reading one run's judge
- * clamp meant fetching thirty runs and their trees to render one. Through the same
- * composer, so the two reads cannot come to disagree about one run.
+ * parameters that travel only on the canvas page would make reading one run's
+ * judge clamp mean fetching thirty runs and their trees to render one. Through
+ * the same composer, so the two reads cannot come to disagree about one run.
  */
 export function readExplorationRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ExplorationCanvasRun | null {
   const run = readForkRun(sql, actor, rootId);

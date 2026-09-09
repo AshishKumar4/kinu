@@ -1,10 +1,11 @@
-// The ChatEvent seam is a projection of what the ai-SDK stream hands runChat.
-// It used to drop the tool success/error discriminator (poisoning the CLI's
-// evolution signal — hadError, outcome review) and cached-prefix tokens (cache
-// telemetry read 0 on the CLI path). It then flattened usage into three numbers
-// gated on `> 0`, which turned a provider-reported zero into "unreported" and
-// made a cold prefix indistinguishable from a provider that says nothing. These
-// tests pin all of it through the public runChat interface.
+// The ChatEvent seam is a projection of what the ai-SDK stream hands runChat,
+// and every field it drops is a signal nothing downstream can rebuild: the tool
+// success/error discriminator feeds the CLI's evolution signal (hadError,
+// outcome review), cached-prefix tokens are the whole of its cache telemetry,
+// and a usage flattened into three numbers gated on `> 0` turns a
+// provider-reported zero into "unreported" — which makes a cold prefix
+// indistinguishable from a provider that says nothing. These tests pin all of
+// it through the public runChat interface.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';

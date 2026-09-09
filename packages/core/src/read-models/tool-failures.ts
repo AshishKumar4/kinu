@@ -28,11 +28,11 @@
  * more than an absent one.
  *
  * The reason vocabulary is SHARED with `obs/error.ts` rather than restated here.
- * It used to be a local picklist, and the cost showed up immediately: the `run`
- * tool's unprovisioned-runtime refusal carried no reason this file recognised, so
- * a runtime that was never there — a platform gap the agent did nothing to cause
- * — was reported as `returned_error` with `refused: false`, in the `broke`
- * bucket, indicting the tool for correctly declining.
+ * A local picklist would cost immediately: the `run` tool's unprovisioned-runtime
+ * refusal carries no reason such a list recognises, so a runtime that was never
+ * there — a platform gap the agent did nothing to cause — would be reported as
+ * `returned_error` with `refused: false`, in the `broke` bucket, indicting the
+ * tool for correctly declining.
  */
 
 import * as v from 'valibot';
@@ -116,8 +116,8 @@ export type ToolFailurePart = 'refused' | 'work-failed' | 'runtime-absent' | 'br
  * `classifyToolFailure` sets `ToolFailure`'s three booleans from this, and
  * `toolFailurePartOfKey` reads it back off a persisted key, so a published
  * failure mix in a run record and the live census cannot disagree about what a
- * reason means. It used to be three expressions in three branches below, which
- * is how a platform gap once landed in `broke`.
+ * reason means. One function decides it, so a platform gap cannot land in
+ * `broke` the way three parallel expressions would let it.
  *
  * A reason outside the shared vocabulary reads as `broke`, which is where
  * `unclassified` and `threw` belong anyway: this cannot explain it, and it says
@@ -156,9 +156,9 @@ export interface ToolFailure {
    * the shell's own codes; `threw` is a tool that raised out of its own execute;
    * `returned_error` is a tool that answered with an error body carrying no
    * classification; `failed_without_error` is a tool that reported failure and
-   * said nothing — a defect in the tool's own contract, and the class that used
-   * to be recorded as a clean call; `unclassified` is a failure this cannot
-   * explain, reported rather than filed under a guess.
+   * said nothing — a defect in the tool's own contract, and the class that
+   * keeps it from counting as a clean call; `unclassified` is a failure this
+   * cannot explain, reported rather than filed under a guess.
    */
   readonly reason: string;
   /** True when the tool declined correctly rather than breaking. A command

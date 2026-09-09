@@ -227,11 +227,10 @@ function aggregatedAnswers(parents: readonly FanInParent[]): string {
  * The expansion prompt for one child: what it is asked, the angle its siblings do
  * not have, what this path has measured, and the branch it may propose.
  *
- * THE ANGLE IS UNCONDITIONAL. It used to be gated on `decorrelate`, an axis whose
- * three values all handed out angles anyway — including `blind`, which names the
- * opposite — so the gate never selected anything and the axis is gone. What is
- * genuinely lost is the ability to turn angles OFF; what is genuinely missing, and
- * is a separate instrument rather than a fourth value, is a detector that notices
+ * THE ANGLE IS UNCONDITIONAL. There is no `decorrelate` axis to gate it on: three
+ * values that all hand out angles anyway — `blind` included, which names the opposite
+ * — select nothing. Angles cannot be turned OFF; what is genuinely missing,
+ * and is a separate instrument rather than a fourth value, is a detector that notices
  * siblings converged despite them.
  */
 export function branchPrompt(input: {
@@ -484,8 +483,8 @@ export function inheritedAsSerialized(prefix: readonly ModelMessage[]): Serializ
 }
 
 /**
- * The context ONE RUN hands every child spawn: everything {@link expandChild} used to
- * close over in the runner, made explicit. Built once per run.
+ * The context ONE RUN hands every child spawn: everything {@link expandChild} needs,
+ * explicit rather than closed over in the runner. Built once per run.
  */
 export interface ExpandChildCtx {
   readonly resolved: ResolvedSwarm;
@@ -668,20 +667,19 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     isolation: run.isolation,
     reported: run.reportedItself ? 'self' : 'final-text',
   });
-  // A NODE THAT REPORTED IS A CANDIDATE, whatever its report says — and `errored` is
-  // not the exception it used to be here. This function threw on that status, so a node
-  // that ran for four minutes, wrote its work and then met an expired credential
-  // reached the barrier as a REJECTION: dropped from `candidates`, counted in `lost`,
-  // and disclosed to the caller only as a smaller number. A live `preset:'ideate'` run
-  // of three nodes returned `candidates: 1` and `stop:'budget'` that way, with nothing
-  // in the result naming the other two or saying why, and their answers recoverable
-  // only out of the workspace.
+  // A NODE THAT REPORTED IS A CANDIDATE, whatever its report says — `errored` included,
+  // and no status is an exception here. Throwing on that status sends a node that ran
+  // for four minutes, wrote its work and then met an expired credential to the barrier
+  // as a REJECTION: dropped from `candidates`, counted in `lost`, and disclosed to the
+  // caller only as a smaller number. A live `preset:'ideate'` run of three nodes
+  // returned `candidates: 1` and `stop:'budget'` that way, with nothing in the result
+  // naming the other two or saying why, and their answers recoverable only out of the
+  // workspace.
   //
-  // The throw predates {@link Expansion.incomplete}, which is the mechanism for exactly
-  // this and already names `errored` in its own docstring: an unfinished node is
-  // carried, is NOT measured, is NOT scored, is NOT backpropagated, and says on its own
-  // row why it stopped. So the two disagreed and the older one won. What the throw
-  // guarded — an error message scored as an answer — `incomplete` guards for every
+  // {@link Expansion.incomplete} is the mechanism for exactly this and names `errored`
+  // in its own docstring: an unfinished node is carried, is NOT measured, is NOT
+  // scored, is NOT backpropagated, and says on its own row why it stopped. What a throw
+  // would guard — an error message scored as an answer — `incomplete` guards for every
   // status alike, and one mechanism for "this node did not finish" is the point.
   //
   // A node that produced NO REPORT still rejects, from `runNodeAgent`: a transport that

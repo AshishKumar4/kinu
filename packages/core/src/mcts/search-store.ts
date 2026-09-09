@@ -311,8 +311,8 @@ export class MctsSearchStore {
    * The most recently-updated still-running MCTS search for a task — the resume
    * source when an evicted tree search is re-driven.
    *
-   * Scoped to this engine's own rows. The swarm has a resume of its own now
-   * ({@link findRunningSwarms}), so the scoping is no longer about which engine can be
+   * Scoped to this engine's own rows. The swarm has a resume of its own
+   * ({@link findRunningSwarms}), so the scoping is not about which engine can be
    * resumed at all: it is that neither loop can execute the other's tree faithfully. A
    * swarm's is scored against an objective this loop has no seam for, so re-entering one
    * here would grow it with judged branches and report the result under the swarm's own

@@ -1,8 +1,7 @@
 /**
  * The scaffold's host bridges — how an evolved scaffold reaches the model, the
  * agent's tool surface, and its own conversation from inside the codemode
- * sandbox. One implementation for both backends (each previously carried its
- * own copy):
+ * sandbox. One implementation for both backends:
  *
  *   createScaffoldLLMStream   host.llmStream — tool NAMES cross the sandbox
  *                             boundary; the host resolves them against the
@@ -12,10 +11,10 @@
  *                             buildHostProvider guarantees).
  *   createScaffoldHistory     host.history — a read-only, budgeted view of the
  *                             conversation the scaffold is the inference loop
- *                             for. Until this existed a scaffold received one
- *                             string (`task`) and a prepared default stream: it
- *                             could not see, let alone navigate, the context it
- *                             was supposed to be managing.
+ *                             for. Without it a scaffold has one string
+ *                             (`task`) and a prepared default stream, and
+ *                             cannot see, let alone navigate, the context it
+ *                             is supposed to be managing.
  */
 
 import { safeValidateTypes } from '@ai-sdk/provider-utils';

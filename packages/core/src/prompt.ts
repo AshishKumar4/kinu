@@ -191,7 +191,7 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 }
 
 /** The number the workspace sentence tells the model, from `worker.isolate.memory`.
- *  Derived rather than typed: this used to read "~128 MB" as prose, which is the
+ *  Derived rather than typed: a hand-written "~128 MB" in prose is exactly the
  *  drift the catalog exists to stop. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 

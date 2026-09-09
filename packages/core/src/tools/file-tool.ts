@@ -176,8 +176,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
   /** The read-before-write gate, shared by edit and overwriting write. Returns
    *  the refusal a verdict earns AND the reason that classifies it, computed
-   *  once here: the two call sites used to derive the reason themselves with a
-   *  ternary each, which is two places for one rule.
+   *  once here rather than at each call site with a ternary of its own — that
+   *  would be two places for one rule.
    *
    *  `partial` classifies as `unread` — read to less depth than the operation
    *  needs is the same defect as not read at all, and the prose is what

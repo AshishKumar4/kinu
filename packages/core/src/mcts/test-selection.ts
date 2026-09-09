@@ -81,10 +81,10 @@ export async function selectWinnerByTest(
     runnable.map(async (n) => {
       const code = (n.code_used ?? '').trim();
       const execution = await runForVerdict(deps.executor, code, checks, language);
-      // The measured share, not the pass bit. All-pass and all-fail used to be
-      // dead ends that fell back to value order; a suite of independent checks
-      // separates "two of four" from "none of four", so a near-tie the judge
-      // could not resolve is now resolved by how much of the task each
+      // The measured share, not the pass bit. The pass bit makes all-pass and
+      // all-fail dead ends that fall back to value order; a suite of independent
+      // checks separates "two of four" from "none of four", so a near-tie the
+      // judge could not resolve is resolved by how much of the task each
       // candidate actually satisfies.
       return { node: n, share: checkFraction(execution) ?? (execution.passed ? 1 : 0) };
     }),

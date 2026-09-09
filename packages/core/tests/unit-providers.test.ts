@@ -94,8 +94,8 @@ describe('ProviderRegistry', () => {
   });
 
   /** The regression this suite exists for: a connected provider whose token
-   *  refresh (or endpoint) is broken used to reject the whole listing, so ONE
-   *  failure emptied the model picker for every other provider. */
+   *  refresh (or endpoint) is broken must not reject the whole listing — ONE
+   *  failure would empty the model picker for every other provider. */
   describe('one broken provider never empties the menu', () => {
     function throwingProvider(
       id: string,
@@ -146,7 +146,7 @@ describe('ProviderRegistry', () => {
     test('defaultSpec skips a throwing provider instead of leaving the agent modelless', async () => {
       const r = createProviderRegistry();
       // No static defaultModel, so defaultSpec must reach the throwing
-      // listModels to find one — the path that used to reject.
+      // listModels to find one — the path a rejection would escape from.
       r.register(throwingProvider('codex', 'listModels'));
       r.register(fakeProvider('beta', 'b-default', true));
       expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
@@ -169,11 +169,11 @@ describe('ProviderRegistry', () => {
     });
   });
 
-  /** The listing methods sit in front of a turn's first token, so one slow
-   *  vendor used to add its whole latency to every provider behind it. These
-   *  pin the two properties that fix costs nothing: probes overlap, and the
-   *  answer's ORDER still comes from registration rather than from whoever
-   *  replied first. */
+  /** The listing methods sit in front of a turn's first token, so a sequential
+   *  probe adds one slow vendor's whole latency to every provider behind it.
+   *  These pin the two properties that cost nothing: probes overlap, and the
+   *  answer's ORDER comes from registration rather than from whoever replied
+   *  first. */
   describe('provider probes overlap instead of queueing', () => {
     /** A provider that yields the event loop `ticks` times inside its listing,
      *  recording when it starts and finishes. Microtasks only — no timers, so

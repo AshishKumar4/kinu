@@ -379,14 +379,14 @@ describe('an operator-cancelled fork is not reported as running', () => {
   });
 
   /**
-   * THE SECOND ACTIVATION, which is where the offered set was wrong.
+   * THE SECOND ACTIVATION, where the offered set decides everything.
    *
    * `markInterrupted` transitions `running` rows only, so a run an EARLIER
-   * activation already marked is returned by nobody. The gate used to be
-   * offered exactly that return value, while `abandonRunning` swept every
-   * unclaimed `interrupted` row — so the run the job registry was re-driving
-   * right now was retired underneath it, and the agent was sent the
-   * "re-fork the work you still need" wake about work that was executing.
+   * activation already marked is returned by nobody. The gate is therefore
+   * offered more than that return value, because `abandonRunning` sweeps every
+   * unclaimed `interrupted` row: a gate blind to those rows retires the run the
+   * job registry is re-driving right now, and sends the agent the "re-fork the
+   * work you still need" wake about work that is executing.
    */
   test('a run an EARLIER activation marked is still offered to the resume gate', async () => {
     const w = workspace();

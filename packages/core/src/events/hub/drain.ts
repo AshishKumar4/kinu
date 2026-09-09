@@ -94,11 +94,11 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
     // ONE LINE PER EVENT, and the boundary is ours rather than the sender's.
     // These entries are joined with '\n' below, and several briefs embed
     // plain-text sender-controlled bodies: an email body, a subordinate's
-    // report, a process's stderr. A body containing a newline followed by
-    // "- [timer] from owner: ..." used to render as an additional, visually
-    // identical drain entry, so external content could add events the agent
-    // believes arrived. Folding the line breaks out of the untrusted fields is
-    // what makes the count above and the list below agree.
+    // report, a process's stderr. Unfolded, a body containing a newline followed
+    // by "- [timer] from owner: ..." renders as an additional, visually identical
+    // drain entry, so external content could add events the agent believes
+    // arrived. Folding the line breaks out of the untrusted fields is what makes
+    // the count above and the list below agree.
     return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
   });
   const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;

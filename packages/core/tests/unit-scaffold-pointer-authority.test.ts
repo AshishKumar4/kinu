@@ -4,7 +4,7 @@
  * The canonical source of every scaffold version is its `.vN` file; the
  * `scaffold_versions.status='current'` row is the single current pointer;
  * `scaffold/agent.js` is a rebuildable view. Every boundary here injects a
- * fault at the exact write that used to be ordered crash-sensitively and
+ * fault at the exact write whose ordering decides crash recoverability and
  * proves the invariant that survives it: exactly one current pointer, whose
  * version file is what a cold-reopened runtime executes.
  */

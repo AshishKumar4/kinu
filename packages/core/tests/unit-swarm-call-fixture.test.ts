@@ -13,8 +13,8 @@
 //
 //   - `Verifier = (ctx) => Promise<Measurement>` is UNAUTHORABLE over a JSON tool
 //     argument, not merely undigestible — which is what *What the engine refuses
-//     outright* now states, where the earlier treatment conceded the digest and
-//     stopped a step short. The counter-example is not hypothetical and not a
+//     outright* states. Conceding the digest and stopping a step short leaves the
+//     arm authorable. The counter-example is not hypothetical and not a
 //     stand-in: the hard-task corpus's own `HardTask.verify` is a real shipped
 //     closure, and it fails the JSON boundary below at runtime.
 //   - The one real guard of *The closed verifier registry* — "a fabricated script
@@ -26,13 +26,10 @@
 //     field the digest is defined over rather than a pointer at them. Agreed with
 //     the spec's author (`ObjectiveSpec`) rather than decided here.
 //
-// WHAT CHANGED, AND WHY THE FIXTURE IS STILL THE SAME FIXTURE. It was written
-// against a tree where none of this existed: thirteen of its assertions pinned an
-// ABSENCE, on purpose, so that landing the real thing would turn them red and force
-// them to be rewired instead of quietly passing over a stub. That has now happened.
-// Every one of those assertions is FLIPPED rather than deleted — the original claim
-// is kept in the comment, because a pin whose history is erased cannot be checked
-// against what it was protecting.
+// EVERY ASSERTION RUNS AGAINST THE SHIPPED SURFACE. Nothing here pins an absence and
+// nothing is checked against this fixture's own reading of the prose: the parser, the
+// preset table, the validity predicate and the verifier registry are all imported and
+// exercised, so a claim that stops being true goes red instead of passing over a stub.
 //
 // The numbers are READ FROM THE CORPUS, never retyped. Entry zero's figures are
 // `hard-majority-vote`'s; sourcing them from `HARD_TASKS` makes that a test rather
@@ -110,8 +107,8 @@ const VERIFY: VerifierSpec = {
  *
  * `best_known_honest` rather than `bestKnownHonest`: *Wire form* makes the objective's
  * wire form snake_case, and this is the one multiword field entry zero contains — the
- * naming collision the fixture originally recorded as an open question, now decided by
- * that rule and mapped at the boundary. The parse below is what proves the mapping.
+ * one naming collision in this fixture, decided by that rule and mapped at the
+ * boundary. The parse below is what proves the mapping.
  *
  * `best_known_honest` and `target` are the same number here and that is not a
  * duplicated literal: `targetOps` is documented as the MEASURED cost of the best
@@ -141,10 +138,8 @@ const WIRE_OBJECTIVE = {
 /**
  * Entry zero, complete, as a call to the shipped tool.
  *
- * FLIPPED (was: `type SwarmCall = { readonly action: 'swarm' } & SwarmInput`, this
- * fixture's own statement of a shape nothing upstream declared, because
- * `AGENTS_TOOL_ACTIONS` carried no `swarm` and `SwarmInput` carried no `action`).
- * The action exists, so the call is typed against the real input and every
+ * Typed against the real input rather than a shape this fixture states for itself:
+ * `AGENTS_TOOL_ACTIONS` carries `swarm` and `SwarmInput` carries `action`, so every
  * assertion below runs through the real parser.
  */
 const CALL = {
@@ -174,12 +169,10 @@ const FLOOR: Floor = v.parse(
 /**
  * The `optimise` row *Presets* fixes, RESOLVED rather than hand-built.
  *
- * FLIPPED (was: a hand-built `SwarmConfig` the fixture called "the fixture's reading
- * of that prose and not a resolution", usable only for `settleOf` because validity is
- * checked over the RESOLVED configuration and nothing resolved a named
- * preset). `resolve(preset) → SwarmConfig` exists, so this reads the row instead of
- * guessing it, and every assertion that used to be scoped to `settleOf` now runs
- * against the real thing.
+ * Read from the row through `resolve(preset) → SwarmConfig`, never hand-built here.
+ * Validity is checked over the RESOLVED configuration, so a hand-built `SwarmConfig`
+ * would only ever be this fixture's reading of the prose — usable for `settleOf` and
+ * for nothing past it.
  */
 const OPTIMISE = SWARM_PRESET_POINTS.optimise;
 const VERIFIER_TREE: SwarmConfig = OPTIMISE.config;
@@ -196,20 +189,19 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
   test('the closure arm of VerifierSource could not have been sent', () => {
     // The corpus's own shipped verifier, not a stand-in for one.
     expect(v.is(JsonObjectSchema, { ...WIRE_OBJECTIVE, verify: TASK.verify })).toBe(false);
-    // FLIPPED, and this is the half that could not be written before: the live
-    // parser refuses it too, so the arm is unauthorable at the surface rather than
-    // merely at the JSON schema this fixture used to check on its own.
+    // And the half that matters: the live parser refuses it too, so the arm is
+    // unauthorable at the SURFACE rather than merely against a JSON schema this
+    // fixture checks on its own.
     expect(() => parseAgentsToolInput({
       ...CALL, objective: { ...WIRE_OBJECTIVE, verify: TASK.verify },
     })).toThrow();
   });
 
   test('verify is a VerifierSpec whose kind is closed and whose spec is whole', () => {
-    // FLIPPED (was: a picklist and a spec schema this fixture DECLARED ITSELF,
-    // because `objective.ts` said "a registered verifier kind" and named no
-    // registry, no membership rule and no refusal for an unregistered one). The
-    // registry is the membership rule now, so these assert resolution rather than a
-    // local reading of the prose.
+    // The registry IS the membership rule, so these assert resolution rather than a
+    // picklist and a spec schema this fixture DECLARES ITSELF — which is all
+    // "a registered verifier kind" is worth while nothing names a registry, a
+    // membership rule or a refusal for an unregistered one.
     expect(VERIFIER_KINDS).toContain('exec-ratio');
     const resolved = resolveVerifier(VERIFY);
     expect('reason' in resolved).toBe(false);
@@ -297,9 +289,9 @@ describe('validity over entry zero, as far as the document defines it', () => {
     expect(PARSED.config).toBeUndefined();
     expect(PARSED.from).toBeUndefined();
     expect(PARSED.label).toBeUndefined();
-    // FLIPPED: requiredness is now CHECKED rather than restated, and each prohibition
-    // fires with its own reason — so the assertion is about the boundary's behaviour
-    // rather than about this fixture's reading of a table.
+    // Requiredness is CHECKED rather than restated, and each prohibition fires with
+    // its own reason — so the assertion is about the boundary's behaviour rather
+    // than about this fixture's reading of a table.
     //
     // `from` and `label` are refused on the CALL, because a named preset accepting
     // either would make it refusable and a refusable preset is not a tested path.
@@ -312,15 +304,15 @@ describe('validity over entry zero, as far as the document defines it', () => {
     const keyed = resolveSwarm({ ...entry, key: 'coverage' });
     if ('reason' in keyed) throw new Error('a named preset must resolve, and this one refused');
     expect(swarmValidity(keyed)).toMatchObject({ reason: 'bad_input' });
-    // AND THE FIELD IT USED TO REQUIRE, MISSING — which is now a legal call rather
-    // than a refusal, and that is the ergonomics fix in one assertion.
+    // AND `objective` MISSING — a legal call rather than a refusal, and that is the
+    // ergonomics contract in one assertion.
     //
-    // The rule never was "optimise requires `objective`"; it was "`score:'verify'`
-    // requires one", and five of six rows scored by `verify`. So `{preset, task}` — the
-    // call the whole surface is meant to make trivial — refused on every row but
-    // `ideate`, and a live incident spent five of a model's ten steps discovering that
-    // one refusal at a time. A named preset now resolves to its UNMEASURED point when
-    // no objective was named: `verify` needs an instrument, none was supplied, so the
+    // The rule is not "optimise requires `objective`"; it is "`score:'verify'`
+    // requires one", and five of six rows score by `verify`. Refusing `{preset, task}`
+    // — the call the whole surface is meant to make trivial — on every row but
+    // `ideate` is what cost a live incident five of a model's ten steps, discovered
+    // one refusal at a time. A named preset resolves to its UNMEASURED point when no
+    // objective was named: `verify` needs an instrument, none was supplied, so the
     // row's judged sweep is what actually runs.
     const unmeasured = resolveSwarm({ preset: 'optimise', task: entry.task });
     if ('reason' in unmeasured) throw new Error('a named preset must resolve, and this one refused');
@@ -336,9 +328,9 @@ describe('validity over entry zero, as far as the document defines it', () => {
   });
 
   test('*Validity over the resolved configuration*: entry zero is LEGAL', () => {
-    // FLIPPED (was: nothing to assert — validity is stated over the resolved
-    // configuration and no resolution existed, so the fixture could only check the
-    // requiredness table above). This is the assertion the whole gap list was about.
+    // Validity is stated over the RESOLVED configuration, so this is the assertion
+    // the whole gap list was about: checking the requiredness table above says
+    // nothing about what the resolver produces.
     const resolved = resolveSwarm(swarmCall());
     expect('reason' in resolved).toBe(false);
     if ('reason' in resolved) return;
@@ -359,13 +351,11 @@ describe('validity over entry zero, as far as the document defines it', () => {
   });
 
   test('the caps entry zero does not state are RESOLVED, and say where from', () => {
-    // FLIPPED (was: "absent rather than guessed" — `branches` and `depth` were
-    // optional with no stated default anywhere in the document, so entry zero could
-    // not say how wide or how deep it runs and inventing a number here would have
-    // made the fixture the source of truth for a quantity the spec never set).
-    // The preset rows now state both (*Presets*), so the CALL still states
-    // neither and the RESOLUTION states both — with the origin recorded, which is
-    // what keeps an inherited default distinguishable from a chosen one.
+    // The preset rows state both `branches` and `depth` (*Presets*), so the CALL
+    // states neither and the RESOLUTION states both — with the origin recorded, which
+    // is what keeps an inherited default distinguishable from a chosen one. Inventing
+    // a number here instead would make the fixture the source of truth for a quantity
+    // the spec sets elsewhere.
     expect(PARSED.branches).toBeUndefined();
     expect(PARSED.depth).toBeUndefined();
     const resolved = resolveSwarm(swarmCall());
@@ -411,10 +401,8 @@ describe('resolve(custom): `config` overrides `from`\'s row, and only where it s
 
 describe('what the live tool surface does with entry zero', () => {
   test('swarm IS an action, and the call parses', () => {
-    // FLIPPED (was: "swarm is not an action, so the call is refused by the enum" —
-    // `AGENTS_TOOL_ACTIONS` was fork/hire/ask/send/reply/list/dismiss and
-    // `parseAgentsToolInput(CALL)` threw). Both halves are the opposite now, and the
-    // parse is asserted field for field so the action cannot be added to the enum
+    // `swarm` is on `AGENTS_TOOL_ACTIONS` and `parseAgentsToolInput(CALL)` returns
+    // it. The parse is asserted field for field so the action cannot sit on the enum
     // without its fields reaching the dispatcher.
     expect(AGENTS_TOOL_ACTIONS).toContain('swarm');
     expect(PARSED.action).toBe('swarm');
@@ -424,15 +412,11 @@ describe('what the live tool surface does with entry zero', () => {
   });
 
   test('a field is refused for the action that does not read it, and the refusal names the one that does', () => {
-    // FLIPPED THREE TIMES, and the history is the point. First it pinned the
-    // silent drop: `AgentsToolInputSchema` was one flat `v.object`, valibot's
-    // `object` EXCLUDES unknown entries rather than rejecting them, so `preset`,
-    // `objective`, `branches` and `depth` reached the dispatcher as ABSENT —
-    // indistinguishable from a caller who never sent them. Then `v.strictObject`
-    // made them "unknown field" refusals. Then they became REAL fields of a REAL
-    // action and the smuggling vehicle was `fork`, which has since left the
-    // picklist — so the property is asserted through `hire`, an action that IS on
-    // the picklist and reads none of them.
+    // THE SILENT DROP THIS REFUSES: valibot's `object` EXCLUDES unknown entries
+    // rather than rejecting them, so one flat `v.object` would let `preset`,
+    // `objective`, `branches` and `depth` reach the dispatcher as ABSENT —
+    // indistinguishable from a caller who never sent them. The property is asserted
+    // through `hire`, an action that IS on the picklist and reads none of them.
     const smuggle = () => parseAgentsToolInput({
       action: 'hire',
       role: 'researcher',
@@ -455,58 +439,46 @@ describe('what the live tool surface does with entry zero', () => {
   });
 
   test('and the money case is refused by the spelling it got wrong', () => {
-    // FLIPPED (was: "the same silence already costs money on a shipping
-    // action"). The caps DO exist on this schema — as `budget_usd` and
-    // `wall_clock_ms` — and a model spelling either in camelCase used to ask for
-    // a $5 ceiling and get none, with no error and no field recording that its
-    // request vanished. Reproduced by `Main` against the shipped parser, and by
-    // `StrictAgentsInput` before the change. It composes with the naming
-    // collision entry zero also carries (`floor.best_known_honest` beside
-    // `merge_strategy`): camelCase-for-snake_case is the EXPECTED model error on
-    // this surface, not an exotic one — which is why the refusal has to name the
-    // snake_case spelling and not merely reject the key.
+    // The caps exist on this schema — as `budget_usd` and `wall_clock_ms` — so a
+    // model spelling either in camelCase is asking for a $5 ceiling. Dropping the
+    // key silently grants none, with no error and no field recording that the
+    // request vanished; `Main` reproduced exactly that against the shipped parser.
+    // It composes with the naming collision entry zero also carries
+    // (`floor.best_known_honest` beside `merge_strategy`): camelCase-for-snake_case
+    // is the EXPECTED model error on this surface, not an exotic one — which is why
+    // the refusal has to name the snake_case spelling and not merely reject the key.
     const camelCase = () => parseAgentsToolInput({
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
     });
     expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
     expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
 
-    // Both spellings of the same request: one is heard, and the other is now
-    // TOLD, where before it was dropped and the two were indistinguishable.
+    // Both spellings of the same request: one is heard, and the other is TOLD.
+    // Dropped instead, the two would be indistinguishable.
     expect(parseAgentsToolInput({
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5,
     })).toEqual({ action: 'swarm', preset: PARSED.preset, task: CALL.task, budget_usd: 5 });
   });
 });
 
-describe('the implementation, asserted where absences used to be pinned', () => {
+describe('the implementation, asserted against the shipped strategy modules', () => {
   test('the strategy modules export the resolution, the predicate and the result half', () => {
-    // FLIPPED (was: "nothing resolves a named preset, so the validity predicate has no
-    // input" — this test pinned the VALUE EXPORT SETS of both strategy modules so
-    // that landing a preset table, a validity predicate, a verifier-kind registry or
-    // a call parser would turn it red and force the fixture onto the real thing
-    // instead of its own reading of the prose. All four landed; this is the rewiring
-    // that pin existed to demand.)
+    // A SET assertion rather than a containment check: an export added without a
+    // thought is the pass-by-omission this file is about, so growth stays a decision.
     //
-    // Still a SET assertion rather than a containment check, and for the same
-    // reason: an export added without a thought is the pass-by-omission this file is
-    // about, so growth stays a decision.
-    //
-    // GROWN BY ONE: `VERIFIER_KINDS` MOVED here from `verifier-registry.ts`. The
-    // vocabulary belongs to `VerifierSpec.kind`, which this module declares; the
-    // implementations stay in the registry. Keeping them together made the membership
-    // rule unreachable from `swarmValidity` without closing an import cycle, so the
-    // registry could only be consulted once a run had started — while
-    // `VerifierSpec.kind`'s own docstring promised a CALL-TIME refusal.
-    // GROWN BY ONE AGAIN: `VERIFIER_KIND_DOC` joined for the same reason
-    // `VERIFIER_KINDS` did. A refusal that wants to name a kind's WHOLE spec at call
-    // time has to read the field list from somewhere `swarmValidity` can import, and
-    // the registry is not that place. Without it a caller learned the shape one field
-    // per round trip from the bound instrument, which is the incident this pin's
-    // neighbours describe.
-    // GROWN BY FOUR for the Pareto frontier landing. `paretoObjectiveAxes`,
-    // `dominatesPareto` and `paretoFront` are the executable half of
-    // `Exploration/Records.lean`'s `frontier_nondominance`, and
+    // `VERIFIER_KINDS` lives HERE and not in `verifier-registry.ts`: the vocabulary
+    // belongs to `VerifierSpec.kind`, which this module declares, while the
+    // implementations stay in the registry. Keeping the two together puts the
+    // membership rule out of `swarmValidity`'s reach without closing an import cycle,
+    // so the registry could only be consulted once a run had started — while
+    // `VerifierSpec.kind`'s own docstring promises a CALL-TIME refusal.
+    // `VERIFIER_KIND_DOC` is here for the same reason. A refusal that wants to name a
+    // kind's WHOLE spec at call time has to read the field list from somewhere
+    // `swarmValidity` can import, and the registry is not that place. Without it a
+    // caller learns the shape one field per round trip from the bound instrument,
+    // which is the incident this pin's neighbours describe.
+    // `paretoObjectiveAxes`, `dominatesPareto` and `paretoFront` are the executable
+    // half of `Exploration/Records.lean`'s `frontier_nondominance`, and
     // `validateParetoEvidence` is the call-time refusal over that evidence —
     // consumed by settle, swarm-scoring, swarm-setup, the GEPA engine and the
     // exploration canvas, so the vocabulary lives where `swarmValidity` can
@@ -517,40 +489,38 @@ describe('the implementation, asserted where absences used to be pinned', () => 
       'measuredHalf', 'normalisedScore', 'paretoFront', 'paretoObjectiveAxes',
       'validateParetoEvidence',
     ]);
-    // GROWN BY FOUR since *Arbitration*'s arbiter landed. `arbitrateBranch` is the executable
-    // port of `Exploration/Arbitration.lean`'s `arbitrate`, and two of the constants are
-    // the bounds its theorems quantify over — `BRANCH_PROPOSAL_WIDTH` is the 2-4 band
-    // `accepted_width_in_range` proves, `BRANCH_REFUSAL_POLICIES` the five reasons
-    // `every_refusal_is_reachable` proves none of is unreachable. `SWARM_CONTEXTS` is the
-    // axis *Inherited context* governs, which arrived with agent nodes and is the trigger
-    // of the fifth refusal. Named here because that is what this pin is for: growth stays
-    // a decision.
+    // `arbitrateBranch` is the executable port of `Exploration/Arbitration.lean`'s
+    // `arbitrate`, and two of the constants are the bounds its theorems quantify over —
+    // `BRANCH_PROPOSAL_WIDTH` is the 2-4 band `accepted_width_in_range` proves,
+    // `BRANCH_REFUSAL_POLICIES` the five reasons `every_refusal_is_reachable` proves
+    // none of is unreachable. `SWARM_CONTEXTS` is the axis *Inherited context* governs
+    // and the trigger of the fifth refusal. Named here because that is what this pin
+    // is for: growth stays a decision.
     //
-    // GROWN BY TWO AGAIN, and both came from the records store landing.
     // `configDigestOf` is `ExplorationRecord.configDigest`, computed beside the
     // resolution because what it digests is what the resolution produced.
-    // `judgeMarginalisationRefusal` is the marginalisation floor lifted out of
-    // `swarmValidity` so that `runSwarm` — which the tool surface does not route
-    // through — enforces the same bound rather than a second copy of it.
+    // `judgeMarginalisationRefusal` is the marginalisation floor kept OUT of
+    // `swarmValidity` alone, so that `runSwarm` — which the tool surface does not
+    // route through — enforces the same bound rather than a second copy of it.
     //
-    // GROWN BY ONE for `advance:'archive'` running, and for `judgeMarginalisationRefusal`'s
-    // exact reason: `archiveRegionRefusal` is the archive's own region — what keys a cell,
-    // what the novelty floor's unit is, and where a second level would have been selected
-    // from — shared by `swarmValidity` and by `runSwarm`'s in-process check so the two
-    // cannot drift apart in the direction that lets an unrunnable shape through.
+    // `archiveRegionRefusal` is `advance:'archive'`'s own region — what keys a cell,
+    // what the novelty floor's unit is, and where a second level is selected from —
+    // shared by `swarmValidity` and by `runSwarm`'s in-process check for
+    // `judgeMarginalisationRefusal`'s exact reason: the two cannot drift apart in the
+    // direction that lets an unrunnable shape through.
     //
-    // NET UNCHANGED in the preset fix, and the swap is the fix in one line.
-    // `isPresetPoint` LEFT: every row is a point, so there is nothing to narrow and the
-    // undeclared arm it guarded is gone. `judgeCallPool` ARRIVED: the per-evaluation
-    // call pool a judged run funds, derived from the ensemble validity admitted rather
-    // than borrowed from the MCTS engine's dial.
-    // GROWN BY THREE in the ergonomics fix, and all three are one idea: a named preset
-    // must be callable as `{preset, task}`. `unmeasuredPoint` is the row a verifying
-    // preset takes when the call named no `objective`, `UNMEASURED_JUDGE_SAMPLES` the
-    // ensemble that sweep runs at, and `SWARM_PRESET_DOCTRINE` the prose MOVED here
-    // from tools/registry.ts so it is rendered from these rows instead of written
-    // beside them — it had drifted into claiming `optimise` "requires `objective`"
-    // while the table decided whether it did.
+    // There is no preset-point narrowing predicate here, because every row IS a point
+    // and there is nothing to narrow. `judgeCallPool` is the per-evaluation call pool
+    // a judged run funds, derived from the ensemble validity admitted rather than
+    // borrowed from the MCTS engine's dial.
+    //
+    // `unmeasuredPoint`, `UNMEASURED_JUDGE_SAMPLES` and `SWARM_PRESET_DOCTRINE` are
+    // one idea: a named preset must be callable as `{preset, task}`. `unmeasuredPoint`
+    // is the row a verifying preset takes when the call named no `objective`,
+    // `UNMEASURED_JUDGE_SAMPLES` the ensemble that sweep runs at, and
+    // `SWARM_PRESET_DOCTRINE` the prose rendered FROM these rows rather than written
+    // beside them in tools/registry.ts, where it drifts into claiming `optimise`
+    // "requires `objective`" while the table decides whether it does.
     expect(Object.keys(swarmModule).sort()).toEqual([
       'BRANCH_PROPOSAL_WIDTH', 'BRANCH_REFUSAL_POLICIES',
       'JUDGE_MARGINALISATION_MIN', 'NAMED_SWARM_PRESETS', 'SWARM_ADVANCES', 'SWARM_CARRIES',
@@ -569,10 +539,9 @@ describe('the implementation, asserted where absences used to be pinned', () => 
     // The behavioural half of the resolver's axis list: a `custom` call with nothing in
     // `config` must come back naming every axis, so an axis added to `SwarmConfig` and
     // forgotten in the resolver's list fails HERE instead of letting an incomplete tuple
-    // through as if it were resolved. `context` is in the list because agent nodes gave
-    // inheritance one spelling (*Inherited context*); `observe` and `decorrelate` are NOT,
-    // because they were cut, and a composition is no longer asked to state an axis that no
-    // longer decides anything.
+    // through as if it were resolved. `context` is in the list because inheritance has
+    // exactly one spelling (*Inherited context*); `observe` and `decorrelate` are NOT,
+    // because a composition is asked to state only axes that decide something.
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
     const error = 'error' in refusal ? refusal.error : '';
@@ -590,22 +559,21 @@ describe('the implementation, asserted where absences used to be pinned', () => 
   });
 
   test('*Presets*: EVERY row is stated, so every named preset resolves', () => {
-    // This assertion is the inverse of the one it replaces. The fixture found the gap
-    // while flipping — `research` and `audit` were given `carry:'artifacts'` with no
-    // threshold and `redteam` an `archive` with no novelty, so three rows could not be
-    // constructed as printed and the resolver refused them naming the missing
-    // parameter. That refusal was accurate and left three advertised presets unusable,
-    // which *Presets* forbids: a named preset is unrefusable.
+    // *Presets* forbids an advertised preset that cannot be called: a named preset is
+    // unrefusable. `research` and `audit` carrying `carry:'artifacts'` with no
+    // threshold, or `redteam` an `archive` with no novelty, is a row that cannot be
+    // constructed as printed — the resolver refuses it naming the missing parameter,
+    // accurately, and three advertised presets go unusable.
     //
-    // The parameters are declared now, and neither was invented here. `novelty: 0.4` is
-    // Rainbow Teaming's τ=0.6 converted from a similarity ceiling to this axis's
-    // distance floor; `threshold: 0.8` is `craftExtractionThreshold`, the pass-band
-    // midpoint this repository already publishes search artifacts at.
+    // Neither parameter was invented here. `novelty: 0.4` is Rainbow Teaming's τ=0.6
+    // converted from a similarity ceiling to this axis's distance floor;
+    // `threshold: 0.8` is `craftExtractionThreshold`, the pass-band midpoint this
+    // repository already publishes search artifacts at.
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
     }
     // THE ARCHIVE IS WHAT AN `objective` BUYS, so the call that asks for one has to
-    // name it. `{preset, task}` alone now resolves to the row's unmeasured point — a
+    // name it. `{preset, task}` alone resolves to the row's unmeasured point — a
     // judged sweep at `advance:'none'` — because `verify` needs an instrument and a
     // bare call named none. The row under test here is the MEASURED one, which is
     // reached by declaring the objective that makes an archive binnable at all.

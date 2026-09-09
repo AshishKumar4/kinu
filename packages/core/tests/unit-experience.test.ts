@@ -99,8 +99,8 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
   // leads the key because `messages` is keyed `(actor_id, id)`, so two actors'
   // turns really do present the same message id — and a bare `message_id`
-  // primary key let one actor's thumbs overwrite a sibling's through the
-  // writer's ON CONFLICT. A fixture on the old shape would take the reader's
+  // primary key lets one actor's thumbs overwrite a sibling's through the
+  // writer's ON CONFLICT. A fixture without the column would take the reader's
   // `actor_id` predicate down with `no such column`.
   db.exec(`CREATE TABLE IF NOT EXISTS turn_feedback (
     actor_id   TEXT NOT NULL,

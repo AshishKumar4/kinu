@@ -90,15 +90,15 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
  *
  * The stored row goes through the SAME narrowing the evict-resume path uses
  * (`resumableAgentsInput`), and that is the point rather than tidiness: a row is
- * recorded verbatim from whatever the model sent, so a row written before today's
- * surface can carry fields the strict parse now refuses, and one carrying
- * `action:'fork'` or a `settle` names a rung this surface no longer has. Replaying
- * it raw would meet the parse instead of the translation — a translate-on-replay
- * convention that held on the resume path and not on this one would be worse than
- * none, because the two paths differ only in who pressed the button.
+ * recorded verbatim from whatever the model sent, so a stored row can carry
+ * fields the strict parse refuses, and one carrying `action:'fork'` or a
+ * `settle` names a rung this surface does not have. Replaying it raw would meet
+ * the parse instead of the translation — a translate-on-replay convention that
+ * holds on the resume path and not on this one would be worse than none, because
+ * the two paths differ only in who pressed the button.
  *
  * A kind the narrowing declines (`run`, `execute_tools`, a converse `agents` action)
- * is replayed exactly as stored, which is the behaviour this function already had.
+ * is replayed exactly as stored.
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
   const job = deps.jobs.get(jobId);
@@ -171,14 +171,14 @@ export interface CancelWorkDeps {
  * re-queues what the model never saw as the next user-origin turn, so nothing
  * returns to the composer. Detached background jobs are deliberately untouched.
  *
- * This used to open with `jobRunner.cancelRunning()`, so pressing Stop on one
- * conversation killed every job that had detached from any earlier turn — a
- * two-hour search, a running release, a laptop command another turn started.
- * Detaching is what a job does when it outlives its turn, so "the turn you can
- * see is over" says nothing about it: the two lifetimes were joined only
- * because both reached the same button.
+ * It deliberately does NOT open with `jobRunner.cancelRunning()`: that kills
+ * every job that had detached from any earlier turn — a two-hour search, a
+ * running release, a laptop command another turn started — because one
+ * conversation pressed Stop. Detaching is what a job does when it outlives its
+ * turn, so "the turn you can see is over" says nothing about it: the two
+ * lifetimes share nothing but the button.
  *
- * Stopping detached work now needs the job's own identity —
+ * Stopping detached work needs the job's own identity —
  * {@link cancelBackgroundJob}, which the task roster's per-job control calls.
  * That is the whole property: a caller who names no job stops no job.
  */

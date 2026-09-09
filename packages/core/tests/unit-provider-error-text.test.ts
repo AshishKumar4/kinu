@@ -2,10 +2,11 @@
 //
 // `streamText` routes provider failures into the stream as an `error` chunk
 // whose payload is whatever the endpoint sent. The OpenAI-compatible provider
-// forwards the parsed body verbatim — a PLAIN OBJECT, not an Error — and
-// runChat rethrew it as `new Error(String(payload))`. Separately the SDK's
-// default `onError` is `console.error(error)`, so the same failure was also
-// dumped raw to the terminal next to our own rendering of it.
+// forwards the parsed body verbatim — a PLAIN OBJECT, not an Error — so
+// rethrowing it as `new Error(String(payload))` is where `[object Object]`
+// comes from. Separately the SDK's default `onError` is `console.error(error)`,
+// which dumps the same failure raw to the terminal next to our own rendering
+// of it.
 //
 // These pin both: the thrown message carries the provider's words, and the
 // turn does not write the payload to the console behind our back.
@@ -95,10 +96,10 @@ describe('describeProviderError', () => {
     expect(describeProviderError({ cause: error })).toContain('models.dev provider was not found');
   });
 
-  // KINU-043. This used to assert `'{"status":402,"body":"nope"}'` — the whole
-  // error object, stringified into the user's terminal. Whatever an SDK or a
-  // gateway attached rode out with it, and a gateway attaches the request it
-  // failed on. The keys are the diagnosis; the values are the leak.
+  // KINU-043. The whole error object stringified — `'{"status":402,"body":"nope"}'`
+  // — puts whatever an SDK or a gateway attached into the user's terminal, and a
+  // gateway attaches the request it failed on. The keys are the diagnosis; the
+  // values are the leak.
   test('names the fields of an unrecognised payload instead of stringifying it', () => {
     expect(describeProviderError({ cause: { status: 402, body: 'nope' } }))
       .toBe('unrecognised provider error (fields: status, body) (HTTP 402)');
@@ -200,11 +201,10 @@ describe('runChat provider failures', () => {
     expect(thrown.message).not.toContain('[object Object]');
   });
 
-  // KINU-043. This used to assert `expect(thrown).toBe(cause)` — the provider's
-  // own object, rethrown untouched, which is how an APICallError reached the CLI
-  // and the chat surface with its raw responseBody still attached while its
-  // message said only "AI_APICallError". The reason now rides the message and
-  // the raw failure rides `cause`.
+  // KINU-043. The reason rides the MESSAGE and the raw failure rides `cause`.
+  // Rethrowing the provider's own object untouched is how an APICallError
+  // reaches the CLI and the chat surface with its raw responseBody still
+  // attached while its message says only "AI_APICallError".
   test('an Error payload crosses as a classified failure that still carries its text', async () => {
     const cause = new Error('context length exceeded');
     const thrown = await rejectionOf(() => runToCompletion(inBandErrorModel(cause)));

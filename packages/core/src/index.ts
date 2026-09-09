@@ -220,8 +220,6 @@ export {
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './evolution/changelog';
-// Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
-// surface is no longer exported.
 
 // Configuration
 export { DEFAULT_CONFIG } from './config';
@@ -501,7 +499,7 @@ export {
   renderExecuteToolsDescription,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
-  // panel, which used to guess it from ToolSet keys.
+  // panel, so none of them has to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
   // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
@@ -1585,8 +1583,8 @@ export type {
 // Only the entry points + persistence + types are public; the algorithm
 // internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
 // The scaffold evolution CONTROL PLANE — the drivers over those primitives.
-// They used to be Durable Object methods, which is why GEPA could not be run
-// from the CLI at all; both backends now call these.
+// Plain module functions rather than backend methods, so every composition
+// root calls the same drivers and GEPA is runnable from the CLI.
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
@@ -1669,8 +1667,8 @@ export type {
 // Backend conformance gate — the manifest of which composition root wires
 // which capability (or why deliberately not), plus the comparator the
 // per-backend harnesses run their observed surfaces through. Kills the
-// "X never worked on Y backend" class: a forgotten wire can no longer look
-// like a design decision.
+// "X never worked on Y backend" class: a forgotten wire cannot look like a
+// design decision.
 export {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
   compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,

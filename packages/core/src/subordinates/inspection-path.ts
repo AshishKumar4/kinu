@@ -2,21 +2,22 @@
  * Owner-authorized inspection of a subordinate's own rows, in the ONE workspace
  * database.
  *
- * WHAT THIS USED TO BE. Every actor owned a database, so inspecting a
- * grandchild meant an RPC per hop, and each hop had to prove its own lineage
- * from rows only it could see: a stored parent path of SDK class names
- * (`OrchestratorAgent`, then `SubordinateAgent` per level), a stored physical
- * key, and a per-facet identity row. That chain was the only authority
- * available — but it authenticated a facet's own account of who its parents
- * were, and a class name is not an identity.
+ * ONE DATABASE, ONE MEMBERSHIP AUTHORITY over it: `workspace_actors`, read
+ * through {@link WorkspaceActorDirectory}. So the walk is a directory walk from
+ * the CALLER's own actor, each hop issued by that directory, and the read is
+ * taken as the actor the walk arrived at. No RPC per hop, no per-facet identity
+ * row, no class-name comparison — and no way to reach an actor that is not a
+ * descendant of the caller, because `resolveChild` only answers for children of
+ * the handle it is given.
  *
- * WHAT IT IS NOW. There is one database and one membership authority over it:
- * `workspace_actors`, read through {@link WorkspaceActorDirectory}. So the walk
- * is a directory walk from the CALLER's own actor, each hop issued by that
- * directory, and the read is taken as the actor the walk arrived at. No RPC per
- * hop, no per-facet identity row, no class-name comparison — and no way to
- * reach an actor that is not a descendant of the caller, because
- * `resolveChild` only answers for children of the handle it is given.
+ * WHY A DIRECTORY AND NOT A STORED CHAIN. Give every actor its own database and
+ * inspecting a grandchild costs an RPC per hop, each hop proving its own lineage
+ * from rows only it can see: a stored parent path of SDK class names
+ * (`OrchestratorAgent`, then `SubordinateAgent` per level), a stored physical
+ * key, and a per-facet identity row. Such a chain authenticates an actor's own
+ * account of who its parents are, and a class name is not an identity. The
+ * directory is ONE shared membership table, so no actor is asked to vouch for
+ * its own lineage.
  *
  * The owner check stays and stays FIRST: the transport authenticated an owner
  * and addressed a workspace by name, and this verifies both against the

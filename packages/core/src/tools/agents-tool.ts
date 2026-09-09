@@ -242,10 +242,10 @@ export interface TeamToolDeps {
    *
    * Separate from {@link list} because the two questions differ on exactly the
    * rows that matter here. `list` is the WORKING SET, and ask/send route on it:
-   * a dismissed agent must not be handed new work. This is PROVENANCE, and
-   * `list`'s answer was wrong for it — a released temporary agent's own result
-   * names it, and a `list` detail lookup on that name fell through to the peer
-   * path and dead-ended. Archived rows are readable, never addressable.
+   * a dismissed agent must not be handed new work. This is PROVENANCE, which
+   * `list`'s answer cannot serve — a released temporary agent's own result names
+   * it, and a `list` detail lookup on that name falls through to the peer path
+   * and dead-ends. Archived rows are readable, never addressable.
    */
   knows(name: string): Promise<boolean>;
   /** Roster row and live state. Archived rows have no live state; retained
@@ -995,8 +995,8 @@ const AgentsToolInputSchema = v.strictObject(AgentsInputEntries);
  * silently.
  *
  * `action` is a plain string here and a picklist on the model-facing parse, and
- * that difference is the whole point: a row can name an action this surface no
- * longer has, and translating it is exactly the job. Refusing it at the parse
+ * that difference is the whole point: a row can name an action this surface does
+ * not hold, and translating it is exactly the job. Refusing it at the parse
  * would strand the rows the translation exists for.
  */
 const StoredAgentsInputSchema = v.object({ ...AgentsInputEntries, action: v.string() });
@@ -1101,8 +1101,8 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
   const action = declared.success ? declared.output : undefined;
   const problems: string[] = [];
   // Printed ONCE at the end rather than after every clause: four unknown fields
-  // used to repeat the same ten-name list four times, which buries the one line
-  // that says which field was wrong.
+  // would otherwise repeat the same ten-name list four times, burying the one
+  // line that says which field was wrong.
   let listFields = false;
   for (const field of Object.keys(parsed.output)) {
     if (field === 'action') continue;
@@ -1198,24 +1198,24 @@ function recordDroppedFields<T>(
  * that could not be re-driven after an eviction must never be detached into a job.
  * One predicate at both ends — a detachable call with no resume is how work is lost.
  *
- * Rows are TRANSLATED rather than validated as a model call would be. A row was
+ * Rows are TRANSLATED rather than validated as a model call would be. A row is
  * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
- * input), so a row written before today's surface can carry fields it now refuses
- * and can name an ACTION it no longer has — and a row is re-driven, not answered, so
- * a refusal there is work lost to a spelling nobody can correct any more. A stored
+ * input), so a stored row can carry fields this surface refuses and can name an
+ * ACTION the enum does not hold — and a row is re-driven, not answered, so a
+ * refusal there is work lost to a spelling nobody can correct any more. A stored
  * row is history, not a prompt.
  *
  * WHAT TRANSLATES, and every translation names what it could not carry:
  *
- *   `action:'fork'` — the removed ephemeral rung. Its caller supplied the angles
- *   itself and a merge model synthesised what came back. A search is what spawns
- *   ephemeral tool-using nodes now, so the row re-drives as one; the briefs and the
- *   merge are the loss, and the drop line names them. `preset:'ideate'` runs without
- *   an invented objective, and the settlement loss rides the drop line.
+ *   `action:'fork'` — an ephemeral rung this enum does not hold. Its caller supplied
+ *   the angles itself and a merge model synthesised what came back. A search is what
+ *   spawns ephemeral tool-using nodes, so the row re-drives as one; the briefs and
+ *   the merge are the loss, and the drop line names them. `preset:'ideate'` runs
+ *   without an invented objective, and the settlement loss rides the drop line.
  *
- *   `settle` — an older row still, from when a judged tree was reachable from inside
- *   that rung. Same translation: the field is not an entry any more, so it arrives as
- *   an unknown key and is named in the same line.
+ *   `settle` — a field on a still older row, which reached a judged tree from
+ *   inside that rung. Same translation: the field is not an entry here, so it
+ *   arrives as an unknown key and is named in the same line.
  */
 export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind !== 'agents') return null;
@@ -1864,14 +1864,14 @@ export async function dispatchAgentsAction(
   //
   // BOTH SPAWNING RUNGS, not just `hire`. A role-targeted `ask` births a child
   // through the identical substrate and therefore adds a level exactly as a hire
-  // does — so a cap that covered only `hire` was a cap the other rung walked
-  // straight past, one call per level, each spending real money. `ask` by NAME
-  // is not a spawn and stays available: talking to an agent that already exists
-  // adds no depth, and an actor at the cap still has to be able to use its team.
+  // does — so a cap covering only `hire` is a cap the other rung walks straight
+  // past, one call per level, each spending real money. `ask` by NAME is not a
+  // spawn and stays available: talking to an agent that already exists adds no
+  // depth, and an actor at the cap still has to be able to use its team.
   // The guard lives INSIDE each spawning arm, on the same read that arm routes
   // on — the ask arm's `if (input.role)` IS its spawn predicate, so the seam
-  // and the dispatcher can no longer disagree about what a spawn is (they once
-  // did, on exactly `role: ''`, which the schema permits).
+  // and the dispatcher cannot disagree about what a spawn is, not even on
+  // `role: ''`, which the schema permits.
   const spawnDepthRefusal = () =>
     team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
   try {

@@ -71,11 +71,12 @@ export function buildProviderCatalogSnapshot(
 /**
  * One credential sweep at a time, memoized only when it was COMPLETE.
  *
- * Four rules, each of which was written twice before this existed:
+ * Four rules, stated ONCE here rather than in each caller that needs them:
  *
  * ONE SWEEP. Concurrent callers join the in-flight sweep instead of starting
- * their own. Every turn that opened before the first finished used to pay for
- * its own credential listing, so the cost was per caller rather than per change.
+ * their own, so the cost is per change rather than per caller — otherwise every
+ * turn that opens before the first sweep finishes pays for its own credential
+ * listing.
  *
  * COMPLETE LISTINGS ONLY. A degraded listing is never cached. A non-empty
  * failure set admits every configured model unverified, so caching one would

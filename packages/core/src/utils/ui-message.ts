@@ -60,23 +60,24 @@ export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
  * WHO WROTE THE WORDS in a turn. Stamped by the seam that enqueues the turn,
  * read by every surface that renders or attributes it.
  *
- * This exists because the alternative was tried and drifted. Provenance used to
- * be re-derived per surface from the EVENT NAME: the chat pane recognised four
- * of them (`background_job`, `event_drain`, `workspace_created`,
- * `deferred_approval`) and rendered everything else in the operator's bubble,
- * so every event kind added after that list — `fork_interrupted`,
- * `completion_gate`, `take_pick`, `overflow_retry` — silently became something
- * the owner appeared to have typed. Measured on the owner's live workspaces on
- * 2026-08-20: five `fork_interrupted` rows across `sunlit-stone-4a20`,
- * `stone-ash-71f2` and `principal-machine-f1296946`, each reading "23 head(s)
- * across 6 fork run(s) were still marked running…" in the owner's own bubble.
+ * This exists because the alternative drifts. Re-derive provenance per surface
+ * from the EVENT NAME and it becomes a list inside a renderer: a chat pane that
+ * recognises four of them (`background_job`, `event_drain`,
+ * `workspace_created`, `deferred_approval`) renders everything else in the
+ * operator's bubble, so every event kind added after that list —
+ * `fork_interrupted`, `completion_gate`, `take_pick`, `overflow_retry` —
+ * silently becomes something the owner appeared to have typed. Measured on the
+ * owner's live workspaces on 2026-08-20: five `fork_interrupted` rows across
+ * `sunlit-stone-4a20`, `stone-ash-71f2` and `principal-machine-f1296946`, each
+ * reading "23 head(s) across 6 fork run(s) were still marked running…" in the
+ * owner's own bubble.
  *
- * So the default is inverted and the writer decides. A turn the harness
- * enqueues is the harness speaking unless its producer says otherwise, and the
- * one producer that does say otherwise is the one carrying words the operator
- * really wrote (an MCP client's `run_task`, a leftover steer re-run as its own
- * turn). A new event kind is therefore attributed correctly the day it is
- * added, without touching any renderer.
+ * So the writer decides. A turn the harness enqueues is the harness speaking
+ * unless its producer says otherwise, and the one producer that does say
+ * otherwise is the one carrying words the operator really wrote (an MCP
+ * client's `run_task`, a leftover steer re-run as its own turn). A new event
+ * kind is therefore attributed correctly the day it is added, without touching
+ * any renderer.
  */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
 

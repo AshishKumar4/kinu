@@ -13,15 +13,15 @@
  * ITS OWN native paths. So it is registered the same way they are — as an
  * `ExecutorProvider` with a `parent.*` codemode namespace and a `run { runtime:
  * 'parent' }` target — rather than being folded into this agent's filesystem as
- * a `/parent` directory. Folding it in is what previously required a router
- * above Nimbus and a second, emulated shell that could walk that router; both
- * are gone.
+ * a `/parent` directory. Folding it in would require a router above Nimbus and
+ * a second, emulated shell that could walk that router.
  *
- * The fork gains capability from the change, not loses it. `/parent` could only
- * ever be read by the emulated shell's dozen-and-a-half builtins, one RPC per
- * file; `parent.exec` runs the parent's REAL shell — its ~95 coreutils, pipes
- * and all — in a single round trip. `grep -rn X .` over the parent's tree is now
- * one call that greps, instead of a walk that reads every file across the wire.
+ * The fork gains capability this way, not loses it. A `/parent` directory could
+ * only ever be read by the emulated shell's dozen-and-a-half builtins, one RPC
+ * per file; `parent.exec` runs the parent's REAL shell — its ~95 coreutils,
+ * pipes and all — in a single round trip. `grep -rn X .` over the parent's tree
+ * is one call that greps, instead of a walk that reads every file across the
+ * wire.
  */
 
 import * as v from 'valibot';

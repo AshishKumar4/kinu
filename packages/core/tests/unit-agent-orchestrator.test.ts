@@ -386,8 +386,8 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
   });
 
   test('the drain the settled turn owes injects one turn for the pending backlog', async () => {
-    // The `event_drain` row's whole body is this method — what the settle used
-    // to run inline once the recording was in.
+    // The `event_drain` row's whole body is this method — a roster effect the
+    // settled turn owes, ordered after the recording is in.
     const { engine } = fakeEngine();
     const { host, enqueued } = fakeHost();
     const eventLog = newEventLog();

@@ -311,14 +311,14 @@ interface JudgeTrialOpts {
 /**
  * Judge one trial with the order-swapped double-win rule.
  *
- * The bias this removes: the incumbent used to be pinned to "Response A" and
- * labelled CURRENT, the candidate to "Response B" labelled PENDING. That is
- * two systematic, DIRECTIONAL handicaps stacked on the pending — position
- * bias, which peaks exactly when two candidates are close in quality (the
- * shadow regime by construction), plus a status-quo/novelty bias carried by
- * the labels themselves. The Monte Carlo that settled DEFAULT_SHADOW_CONFIG
- * models judge error as SYMMETRIC noise, so a directional bias was never
- * inside its guarantees.
+ * The bias this removes: pinning the incumbent to "Response A" labelled
+ * CURRENT and the candidate to "Response B" labelled PENDING stacks two
+ * systematic, DIRECTIONAL handicaps on the pending — position bias, which
+ * peaks exactly when two candidates are close in quality (the shadow regime by
+ * construction), plus a status-quo/novelty bias carried by the labels
+ * themselves. The Monte Carlo that settled DEFAULT_SHADOW_CONFIG models judge
+ * error as SYMMETRIC noise, so a directional bias is nowhere inside its
+ * guarantees.
  *
  * The rule: neutral labels, a randomized presentation order, and two calls
  * with the orders swapped. A candidate takes the trial only by winning BOTH

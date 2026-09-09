@@ -1,10 +1,10 @@
 /**
  * The fork driver's policy, through its public seam.
  *
- * Everything here used to be a Durable Object method, so a fork existed on
- * exactly one backend. What a backend supplies now is the transport — how to
- * reach a workspace that does not exist yet — and these tests drive the driver
- * over a recording one.
+ * The policy is backend-agnostic: a backend supplies only the transport — how
+ * to reach a workspace that does not exist yet — and these tests drive the
+ * driver over a recording one. A driver built out of Durable Object methods
+ * would exist on exactly one backend.
  */
 
 import { describe, test, expect } from 'bun:test';

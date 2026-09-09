@@ -115,8 +115,8 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
  *
  * Driven through a real journal row rather than a literal, because the row's ID
  * is half the defect this reading exists for — a branch's head is journalled
- * under `branchHeadId(runId)`, and both backends' replays used to look it up
- * under the run id and find nothing at all.
+ * under `branchHeadId(runId)`, so a replay that looks it up under the run id
+ * finds nothing at all.
  */
 describe('branchOutcomeFromJournal — the journal read a cold settle makes', () => {
   /** One real branch run, left with the status a caller wants to read back. */

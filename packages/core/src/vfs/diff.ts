@@ -221,9 +221,10 @@ export function parseGitDiff(unified: string): FileDiff[] {
       || line.startsWith('similarity index') || line.startsWith('\\ No newline')) continue;
     if (line.startsWith('Binary files')) { carry(cur, { kind: 'ctx', text: '(binary file differs)' }); continue; }
     if (line.startsWith('@@')) { carry(cur, { kind: 'ctx', text: line }); continue; }
-    // Count FIRST, carry second. The bound used to sit above the counters, so
-    // a file past the limit stopped counting as well as stopped showing — and
-    // then presented the undercount as the file's +/- totals.
+    // Count FIRST, carry second. The bound lives inside `carry`, below the
+    // counters, so a file past the limit stops SHOWING without stopping
+    // COUNTING — a bound above them presents the undercount as the file's +/-
+    // totals.
     const kind: DiffLine['kind'] | null =
       line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith(' ') ? 'ctx' : null;
     if (kind === null) continue;

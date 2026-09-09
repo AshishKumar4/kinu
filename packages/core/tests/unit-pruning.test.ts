@@ -1,11 +1,10 @@
 /**
  * Unit tests: MCTS pruning (WP-A2).
  *
- * The regression this guards: pruning used to be handed only the freshly-
- * expanded children (visits === 1) yet gated on a hardcoded `visits >= 2`, so
- * it could NEVER fire. Pruning now scans the full open population and honors
- * the `minVisitsForPrune` config, so a settled low-value node actually reaches
- * status='pruned' mid-search.
+ * The regression this guards: pruning handed only the freshly-expanded children
+ * (visits === 1) yet gated on a hardcoded `visits >= 2` can NEVER fire. Pruning
+ * scans the full open population and honors the `minVisitsForPrune` config, so
+ * a settled low-value node actually reaches status='pruned' mid-search.
  */
 
 import { describe, test, expect } from 'bun:test';

@@ -41,12 +41,13 @@ export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): Sear
  * scoped by the root the caller asked for.
  *
  * A canvas showing several searches composes this per root
- * ({@link readExplorationCanvas}) rather than flattening the table. There used
- * to be a multi-root `readSearchForest` for that, and its roots were chosen by
+ * ({@link readExplorationCanvas}) rather than flattening the table, and the
+ * roots are the caller's page. A multi-root read choosing its own roots by
  * recency INDEPENDENTLY of the run list beside it — by `MAX(created_at)` where
- * the run list ordered by first write — so the two could disagree about which
- * searches exist and the canvas drew a listed fork with no tree under it. Roots
- * are the caller's page now, so that disagreement has nowhere to live.
+ * the run list orders by first write — would disagree with that list about
+ * which searches exist, and the canvas would draw a listed fork with no tree
+ * under it. Taking the page from the caller leaves that disagreement nowhere
+ * to live.
  */
 export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchNode[] {
   actor.assertCurrent();

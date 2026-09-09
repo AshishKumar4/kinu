@@ -147,9 +147,9 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('retired tool names still render, so stored transcripts do not degrade', () => {
-    // Every name here was once live. A transcript recorded under the old name
-    // must keep summarizing after the rename — the alternative is a wall of
-    // `summarizeUnknownTool` in history the owner cannot re-record.
+    // Persisted transcripts carry calls under these names. Each one must keep
+    // summarizing — the alternative is a wall of `summarizeUnknownTool` in history
+    // the owner cannot re-record.
     expect(summarizeToolCall('product_change', { action: 'create', userPrompt: 'dark mode toggle' }))
       .toBe('create — "dark mode toggle"');
     expect(summarizeToolCall('think', { task: 'compare the two designs' })).not.toBe('');

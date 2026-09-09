@@ -322,12 +322,15 @@ export class ConversationSearchStore {
   // ── Derived index maintenance ─────────────────────────────────────────────
 
   /**
-   * Idempotent: drop the mirror-era index, create the derived one, then sync.
+   * Idempotent: drop any `messages_fts` index and its triggers, create the
+   * derived `conversation_fts`, then sync.
    *
-   * The old shape was external-content fts5 over `messages` with sync triggers
-   * — an index OF THE MIRROR, which stopped being the transcript when the
-   * reconciler died. That state is disposable by definition, so it is dropped
-   * once here and rebuilt from the authority.
+   * `conversation_fts` owns its content and its own reference columns and is
+   * fed from the authority by the watermark sync. An external-content fts5
+   * index over `messages` with sync triggers indexes whatever `messages`
+   * holds, which on a pane-store backend is not the default chat at all. Both
+   * are disposable derived state, so the older table is dropped once here and
+   * the index is rebuilt from the authority.
    */
   private ensure(): void {
     if (this.ensured) return;

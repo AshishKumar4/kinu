@@ -1,17 +1,17 @@
 // ONE SQL snapshot IS the workspace — for every actor, not only its main one.
 //
 // The claim open-38 rests on is that a workspace object's SQLite contains the
-// whole workspace. That used to hold for the main actor alone: a hired
-// subordinate, a head and a swarm node each owned a database, so an export of
-// the workspace object was an export of one agent out of N and nothing said so.
-// With every actor's rows in one database the export already covers them — but
-// "already covers them" is exactly the kind of claim that rots, so the archive
-// DECLARES how many actors its roster carried and the restore refuses an
+// whole workspace. Give a hired subordinate, a head and a swarm node each their
+// own database and that export is an export of one agent out of N with nothing
+// saying so. With every actor's rows in one database the export already covers
+// them — but "already covers them" is exactly the kind of claim that rots, so the
+// archive DECLARES how many actors its roster carried and the restore refuses an
 // archive whose rebuilt roster disagrees.
 //
 // This suite deliberately depends on nothing but the archive, the directory and
-// the workspace schema: no session, no event log, no store bundle. It is the
-// half of the proof that can be run before the hosting cutover merges.
+// the workspace schema: no session, no event log, no store bundle. It proves the
+// ARCHIVE's own property — every actor's rows in, every actor's rows out — with
+// no hosting in the way.
 import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
@@ -34,7 +34,7 @@ interface Workspace {
  * Local rather than `@kinu.run/test-utils`' `sqlOver`, deliberately: that
  * package imports the `@kinu.run/core` barrel, the barrel re-exports the actor
  * host, and the host's own imports land with the context plane. This suite
- * proves a property of the ARCHIVE and must be runnable before that merge.
+ * proves a property of the ARCHIVE and must not drag that plane in to do it.
  */
 function sqlOver(db: Database): SqlExecutor {
   return <Row = unknown>(strings: TemplateStringsArray, ...values: readonly SqlValue[]): Row[] => {
@@ -55,7 +55,7 @@ function workspace(): Workspace {
 }
 
 /** One actor's conversation, claim and promoted-loop pointer — the three things
- *  a snapshot has to carry per actor and used to carry for one. */
+ *  a snapshot has to carry FOR EVERY actor, not for one. */
 function seedActorState(ws: Workspace, actor: ActorHandle, text: string, runId: string, version: number): void {
   const now = Date.now();
   void ws.sql`INSERT INTO messages (actor_id, id, role, content, created_at)
@@ -207,7 +207,7 @@ describe('a workspace snapshot covers every actor', () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
     void ws.sql`INSERT INTO assistant_messages (id, role, content, created_at)
-      VALUES ('legacy-1', 'user', 'exported before the column existed', '2026-01-02 03:04:05')`;
+      VALUES ('unowned-1', 'user', 'exported before the column existed', '2026-01-02 03:04:05')`;
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'cloud' });
     const target = new Database(':memory:');
@@ -215,6 +215,6 @@ describe('a workspace snapshot covers every actor', () => {
     const there = sqlOver(target);
 
     expect(there<{ actor_id: string }>`
-      SELECT actor_id FROM messages WHERE id = 'legacy-1'`[0]?.actor_id).toBe(ws.main.actorId);
+      SELECT actor_id FROM messages WHERE id = 'unowned-1'`[0]?.actor_id).toBe(ws.main.actorId);
   });
 });

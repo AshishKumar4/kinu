@@ -488,7 +488,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setAutoGepaEveryNTurns(n) {
-      // Persist 0 explicitly — unset now means "autonomous default", so a
+      // Persist 0 explicitly — unset means "autonomous default", so a
       // deliberate disable must stick as a stored value.
       const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
       set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));

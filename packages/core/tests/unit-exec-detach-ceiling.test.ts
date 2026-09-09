@@ -163,7 +163,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     expect(detached).toHaveLength(1);
 
     // …and the work it was told is "still running, not cancelled" really is.
-    // Before the fix this settled as `Command timeout after 60000ms`.
+    // A lane deadline would settle this as `Command timeout after 60000ms`.
     container.finish();
     expect(String(await detached[0])).toContain('epoch 40/40 done');
   });

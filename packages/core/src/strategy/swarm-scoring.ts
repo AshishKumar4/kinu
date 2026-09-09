@@ -234,10 +234,10 @@ export async function measureParetoChild(input: {
  * about this scorer that was measured going silent.
  *
  * THE POOL IS FUNDED FROM THE REQUEST. `maxEvalLLMCalls` is the whole per-evaluation
- * call pool that check generation and the ensemble share, and this path used to hand the
- * evaluator the MCTS engine's shipped 4 — so a judged tree admitted at the
- * marginalisation floor of 20 realised `min(20, 4 − 1) = 3`. {@link judgeCallPool} sizes
- * the pool at `samples + 1` instead, so the clamp cannot bind.
+ * call pool that check generation and the ensemble share, and handing the evaluator the
+ * MCTS engine's shipped 4 makes a judged tree admitted at the marginalisation floor of
+ * 20 realise `min(20, 4 − 1) = 3`. {@link judgeCallPool} sizes the pool at `samples + 1`
+ * instead, so the clamp cannot bind.
  *
  * AN ENSEMBLE SHRINKS TWO WAYS AND BOTH ARE REFUSED HERE. The pool is one: it decides
  * how many calls are ASKED FOR, and a shortfall there means the evaluator did not honour
@@ -290,11 +290,10 @@ export async function judgeChild(input: {
     executor: rt.executor,
     explorer: rt.llm,
     judgeSamples: input.samples,
-    // FUNDED AT THE REQUEST, which is the whole of the judge-ceiling fix. This used to
-    // be `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for
-    // that engine's own `judgeSamples: 3` — so every judged swarm realised
-    // `min(samples, 3)` no matter what the marginalisation floor admitted. See
-    // {@link judgeCallPool}.
+    // FUNDED AT THE REQUEST, and never from `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the
+    // MCTS engine's dial, 4, sized for that engine's own `judgeSamples: 3`, which makes
+    // every judged swarm realise `min(samples, 3)` no matter what the marginalisation
+    // floor admitted. See {@link judgeCallPool}.
     maxLLMCalls: judgeCallPool(input.samples),
   };
   let evaluation: BranchEvaluation;
