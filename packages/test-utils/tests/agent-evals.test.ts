@@ -49,27 +49,36 @@ function forkStore(): ForkStore {
 
 /** A search the way runMCTS writes one: a root, `branches` children, and — when
  *  `winner` is given — that child marked terminal with the rest pruned, plus
- *  the durable take row convergence writes beside it. */
-function seedSearch(sql: SqlExecutor, opts: {
+ *  the durable take row convergence writes beside it.
+ *
+ *  Takes the STORE rather than a bare executor because the search ledger is
+ *  actor-private: `search_nodes` and `alternate_takes` are both keyed
+ *  `(actor_id, id)` and every read in the scorer filters on the handle it was
+ *  handed. A fixture that omitted the id would not merely file rows the scorer
+ *  cannot see — the column is NOT NULL, so it cannot file them at all. */
+function seedSearch(store: ForkStore, opts: {
   root: string; branches: number; winner: number | null; value?: number;
 }): void {
+  const { sql } = store;
+  const actorId = store.actor.actorId;
   const { root, branches, winner } = opts;
-  void sql`INSERT INTO search_nodes (id, parent_id, root_id, task, depth, status, created_at)
-    VALUES (${root}, ${null}, ${root}, ${'task ' + root}, ${0}, ${'open'}, ${1_000})`;
+  void sql`INSERT INTO search_nodes
+    (actor_id, id, parent_id, root_id, task, depth, status, created_at)
+    VALUES (${actorId}, ${root}, ${null}, ${root}, ${'task ' + root}, ${0}, ${'open'}, ${1_000})`;
   for (let i = 0; i < branches; i++) {
     const id = `${root}-n${String(i)}`;
     const terminal = winner === i;
     void sql`INSERT INTO search_nodes
-      (id, parent_id, root_id, task, depth, status, value, visits, created_at)
-      VALUES (${id}, ${root}, ${root}, ${'task ' + root}, ${1},
+      (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at)
+      VALUES (${actorId}, ${id}, ${root}, ${root}, ${'task ' + root}, ${1},
               ${terminal ? 'terminal' : winner === null ? 'open' : 'pruned'},
               ${terminal ? (opts.value ?? 0.8) : 0.2}, ${1}, ${1_001 + i})`;
   }
   if (winner !== null) {
     const winnerNode = `${root}-n${String(winner)}`;
     void sql`INSERT INTO alternate_takes
-      (id, task, source, winner_node_id, chosen_node_id, candidates, created_at)
-      VALUES (${root + '-take'}, ${'task ' + root}, ${'mcts'}, ${winnerNode},
+      (actor_id, id, task, source, winner_node_id, chosen_node_id, candidates, created_at)
+      VALUES (${actorId}, ${root + '-take'}, ${'task ' + root}, ${'mcts'}, ${winnerNode},
               ${null}, ${JSON.stringify([{ nodeId: winnerNode }])}, ${1_010})`;
   }
 }
@@ -92,7 +101,7 @@ function seedHeads(store: ForkStore, opts: { root: string; heads: number }): voi
 describe('scoreExploration — a search tree reached, branched and ranked', () => {
   test('a converged multi-branch search scores a non-zero denominator and passes', () => {
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-a', branches: 3, winner: 1, value: 0.91 });
+    seedSearch(store, { root: 'search-a', branches: 3, winner: 1, value: 0.91 });
 
     const score = scoreExploration(store.sql, store.actor);
 
@@ -110,7 +119,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
   test('a search that never converged is counted but reports no ranked winner', () => {
     // The shipped defect: nodes exist, the run is visible, and nothing ranked.
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-b', branches: 3, winner: null });
+    seedSearch(store, { root: 'search-b', branches: 3, winner: null });
 
     const score = scoreExploration(store.sql, store.actor);
 
@@ -123,7 +132,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 
   test('a single-branch search ranked nothing — there was no competition to win', () => {
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-c', branches: 1, winner: 0 });
+    seedSearch(store, { root: 'search-c', branches: 1, winner: 0 });
 
     const score = scoreExploration(store.sql, store.actor);
 
@@ -142,8 +151,19 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
   });
 
   test('a journal-only run is not counted as a run with a search tree', () => {
+    // NON-VACUITY: `searchRuns === 0` is also what an EMPTY store reports, and
+    // what a store whose rows were filed under some other actor reports. So the
+    // journalled run is proved visible to the production reader FIRST, and only
+    // then denied a tree. Without that order this case passes over a fixture
+    // that seeded nothing the scorer can see, and the tree/transcript split it
+    // exists to pin goes unmeasured.
     const store = forkStore();
     seedHeads(store, { root: 'merge-a', heads: 2 });
+
+    const listed = listForkRuns(store.sql, store.actor, null, 10).items;
+    expect(listed.map((run) => run.id)).toEqual(['merge-a']);
+    expect(listed[0]).toMatchObject({ hasNodeTranscripts: true, hasSearchTree: false });
+
     expect(scoreExploration(store.sql, store.actor).searchRuns).toBe(0);
     store.close();
   });
@@ -152,7 +172,7 @@ describe('scoreExploration — a search tree reached, branched and ranked', () =
 describe('scoreSettleVisibility — every half a run writes is where the reader reads', () => {
   test('both stores populated: every written root is visible', () => {
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
+    seedSearch(store, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const score = scoreSettleVisibility(store.sql, store.actor);
@@ -172,7 +192,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // be able to blame the reader's limit.
     const store = forkStore();
     for (let i = 0; i < 25; i++) seedHeads(store, { root: `merge-${String(i)}`, heads: 1 });
-    seedSearch(store.sql, { root: 'search-late', branches: 2, winner: 0 });
+    seedSearch(store, { root: 'search-late', branches: 2, winner: 0 });
 
     const score = scoreSettleVisibility(store.sql, store.actor);
 
@@ -187,7 +207,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // that had really run. The scorer must call that a failure and say which store
     // it happened in.
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
+    seedSearch(store, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const transcriptsOnly = (sql: SqlExecutor, limit: number) =>
@@ -208,7 +228,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // The same bug the other way round, which is how it shipped the second
     // time. Both directions must fail, or the scorer only guards one of them.
     const store = forkStore();
-    seedSearch(store.sql, { root: 'search-a', branches: 2, winner: 0 });
+    seedSearch(store, { root: 'search-a', branches: 2, winner: 0 });
     seedHeads(store, { root: 'merge-a', heads: 2 });
 
     const treeOnly = (sql: SqlExecutor, limit: number) =>
@@ -234,14 +254,23 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
   });
 
   test('steer-branch roots are excluded, so a correct reader does not look broken', () => {
+    // NON-VACUITY: the exclusion is asserted as a DIFFERENCE, not as a zero. A
+    // plain steer-only store reports `rootsWritten === 0` whether the prefix
+    // filter works, whether the fixture wrote nothing, or whether it wrote
+    // under an actor the scorer does not read as — three states one zero cannot
+    // tell apart. A real root beside the steer root separates them: the count
+    // must be exactly the real one.
     const store = forkStore();
+    seedHeads(store, { root: 'merge-a', heads: 1 });
     void store.sql`INSERT INTO head_journal
       (actor_id, id, parent_id, root_id, depth, task, status, spawned_at)
       VALUES (${store.actor.actorId}, ${'branch-abc-h0'}, ${null}, ${'branch-abc'}, ${0}, ${'steer'}, ${'completed'}, ${5_000})`;
 
     const score = scoreSettleVisibility(store.sql, store.actor);
 
-    expect(score.rootsWritten).toBe(0);
+    const transcripts = score.stores.find((half) => half.store === 'head_journal');
+    expect(transcripts).toMatchObject({ rootsWritten: 1, rootsVisible: 1 });
+    expect(score.rootsWritten).toBe(1);
     expect(score.invisibleRoots).toEqual([]);
     store.close();
   });

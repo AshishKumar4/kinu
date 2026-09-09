@@ -57,6 +57,7 @@
   "movable packages/cf-backend/src/feedback/contract.ts",
   "movable packages/cf-backend/src/feedback/png.ts",
   "movable packages/cf-backend/src/health-route.ts",
+  "movable packages/cf-backend/src/hooks/chat-turn-error.ts",
   "movable packages/cf-backend/src/hooks/send-admission.ts",
   "movable packages/cf-backend/src/hooks/session-recovery.ts",
   "movable packages/cf-backend/src/lib/agent-naming.ts",

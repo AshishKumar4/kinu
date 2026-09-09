@@ -37,8 +37,10 @@ function freshDb() {
   initHeadsTables(execRaw);
   // A REAL actor over this database: both stores these runs are folded from are
   // actor-private, so a seeded row exists only for the owner that wrote it.
-  const actor = createTestActors(sql, execRaw).main;
-  return { db, sql, actor, actorId: actor.actorId };
+  // The directory comes back too, so a case can issue a real SIBLING and prove
+  // the folding is per-actor rather than per-database.
+  const actors = createTestActors(sql, execRaw);
+  return { db, sql, actors, actor: actors.main, actorId: actors.main.actorId };
 }
 
 /**
@@ -314,6 +316,90 @@ describe('listForkRuns', () => {
   test('nothing searched yet is an empty list, not a throw', () => {
     const { sql, actor } = freshDb();
     expect(listForkRuns(sql, actor).items).toEqual([]);
+  });
+});
+
+/**
+ * TWO ACTORS, ONE DATABASE.
+ *
+ * Every workspace table is now keyed `(actor_id, …)` and one SQLite file holds
+ * every actor of the workspace, so "which rows are mine" is a predicate this
+ * read model has to write, not a property of the file it reads. The transcript
+ * half always carried it; the tree half did not, and the difference was
+ * invisible to every single-actor case above.
+ *
+ * The damage is worse than a longer list, because both tree aggregates are SUMs
+ * over `root_id`: two actors that ran the SAME root id reported each other's
+ * branches added together, and an open node read as expanded when a stranger's
+ * node named it as a parent — which decides `running` vs `settled`.
+ *
+ * Each case asserts THIS actor's own read first and the stranger's absence
+ * second. In that order the fixture cannot pass by seeding nothing: a run filed
+ * under the wrong id fails the positive read before the negative is reached.
+ */
+describe('the run list is folded per actor, not per database', () => {
+  test('a sibling search tree is neither listed nor readable as a run', () => {
+    const { db, sql, actors, actor, actorId } = freshDb();
+    const other = actors.sibling('other');
+    seedSearchRun(db, actorId, {
+      rootId: 'mine', task: 'my search', at: 100, branches: 2, winner: 0.7, ledger: 'converged',
+    });
+    seedSearchRun(db, other.actorId, {
+      rootId: 'theirs', task: 'their search', at: 200, branches: 3, winner: 0.9, ledger: 'converged',
+    });
+
+    const listed = listForkRuns(sql, actor, null, 50).items;
+
+    // POSITIVE FIRST: my own run is there, whole.
+    expect(listed.map((run) => run.id)).toEqual(['mine']);
+    expect(listed[0]).toMatchObject({ task: 'my search', branches: 2, hasSearchTree: true });
+    // The stranger's root is not a run of mine even by exact id — an id is only
+    // unguessable until a caller pastes one from another actor's surface.
+    expect(readForkRun(sql, actor, 'theirs')).toBeNull();
+    // ...and the stranger can still see its own, so the scoping is a filter and
+    // not a tree that stopped being readable at all.
+    expect(listForkRuns(sql, other, null, 50).items.map((run) => run.id)).toEqual(['theirs']);
+  });
+
+  test('two actors that ran the same root id do not pool their branches', () => {
+    const { db, sql, actors, actor, actorId } = freshDb();
+    const other = actors.sibling('other');
+    seedSearchRun(db, actorId, {
+      rootId: 'shared', task: 'mine', at: 100, branches: 2, winner: 0.7, ledger: 'converged',
+    });
+    seedSearchRun(db, other.actorId, {
+      rootId: 'shared', task: 'theirs', at: 100, branches: 5, winner: 0.9, ledger: 'converged',
+    });
+
+    const mine = listForkRuns(sql, actor, null, 50).items;
+
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ id: 'shared', task: 'mine', branches: 2 });
+    expect(listForkRuns(sql, other, null, 50).items[0]).toMatchObject({ task: 'theirs', branches: 5 });
+  });
+
+  test("a sibling's child node does not make my open root read as expanded", () => {
+    // The frontier is what decides `running` vs `settled`: an open node WITH a
+    // child is an expanded parent and not selectable. Scoped by root id alone,
+    // a sibling's node parented on my node id emptied my frontier and settled a
+    // search that was still running.
+    const { db, sql, actors, actor, actorId } = freshDb();
+    const other = actors.sibling('other');
+    seedSearchRun(db, actorId, { rootId: 'mine', task: 'my search', at: 100, branches: 0 });
+
+    expect(listForkRuns(sql, actor, null, 50).items[0]).toMatchObject({
+      id: 'mine', status: 'running',
+    });
+
+    db.prepare(
+      `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation,
+                                 visits, value, depth, status, created_at)
+       VALUES (?, 'squatter', 'mine', 'their-root', 'their search', '', '', 1, 0.1, 1, 'open', 150)`,
+    ).run(other.actorId);
+
+    expect(listForkRuns(sql, actor, null, 50).items[0]).toMatchObject({
+      id: 'mine', status: 'running',
+    });
   });
 });
 
