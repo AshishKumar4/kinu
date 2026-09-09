@@ -3,11 +3,11 @@
  *
  * GEPA runs produce CANDIDATES for the next scaffold version; the quality
  * scoreboard scores the live scaffold against graded turns and is keyed by
- * `scaffoldVersion` row by row. Both used to sit under Exploration, next to
- * the fork strategies, because the strategy code is adjacent — but nobody
- * comparing fork branches also wants a Wilson interval, and both of these are
- * about the agent's own trajectory across its versions. They live under
- * Agent → Evolution now, beside the lineage they measure.
+ * `scaffoldVersion` row by row. They live under Agent → Evolution, beside the
+ * lineage they measure, not under Exploration next to the fork strategies:
+ * code adjacency is not a reason, nobody comparing fork branches also wants a
+ * Wilson interval, and both of these are about the agent's own trajectory
+ * across its versions.
  */
 import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -124,7 +124,7 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
 
 // The two quality signals load side by side and the pane still resolves once
 // in the ordinary case, but each publishes on its OWN branch: the alignment
-// ledger being unavailable no longer blanks the replay-eval curve, and vice
+// ledger being unavailable does not blank the replay-eval curve, and vice
 // versa (KINU-073). Each RPC runs under the agents SDK's own call deadline —
 // the one request bound this surface already lives under — so a stalled read
 // settles as that branch's failure rather than holding the pane forever.

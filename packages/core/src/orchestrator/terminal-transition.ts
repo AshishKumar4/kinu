@@ -11,10 +11,10 @@
  *
  * Backend-neutral on purpose. The Durable Object and the CLI answer the same
  * question — "what did this response still owe when the process went away?" —
- * and they used to answer it differently: the DO claimed and swept, the CLI
- * released its claims as soon as the transcript was persisted and had no
- * recovery at all. One state machine over one table is what makes an interrupted
- * laptop turn and an evicted isolate the same problem with the same answer.
+ * and one state machine over one table is what makes an interrupted laptop turn
+ * and an evicted isolate the same problem with the same answer. Two
+ * implementations of it drift: a claim-and-sweep on one side against a release
+ * at persist time with no recovery at all on the other.
  *
  * What a backend still supplies is only the two things it genuinely owns: the
  * effect IMPLEMENTATIONS, and the WAKE that brings a process back for an owed
@@ -214,11 +214,11 @@ export class TerminalTransitions {
   /**
    * Drive ONE settled response, end to end.
    *
-   * The whole state machine, in one place, because every ordering in it was a
-   * defect before it was written down: the roster built before anything durable
-   * exists, the in-process guard before the durable claim, the claim and the
-   * whole roster committed as one unit, and the close only once the detached tail
-   * has reported.
+   * The whole state machine, in one place, because every ordering in it is a
+   * correctness constraint and not a style choice: the roster built before
+   * anything durable exists, the in-process guard before the durable claim, the
+   * claim and the whole roster committed as one unit, and the close only once
+   * the detached tail has reported.
    *
    * A RESUMED response does not re-declare. Its roster is frozen at what the
    * first attempt claimed: a second declaration reads live state that has moved

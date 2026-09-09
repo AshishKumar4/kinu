@@ -453,9 +453,9 @@ export type MergeOrder =
  * The members of one merge in the order *Dependency order* requires: every member
  * after the dependencies it declares.
  *
- * DERIVED FROM THE EDGES, NEVER FROM TREE POSITION. `sequential-rebase` used to be
- * offered members in settle order and trusted to have been handed a good one, which is
- * a dependency order only where the tree's shape happens to BE the dependency graph's.
+ * DERIVED FROM THE EDGES, NEVER FROM TREE POSITION. Offering `sequential-rebase` its
+ * members in settle order and trusting it was handed a good one gives a dependency
+ * order only where the tree's shape happens to BE the dependency graph's.
  * Under `expand:'aggregate'` it is not: a fan-in's members are consumed by one child,
  * so the order is a fact about the fan-in's edges and tree position says nothing about
  * it. Rule 1 stays the check that the order was right; this is the order.

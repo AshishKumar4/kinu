@@ -23,7 +23,7 @@ counts are not current acceptance evidence, and no Lean build was performed here
 | Public slate operations | `SlateOperationSchema` and `workspace.slate` expose list, preview, call, commit, history, fork, restore | Implemented product surface. Native builtins remain eight. |
 | Publication, deployment, resource provisioning | Vendored interfaces and Kinu's `WorkspaceSlates` adapter exist; the live `SlateHost` does not supply deployment/invocation/preview-validation capabilities | Not product-complete by the existence of tables or methods. Attempts needing absent capabilities refuse `unsupported`; these operations are not exposed by `workspace.slate`. |
 | Existing releases | `core/src/release/**` retains its own release workflow | Not converted into `SlateDeployment`; no proof establishes that one is a substitute for the other. |
-| Broad authority/composition adoption | Direct `@agent-core/core` imports in Kinu core are concentrated in `core/src/slates/**` | No universal Facet/Grant/Binding/Operation composition cutover has occurred. |
+| Broad authority/composition adoption | Direct `@agent-core/core` imports in Kinu core are concentrated in `core/src/slates/**` | Adoption stops at the slate seam. Kinu core composes nothing through Facet/Grant/Binding/Operation. |
 
 ## Similar names are not equivalence
 

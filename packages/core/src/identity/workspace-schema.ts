@@ -1,14 +1,12 @@
 /**
  * The workspace schema — the one answer to "which tables a workspace has".
  *
- * It used to be four answers. `ensureSchema` on the orchestrator DO, a second
- * `ensureSchema` on the subordinate DO, an eleven-call block in the CLI
- * session constructor, and `openWorkspaceCLI` each named their own subset, and
- * the subsets disagreed: crafted-tool quality was never created by every local path
- * except `kinu create`, so every EMA read on a workspace opened any other
- * way silently no-opped; `imported_experience` was never created on cf, so the
- * `experience` tool's import action hard-errored in production. Neither is a
- * platform difference — both are a list someone forgot to copy.
+ * One answer, because a per-root subset is a list someone forgets to copy, not
+ * a platform difference. Every composition root calls `initWorkspaceSchema`,
+ * which owns the shared table list. A per-root subset can omit crafted-tool
+ * quality and silently lose EMA updates, or omit `imported_experience` and
+ * make the experience import action fail; neither omission is a platform
+ * difference.
  *
  * So the list lives here once, and each composition root calls
  * {@link initWorkspaceSchema}. Tables that genuinely belong to one root only

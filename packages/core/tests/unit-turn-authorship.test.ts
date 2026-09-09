@@ -1,8 +1,7 @@
 // Who wrote the words in a turn, decided once at the WRITE and read everywhere.
 //
-// The rule this replaces was an allowlist of four event names living in the
-// chat pane, and it had drifted from the writers by four kinds. Measured on the
-// owner's live production workspaces on 2026-08-20, over the same
+// An allowlist of event names living in the chat pane drifts from the writers.
+// Measured on the owner's live production workspaces on 2026-08-20, over the same
 // `cf_agent_chat_messages` frame the browser renders from:
 //
 //   sunlit-stone-4a20            3 rows  metadata.kinuEvent = fork_interrupted
@@ -11,14 +10,14 @@
 //
 // each reading "23 head(s) across 6 fork run(s) were still marked running from
 // an activation that has ended…" and each drawn in the owner's own bubble,
-// because `fork_interrupted` was not one of the four names. `completion_gate`,
-// `take_pick` and `overflow_retry` are the same hole.
+// because `fork_interrupted` is not one of the four names such a list holds.
+// `completion_gate`, `take_pick` and `overflow_retry` are the same hole.
 //
 // So the default is inverted: a turn written through the programmatic seam is
 // the harness speaking unless its producer says otherwise. These tests hold the
 // two halves of that — the stamp the seam applies, and the reading of rows that
-// predate it — and the legacy cases are the real production shapes above, not
-// invented ones.
+// carry no stamp — and the unstamped cases are the real production shapes above,
+// not invented ones.
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -117,16 +116,16 @@ describe('the seam stamps who wrote the turn', () => {
   });
 });
 
-describe('rows written before the stamp existed', () => {
+describe('a row that carries no stamp is read from what it does carry', () => {
   // The four shapes actually present in the owner's production workspaces.
-  test('a legacy fork_interrupted row is the harness, by its event name', () => {
+  test('an unstamped fork_interrupted row is the harness, by its event name', () => {
     expect(turnAuthor({
       id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1',
       metadata: { kinuEvent: 'fork_interrupted', runs: ['67t522lz3213jla9vylyd'], heads: 4 },
     })).toBe('harness');
   });
 
-  test('a legacy background-job wake is the harness, with or without the id prefix', () => {
+  test('an unstamped background-job wake is the harness, with or without the id prefix', () => {
     // stone-ash-71f2 wrote these under a bare UUID; principal-machine-f1296946
     // wrote the same fact under the prefix once both backends derived it.
     const metadata = { kinuEvent: 'background_job', kinuMode: 'build', status: 'completed' };

@@ -401,9 +401,9 @@ describe('forkWorkspaceStorage', () => {
     src.execRaw(SDK_SESSION_DDL);
     const srcActor = openWorkspaceMainActor(src.sql).actorId;
     // Both messages land in the SAME second, which is all the SDK's
-    // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. The old cut compared
-    // `strftime('%s', created_at) * 1000` against the fork point and so could
-    // not tell m2 from m3; the ancestry can.
+    // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. A cut comparing
+    // `strftime('%s', created_at) * 1000` against the fork point cannot tell m2
+    // from m3; the ancestry can.
     for (const [id, parent, role, text] of [
       ['m1', null, 'user', 'hello'], ['m2', 'm1', 'assistant', 'hi'], ['m3', 'm2', 'user', 'after'],
     ] as const) {
@@ -488,10 +488,10 @@ describe('forkWorkspaceStorage', () => {
 
   test('17. a fork that cannot copy assistant_messages FAILS instead of losing them', async () => {
     // A target carrying an older Session schema — no `actor_id`, no
-    // `session_id` — cannot take the fork's pane write. This used to be
-    // swallowed together with the CREATE that preceded it, so the fork reported
-    // success with an empty chat pane — the owner's messages silently gone. The
-    // copy must be all-or-nothing and loud.
+    // `session_id` — cannot take the fork's pane write. Swallowing that failure
+    // together with the CREATE that precedes it makes the fork report success
+    // with an empty chat pane — the owner's messages silently gone. The copy
+    // must be all-or-nothing and loud.
     //
     // The SOURCE is production-shaped, deliberately: with a pre-actor table
     // here the source's own ancestry read raised `no such column` first, and
@@ -715,11 +715,10 @@ describe('fork snapshot payload', () => {
       .rejects.toThrow(/elided the text of message "m1"/);
   });
 
-  test('a snapshot over the former ceiling is read and landed instead of refused', async () => {
-    // The former shape refused this workspace outright: 40 MB of transcript is
-    // over the 16 MiB half-ceiling it measured against, and over the 32 MiB
-    // serialized-argument ceiling that half was derived from. Both are gone —
-    // the snapshot is simply more frames.
+  test('a 40 MB transcript snapshot is read and landed, not refused', async () => {
+    // No byte ceiling on the snapshot: 40 MB of transcript rides as more frames.
+    // A 16 MiB half-ceiling — half of the 32 MiB serialized-argument ceiling —
+    // refuses this workspace outright.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -733,10 +732,8 @@ describe('fork snapshot payload', () => {
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm39');
 
-    // 40 MB of transcript: over the 16 MiB half-ceiling the old shape measured
-    // against, and over the 32 MiB serialized-argument ceiling that half was
-    // derived from. Measured here so the test cannot pass on a workspace the
-    // old ceiling would have allowed.
+    // Measured here rather than assumed, so the test cannot pass on a workspace
+    // those ceilings would have allowed.
     const carried = snapshot.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0);
     expect(carried).toBeGreaterThan(32 * 1024 * 1024);
     expect(snapshot.messages.length).toBe(40);
@@ -748,9 +745,9 @@ describe('fork snapshot payload', () => {
     expect(rows[39]!.content).toBe(`39:${CHUNK}`);
   });
 
-  test('memory the former budget refused by path is read and landed', async () => {
-    // The exact workspace the file walk used to refuse: 16 MB of transcript,
-    // then a 1.5 MB memory file that put it over what the transcript left.
+  test('a memory file on top of a 16 MB transcript is read and landed', async () => {
+    // The exact workspace a per-path byte budget refuses: 16 MB of transcript,
+    // then a 1.5 MB memory file that puts it over what the transcript leaves.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);

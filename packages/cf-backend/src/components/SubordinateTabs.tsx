@@ -17,7 +17,7 @@ const UNTITLED_AGENT_TITLE = "Untitled agent";
 const UNTITLED_WORKSPACE_TITLE = "Untitled workspace";
 
 /** The plus button's label. An ACTION, not the untitled state above it — the
- *  two read alike and used to share one constant. */
+ *  two read alike, which is exactly why they are separate constants. */
 const ADD_AGENT_LABEL = "New agent";
 
 /** A roster entry's shown name. Blank means created-but-untitled: the

@@ -43,7 +43,7 @@ describe('a device file operation whose hub read fails', () => {
     expect(caught.cause).toBeInstanceOf(Error);
     expect(caught.cause instanceof Error ? caught.cause.message : '')
       .toContain('getDeviceFileView is not reachable');
-    // And NOT the lie a swallowed read used to tell.
+    // And NOT the lie a swallowed read tells.
     expect(caught.message).not.toContain('no consented directory');
   });
 

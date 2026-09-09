@@ -294,17 +294,16 @@ exit 87
 }
 
 describe("deploy gate", () => {
-  // WHAT PARALLELISM CHANGED, and what it did not.
+  // WHY THESE ARE SET PROPERTIES AND NOT AN ORDERED COMPARE.
   //
-  // These assertions used to be `events == REQUIRED_GATES` and, per failing gate,
-  // `events == REQUIRED_GATES.slice(0, n + 1)`. Both read a total order off the
-  // event log, and deploy.sh now runs the middle 55 gates concurrently, so that
-  // order is scheduling noise.
+  // deploy.sh runs the middle 55 gates concurrently, so the order they reach the
+  // event log is scheduling noise. `events == REQUIRED_GATES` — or, per failing
+  // gate, `events == REQUIRED_GATES.slice(0, n + 1)` — reads a total order off
+  // that log and pins the noise.
   //
-  // The properties the total order was standing in for are all still asserted, and
-  // one is new:
-  //   - every declared gate RUNS (set equality, so a dropped gate still fails — the
-  //     old ordered compare caught that and this catches it too);
+  // Every property a total order stands in for is asserted directly, and one
+  // more besides:
+  //   - every declared gate RUNS (set equality, so a dropped gate still fails);
   //   - every SERIAL_GATE sits in its own wave at the position it declares;
   //   - a failing gate stops the pipeline: no build mutation, and the run is
   //     strictly shorter than a whole run;
@@ -319,32 +318,30 @@ describe("deploy gate", () => {
   });
 
   test("the serial gates run alone, and everything else runs concurrently", () => {
-    // STRUCTURAL, over the waves deploy.sh declares. The first version of this
-    // read the order off the stub log, and commenting the preflight barrier out
-    // left it GREEN: with the barrier gone preflight is still queue index 0, so
-    // the scheduler launched it first and the log looked identical. A grouping
+    // STRUCTURAL, over the waves deploy.sh declares, NOT the order in the stub
+    // log. Reading the order off that log cannot see a missing barrier: comment
+    // the preflight barrier out and preflight is still queue index 0, so the
+    // scheduler launches it first and the log looks identical. A grouping
     // cannot be satisfied by luck.
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // FOUR waves: preflight, one concurrent source block, the hammer, then
-    // infrastructure. The hammer earned its own barrier by being the one gate
-    // whose subject is contention — it starves nproc/2 threads on purpose, so
-    // anything beside it would be measured on a machine this gate is
-    // deliberately loading. Barriers around every source gate would satisfy
+    // FIVE waves: preflight, one concurrent source block, the hammer,
+    // infrastructure, and — after the upload and the smoke test, on staging
+    // only — the first-run tier. The hammer earned its own barrier by being the
+    // one gate whose subject is contention — it starves nproc/2 threads on
+    // purpose, so anything beside it would be measured on a machine this gate
+    // is deliberately loading. Barriers around every source gate would satisfy
     // `alone` and make the pipeline serial, so the middle size is pinned.
     // DERIVED from the two lists above rather than written as a number: a
     // literal here has to be edited every time a gate is added, and a number
     // nobody can derive gets edited without being read. The property is the
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
-    // FIVE waves: preflight, one concurrent source block, the hammer,
-    // infrastructure, and — after the upload and the smoke test, on staging
-    // only — the first-run tier. The last one is the only wave that runs
-    // against the DEPLOYED build, and it is alone for the reason SERIAL_GATES
-    // states: it links real machines to the account a sibling gate
-    // authenticates against.
+    // The last wave is the only one that runs against the DEPLOYED build, and
+    // it is alone for the reason SERIAL_GATES states: it links real machines to
+    // the account a sibling gate authenticates against.
     expect(waves.length).toBe(5);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length + 1);
@@ -607,8 +604,8 @@ fi`);
 
   // ── The bootstrap option and the phase it selects ──────────────
   //
-  // A deploy that DECLARES a resource only a deploy can create used to refuse
-  // itself: `ControlPlaneDO` landed in `migrations`, staging's 55 source gates
+  // Without it, a deploy that DECLARES a resource only a deploy can create
+  // refuses itself: `ControlPlaneDO` landed in `migrations`, staging's 55 source gates
   // passed, and the infrastructure gate then blocked the one upload that could
   // have created the namespace — telling the operator to run
   // `bun run infra:provision`, which cannot create a Durable Object namespace and
@@ -752,11 +749,11 @@ fi`);
     // so an account that cannot be proved never reaches Wrangler deployment.
     const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
     expect(waves[infraWave]).toEqual(['bun run gate:infra']);
-    // THE LAST WAVE BEFORE THE UPLOAD. It used to be the last wave outright,
-    // and the first-run tier now runs after the deploy — so the property is
-    // stated against the thing it always meant: an account that cannot be
-    // proved never reaches Wrangler deployment. Everything after this wave is
-    // post-deploy by construction.
+    // THE LAST WAVE BEFORE THE UPLOAD, which is what the property has always
+    // meant: an account that cannot be proved never reaches Wrangler
+    // deployment. Not the last wave outright — the first-run tier runs after
+    // the deploy — so everything after this wave is post-deploy by
+    // construction.
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     const preDeployWaves = deployWaves(source.slice(0, source.indexOf('Step 2: Building Kinu')));
     expect(infraWave).toBe(preDeployWaves.length - 1);
@@ -850,8 +847,8 @@ describe("one deploy path", () => {
 
   /** The one process that rules on which deployment an eval credential may name
    *  (`packages/test-utils/src/eval-identity.ts` holds the allowlist it reads).
-   *  The benchmark job used to take an origin and an auth header straight from
-   *  repository secrets, so one secret could name production and nothing asked. */
+   *  Without it, a benchmark job takes an origin and an auth header straight from
+   *  repository secrets, so one secret can name production and nothing asks. */
   const EVAL_RESOLVER = "scripts/eval-credentials.ts";
 
   const ScriptsSchema = v.object({ scripts: v.optional(v.record(v.string(), v.string())) });
@@ -900,7 +897,7 @@ describe("one deploy path", () => {
       }
     }
     // Non-vacuity: the corpus really does contain the eval launch site.
-    expect(tierLaunches, "no package script launches the eval tier any more").toBeGreaterThan(0);
+    expect(tierLaunches, "no package script launches the eval tier").toBeGreaterThan(0);
   });
 
   // The documented commands and the runnable ones are the same set or the
@@ -917,7 +914,7 @@ describe("one deploy path", () => {
       if (text.includes("bun run deploy")) rootCommands += 1;
     }
     // Non-vacuity: the check runs over prose that really does name the deploy.
-    expect(rootCommands, "no document names the root deploy command any more")
+    expect(rootCommands, "no document names the root deploy command")
       .toBeGreaterThan(0);
   });
 
@@ -1057,7 +1054,7 @@ describe("one deploy path", () => {
       ).toBe(true);
     }
     // Non-vacuity: a workflow really does launch an eval with a credential.
-    expect(launching, "no workflow launches an eval any more").toBeGreaterThan(0);
+    expect(launching, "no workflow launches an eval").toBeGreaterThan(0);
   });
 });
 

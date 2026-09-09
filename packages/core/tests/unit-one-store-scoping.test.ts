@@ -539,13 +539,12 @@ describe('two actors, one database: deferred_approvals', () => {
   });
 });
 
-describe('two actors, one database: instruction_approvals and their migration marker', () => {
-  test('an approval and a grandfather baseline are per actor within one scope', () => {
+describe('two actors, one database: instruction_approvals', () => {
+  test('approvals are per actor within one scope, and a fresh actor starts undecided', () => {
     const w = world();
     initInstructionApprovalsTable(w.execRaw);
-    const tx = <T>(body: () => T): T => w.db.transaction(body)();
-    const a = new InstructionApprovalStore(w.sql, w.a, 'owner/ws', tx);
-    const b = new InstructionApprovalStore(w.sql, w.b, 'owner/ws', tx);
+    const a = new InstructionApprovalStore(w.sql, w.a, 'owner/ws');
+    const b = new InstructionApprovalStore(w.sql, w.b, 'owner/ws');
     const content = 'always deploy to staging';
 
     a.approve('SKILL.md', instructionDigest(content));
@@ -558,12 +557,12 @@ describe('two actors, one database: instruction_approvals and their migration ma
     expect(a.trustOf('SKILL.md', content)).toBe('approved');
     expect(b.trustOf('SKILL.md', content)).toBe('unverified');
 
-    a.markMigratedEmpty();
-    // B has never been migrated, so its own baseline still lands.
-    b.grandfatherExisting([{ path: 'LEGACY.md', digest: instructionDigest('legacy') }]);
-    expect(w.count('instruction_approval_migrations')).toBe(2);
+    // No carry-over exists to inherit: a file B never decided about stays
+    // unverified for B whatever A approved.
+    expect(b.get('LEGACY.md')).toBeNull();
+    expect(b.trustOf('LEGACY.md', 'legacy')).toBe('unverified');
     expect(a.list().map((r) => r.path)).toEqual(['SKILL.md']);
-    expect(b.list().map((r) => r.path)).toEqual(['LEGACY.md', 'SKILL.md']);
+    expect(b.list().map((r) => r.path)).toEqual(['SKILL.md']);
     w.close();
   });
 });
@@ -1146,7 +1145,7 @@ describe('a handle whose validation throws is refused before the statement runs'
         id: 'appr-1', command: 'c', executor: 'e', reason: 'r', requestedAt: 1,
       })],
       ['instruction_approvals', () => new InstructionApprovalStore(
-        w.sql, w.revocable, 'scope', (body) => body(),
+        w.sql, w.revocable, 'scope',
       ).approve('SKILL.md', 'digest')],
       ['plan_reviews', () => plans.submit('default', [{ start: 1, content: 'plan' }])],
       ['refinement_requests', () => refinements.open({

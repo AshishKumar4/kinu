@@ -195,21 +195,21 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
 
 /-- The defective floor: `2*(n-1) = 2398` against a best known honest cost of
     2992 (`tasks.ts:198`, `tasks.ts:192`). -/
-def majorityVoteOldFloor : Floor :=
+def majorityVoteDefectiveFloor : Floor :=
   { value := 2398, kind := .certificate, bestKnownHonest := 2992 }
 
 /-- The corrected floor, `n = 1200` (`tasks.ts:206`). -/
-def majorityVoteFixedFloor : Floor :=
+def majorityVoteCorrectedFloor : Floor :=
   { value := 1200, kind := .certificate, bestKnownHonest := 2992 }
 
-theorem old_majority_floor_escapes_c1 :
-    floorRoom majorityVoteOldFloor .minimise = 594
-    ∧ floorAdmissible majorityVoteOldFloor 2992 .minimise = true := by
+theorem defective_majority_floor_escapes_c1 :
+    floorRoom majorityVoteDefectiveFloor .minimise = 594
+    ∧ floorAdmissible majorityVoteDefectiveFloor 2992 .minimise = true := by
   refine ⟨rfl, rfl⟩
 
-theorem fixed_majority_floor_has_more_room :
-    floorRoom majorityVoteOldFloor .minimise
-      < floorRoom majorityVoteFixedFloor .minimise := by
+theorem corrected_majority_floor_has_more_room :
+    floorRoom majorityVoteDefectiveFloor .minimise
+      < floorRoom majorityVoteCorrectedFloor .minimise := by
   decide
 
 /-- C1 is not vacuous: a floor that exceeds its own best known honest cost is

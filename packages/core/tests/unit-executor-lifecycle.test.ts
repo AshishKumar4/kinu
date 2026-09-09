@@ -209,11 +209,10 @@ describe("executor lifecycle state", () => {
     if (!provided.supported) expect(provided.reason).toContain("not configured");
   });
 
-  // KINU-033. This used to assert the opposite — that the signal was STRIPPED
-  // before the SDK call — which is precisely why an abort cancelled nothing: the
-  // adapter owns the container process id, so a signal that never reaches it
-  // cannot kill anything, and core answered `cancelled` over a command still
-  // writing to /workspace.
+  // KINU-033. The signal MUST reach the SDK call: the adapter owns the
+  // container process id, so a signal stripped before it cannot kill anything,
+  // and core would answer `cancelled` over a command still writing to
+  // /workspace.
   test("sandbox exec hands the AbortSignal to the container, and no work deadline", async () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle, "kinu.example.test");

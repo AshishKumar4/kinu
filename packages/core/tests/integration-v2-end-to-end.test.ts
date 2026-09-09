@@ -225,10 +225,10 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     // The files those rows are rows ABOUT. `modifyScaffold` gate 4 archives the
     // outgoing current at `.v0` and writes the proposal at `.v1`, never into the
     // live file — so a fixture with rows and no files is a state the pipeline
-    // cannot produce. This test used to be exactly that, and it passed: promotion
-    // fell through to reading the LIVE file, copied v0's bytes back over itself,
-    // and the assertions below (statuses, action, newCurrentVersion) were all
-    // still true of a promotion that moved no code.
+    // cannot produce, and it passes anyway: promotion falls through to reading
+    // the LIVE file, copies v0's bytes back over itself, and the assertions
+    // below (statuses, action, newCurrentVersion) stay true of a promotion that
+    // moved no code.
     const V0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
     const V1 = 'async function* run(rt, task) { yield { type: "chunk", data: "v1-retry" }; }';
     await rt.identity.scaffold.write(V0);

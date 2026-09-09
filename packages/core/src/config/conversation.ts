@@ -16,10 +16,9 @@ import { AGENT_CONFIG_KEYS, type AgentConfigStore } from './store';
 /**
  * The conversation every workspace starts in.
  *
- * Adopted (not invented) when no row exists yet: every workspace created
- * before this seam already has its history under session id "default", so
- * adopting it keeps that history continuous instead of stranding it under an
- * id nothing reads any more.
+ * Adopted (not invented) when no row exists yet: a workspace's recorded history
+ * already sits under session id "default", so adopting it keeps that history
+ * continuous instead of stranding it under an id nothing reads.
  */
 const FIRST_CONVERSATION_ID = 'default';
 

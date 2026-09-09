@@ -134,11 +134,10 @@ async function openFixture(): Promise<Fixture> {
     workspace,
     host,
     // Keyed on the node ACTOR's storage key, not the raw node id. Every
-    // actor-scoped address in the cutover is keyed that way — `shellId`, the
-    // state subtree, the home — because a rename must not move an actor's
-    // directory and two actors that briefly shared a name across a retirement
-    // must not share one. `agentHomeNodeProvisioner` wrapped this same applier
-    // but keyed on `node.nodeId`, which is the collision it was deleted for.
+    // actor-scoped address is keyed that way — `shellId`, the state subtree,
+    // the home — because a rename must not move an actor's directory and two
+    // actors that briefly shared a name across a retirement must not share one.
+    // Keying a home on `node.nodeId` instead is exactly that collision.
     provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(nodeAgentName(identity.nodeId)),
     reprovision: (identity: NodeIdentity) =>
       facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(nodeAgentName(identity.nodeId)),

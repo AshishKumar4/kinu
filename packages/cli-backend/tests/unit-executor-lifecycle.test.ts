@@ -4,19 +4,19 @@
  * Two contracts, both about the spawn seam and both measured through the public
  * `execute` surface against real child processes:
  *
- *   1. A run settles on the COMMAND'S OWN EXIT. Output used to be read with
- *      `new Response(proc.stdout).text()`, which resolves at pipe EOF rather
- *      than at exit — so any process the code left running kept the inherited
- *      write end open and held the executor past the answer until the harness
- *      cap killed it (TB2.1 nginx trial). Nothing about the pipe may arbitrate
- *      the settle any more, in EITHER direction: a lane whose stdout closes
- *      early must still report the command's own exit and its own streams.
+ *   1. A run settles on the COMMAND'S OWN EXIT. Reading output with
+ *      `new Response(proc.stdout).text()` resolves at pipe EOF rather than at
+ *      exit — so any process the code leaves running keeps the inherited write
+ *      end open and holds the executor past the answer until the harness cap
+ *      kills it (TB2.1 nginx trial). Nothing about the pipe may arbitrate the
+ *      settle, in EITHER direction: a lane whose stdout closes early must still
+ *      report the command's own exit and its own streams.
  *
- *   2. The runtime is whatever the CONFIGURED PATH resolves. The JS lane used
- *      to spawn the literal `"bun"`, which does not exist beside a compiled
- *      binary — every container-less deploy died with `Executable not found`
- *      instead of running the work. Resolution now decides, and a path with no
- *      runtime on it runs the work in-process rather than spawning a name.
+ *   2. The runtime is whatever the CONFIGURED PATH resolves. Spawning the
+ *      literal `"bun"` finds nothing beside a compiled binary — every
+ *      container-less deploy dies with `Executable not found` instead of
+ *      running the work. Resolution decides, and a path with no runtime on it
+ *      runs the work in-process rather than spawning a name.
  *
  * `Bun.which` reads the PATH the PROCESS started with, so contract 2 cannot be
  * driven by mutating `process.env` inside this test — it drives the same public

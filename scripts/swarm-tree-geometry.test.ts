@@ -164,16 +164,15 @@ interface Beat {
   /**
    * What the RUN ROW says became of the run.
    *
-   * Read off `[data-fork-run]` and not off `document.body.innerText`, which is
-   * where this probe used to look. The swarm liveness notice sits above the run
-   * list and says "23 head(s) across 6 fork run(s) were still marked running
-   * from an activation that has ended", so a body-wide scan matched `running`
-   * at character 1543 on EVERY stage — including the completed one, whose row
-   * read `· completed` correctly two thousand characters further down. Both
-   * liveness arms failed on that one word while the surface was right: the
-   * completed assertion read the banner, and the watch loop, whose break is
-   * `outcome === 'completed'`, never broke and ran on past the frame's wrap back
-   * to stage 1, comparing 1 node against 1.
+   * Read off `[data-fork-run]` and not off `document.body.innerText`. The swarm
+   * liveness notice sits above the run list and says "23 head(s) across 6 fork
+   * run(s) were still marked running from an activation that has ended", so a
+   * body-wide scan matches `running` at character 1543 on EVERY stage —
+   * including the completed one, whose row reads `· completed` correctly two
+   * thousand characters further down. Both liveness arms fail on that one word
+   * while the surface is right: the completed assertion reads the banner, and
+   * the watch loop, whose break is `outcome === 'completed'`, never breaks and
+   * runs on past the frame's wrap back to stage 1, comparing 1 node against 1.
    *
    * Scoping it to the row is stricter, not looser: no prose anywhere else on
    * the page can satisfy this assertion or defeat it. `settle=search` in the
@@ -385,9 +384,9 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
  * something to do. Each is pressed from a state where it HAS work: `Fit` after a
  * zoom, so it is asked to travel rather than to re-apply the transform it already
  * holds, and `Expand` after a fold. A control asked for what it has already done
- * cannot be observed either way — which is how the first version of this probe
- * passed `Fit` for the wrong reason, `Expand`'s own refit having already fitted
- * the scene.
+ * cannot be observed either way — press `Fit` straight after `Expand` and it
+ * passes for the wrong reason, `Expand`'s own refit having already fitted the
+ * scene.
  */
 async function readControls(browser: Browser, origin: string): Promise<ControlEffect> {
   const effects: ControlEffect = {};
@@ -514,9 +513,9 @@ describe('the swarm trees, as a browser lays them out', () => {
   });
 
   test('a card of short searches hugs them instead of reserving the column', () => {
-    // `forkmerge` focuses a journalled run: one band of five rows. It used to
-    // hold the whole column and draw the rest as empty canvas with the key
-    // stranded at the bottom of it.
+    // `forkmerge` focuses a journalled run: one band of five rows. Holding the
+    // whole column would draw the rest as empty canvas with the key stranded at
+    // the bottom of it.
     for (const width of WIDTHS) {
       for (const mode of MODES) {
         const where = key('forkmerge', width, mode);
@@ -611,8 +610,8 @@ describe('a search, as it happens', () => {
   test('every stage of a live run renders', () => {
     const { pinned } = observed.live;
     expect(pinned).toHaveLength(LIVE_STAGES);
-    // Stage 0 is the state the surface used to be stuck in: a search is running
-    // and the ledger has no row for it yet.
+    // Stage 0 is the gap the surface has to survive: a search is running and
+    // the ledger has no row for it yet.
     expect(pinned[0]?.rows, 'stage 0 should have no ledger row').toBe(0);
     expect(pinned[0]?.nodes, 'stage 0 should draw no nodes').toBe(0);
     for (let stage = 1; stage < LIVE_STAGES; stage += 1) {

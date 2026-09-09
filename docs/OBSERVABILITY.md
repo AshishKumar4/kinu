@@ -75,15 +75,13 @@ to name, and labelling one `rpc` would be exactly the mislabelling this table
 exists to prevent. Their child phases go with them — including `head.home` and
 `swarm.node.home`, which were the facet-home provisioning spans.
 
-AND THE DISCRIMINATOR CHANGED WITH THEM, which is the more useful half.
+AND THE DISCRIMINATOR IS THE ACTOR, which is the more useful half.
 `SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]` — a
-DURABLE OBJECT path. It told two forks apart only because a fork used to BE its
-own object; with one object per workspace it is constant for every span the
-workspace emits. A facet-era span could not carry an actor id at all, because a
-facet's id resolved to the root's `durableObjectId`
-(`do.facet.id_is_root_namespace`). So what distinguishes two forks' spans is now
-the ACTOR the span was opened under, which every hosted actor has and no facet
-ever did.
+DURABLE OBJECT path. With one object per workspace it is constant for every span
+the workspace emits, so it separates no two forks. Nor can a Durable
+Object id: a facet's id resolves to the root's `durableObjectId`
+(`do.facet.id_is_root_namespace`). What distinguishes two forks' spans is the
+ACTOR the span was opened under, which every hosted actor carries.
 
 | Root | Phases |
 | --- | --- |
@@ -96,8 +94,8 @@ ever did.
 The workspace object hosts heads, nodes and MCTS branches itself, through the
 orchestrator `tracing` getter and
 `AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts:211`). The
-120 s RPC cap that once killed MCTS rollouts against 151/294/509 s turns is not
-reachable from that path any more: there is no RPC in it.
+120 s RPC cap that would kill MCTS rollouts against 151/294/509 s turns does
+not reach that path: there is no RPC in it.
 One kind alone cannot explain the other two.
 
 ### A turn cannot be a span at this pin
@@ -455,11 +453,11 @@ channels, not a predicate for arbitrary tool output.
 
 | Tool | The distinction it buys |
 | --- | --- |
-| `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window were one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
+| `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window arrive as one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
 | `nimbus.ts` | An absent binding (`unavailable`) apart from a session handle that has no such surface (`unsupported`). A retry against a permanence, and on the CF backend Nimbus *is* the workspace, so this is every call. |
-| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). This was the worst of the five. The old prose reached no reader as a failure at all. |
-| `inline.ts` | `denied` for the misevolution veto, a gate refusing, which used to be filed as a defect in the tool it protected. And `bad_input` for arguments that never described an operation. Its `exec` still throws a shell failure with the chain intact, which is correct and unchanged. |
-| `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. What *was* missing is `cancelled`. The abort signal was parsed and dropped, so one class of the nine was unreachable on one of the five tools. It races the RPC now. |
+| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). The starkest of the five: a prose string in place of either code reaches no reader as a failure at all. |
+| `inline.ts` | `denied` for the misevolution veto — a gate refusing, not a defect in the tool it protected. And `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact, which is the right answer for a shell failure. |
+| `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. The exception is `cancelled`: the abort signal races the RPC, and a signal parsed and dropped instead leaves one class of the nine unreachable on one of the five tools. |
 
 Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
 
@@ -502,7 +500,8 @@ The Executors terminal uses the structural command result and forwards its
   cli-backend two generated-string hits (`executor.ts:177,179`). The
   2026-08-17 AST census in `obs/log.ts:12-31` was cli 479, cf-backend 99,
   core 55, cli-backend 17, 650 across 86 files. AST and regex denominators
-  differ; core, cf-backend and cli-backend migrated since.
+  differ, and the 2026-08-17 figures are a baseline: core, cf-backend and
+  cli-backend reach the terminal through the sink, not through `console.*`.
 - `command_not_found` and `not_executable`. Neither belongs in `ErrorCode`.
   `missing` loses absent-program versus cannot-execute, and both come from
   shell exit codes rather than an error classifier.

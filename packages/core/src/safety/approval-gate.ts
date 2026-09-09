@@ -234,9 +234,9 @@ const RULES: Rule[] = [
 
   // ── GATE: privileged or sensitive operations ─────────────────────
   {
-    // Just the word: the leading-whitespace guard it used to carry was a proxy
-    // for "in command position", which `binaries` now decides properly — and
-    // the proxy was wrong, missing both `/usr/bin/sudo x` and `ssh box "sudo x"`.
+    // Just the word: `binaries` decides command position properly. A
+    // leading-whitespace guard is a bad proxy for it — the proxy misses both
+    // `/usr/bin/sudo x` and `ssh box "sudo x"`.
     pattern: /\bsudo\b/,
     decision: 'gate',
     name: 'sudo',

@@ -80,8 +80,8 @@ describe('reading a steer row', () => {
 describe('a steer inside the turn that read it', () => {
   test('the durable row moves into the turn it interrupted, not before it', () => {
     // The write order is user, steer, assistant: the steer is appended while
-    // the assistant message is still uncommitted, so it lands between them and
-    // a reload used to draw it above the entire turn.
+    // the assistant message is still uncommitted, so it lands between them and a
+    // reload that trusted raw row order would draw it above the entire turn.
     const { entries } = buildTranscript([
       user('u1', 'research flaxdiff'),
       steerRow('steer-a', 'use the swarm for this', 3),

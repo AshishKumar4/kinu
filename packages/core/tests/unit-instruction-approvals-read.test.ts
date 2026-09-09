@@ -34,7 +34,11 @@ function store(scope = 'test') {
   // Keyed by ACTOR before scope: an approval the owner gave the root is not one
   // a subordinate reading the same file inherits.
   const actor = createTestActors(sql, execRaw).main;
-  return new InstructionApprovalStore(sql, actor, scope, (body) => db.transaction(body)());
+  return {
+    db,
+    actor,
+    approvals: new InstructionApprovalStore(sql, actor, scope),
+  };
 }
 
 function paths(page: Page<InstructionSourceRow>): string[] {
@@ -53,21 +57,24 @@ describe('listInstructionApprovals — metadata only', () => {
   });
 
   test('the owner\'s own answer is reported without reading the file', () => {
-    const approvals = store();
+    const { approvals } = store();
     approvals.approve(AGENTS, instructionDigest(DOCTRINE));
     const page = listInstructionApprovals({ sources: [meta()], decisions: approvals.list() });
     expect(page.items[0]?.decision).toBe('approved');
   });
 
   test('a carried-over file is distinguishable from one the owner chose', () => {
-    const approvals = store();
-    approvals.grandfatherExisting([{ path: AGENTS, digest: instructionDigest(DOCTRINE) }]);
+    // No API writes 'grandfathered' anymore; the row below stands in for one
+    // stored before the deletion, which the listing must keep reporting.
+    const { db, actor, approvals } = store();
+    db.exec(`INSERT INTO instruction_approvals (actor_id, scope, path, digest, decision)
+      VALUES ('${actor.actorId}', 'test', '${AGENTS}', '${instructionDigest(DOCTRINE)}', 'grandfathered')`);
     const page = listInstructionApprovals({ sources: [meta()], decisions: approvals.list() });
     expect(page.items[0]?.decision).toBe('grandfathered');
   });
 
   test('a refusal stays visible', () => {
-    const approvals = store();
+    const { approvals } = store();
     approvals.revoke(AGENTS);
     const page = listInstructionApprovals({ sources: [meta()], decisions: approvals.list() });
     expect(page.items[0]?.decision).toBe('revoked');

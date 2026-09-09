@@ -18,11 +18,11 @@ const ownerOf = (path: readonly string[]) => path.length ? path.join(' / ') : 'M
 /**
  * ONE presentation policy, derived once for every row, because the dropdown
  * label, the read-only banner and the review affordance all answer the same
- * question. They used to disagree: a priority record arrives with no scanned
- * status, so a label read off the record said "retained" about an actor the
- * selection had already decided was live. A direct actor is live exactly when
- * the root's roster still lists it; deeper history keeps what the traversal
- * observed; the root itself always is.
+ * question. Answering it three times makes them disagree: a priority record
+ * arrives with no scanned status, so a label read off the record says
+ * "retained" about an actor the selection has already decided is live. A
+ * direct actor is live exactly when the root's roster still lists it; deeper
+ * history keeps what the traversal observed; the root itself always is.
  *
  * The selection rides with the rows for the same reason: which row is picked,
  * and whether it belongs to THIS pane, are read off the merged list and cannot

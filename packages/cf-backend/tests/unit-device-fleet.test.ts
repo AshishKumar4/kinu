@@ -3,11 +3,11 @@
 // against what the hub actually does — which machine a frame reached, what
 // the snapshot says, which grant answered, and what the model is told.
 //
-// The bug this pins: with two machines live, the hub used to route every call
-// that named no device to the FIRST live socket in `ctx.getWebSockets()`
-// order — an order the platform, not the hub, decides — so two calls in one
-// turn could land on different machines, and the "connected device" the
-// snapshot described took turns being either one.
+// The bug this pins: with two machines live, routing every call that named no
+// device to the FIRST live socket in `ctx.getWebSockets()` order — an order the
+// platform, not the hub, decides — lands two calls in one turn on different
+// machines, and the "connected device" the snapshot describes takes turns being
+// either one.
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_DENIED, SEVERAL_DEVICES_CONNECTED, NO_DEVICE_CONNECTED,

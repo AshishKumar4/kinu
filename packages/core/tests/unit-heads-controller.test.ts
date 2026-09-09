@@ -303,8 +303,8 @@ describe('HeadController.run', () => {
 
   /**
    * A head aborted before it could report is the case this whole vocabulary
-   * exists for. The controller writes that head's report itself, and it used to
-   * write `{ input: 0, output: 0, total: 0 }` — a measurement nobody took. The
+   * exists for. The controller writes that head's report itself, and
+   * `{ input: 0, output: 0, total: 0 }` there is a measurement nobody took. The
    * head may well have burned real tokens before the deadline cut it off, so
    * every layer below has to be able to say "unknown", including the SQL.
    */
@@ -364,8 +364,8 @@ describe('HeadController.run', () => {
     expect(result.costSummary.headCount).toBe(2);
     expect(result.costSummary.totalTokens).toBeUndefined();
 
-    // This narrative goes into the parent's context verbatim. "0 tokens" is the
-    // sentence that used to tell the agent a failed delegation had been free.
+    // This narrative goes into the parent's context verbatim. "0 tokens" there
+    // tells the agent a failed delegation was free.
     expect(result.mergedNarrative).not.toContain('0 tokens');
     expect(result.mergedNarrative).toContain('tokens unreported');
 
@@ -775,7 +775,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     });
 
     const runs = journal.listRuns(10);
-    // The quirk: this used to be 2 "roots" with empty heads. Now: ONE run.
+    // ONE run, never 2 "roots" carrying empty heads.
     expect(runs).toHaveLength(1);
     const run = runs[0];
     expect(run.rootId).toBe('top-root');

@@ -26,9 +26,10 @@ import { KinuError, renderThrownChain } from '../obs/index';
  * review surface, not a backup.
  *
  * Both numbers bound the RESPONSE, not peak resident bytes: their product is
- * 104,857,600 bytes — 100.0 MiB, or 104.9 MB, which the comment here used to give
- * as 102.4 MiB by dividing a KiB count by 1000. That leaves 23 MB under
- * `worker.isolate.memory`'s published 128 MB, not a margin worth relying on, and
+ * 104,857,600 bytes — 100.0 MiB, or 104.9 MB. Both units, because the 128 MB
+ * ceiling below is decimal and dividing a KiB count by 1000 mis-states the
+ * product as 102.4 MiB. That leaves 23 MB under `worker.isolate.memory`'s
+ * published 128 MB, not a margin worth relying on, and
  * `do.isolate.reset_silent` — a retained working set past roughly 200 MiB
  * resetting the object with nothing thrown or logged — would present as an
  * unexplained disappearance rather than as a truncated diff. What bounds residency
@@ -84,7 +85,7 @@ export interface ExecutorDiffResult {
  * Visit every workspace text file the change-set considers, one body at a time.
  *
  * The visitor shape is the whole point. A 400-file workspace of 256 KiB files
- * is 102 MiB, and the previous code held that map, the materialized baseline
+ * is 100 MiB, and materializing that map holds it, the materialized baseline
  * and the diff output live at once — three copies, in an isolate whose
  * silent-reset wall is `PLATFORM_CATALOG['do.isolate.reset_silent']` and whose
  * breach throws and logs nothing. Exactly one body is live here.

@@ -20,8 +20,8 @@
  *
  * Order is a single total order — by name, code-unit ascending — decided here
  * and nowhere else. `readdir` order is filesystem- and backend-dependent, and
- * for a corpus that overflows the allocation it used to decide which skills the
- * model got to see.
+ * for a corpus that overflows the allocation order decides which skills the
+ * model gets to see at all.
  */
 import { estimateTokens } from '../llm';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -41,8 +41,7 @@ export interface SkillsVfs {
   unlink?(path: string): Promise<void>;
   mkdir?(path: string, opts?: { recursive?: boolean }): Promise<void>;
   /** Size before bytes. Optional because a file view may not offer it; without
-   *  it every `.md` file is opened — which is what discovery did for every
-   *  file, every turn, before this. */
+   *  it every `.md` file is opened, every turn. */
   stat?(path: string): Promise<VfsEntryStat | null>;
 }
 

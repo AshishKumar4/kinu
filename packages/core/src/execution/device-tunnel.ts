@@ -29,13 +29,13 @@ const WS_OPEN = 1;
  * existence check. Work the daemon answers immediately or not at all, so a
  * wall clock on it is a real signal.
  *
- * It is deliberately NOT the bound on `exec`. The same 30s used to apply to
- * every call, which meant any laptop command outliving half a minute — a
- * build, a test suite, an install — failed as `device RPC timeout`, a message
- * indistinguishable from a dead device. Liveness had been welded onto the work
- * budget. A call with no deadline of its own now rides {@link LIVENESS_PROBE_MS}
- * instead: it fails when the DEVICE stops being there, not when the work takes
- * a while, and says which of the two happened.
+ * It is deliberately NOT the bound on `exec`. One 30s bound over every call
+ * welds liveness onto the work budget: any laptop command outliving half a
+ * minute — a build, a test suite, an install — fails as `device RPC timeout`, a
+ * message indistinguishable from a dead device. A call with no deadline of its
+ * own rides {@link LIVENESS_PROBE_MS} instead: it fails when the DEVICE stops
+ * being there, not when the work takes a while, and says which of the two
+ * happened.
  */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
@@ -344,11 +344,11 @@ export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
 /**
  * This isolate's request-identity epoch, and the counter under it.
  *
- * Ids used to be the bare counter, and the counter is instance-local: a hub
- * that woke after eviction rebuilt its tunnel with the counter back at zero
- * while a timed-out command was still running on the machine, so that command's
- * late answer paired with a DIFFERENT pending call and one workspace's result
- * read as another's. The epoch is what a rebuilt counter cannot reproduce.
+ * The counter alone would not do, because it is instance-local: a hub that
+ * wakes after eviction rebuilds its tunnel with the counter back at zero while
+ * a timed-out command is still running on the machine, so that command's late
+ * answer pairs with a DIFFERENT pending call and one workspace's result reads
+ * as another's. The epoch is what a rebuilt counter cannot reproduce.
  */
 // Workers reject CSPRNG calls during global module evaluation. The epoch is
 // therefore minted by the first actual RPC in this isolate; a reset evaluates

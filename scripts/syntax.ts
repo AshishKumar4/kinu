@@ -252,10 +252,10 @@ const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
  *
  * BOTH SYNTAXES, by the rule an author states by writing: a block comment's
  * closing delimiter ends it, and a run of line comments is one block while nothing
- * but whitespace separates the lines. Reading only `/** *\/` was the first draft
- * and it under-reported itself — `unit-checkpoint-format.test.ts` declares a
- * quotation over a `//` run, and the citation gate counted zero uncompared
- * quotations while that one sat unread.
+ * but whitespace separates the lines. Reading only `/** *\/` would under-report
+ * this gate itself — `unit-checkpoint-format.test.ts` declares a quotation over
+ * a `//` run, and the citation gate would count zero uncompared quotations while
+ * that one sits unread.
  */
 export function docComment(text: string, node: SyntaxNode): string | undefined {
   let statement = node;

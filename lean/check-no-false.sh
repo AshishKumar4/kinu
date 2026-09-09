@@ -7,14 +7,14 @@
 # (every theorem in it becomes vacuously derivable).
 #
 # ONE FILE PER AXIOM FAMILY, and that is the substance of this gate rather than
-# tidiness. All four counterexamples used to sit in a single `Boom.lean` behind
-# two imports, and `Kinu/Safety/FloatAxioms.lean` no longer exists — so
-# `lake env lean` failed at that import and elaborated NOTHING after it. The
-# chunk_reassembly counterexample, whose subject module is still present and
-# still exports a `chunk_reassembly`, was therefore unreachable: a reintroduced
-# String-based axiom would have derived `False` and this gate would still have
-# printed OK, on the strength of an import error about an unrelated family. One
-# family's absence was masking every family behind it.
+# tidiness. Families sharing one file share its imports, and a family whose
+# subject module the library does not export makes `lake env lean` fail at that
+# import and elaborate NOTHING after it. Every family behind it is then
+# unreachable — the chunk_reassembly counterexample is one, its subject module
+# present and still exporting a `chunk_reassembly` — so a reintroduced
+# String-based axiom would derive `False` and this gate would still print OK, on
+# the strength of an import error about an unrelated family. One family's
+# absence masks every family behind it.
 #
 # THE EXPECTED FAILURE IS DECLARED PER FAMILY. "It did not compile" is satisfied
 # by a reintroduced axiom's absence, by a typo, by a renamed lemma, by a syntax

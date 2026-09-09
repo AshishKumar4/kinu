@@ -87,9 +87,9 @@ describe('Cost estimation is model-aware', () => {
     expect(free.basis.source).not.toBe(unknown.basis.source);
   });
 
-  test('an expensive model is no longer understated by the blend', () => {
+  test('an expensive model is priced from its catalog, not understated by the blend', () => {
     // anthropic/claude-fable-5 — the failure mode that matters more than
-    // refusing free work: the blend waved this through at a fraction of cost.
+    // refusing free work: the blend prices this at a fraction of its cost.
     const est = estimateCost(20, 3, 4, {
       spec: 'anthropic/claude-fable-5',
       pricing: { input: 10, output: 50 },

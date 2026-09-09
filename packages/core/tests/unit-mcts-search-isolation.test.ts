@@ -2,13 +2,13 @@
  * Search isolation — one runMCTS call may only ever read, expand and settle its
  * OWN tree.
  *
- * Selection, pruning and convergence used to scan `search_nodes` globally and
- * relied on a single invariant to stay correct: "nothing stays open across
- * tasks", enforced only by the tree close at the end of a successful converge().
- * Every way of not reaching that close — an eviction, an aborted turn, a
- * convergence that throws — left the invariant broken, and a converged search's
- * terminal winner was never excluded at all. These tests pin the invariant to
- * the data (`root_id`) instead of to the happy path.
+ * Selection, pruning and convergence scan by `root_id`. A global scan over
+ * `search_nodes` rests on one invariant — "nothing stays open across tasks" —
+ * enforced only by the tree close at the end of a successful converge(): every
+ * way of not reaching that close (an eviction, an aborted turn, a convergence
+ * that throws) leaves it broken, and a converged search's terminal winner is
+ * never excluded at all. These tests pin the invariant to the DATA (`root_id`)
+ * rather than to the happy path.
  */
 
 import { describe, test, expect } from 'bun:test';

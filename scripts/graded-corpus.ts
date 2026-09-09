@@ -139,12 +139,11 @@ const TASKS: readonly CorpusTask[] = [
   // graded `accepted` at 0.70.
   //
   // `alwaysFails` says only that `verify` can never pass. It does NOT guarantee
-  // a negative OUTCOME, and the first version of this task proved why: with no
-  // "current working directory" in the prompt the agent went hunting with
-  // ls/find/cat, never ran the check at all, and graded `accepted` while
-  // verification still reported FAIL. The outcome follows the agent's last
-  // action, not the task's ground truth — which is exactly the limit recorded
-  // at the head of this file.
+  // a negative OUTCOME, which is why the prompt names the current working
+  // directory: without it the agent goes hunting with ls/find/cat, never runs
+  // the check at all, and grades `accepted` while verification still reports
+  // FAIL. The outcome follows the agent's last action, not the task's ground
+  // truth — which is exactly the limit recorded at the head of this file.
   {
     id: 'diagnose-failing-check',
     seed: {

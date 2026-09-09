@@ -24,8 +24,8 @@ export function PreviewChrome({ url }: { url: string }) {
 export function PreviewFrame({ url, label }: {
   url: string;
   /** The frame's accessible name — a tab title or a port label. The header
-   *  shows the URL only: the tab that opened this frame already names it, and
-   *  a second title beside the URL is the duplication the tabs replaced. */
+   *  shows the URL only: the tab that opened this frame already names it, so a
+   *  second title beside the URL is duplication. */
   label?: string;
 }) {
   // The only gate on what this app frames. Preview URLs reach here out of raw

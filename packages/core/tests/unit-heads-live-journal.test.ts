@@ -1,16 +1,15 @@
 // The head journal announces its own writes, so a running search is live.
 //
-// Shared rather than cf-only: the listener is injected, and the CLI carries the
-// same defect in a stronger form — its nodes always run in process, so nothing
-// it journals has ever announced anything.
+// Shared rather than cf-only: the listener is injected, and the CLI is exposed
+// in a stronger form — its nodes always run in process, so an announcement
+// bolted to an RPC hop would never fire there at all.
 //
-// `head_activity` used to be a side effect on two RPC methods, both reachable
-// only from a facet calling back to its parent. So a top-level node's or head's
-// COMPLETION announced nothing, and an UNHOSTED node — a workspace with no
-// owner gets no facet, and core then wires `reportStep` straight to
-// `journal.appendStep` — announced nothing at all, for its whole run. Its rows
-// landed correctly and a manual reload showed them, which is the worst shape a
-// liveness defect can take.
+// `head_activity` as a side effect on two RPC methods, both reachable only from
+// a facet calling back to its parent, announces nothing for a top-level node's
+// or head's COMPLETION, and nothing at all for an UNHOSTED node's whole run — a
+// workspace with no owner gets no facet, and core then wires `reportStep`
+// straight to `journal.appendStep`. Those rows land correctly and a manual
+// reload shows them, which is the worst shape a liveness defect can take.
 //
 // The property under test is that the announcement rides the WRITE. Every path
 // into the journal goes through the one instance this backend hands to core, so

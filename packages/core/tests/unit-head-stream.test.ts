@@ -124,7 +124,7 @@ function headInput(): HeadInput {
  * The frames under test are produced inside a claimed turn on the actor's own
  * `ActorSession`, so the fixture supplies the actor that turn belongs to —
  * through the production directory, host and session `hostedSeatsOver` builds —
- * rather than the bare runtime a head used to be handed.
+ * rather than a bare runtime with no turn to claim.
  */
 async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
   const { rt, testSql } = createTestRuntime();

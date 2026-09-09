@@ -1,6 +1,7 @@
 // Cancellation must actually propagate from the `run` tool / executor exec
-// tools. Previously the whole AbortSignal chain was a silent no-op: createShell
-// dropped the signal and every remote executor ignored the trailing options.
+// tools. The whole AbortSignal chain is a silent no-op the moment one link
+// drops it: createShell must forward the signal, and every remote executor
+// must read the trailing options.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -83,8 +84,8 @@ describe('run tool — workspace shell abort', () => {
 describe('remote executor exec abort', () => {
   // KINU-033. The sandbox's signal is not a wait-breaker: core hands it to the
   // adapter, which kills the container process it started and settles only once
-  // that process is gone. Core's own job shrank to two things — pass the signal
-  // on, and refuse to DISPATCH for a caller who has already given up.
+  // that process is gone. Core's own job is two things — pass the signal on,
+  // and refuse to DISPATCH for a caller who has already given up.
   /** What the container was asked to run, and whether the caller's signal
    *  reached it. `signalled: false` is the defect this suite exists to catch. */
   interface ObservedExec {
@@ -166,12 +167,11 @@ describe('remote executor exec abort', () => {
   });
 
   /**
-   * KINU-N021. Aborting a laptop exec used to end the WAIT and nothing else:
-   * the protocol had no way to say "stop", so the command — and anything it had
-   * started — kept running on the user's machine after the turn reported
-   * stopped. Now the abort path sends a cancellation keyed on the id the
-   * command was issued under, waits for the device's answer, and reports what
-   * that answer actually was.
+   * KINU-N021. The abort path sends a cancellation keyed on the id the command
+   * was issued under, waits for the device's answer, and reports what that
+   * answer actually was. An abort that only ends the WAIT leaves the command —
+   * and anything it started — running on the user's machine after the turn
+   * reports stopped.
    */
   interface LaptopCall { method: string; params: JsonValue[]; requestId?: string }
 

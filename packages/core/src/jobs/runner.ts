@@ -97,10 +97,10 @@ export type JobResumer = (
  * What a job has already produced, for a job that will not be driven again.
  *
  * PARTIAL CANDIDATES ARE RESULTS, and that is the whole reason this seam exists. The
- * bounded-out and force-fail paths used to settle with an eviction string, so the
- * incident's job reported nothing while its search held two completed candidates with
- * real content. A harvester answers "what does this work have RIGHT NOW", read out of
- * the durable rows the work already wrote.
+ * bounded-out and force-fail paths have no result of their own to report, and settling
+ * them with a bare eviction string makes a job report nothing while its search holds
+ * two completed candidates with real content. A harvester answers "what does this work
+ * have RIGHT NOW", read out of the durable rows the work already wrote.
  *
  * Null when the kind has nothing partial to give, which is the honest answer for a
  * side-effecting call: `run` and `execute_tools` either happened or did not.
@@ -183,16 +183,16 @@ export interface BackgroundJobRunnerDeps {
    *  REFUSE the cancel, which leaves the job running and retryable. */
   onCancelled?(jobId: string): Promise<void> | void;
   /** Re-drive an evicted job from its durable checkpoint. When absent, an evicted
-   *  running job is failed (legacy behavior); when present, the runner reclaims
-   *  the job under a fresh lease epoch and re-drives it in a new durable fiber. */
+   *  running job is failed; when present, the runner reclaims the job under a fresh
+   *  lease epoch and re-drives it in a new durable fiber. */
   resume?: JobResumer;
   /** What a job that will not be driven again has already produced, for the two
    *  terminals that reach settle-with-what-you-have: a kind that cannot be
    *  re-driven, and the no-resumer case.
    *
-   * Absent means "settle with nothing", which is what every one of those paths used
-   * to do unconditionally. Present, the job settles `completed` carrying the partial
-   * result, because a search that measured two of five answers measured two answers.
+   * Absent means those terminals settle with nothing. Present, the job settles
+   * `completed` carrying the partial result, because a search that measured two of
+   * five answers measured two answers.
    * Never throws into the fiber: a harvester that fails leaves the job settling the
    * way it would have without one.
    */
@@ -1045,10 +1045,10 @@ export class BackgroundJobRunner {
    * that can notice. Arming is soonest-wins on both backends, so repeating it is
    * free.
    *
-   * The deferral is ANNOUNCED, because the give-up this replaced was the only
-   * thing that ever told anyone the job had been interrupted. Silence is what
-   * made the incident unreadable: the owner watched a job sit `running` with
-   * nothing able to say why.
+   * The deferral is ANNOUNCED, because a silent one leaves nothing that tells
+   * anyone the job was interrupted. Silence is what made the incident
+   * unreadable: the owner watched a job sit `running` with nothing able to say
+   * why.
    */
   private async deferRecovery(job: BackgroundJob, at: number): Promise<JobRecoveryOutcome> {
     const delayMs = at - Date.now();

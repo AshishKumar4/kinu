@@ -110,8 +110,8 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
   return (
     <Markdown remarkPlugins={[remarkGfm]} components={{
       // A fence with no language gets no className, which is also what real
-      // inline code gets — so ``` blocks used to come out as an inline pill
-      // wrapping across lines. The block/inline question is answered by the
+      // inline code gets — so className alone renders a ``` block as an inline
+      // pill wrapping across lines. The block/inline question is answered by the
       // node's position (react-markdown puts a fence inside a <pre>), which
       // `pre` below unwraps, so the check here is on the content itself: a
       // fence is the thing that spans lines.

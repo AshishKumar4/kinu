@@ -95,16 +95,16 @@ export function resolveEvalTarget(suite: string, model: string): EvalTargetPlan 
  * it.
  *
  * NO INTERMEDIATE ROOT. A per-plan `kinu-eval-local-<stamp>` directory with each
- * case provisioned inside it left that root behind on every suite run, because
- * `teardown` owns the case's directory and nothing owned the parent — a leak in
+ * case provisioned inside it leaves that root behind on every suite run, because
+ * `teardown` owns the case's directory and nothing owns the parent — a leak in
  * the module whose cloud half is built around "a run that throws must not leave a
- * row". Each case's directory is now a sibling in tmpdir, so the thing that
- * created it is the thing that removes it.
+ * row". Each case's directory is a sibling in tmpdir, so the thing that created
+ * it is the thing that removes it.
  *
- * THE NAME CARRIES THE SUITE. Every case used to be `behaviour-<subject>`
- * whatever resolved the plan, so a swarm or research case would carry a
- * behaviour-arm name in its own store and in the banner a reader attributes rows
- * from. The stamp keeps two runs of one suite from colliding in tmpdir.
+ * THE NAME CARRIES THE SUITE. A fixed `behaviour-<subject>` whatever resolved the
+ * plan puts a behaviour-arm name on a swarm or research case, in its own store and
+ * in the banner a reader attributes rows from. The stamp keeps two runs of one
+ * suite from colliding in tmpdir.
  */
 function localPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfig): EvalTargetPlan {
   const model = liveChatModel(llm);

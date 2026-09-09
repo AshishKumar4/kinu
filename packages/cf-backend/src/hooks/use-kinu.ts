@@ -1047,7 +1047,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // bumps the counter; every WS 'open' beyond the session's first bumps it
   // too (session-recovery), so a reconnect re-fetches even when React never
   // observed an intermediate disconnected state; `retryLoad` is the same
-  // path, driven by the user. The load no longer waits for `isConnected`:
+  // path, driven by the user. The load does not wait for `isConnected`:
   // while the socket is down the call queues client-side and flushes on the
   // next dial, so recovery starts the moment transport returns.
   const [loadGeneration, setLoadGeneration] = useState(0);
@@ -1137,8 +1137,8 @@ export function useKinu(target?: string | KinuActorAddress) {
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
   // A subordinate's snapshot seeds none of the polled surfaces, so it speaks
-  // only for itself. The cancellation this effect used to also track is the
-  // admission's job: re-running it admits a newer load, which retires this one.
+  // only for itself. Cancellation is the admission's job, not this effect's:
+  // re-running it admits a newer load, which retires this one.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
@@ -1265,10 +1265,10 @@ export function useKinu(target?: string | KinuActorAddress) {
    * The actor decides in its own turn queue: `"mid-turn"` means it was spliced
    * into the running turn's next step, `"queued"` means that turn had already
    * ended and the actor enqueued it as the next ordinary turn. Either way the
-   * text has landed somewhere, which is why nothing here re-sends it. The shape
-   * this replaced answered `"idle"` and left the client to call `sendChat`
-   * afterwards — a decision and an enqueue that were not atomic, so guidance
-   * meant for one turn could become an ordinary turn after another had started.
+   * text has landed somewhere, which is why nothing here re-sends it. Answering
+   * `"idle"` and leaving the client to call `sendChat` afterwards would make the
+   * decision and the enqueue two non-atomic steps, so guidance meant for one
+   * turn could become an ordinary turn after another had started.
    */
   const steerChat = useCallback(async (
     text: string, mode: "plan" | "build" = "build",
@@ -1564,16 +1564,16 @@ export function useKinu(target?: string | KinuActorAddress) {
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
-  // Initial load — ONE round-trip, and it stays one: the active plan used to be
-  // a second awaited RPC here, so a plan-gated workspace painted its composer in
-  // build mode and moved a beat later.
+  // Initial load — ONE round-trip, and it stays one: a second awaited RPC here
+  // for the active plan is how a plan-gated workspace paints its composer in
+  // build mode and moves a beat later.
   //
-  // The exploration canvas is deliberately NOT seeded from here any more. It was
-  // the largest thing on this path (499-824 KiB per workspace, measured against
-  // production 2026-08-20) and its only effect was to pre-fill a tree map that
-  // the Exploration surface rebuilds from its own `getExplorationCanvas` when it
-  // mounts, and that `useForkRunTree` fetches per run when it does not. Live
-  // trees still arrive on the `mcts_update` broadcast.
+  // The exploration canvas is deliberately NOT seeded from here. It is the
+  // largest thing this path could carry (499-824 KiB per workspace, measured
+  // against production 2026-08-20) and its only effect would be to pre-fill a
+  // tree map that the Exploration surface rebuilds from its own
+  // `getExplorationCanvas` when it mounts, and that `useForkRunTree` fetches per
+  // run when it does not. Live trees still arrive on the `mcts_update` broadcast.
   async function loadAllData(
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
@@ -1621,12 +1621,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
-    // `getActorSnapshot`, not the facet-era `getSubordinateSnapshot`: the method
-    // this used to call went with the SubordinateAgent class, and the same
-    // capability is answered in process by the root now, keyed on the actor
-    // name this tab is looking at. The name is what the root resolves through
-    // its directory, so a tab cannot ask about an actor that is not a child of
-    // this workspace.
+    // `getActorSnapshot`: the root answers this capability in process, keyed on
+    // the actor name this tab is looking at. The name is what the root resolves
+    // through its directory, so a tab cannot ask about an actor that is not a
+    // child of this workspace.
     const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
     if (!isCurrent()) return;
     setAgentStatus({
@@ -1803,9 +1801,9 @@ export function useKinu(target?: string | KinuActorAddress) {
     });
   }, [startTurn, messages.length, regenerate]);
 
-  // Every keystroke used to fire its own searchMemoryHybrid with nothing
-  // ordering the replies, so a slow early query could land last and leave the
-  // pane showing results for a prefix the user had already typed past.
+  // Ordering for the memory search: a searchMemoryHybrid per keystroke with
+  // nothing ordering the replies lets a slow early query land last and leave
+  // the pane showing results for a prefix the user has already typed past.
   const searchSeq = useRef(0);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
@@ -2137,8 +2135,8 @@ interface ToolDescResult {
  *
  *  `exposure` and `wired` both come from the orchestrator: the first is the
  *  registry's declared reach, the second is whether THIS agent wires the
- *  capability. Neither is recomputed here — the panel used to be handed a
- *  single guessed word and could not tell absence from codemode-only reach. */
+ *  capability. Neither is recomputed here — a single guessed word cannot tell
+ *  absence from codemode-only reach. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   return [
     ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),

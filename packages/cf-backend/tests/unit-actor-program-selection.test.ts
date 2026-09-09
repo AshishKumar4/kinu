@@ -1,22 +1,18 @@
 /**
- * NOTE ON THE SHRUNK MATRIX. Every case here used to run twice, over
- * `test.each(['orchestrator', 'subordinate'])`, because a subordinate was a
- * SEPARATE Durable Object running its own copy of the turn machinery and "does
- * the non-root kind do this too" was a real, open question.
+ * NOTE ON THE MATRIX. This file has ONE arm, the ROOT's.
  *
- * It is not open any more, and it is no longer this file's question. Every
- * non-root actor is a logical actor whose turns run on one `ActorSession`
+ * Every non-root actor is a logical actor whose turns run on one `ActorSession`
  * through the shared runner, so the four non-root kinds are asserted together —
- * with a STRONGER property than this matrix had — in
+ * with a STRONGER property than a per-kind matrix here would give — in
  * `tests/unit-loop-contract.test.ts`: the pinned version is selected with the
  * live alias POISONED, the claim records `program_version` and
  * `program_digest`, and a promotion does not move a claim already admitted,
  * for root, hired, temporary, head and node.
  *
- * What remains here is the ROOT's arm, and it remains because it is genuinely
- * different machinery: the workspace root drives Think's own turn loop rather
- * than an `ActorSession`, so nothing in the loop-contract suite covers it —
- * and this file drives a scripted MODEL, so it is the one place the marker is
+ * The root's arm is here because it is genuinely different machinery: the
+ * workspace root drives Think's own turn loop rather than an `ActorSession`, so
+ * nothing in the loop-contract suite covers it — and this file drives a
+ * scripted MODEL, so it is the one place the marker is
  * proven to have actually RUN rather than to have been selected. Deleting this
  * arm to "avoid duplication" would delete the only proof of the one path that
  * is not shared, and the only end-to-end execution proof of any of them.

@@ -376,7 +376,7 @@ SPEND="$REPORT_DIR/spend-$BACKEND.jsonl"
 : > "$SPEND_DEVICE"
 
 # The ONE place this is set. `liveModelTarget` refuses to spend without it, so a
-# credential exported in a developer's shell can no longer make the commit hook
+# credential exported in a developer's shell cannot make the commit hook
 # bill the owner's account — being driven by this script is the consent.
 export KINU_EVAL_LIVE=1
 
@@ -614,25 +614,25 @@ fi
 
 # THE ACTIVE ARMS, as one indexed list.
 #
-# Six arms used to be spelled that many times each in the three blocks below — a
-# report check, a timing line and a liveness assertion — so adding an arm meant
-# four edits and forgetting one meant an arm nobody measured. That is the shape
-# of the hole this tier was built to close, one level up: the set the assertions
-# govern and the set the run produced must be the same set. Now they are one
-# array, and an arm this backend cannot measure is simply absent from it.
+# Spelling six arms once per block below — a report check, a timing line and a
+# liveness assertion — makes adding an arm four edits, and forgetting one leaves
+# an arm nobody measured. That is the shape of the hole this tier was built to
+# close, one level up: the set the assertions govern and the set the run
+# produced must be the same set. They are one array, and an arm this backend
+# cannot measure is simply absent from it.
 #
 # `SKIPPED_ARMS` is printed rather than left implicit: an arm missing from the
 # report because it was never run and one missing because it crashed look
 # identical afterwards, and only one of them is fine.
 #
-# EACH ARM CARRIES ITS RATCHET TARGET, because that is the fifth thing that used
-# to be spelled somewhere else: `skip-ratchet.ts` proved every target it knows
-# about non-empty, and this backend runs a SUBSET of them. Under `--backend
-# cloud` the behaviour, research and optimization arms are deliberately absent,
-# so all three of their targets reported missing and the ratchet exited 1 — the
-# tier could not pass while doing exactly what it was told. Now the arm array is
-# also the target list, so the set the ratchet governs is the set this run
-# produced, by construction rather than by two lists agreeing.
+# EACH ARM CARRIES ITS RATCHET TARGET, which is the fifth thing a second list
+# would hold: `skip-ratchet.ts` proves every target it knows about non-empty,
+# and this backend runs a SUBSET of them. Under `--backend cloud` the behaviour,
+# research and optimization arms are deliberately absent, so a fixed target list
+# reports all three missing and the ratchet exits 1 — the tier cannot pass while
+# doing exactly what it was told. The arm array is also the target list, so the
+# set the ratchet governs is the set this run produced, by construction rather
+# than by two lists agreeing.
 #
 # AND EACH ARM CARRIES ITS LIVENESS CURRENCY, which is the sixth thing. Five arms
 # prove they ran by reaching a MODEL, and `eval-spend.ts --expect-live` is that

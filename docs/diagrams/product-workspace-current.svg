@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="950" viewBox="0 0 640 950" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="workspace-current-title workspace-current-desc">
 <title id="workspace-current-title">CURRENT: Hosted workspace ownership</title>
-<desc id="workspace-current-desc">Current hosted ownership. One workspace root Durable Object contains the main agent and owns the SQLite backing canonical Nimbus files and root actor state. Subordinate and exploration SDK facets each have their own actor SQLite. They access the canonical root filesystem over RPC. Shared files do not mean one shared database.</desc>
-<!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/cf-backend/src/workspace-host.ts:createHostedWorkspace; packages/cf-backend/src/runtime.ts:createCFRuntime. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<desc id="workspace-current-desc">Current hosted ownership. One workspace root Durable Object holds the main agent and every subordinate and exploration actor as logical actors over one workspace SQLite, with actor_id leading every actor-owned row. The same database backs the canonical Nimbus files. Shared storage is not shared authority.</desc>
+<!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/core/src/state/actor-host.ts; packages/cf-backend/src/subordinate-hosting.ts; packages/cf-backend/src/exploration-hosting.ts. Current-source baseline: 7ec50001f. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="workspace-current-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -16,9 +16,9 @@
 <tspan x="32" dy="0">Hosted workspace ownership</tspan>
 </text>
 <text x="32" y="111" font-size="21" font-weight="400" fill="#625544" text-anchor="start">
-<tspan x="32" dy="0">One root owns files. Facets keep separate actor state.</tspan>
+<tspan x="32" dy="0">One database. Logical actors, actor-led keys.</tspan>
 </text>
-<rect x="24" y="146" width="592" height="358" rx="14" fill="none" stroke="#CBBFA9" stroke-width="2" />
+<rect x="24" y="146" width="592" height="430" rx="14" fill="none" stroke="#CBBFA9" stroke-width="2" />
 <text x="40" y="176" font-size="20" font-weight="650" fill="#625544" text-anchor="start">
 <tspan x="40" dy="0">Workspace root Durable Object</tspan>
 </text>
@@ -31,56 +31,61 @@
 <tspan x="68" dy="0">Default workspace conversation</tspan>
 </text>
 </g>
-<path d="M320 295 V326" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-current-arrow)" />
 <g>
-<path d="M48 343 C48 321,592 321,592 343 L592 463 C592 485,48 485,48 463 Z" fill="#EEE0C2" stroke="#7A5514" stroke-width="1.5" />
-<path d="M48 343 C48 365,592 365,592 343" fill="none" stroke="#7A5514" stroke-width="1.2"/>
-<text x="68" y="389" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Root SQLite</tspan>
+<rect x="48" y="311" width="262" height="120" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="68" y="346" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Subordinate actor</tspan>
 </text>
-<text x="68" y="425" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Main state and Nimbus file data</tspan>
-<tspan x="68" dy="30">One canonical workspace filesystem</tspan>
-</text>
-</g>
-<path d="M175 576 V520 H215 V485" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-current-arrow)" />
-<path d="M465 576 V520 H425 V485" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-current-arrow)" />
-<g>
-<rect x="40" y="578" width="268" height="184" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
-<text x="60" y="613" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="60" dy="0">Subordinate facet</tspan>
-</text>
-<text x="60" y="647" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="60" dy="0">Own actor SQLite</tspan>
-<tspan x="60" dy="30">Shared root files</tspan>
-<tspan x="60" dy="30">over RPC</tspan>
+<text x="68" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Own session, queue,</tspan>
+<tspan x="68" dy="30">home — rows, not a database</tspan>
 </text>
 </g>
 <g>
-<rect x="332" y="578" width="268" height="184" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
-<text x="352" y="613" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="352" dy="0">Exploration facet</tspan>
+<rect x="330" y="311" width="262" height="120" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="350" y="346" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="350" dy="0">Exploration actor</tspan>
 </text>
-<text x="352" y="647" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="352" dy="0">Own actor SQLite</tspan>
-<tspan x="352" dy="30">Shared root files</tspan>
-<tspan x="352" dy="30">over RPC</tspan>
+<text x="350" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="350" dy="0">Head, node or branch —</tspan>
+<tspan x="350" dy="30">rows, not a database</tspan>
 </text>
 </g>
-<text x="320" y="556" font-size="21" font-weight="400" fill="#355B6A" text-anchor="middle">
-<tspan x="320" dy="0">Filesystem RPC</tspan>
+<path d="M320 431 V462" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-current-arrow)" />
+<g>
+<path d="M48 479 C48 457,592 457,592 479 L592 546 C592 568,48 568,48 546 Z" fill="#EEE0C2" stroke="#7A5514" stroke-width="1.5" />
+<path d="M48 479 C48 501,592 501,592 479" fill="none" stroke="#7A5514" stroke-width="1.2"/>
+<text x="68" y="520" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">One workspace SQLite</tspan>
+</text>
+<text x="330" y="520" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="330" dy="0">actor_id-led rows for every actor</tspan>
+</text>
+</g>
+<text x="320" y="620" font-size="21" font-weight="400" fill="#355B6A" text-anchor="middle">
+<tspan x="320" dy="0">Bound by one ActorHost — no per-actor database, no state RPC</tspan>
 </text>
 <g>
-<rect x="40" y="793" width="560" height="93" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
-<text x="60" y="828" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<rect x="40" y="648" width="560" height="145" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
+<text x="60" y="683" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Canonical Nimbus files</tspan>
+</text>
+<text x="60" y="717" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">The same database backs the one workspace filesystem.</tspan>
+<tspan x="60" dy="30">Actor homes and temporary paths are views in that plane.</tspan>
+</text>
+</g>
+<g>
+<rect x="40" y="809" width="560" height="93" rx="10" fill="#E5EDF0" stroke="#8A7B66" stroke-width="1.5" />
+<text x="60" y="844" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
 <tspan x="60" dy="0">Important distinction</tspan>
 </text>
-<text x="60" y="862" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="60" dy="0">Shared filesystem ≠ shared actor database.</tspan>
+<text x="60" y="878" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="60" dy="0">Shared database ≠ shared authority.</tspan>
 </text>
 </g>
-<path d="M32 892 H608" stroke="#CBBFA9"/>
-<text x="32" y="922" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
+<path d="M32 908 H608" stroke="#CBBFA9"/>
+<text x="32" y="932" font-size="18" font-weight="400" fill="#625544" text-anchor="start">
 <tspan x="32" dy="0">Arrows show the labeled flow, not unrestricted access.</tspan>
 </text>
 </svg>

@@ -56,9 +56,9 @@ export interface DevboxPolicy {
    * the schedule row that covers a mid-life container replacement — the timer
    * delivers normally and the budget also ABANDONS the step it bounds.
    *
-   * IT COVERS EVERY PHASE, not just the attach. Only `attach()` used to be
-   * wrapped, so the phases after it ran unbounded while every caller waited in
-   * the readiness gate.
+   * IT COVERS EVERY PHASE, not just the attach. Wrapping `attach()` alone leaves
+   * the phases after it unbounded while every caller waits in the readiness
+   * gate.
    */
   readonly attachBudgetMs: number;
   /**
@@ -72,11 +72,10 @@ export interface DevboxPolicy {
    * out a URL that is about to work. This is the window silence has to last
    * before it is a fact.
    *
-   * A CAP AND NOT A TIMER OF ITS OWN. Each port used to get this whole window
-   * to itself, so silence cost it once per port and nothing bounded the sum.
-   * Whichever is smaller — this cap or the restoration's remaining budget — is
-   * what a port actually gets, so a box with many silent ports settles inside
-   * one budget instead of many windows.
+   * A CAP AND NOT A TIMER OF ITS OWN. A whole window per port costs silence once
+   * per port with nothing bounding the sum. Whichever is smaller — this cap or
+   * the restoration's remaining budget — is what a port actually gets, so a box
+   * with many silent ports settles inside one budget instead of many windows.
    */
   readonly portWaitMs: number;
   /** Gap between two listener probes inside that window. */
@@ -153,10 +152,10 @@ export class ContainerStartOverrun extends Error {
  *
  * ONE OWNER FOR THE WHOLE RESTORATION. Every phase after the attach —
  * restarting processes, proving a listener, exposing a port, stamping the boot
- * id — used to run outside any budget, and the listener proof carried its OWN
- * window per port. Three silent ports therefore added three full windows, about
- * ninety seconds, while every caller sat in the readiness gate; nothing bounded
- * the total, and adding a fourth port made it worse.
+ * id — draws on this budget. Leave them outside it, with the listener proof
+ * carrying its OWN window per port, and three silent ports add three full
+ * windows, about ninety seconds, while every caller sits in the readiness gate;
+ * nothing bounds the total, and adding a fourth port makes it worse.
  *
  * The allowance is what remains divided by the work still DECLARED, so every
  * step of the restoration is counted — each probe, each exposure and the boot
@@ -759,19 +758,18 @@ const HOLDER_TERM_WAIT_MS = 5_000;
  * one that does not is removed anyway.
  *
  * STDOUT IS WHO IS STILL HOLDING, RE-READ AFTER THE SIGNALS, and that is the
- * second measured repair. The command used to echo the list it had captured
- * BEFORE signalling anything, so its answer said "these were holding when I
- * started" while every reader — `#detachStorage`'s refusal above all — took it
- * to mean "these are holding now". Deployed run `probe09011530` refused a stop
- * with `these processes were still holding it: 258 (bun)`, and the same shape
- * reproduced in `hp0901170218` naming `253 (bun)`: in both, the scan had
- * ALREADY killed that writer successfully, and the `/proc` report taken
- * afterwards shows no such pid. The name was residue of a list captured one
- * `sleep` earlier, and it sent the diagnosis after a process that had done
- * nothing wrong — a survivor of SIGKILL, which cannot exist. A second scan
- * costs one `/proc` walk inside a stop that has just spent five seconds
- * sleeping, and it is the difference between a refusal a caller can act on and
- * a refusal that lies.
+ * second measured repair. Echoing the list captured BEFORE signalling anything
+ * makes the answer say "these were holding when I started" while every reader —
+ * `#detachStorage`'s refusal above all — takes it to mean "these are holding
+ * now". Deployed run `probe09011530` refused a stop with `these processes were
+ * still holding it: 258 (bun)`, and the same shape reproduced in `hp0901170218`
+ * naming `253 (bun)`: in both, the scan had ALREADY killed that writer
+ * successfully, and the `/proc` report taken afterwards shows no such pid. The
+ * name was residue of a list captured one `sleep` earlier, and it sent the
+ * diagnosis after a process that had done nothing wrong — a survivor of
+ * SIGKILL, which cannot exist. A second scan costs one `/proc` walk inside a
+ * stop that has just spent five seconds sleeping, and it is the difference
+ * between a refusal a caller can act on and a refusal that lies.
  *
  * The output is one line of `pid:comm` entries, or the word `none` — a distinct
  * token so an empty answer reads as "nothing is holding" rather than "the
@@ -790,10 +788,10 @@ const HOLDER_TERM_WAIT_MS = 5_000;
  * forget; the fakes now parse every composed command with `sh -n`, so this
  * class cannot pass a test again.
  *
- * AND IT MUST NOT SAY `exit`. The empty scan used to answer `echo none; exit
- * 0`, which ends the session shell exactly as the syntax error did — the same
- * defect the chain's visibility probe was repaired for. `if`/`else` answers
- * both cases and leaves the shell alive.
+ * AND IT MUST NOT SAY `exit`. An empty scan answering `echo none; exit 0` ends
+ * the session shell exactly as the syntax error above does — the same defect the
+ * chain's visibility probe carries a repair for. `if`/`else` answers both cases
+ * and leaves the shell alive.
  *
  * `${name%%:*}` RATHER THAN `echo | cut`: POSIX parameter expansion, and two
  * fewer processes per holder inside a stop a caller is waiting on.
@@ -939,15 +937,15 @@ export function healthProbeSilent(output: string): boolean {
  * answers with the LAST probe's output so {@link healthProbeSilent} stays the
  * only reader of that format.
  *
- * THE WAITING MOVED INTO THE CONTAINER, and that is not an optimisation — it is
- * what makes the listener proof legal inside the init gate at all. The proof
- * used to be a Durable Object loop: probe, `scheduler.wait`, probe again. Two
- * things were wrong with it in the gate. A timer is not delivered until
- * `blockConcurrencyWhile` releases, so the sleep never returns and the proof
- * wedges the activation the platform then RESETS; and each probe is a separate
- * DO↔container round trip, so a thirty-second window over a two-second interval
- * spent fifteen of them on one port. The container's own `sleep` is not the
- * Durable Object's clock, so the same window costs ONE hop and returns.
+ * THE WAITING HAPPENS IN THE CONTAINER, and that is not an optimisation — it is
+ * what makes the listener proof legal inside the init gate at all. A Durable
+ * Object loop — probe, `scheduler.wait`, probe again — is wrong in the gate two
+ * ways. A timer is not delivered until `blockConcurrencyWhile` releases, so the
+ * sleep never returns and the proof wedges the activation the platform then
+ * RESETS; and each probe is a separate DO↔container round trip, so a
+ * thirty-second window over a two-second interval spends fifteen of them on one
+ * port. The container's own `sleep` is not the Durable Object's clock, so the
+ * same window costs ONE hop and returns.
  *
  * BOUNDED BY A COUNT, in the shape `snapshot-chain`'s own layer probe uses: the
  * loop runs at most `attempts` times, so the command's own duration is at most
@@ -983,11 +981,11 @@ export function awaitListenerCommand(port: number, attempts: number, intervalMs:
  * The phases are the correctness. Processes serve the ports, so no port is
  * exposed until every process is back; and a port is exposed only after its own
  * listener answers, or the box publishes a preview URL for a server that is not
- * there. This used to be one flat list of three op kinds — start a process,
- * probe a port, expose a port — and the executor walked it recording each
- * failure and continuing, straight past a silent probe into the exposure of that
- * very port, then reported the box ready. A shape that cannot express "expose
- * without a listener" is a better guard than an executor that remembers not to.
+ * there. One flat list of three op kinds — start a process, probe a port, expose
+ * a port — leaves the executor walking it, recording each failure and
+ * continuing, straight past a silent probe into the exposure of that very port,
+ * and then reporting the box ready. A shape that cannot express "expose without
+ * a listener" is a better guard than an executor that remembers not to.
  */
 export interface RestartPlan {
   /** Every durably-recorded process, in the order the specs came back. */

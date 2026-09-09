@@ -377,10 +377,10 @@ export class EvolutionEngine {
   private emit(event: EvolutionEvent): void {
     // evolution_events is created by initWorkspaceSchema on every backend
     // (conformance/manifest.ts lists it EVERYWHERE), so a failed INSERT is a
-    // real fault. This used to be swallowed as "may not exist yet in test
-    // environments": a production catch accommodating a test-only condition,
-    // which is exactly how an unwritable evolution stream stayed invisible
-    // while the listeners below kept reporting the event as delivered.
+    // real fault and is NOT swallowed. A production catch accommodating a
+    // test-only "may not exist yet" condition is exactly how an unwritable
+    // evolution stream stays invisible while the listeners below keep reporting
+    // the event as delivered.
     void this.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
       VALUES (${this.rt.actor.actorId}, ${event.type}, ${event.message},
               ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
@@ -584,7 +584,7 @@ export class EvolutionEngine {
     }
 
     // Quality: the outcome IS the signal, priced by where the verdict came
-    // from. An abandoned turn (only ever an existing ledger row now) that
+    // from. An abandoned turn (only ever an existing ledger row) that
     // errored is the one case the error decides; a clean abandonment stays
     // neutral. Pure, and computed BEFORE the writes so all of them fit in one
     // commit.
@@ -592,10 +592,10 @@ export class EvolutionEngine {
       ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
       : (turn.hadError ? 0.1 : null);
     // Craft EMA — real-outcome observations on the crafted tools this turn used,
-    // as the in-episode craft clock observed them. It used to be every tool name
-    // that was not built in, which is a set crafted tools are never IN — they
-    // are codemode-only — so the EMA was written against MCP and extension
-    // tools and nothing else.
+    // as the in-episode craft clock observed them. Crafted tools are
+    // codemode-only, so they are never IN the set "every tool name that is not
+    // built in": deriving the EMA from that set writes it against MCP and
+    // extension tools and nothing else.
     const craftedToolNames = turn.craftedToolsUsed ?? [];
 
     // `source`/`confidence` describe a verdict, so they are null on an
@@ -908,10 +908,11 @@ export class EvolutionEngine {
    */
   private async settleImports(turnId: string | undefined, outcome: TurnOutcome | null): Promise<void> {
     if (!turnId || outcome === null || outcome === 'abandoned') return;
-    // imported_experience is created by initWorkspaceSchema on every root, so
-    // "the ledger may not exist in minimal runtimes" is no longer true — and
-    // while it was, the catch also absorbed a failed ADOPTION, leaving the
-    // import staged forever with the turn recorded as having settled it.
+    // imported_experience is created by initWorkspaceSchema on every root, so a
+    // failure here is a real fault and is not caught: a catch wide enough to
+    // absorb "the ledger may not exist in minimal runtimes" also absorbs a
+    // failed ADOPTION, leaving the import staged forever with the turn recorded
+    // as having settled it.
     bindPendingImports(this.rt.storage.sql, this.rt.actor, turnId);
     const settled = await settleImportsForTurn(
       this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
@@ -1042,9 +1043,9 @@ export class EvolutionEngine {
    *  surface only when a recorded outcome already backs the window; otherwise
    *  it waits in the lessons ledger as provisional until one corroborates it. */
   private async onSessionReflection(session: CompletedSession, windowsClosed: number): Promise<void> {
-    // The reflection input is the ledger's newest CORROBORATED lessons — not a
-    // MEMORY.md heading parse, which only ever saw the copies this module no
-    // longer writes.
+    // The reflection input is the ledger's newest CORROBORATED lessons, which
+    // own their status there. Every recent-lesson reader uses those rows, so a
+    // memory file's headings or contents cannot decide which lessons qualify.
     const recentLessons = renderRecentLessons(this.rt.storage.sql, this.rt.actor, 5);
 
     if (!recentLessons.trim()) return;
@@ -1075,12 +1076,12 @@ export class EvolutionEngine {
 
   /** Propose a scaffold improvement based on session patterns.
    *
-   *  A rejected proposal is already a RETURNED value (`result.ok === false`),
-   *  not an exception — so the blanket catch this used to carry never caught a
-   *  failed validation. What it did catch was every real fault on the path: the
-   *  archive read, the versioned-backup read, both model calls and the scaffold
-   *  write. An evolution that never proposed anything reported the same silence
-   *  as one that proposed nothing worth taking. */
+   *  A rejected proposal is a RETURNED value (`result.ok === false`), not an
+   *  exception, so nothing here is wrapped in a catch: a blanket one would
+   *  never see a failed validation and would swallow every real fault on the
+   *  path — the archive read, the versioned-backup read, both model calls and
+   *  the scaffold write. An evolution that never proposed anything would then
+   *  report the same silence as one that proposed nothing worth taking. */
   private async maybeEvolveScaffold(reflection: string): Promise<void> {
     const scaffoldExists = await this.rt.identity.scaffold.exists();
     if (!scaffoldExists) return;
@@ -1187,8 +1188,8 @@ export class EvolutionEngine {
     // re-execution bill paid twice for two points on a curve, and the curve is
     // read by inspection RPCs only (listReplayEvals): no decision anywhere
     // consumes it. It stays available on demand (`runReplayEval`, the CLI and
-    // DO RPCs) so the number can still be asked for; what it no longer does is
-    // spend twenty full completions per cycle unasked.
+    // DO RPCs) so the number can still be asked for; what the cycle does NOT do
+    // is spend twenty full completions on it unasked.
 
     // CraftStore consolidation
     await periodicCraftConsolidation(this.rt);

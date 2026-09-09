@@ -127,7 +127,8 @@ describe('readForkRunParams', () => {
 
   // The invisible spend ceiling (2026-08-18). `judgeSamples` is a REQUEST; it
   // shares one per-evaluation call pool with check generation, so a request the
-  // pool cannot fund runs smaller. The surface used to show only the request.
+  // pool cannot fund runs smaller. A surface showing only the request hides
+  // that entirely.
   test('a search that asked for 20 judges and was seen running 3 says both numbers', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, {
@@ -290,8 +291,8 @@ describe('readExplorationCanvas', () => {
     expect(entry.tree).toHaveLength(4);
     expect(entry.tree.every((row) => row.root_id === 'swarm-1')).toBe(true);
     expect(entry.head?.heads).toHaveLength(3);
-    // And both halves of its parameters, which the map keyed by root id used to
-    // collapse to one.
+    // And both halves of its parameters: a map keyed by root id alone collapses
+    // them to one.
     expect(entry.params?.search).toMatchObject({
       budget: 12, branches: 3, maxDepth: 4,
       judgeSamplesRequested: 5, judgeSamplesRealised: 2,
@@ -318,11 +319,11 @@ describe('readExplorationCanvas', () => {
 
   test('a journal-only run on a later page still carries its branches', () => {
     const { db, sql, actor, actorId } = freshDb();
-    // It is the OLDEST run here, so it is off page one. The surface used to fetch
-    // the journalled half as ONE bounded `getHeadRuns` read taken beside page one,
-    // which is a second window over an overlapping set: every journalled run behind
-    // that window drew as "no branches were ever written" while the journal held
-    // them. The page a run is on now carries both halves of it.
+    // It is the OLDEST run here, so it is off page one. The page a run is on
+    // carries both halves of it. Fetching the journalled half as ONE bounded
+    // `getHeadRuns` read taken beside page one is a second window over an
+    // overlapping set: every journalled run behind that window draws as "no
+    // branches were ever written" while the journal holds them.
     seedSplit(db, actorId, { rootId: 'm1', task: 'journal', at: 1_000, heads: 2, merged: true });
     for (let i = 0; i < 4; i++) {
       seedSearch(db, actorId, { rootId: `s${i}`, task: `t${i}`, at: 5_000 + i * 1_000, nodes: 1 });
@@ -361,11 +362,10 @@ describe('readExplorationCanvas', () => {
   test('a search still being written cannot displace the run the page shows', () => {
     const { db, sql, actor, actorId } = freshDb();
     // `growing` STARTED first but is still receiving nodes, so it is the newest
-    // by last write and the oldest by first write. The canvas used to pick its
-    // trees by last write while the run list picked by first write, so at a
-    // page of one the list showed `settled` and the trees beside it belonged to
-    // `growing` — a listed run drawn with no tree, next to a tree for a run
-    // that was not listed.
+    // by last write and the oldest by first write. Picking trees by last write
+    // while the run list picks by first write means, at a page of one, the list
+    // shows `settled` and the trees beside it belong to `growing` — a listed
+    // run drawn with no tree, next to a tree for a run that was not listed.
     seedSearch(db, actorId, { rootId: 'growing', task: 'still going', at: 1_000, nodes: 1 });
     seedSearch(db, actorId, { rootId: 'settled', task: 'done', at: 5_000, nodes: 1 });
     db.query(`INSERT INTO search_nodes
@@ -455,9 +455,9 @@ describe('Pareto canvas evidence', () => {
 });
 /**
  * The permalink read: ONE run, composed exactly as the page composes it. The
- * drill-down opens a single run by id, and its dispatch parameters used to travel
- * only on the canvas page — so the surface with the most room to show the judge
- * clamp was the one surface that could not read it.
+ * drill-down opens a single run by id and carries its dispatch parameters with
+ * it — parameters that travel only on the canvas page leave the surface with
+ * the most room to show the judge clamp as the one surface that cannot read it.
  */
 
 describe('readExplorationRun', () => {

@@ -264,9 +264,9 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
  *
  * A FACTORY, because a wave's node deps are built once and shallow-copied per
  * child: one shared actor would give every node of that wave one claim ledger
- * and one row set, which is the collision the cutover exists to make
- * impossible. Each call registers its own node actor in the production
- * directory and builds that actor's own runtime over the ONE database.
+ * and one row set, which is the collision this makes impossible. Each call
+ * registers its own node actor in the production directory and builds that
+ * actor's own runtime over the ONE database.
  */
 export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: NodeIdentity) => Promise<HostedNodeSeat> {
   return async (node) => {

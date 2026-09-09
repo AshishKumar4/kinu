@@ -1,4 +1,4 @@
-// A container that is gone, and the two flows that used to act as if it were
+// A container that is gone, and the two flows that must not act as if it were
 // there: the heartbeat's replacement detector and the stop.
 //
 // MEASURED, run kinu-devbox-bench-20260906072721 (2026-09-06,

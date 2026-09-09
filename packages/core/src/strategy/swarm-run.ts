@@ -82,16 +82,15 @@
  * is ever dropped silently — a node that cannot tell refusal from being ignored will
  * simply propose again.
  *
- * THE BUDGET IS CONSERVED AND NOT MERELY CAPPED, and that is new here because
- * arbitration moved. A thought node's proposal was answered in this loop, one node
- * at a time, so reading the remaining budget and spending it could not interleave.
- * An agent node asks from inside its own tool loop and N of those run concurrently,
- * so `SwarmBudget` owns the number and decides-and-debits in one synchronous step
- * (*Budget conservation*: the allocations granted to a node's children must SUM to no
- * more than the parent's remaining budget). Depth and width bound the shape;
- * conservation bounds the spend.
+ * THE BUDGET IS CONSERVED AND NOT MERELY CAPPED. A thought node's proposal is answered
+ * in this loop, one node at a time, so reading the remaining budget and spending it
+ * cannot interleave. An agent node asks from inside its own tool loop and N of those
+ * run concurrently, so `SwarmBudget` owns the number and decides-and-debits in one
+ * synchronous step (*Budget conservation*: the allocations granted to a node's children
+ * must SUM to no more than the parent's remaining budget). Depth and width bound the
+ * shape; conservation bounds the spend.
  *
- * WHAT THE ISOLATION PROOF COVERS, AND WHAT IT NO LONGER COVERS.
+ * WHAT THE ISOLATION PROOF COVERS, AND WHAT IS DELIBERATELY OUTSIDE IT.
  * `MCTS/StorageIsolation.lean` holds of TOOLLESS branches: its two branch-side
  * actions carry a frame condition forbidding a branch from introducing a storage
  * identity no existing branch holds. `Exploration/Isolation.lean`'s
@@ -225,10 +224,10 @@ export interface SwarmRunDeps {
    * A caller-declared wall clock for ONE agent node, observed at its step
    * boundaries. OPTIONAL — there is no default clock over a node's work (owner
    * ruling, 2026-08-21: no per-turn bounds). Absent, a node runs until its work
-   * is done; present is a search or a test declaring a tighter deadline. The
-   * derived-default this field used to fall back to was the product of a deleted
-   * step cap and a deleted turn envelope — the exact per-turn bounds the ruling
-   * removed.
+   * is done; present is a search or a test declaring a tighter deadline. There
+   * is no implicit wall-clock default: the owner ruling of 2026-08-21 forbids
+   * per-turn bounds. A product of a step cap and a turn envelope would impose
+   * such a bound, just as a directly chosen default would.
    */
   readonly maxWallClockMs?: number;
   /**
@@ -528,7 +527,7 @@ export async function runSwarm(
   // declared is a shape the record cannot report honestly, and this one `expansions`
   // reports.
   //
-  // OWNED BY A TYPE rather than by a `let`, because arbitration no longer happens only
+  // OWNED BY A TYPE rather than by a `let`, because arbitration does not happen only
   // in this loop: an agent node asks from inside its own concurrent tool loop, so the
   // read and the debit have to be one step (`swarm-budget.ts`).
   const expansionBudget = maxDepth * branches;
@@ -558,8 +557,8 @@ export async function runSwarm(
    * THE LEASE every ledger write of this run is stamped with: the epoch a re-entry
    * claimed, or zero for a first attempt.
    *
-   * Live fencing rather than the constant zero it used to be. A swarm has a resume now,
-   * so an executor from the evicted activation may still hold the previous lease, and a
+   * Live fencing rather than a constant zero. A swarm has a resume, so an executor
+   * from the evicted activation may still hold the previous lease, and a
    * `converge` from it would settle a row this run is making progress on.
    */
   const ledgerEpoch = reentry?.epoch ?? SWARM_FIRST_LEDGER_EPOCH;
@@ -815,9 +814,9 @@ export async function runSwarm(
     const prefix = agentNodes
       ? await sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
       : [];
-    // What a child starts from: the proposal's per-branch answer where one was
-    // granted, otherwise the run's `context`. `expand:'mutate'` used to ask this and
-    // was cut for exactly that reason — it was a second spelling of `context`.
+    // What a child starts from: the proposal's per-branch context where one was
+    // granted, otherwise the run's `context`. The expansion axis does not
+    // independently control inheritance.
     const inheritedArtifact = (grant
       ? grant.proposal.branches.some((branch) => branch.context === 'fork')
       : resolved.config.context === 'fork')
@@ -875,9 +874,9 @@ export async function runSwarm(
      * TWO KINDS SIT HERE UNDER ONE NAME, because "this branch produced nothing the search
      * can continue from" is one fact: a member the barrier rejected left no report at
      * all, and a member that reported `incomplete` left a status line rather than an
-     * answer. The second kind used to be the first — an `errored` node was thrown — and
-     * collapsing them again in the other direction would put a node the caller can read
-     * back into the bucket for the ones that vanished.
+     * answer. One name for the refusal text and no further than that — treating an
+     * `incomplete` node as a rejected one would put a node the caller can read into the
+     * bucket for the ones that vanished.
      */
     const unusable: string[] = [];
     for (const { id, answer } of answers) {
@@ -933,10 +932,9 @@ export async function runSwarm(
     // cut one settles instead of refusing.
     if (unusable.length > 0 && expansions.every((child) => child.incomplete?.status === 'errored')) {
       // THE LEDGER IS SETTLED ON THE WAY OUT, as it is on every other refusal past
-      // `begin`. A refused run left `running` used to be merely untidy; now it is a
-      // RESUME TARGET — the next re-drive of this task would re-enter a tree whose run
-      // already gave up — so a refusal that does not settle its row is a refusal that
-      // silently continues.
+      // `begin`. A refused run left `running` is a RESUME TARGET — the next re-drive of
+      // this task would re-enter a tree whose run already gave up — so a refusal that
+      // does not settle its row is a refusal that silently continues.
       searchLedger.fail(rootId, ledgerEpoch, Date.now());
       return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
         + `${String(width)} of its nodes failed. ${unusable.join(' | ')}`);

@@ -121,7 +121,7 @@ def sealKey (dg : Floor → String) (i : Identity) (f : Floor) : Identity × Str
     pair of floors. -/
 theorem identityKey_is_floor_blind (i : Identity) :
     ∃ f₁ f₂ : Floor, f₁ ≠ f₂ ∧ identityKey i f₁ = identityKey i f₂ := by
-  refine ⟨majorityVoteOldFloor, majorityVoteFixedFloor, ?_, rfl⟩
+  refine ⟨majorityVoteDefectiveFloor, majorityVoteCorrectedFloor, ?_, rfl⟩
   intro h
   exact absurd (congrArg Floor.value h) (by decide)
 
@@ -327,27 +327,24 @@ theorem unmeasurable_does_not_discriminate :
 
 /-! ## The enumerated publication surfaces
 
-  **This section is a restatement forced by a moved rule, and the move is the whole
-  point of having isolated the clause.**
+  **The seal is stated over PUBLICATION, not over one store's write, and that is the
+  whole point of having isolated the clause.**
 
-  The seal used to be stated over a RECORDS-STORE write, and this file used to prove
-  exactly that. `SpecAudit`'s adversarial consultation found the hole and
-  `SealSideDoor` carried it here by theorem name: `carry:'artifacts'` publication was
-  routed through `experience_library` and called "separate and unchanged", so nothing
-  gated that path on `PublicationState` — the hole *The publication seal* now records
-  in as many words. The
-  old `sealed_publishes_nothing` was therefore **a true theorem about a false
-  property** — it quantified over actions writing one field, and the laundering
-  channel was not one of those actions. A run that breached its floor could publish
-  its artifact cross-workspace while the leaderboard was sealed.
+  A seal stated over a RECORDS-STORE write is **a true theorem about a false
+  property**: it quantifies over actions writing one field, and a laundering channel
+  is not one of those actions. `SpecAudit`'s adversarial consultation found the hole
+  and `SealSideDoor` carries it here by theorem name: `carry:'artifacts'` publication
+  routed through `experience_library` and called "separate and unchanged" is gated by
+  nothing on `PublicationState` — the hole *The publication seal* records in as many
+  words. A run that breached its floor could publish its artifact cross-workspace
+  while the leaderboard was sealed.
 
-  So the seal is now stated over PUBLICATION, defined as an enumerated set of
-  surfaces (`PUBLICATION_SURFACES`, `strategy/objective.ts`). The three theorems
-  that carried the contested clause keep their names and gain a surface index:
-  `publish_requires_open`, `retroPublish_requires_open`, `sealed_publishes_nothing`.
-  They go through essentially unchanged, and that is the tell that this is the right
-  restatement rather than a weakening — the theorem became true OF THE PROPERTY
-  without becoming harder to prove. -/
+  So PUBLICATION is an enumerated set of surfaces (`PUBLICATION_SURFACES`,
+  `strategy/objective.ts`). The three theorems that carry the contested clause each
+  take a surface index: `publish_requires_open`, `retroPublish_requires_open`,
+  `sealed_publishes_nothing`. They go through essentially unchanged, and that is the
+  tell that this is the right statement rather than a weakening — the theorem is true
+  OF THE PROPERTY without being harder to prove. -/
 
 /-- The six sealed publication surfaces. A write is a publication when it makes a
     candidate's artifact, or a value measured against the sealed objective,
@@ -358,8 +355,8 @@ theorem unmeasurable_does_not_discriminate :
     the Lean form of the spec's rule that adding a writer without adding it to the
     enumeration is a specification violation. -/
 inductive Surface where
-  /-- The leaderboard: `ExplorationRecord`, keyed by `objectiveId`. The only surface
-      the seal used to name. -/
+  /-- The leaderboard: `ExplorationRecord`, keyed by `objectiveId`. The narrowest
+      surface in the set: a seal over this one alone leaves the other five open. -/
   | records
   /-- Cross-workspace, on the UserDO. The widest blast radius in the set, and the
       row the audit found. -/
@@ -483,7 +480,7 @@ structure RunState where
   floorSuspended : Bool
   /-- **The whole publication egress**, surface and row. One field rather than six,
       because the theorem worth having is about the egress and not about any table:
-      the previous version's defect was exactly that it named one sink. -/
+      a model that names one sink says nothing about the other five. -/
   published : List (Surface × Row)
   /-- How many publications the seal refused. *The publication seal*'s disclosure
       obligation needs a COUNT, and a count nobody accumulates is a count nobody can
@@ -510,9 +507,8 @@ inductive RunAction where
   /-- The environment answers. Retained whether or not the floor is suspended. -/
   | evaluate (c : Scored)
   | breach (b : Breach)
-  /-- A publication to a NAMED surface. Indexed rather than implicit, because the
-      old unindexed form is what let a laundering channel sit outside the
-      theorem. -/
+  /-- A publication to a NAMED surface. Indexed rather than implicit, because an
+      unindexed form lets a laundering channel sit outside the theorem. -/
   | publish (sfc : Surface) (r : Row)
   /-- Retroactive publication of a withheld entry, additionally gated on
       *Comparability*'s `verifierDigest` equality. -/
@@ -586,9 +582,8 @@ theorem breach_seals (s : RunState) (b : Breach) (h : s.halted = false) :
   simp [stepOf, h]
 
 /-- **A publication to ANY enumerated surface requires an admitting state.**
-    Quantified over `Surface`, which is the restatement the audit's finding forced:
-    the old version quantified over one field and left `experience_library` outside
-    the theorem. -/
+    Quantified over `Surface`, which is what the audit's finding forced: a theorem
+    over one field alone leaves `experience_library` outside it. -/
 theorem publish_requires_open (s : RunState) (b : Breach) (sfc : Surface) (r : Row)
     (h : s.pub = .sealed b none) :
     (stepOf s (.publish sfc r)).published = s.published := by

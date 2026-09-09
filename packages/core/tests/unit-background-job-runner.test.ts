@@ -1027,12 +1027,12 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test('the detach transfers what the call had issued, and OWNS what it issues next', async () => {
-    // Blocker 1. The handover used to be a snapshot taken at the crossing, so a
-    // request the tool issued afterwards — an `execute_tools` script still
-    // launching laptop commands minutes later — belonged to nobody: the turn was
-    // over and the transfer had already named its set. The claim now lands
-    // BEFORE the transfer is awaited, so a request issued from that moment on is
-    // registered under the job at its own INSERT.
+    // Blocker 1. The claim lands BEFORE the transfer is awaited, so a request
+    // issued from that moment on is registered under the job at its own INSERT.
+    // A handover that is only a snapshot taken at the crossing leaves a request
+    // the tool issues afterwards — an `execute_tools` script still launching
+    // laptop commands minutes later — belonging to nobody: the turn is over and
+    // the transfer has already named its set.
     const ownership = new DeviceRequestOwnership();
     ownership.report('req-1');
     ownership.report('req-2');
@@ -1111,9 +1111,8 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
  * search itself is durable and re-enterable, and the job is the caller's handle on
  * that search — a job per generation would split one search across N rows each
  * holding a fragment, which is the same shape the search layer already rejected when
- * it stopped minting a second root. So identity stays, and what changes is that the
- * lifetime is bounded, the generation count is disclosed, and the terminal state
- * carries what the work has.
+ * it stopped minting a second root. So identity stays: the lifetime is bounded, the
+ * generation count is disclosed, and the terminal state carries what the work has.
  *
  * Neither bound is exercised at its real value here, for the reason the stall
  * watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes cannot
@@ -1226,7 +1225,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     store.create({ id: 'bgjob-empty', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     // The executor was lost and no resumer exists for the kind, so recovery owns
-    // the settlement — nothing bounds live work by time any more to do it.
+    // the settlement — nothing bounds live work by time to do it instead.
     await runner.recoverOrphans();
 
     const job = store.get('bgjob-empty');

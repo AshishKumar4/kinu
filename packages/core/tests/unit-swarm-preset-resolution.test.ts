@@ -31,11 +31,11 @@ import type { JsonObject } from '../src/utils/json';
  * A measurable objective naming a REGISTERED instrument, which is what every verifying
  * preset requires and what the archive presets bin their cells by.
  *
- * ITS `spec` USED TO BE `{}`, and that passed because nothing checked a spec until the
- * instrument was bound — one round trip into a started run. `swarmValidity` now names
- * every field the kind needs at CALL time, so the fixture has to be an instrument that
- * could actually run: an empty spec described a verifier that would have faulted the
- * moment it was asked to measure anything.
+ * ITS `spec` IS WHOLE. `swarmValidity` names every field the kind needs at CALL time,
+ * so the fixture has to be an instrument that could actually run: a `{}` spec describes
+ * a verifier that faults the moment it is asked to measure anything, and with no
+ * call-time check it passes until the instrument is bound — one round trip into a
+ * started run.
  */
 const EXEC_RATIO_SPEC: JsonObject = {
   params: { n: 8 },
@@ -184,10 +184,10 @@ describe('every named preset resolves to a tuple validity accepts', () => {
       .toBe(DEFAULT_CONFIG.mcts.craftExtractionThreshold);
   });
 
-  test('a preset row is a POINT — the undeclared arm is gone rather than guarded', () => {
-    // The strongest form of the fix. While a row could be undeclared, every reader of
-    // the table needed a guard and `custom` + `from` inherited the refusal. With the
-    // arm removed the guard has nothing to check and the hatch cannot be poisoned.
+  test('a preset row is a POINT — every row declares its config, so nothing guards one', () => {
+    // The strongest form of the rule. An undeclarable row makes every reader of the
+    // table carry a guard and `custom` + `from` inherit its refusal. With no undeclared
+    // arm there is nothing to check and the hatch cannot be poisoned.
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
       expect(SWARM_PRESET_POINTS[preset].depth).toBeGreaterThan(0);
@@ -197,10 +197,10 @@ describe('every named preset resolves to a tuple validity accepts', () => {
 
 describe('custom seeded from a preset resolves on the axes the caller states', () => {
   test('`from` each named preset resolves, overriding only what differs', () => {
-    // The escape hatch the refusal text used to RECOMMEND while poisoning: a call
-    // saying `preset:'custom', from:'research'` inherited the undeclared row's refusal,
-    // so the way out named by the error did not work. Every base now seeds a
-    // composition, including the three that used to refuse.
+    // The escape hatch the refusal text RECOMMENDS, and it has to work: a call saying
+    // `preset:'custom', from:'research'` that inherited an undeclared row's refusal
+    // would make the way out named by the error a dead end. Every base seeds a
+    // composition.
     for (const from of NAMED_SWARM_PRESETS) {
       const resolved = legal({
         preset: 'custom', from, label: `from-${from}`,
@@ -288,8 +288,8 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
   test('the marginalisation floor is unchanged, because the evidence for it is unchanged', () => {
     // #178: a gate is not lowered to make something pass. Koh Table 4 at fixed node
     // expansions — a marginalised weaker judge scores 30.0% against an unmarginalised
-    // stronger one's 28.5%, and SC(1)→SC(20) is worth +8.5. The number stays; what
-    // changed is that a run admitted at it now runs at it.
+    // stronger one's 28.5%, and SC(1)→SC(20) is worth +8.5. The number is the
+    // floor a run is admitted at and the floor it runs at.
     expect(JUDGE_MARGINALISATION_MIN).toBe(20);
   });
 });
@@ -368,14 +368,14 @@ describe('`{preset, task}` is a complete call on every row', () => {
     const refusal = swarmValidity(composed);
     if (!refusal) throw new Error('a composed score:"verify" with no objective must be refused');
     expect(refusal.error).toContain('score:"verify"');
-    // And the way out it names has to be one `custom` can actually take. The old text
-    // offered `score:"none"` to every preset, which a NAMED preset cannot set at all.
+    // And the way out it names has to be one `custom` can actually take: offering
+    // `score:"none"` to every preset names a move a NAMED preset cannot make at all.
     expect(refusal.error).toContain('`config`');
   });
 
   test("the incident's call sequence collapses to one refusal, and it names a working call", () => {
     const task = 'reduce the oracle calls our solver spends';
-    // CALL 1, the one the model actually made. It used to be refusal #1 of 5.
+    // CALL 1, the one the model actually made in the incident — refusal #1 of its 5.
     const bare = resolveSwarm({ preset: 'optimise', task });
     if ('reason' in bare) throw new Error(bare.error);
     expect(swarmValidity(bare)).toBeNull();

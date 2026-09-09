@@ -25,13 +25,13 @@
 
 # WHY THE TRANSCRIPT GOES TO A FILE.
 #
-# Gates run with stdout inherited, so this tier used to write its whole
-# transcript into the pipe git gives a pre-push hook: 16,650 lines, measured
-# 2026-09-03. Git stops reading before the end, the next write takes SIGPIPE,
-# and the hook dies with status 141 — which git reports as a refusal with no
-# failing gate named. It refused three pushes in one evening whose 42 gates had
-# all passed, and the same tier run standalone exited 0, which is what
-# localised it.
+# Gates run with stdout inherited, and this tier's whole transcript is 16,650
+# lines, measured 2026-09-03 — more than the pipe git gives a pre-push hook
+# will read. Write it there and git stops reading before the end, the next
+# write takes SIGPIPE, and the hook dies with status 141 — which git reports as
+# a refusal with no failing gate named. That refused three pushes in one
+# evening whose 42 gates had all passed, while the same tier run standalone
+# exited 0, which is what localised it.
 #
 # So the transcript lands in a file and git sees the verdict. A failure prints
 # the finding and names the log, which is also the only readable form of a

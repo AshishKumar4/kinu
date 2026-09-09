@@ -1,12 +1,12 @@
 import type { ChatEvent } from '../src/chat';
 // Regression tests for the scaffold-proposal contract.
 //
-// The proposal prompt used to instruct "Use only rt.* methods (rt.llm,
-// rt.memory, rt.executor, rt.schedule)" — a phantom API: the executor passes
-// the task STRING as `rt` and exposes only the `host.*` bridge, so every
-// proposal written against those instructions crashed in shadow eval. These
-// tests pin the prompt to the real contract and prove a proposal written
-// against the documented API survives the executor's smoke path.
+// The executor passes the task STRING as `rt` and exposes only the `host.*`
+// bridge, so a prompt that instructs "Use only rt.* methods (rt.llm,
+// rt.memory, rt.executor, rt.schedule)" names a phantom API and every proposal
+// written against it crashes in shadow eval. These tests pin the prompt to the
+// real contract and prove a proposal written against the documented API
+// survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
 import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine';
 import { recordLesson } from '../src/evolution/outcomes';

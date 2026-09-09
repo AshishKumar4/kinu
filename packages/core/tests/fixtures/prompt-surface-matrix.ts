@@ -231,14 +231,13 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['report'], registeredExecutors: [] },
   },
   {
-    // ONE case, not the `code-execution-with/without-temporary-ask` pair this
-    // replaces. `temporaryAsk` reaches the prompt only through the Delegation
-    // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('ask')`
-    // (prompt.ts) — so on a surface carrying `execute_tools` and no `agents`
-    // tool the flag renders nothing in either position, and the two cases were
-    // one request under two names. The Code-execution section had its own
-    // `agents.ask` bullet until the 2026-09-03 delegation-nudge cutover; the
-    // pair outlived it.
+    // ONE case, not a with/without-`temporaryAsk` pair. `temporaryAsk` reaches
+    // the prompt only through the Delegation section's `hasTemporaryAsk`, which
+    // is `surface.temporaryAsk && has('ask')` (prompt.ts), and the
+    // Code-execution section carries no `agents.ask` bullet of its own — so on
+    // a surface carrying `execute_tools` and no `agents` tool the flag renders
+    // nothing in either position, and a pair here would be one request under
+    // two names.
     name: 'code-execution',
     opts: { availableTools: ['execute_tools'], registeredExecutors: [] },
   },

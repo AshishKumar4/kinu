@@ -623,12 +623,11 @@ export class EventLog {
    * because the two answers are opposite and a caller must pick one.
    *
    * `answered` names the drain turns that DID produce an answer and therefore
-   * owe a reply rather than a second asking. Re-pending one of those is the
-   * quiet data loss this sweep used to cause on its own: the sender was still
-   * waiting on a reply that already existed, and got a repeat of the question
-   * instead. The exclusion is a predicate and not an execution order on
-   * purpose — an ordering between this and the resume would have to hold on
-   * every path, and this holds whatever runs first.
+   * owe a reply rather than a second asking. Re-pending one of those is quiet
+   * data loss: the sender is still waiting on a reply that already exists and
+   * gets a repeat of the question instead. The exclusion is a predicate and not
+   * an execution order on purpose — an ordering between this and the resume
+   * would have to hold on every path, and this holds whatever runs first.
    */
   unbindStale(
     olderThanMs: number,

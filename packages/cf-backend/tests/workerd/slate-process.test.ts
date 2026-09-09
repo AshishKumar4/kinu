@@ -80,8 +80,8 @@ it('authored code that keeps an old request\'s bindings cannot replay its call c
 it('bindings kept from a PREVIEW request cannot stand in for a hop lineage', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('preview-replay'));
   // The preview arm of the same escape. A browser GET is a root lineage, so
-  // bindings kept from one used to yield an empty chain when presented from
-  // inside a hop — the ancestors the honest chain would have refused on.
+  // bindings kept from one would yield an empty chain when presented from
+  // inside a hop — the ancestors the honest chain refuses on.
   await subject.start([
     'let kept = null;',
     'export default { async fetch(request, env) {',

@@ -45,7 +45,7 @@ export interface MCTSDefaults {
  *  is heads-specific. */
 export interface HeadsDefaults {
   /** Independent merge-synthesis samples; the median-scored one is kept.
-   *  1 ⇒ the legacy n=1 merge. */
+   *  1 ⇒ a single merge sample, no ensemble. */
   mergeSamples: number;
 }
 

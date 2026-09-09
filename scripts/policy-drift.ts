@@ -20,7 +20,7 @@
  *
  * ## Three signals, because one is not enough — measured, not assumed
  *
- * VALUE alone over-fires, and the first version of this gate measured exactly
+ * VALUE alone over-fires on this tree, and the measurement says exactly
  * how badly: 198 findings, because `MS` is in nearly every policy name and
  * `600000` is both a session lifetime and a deploy timeout. NAME alone
  * under-fires: the same policy is written `MAX_DELIVERY_ATTEMPTS` in core and
@@ -137,8 +137,8 @@ export interface Survey extends FileSurvey {
 
 const SCREAMING_SNAKE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$/;
 
-/*  A name is three kinds of word, and conflating them is what made the first
-    version of this gate report 198 findings, nearly all noise.
+/*  A name is three kinds of word, and conflating them is what reports 198
+    findings on this tree, nearly all noise.
 
     A UNIT says what the number measures. `MS` is the commonest word in every
     policy name in the tree, so "shares a role word" was satisfied by any two

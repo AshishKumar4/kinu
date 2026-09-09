@@ -8,9 +8,9 @@
 // scripts/bench.ts, which runs real agent solvers in isolated sandboxes against
 // this repo's own checks with a sealed split.
 //
-// It runs only when someone asks for it. It used to run nightly on a schedule
-// with the baseline defaulting to the candidate model, which billed for a model
-// judged against itself; both of those are now refused.
+// It runs only when someone asks for it, never on a schedule. A nightly run
+// with the baseline defaulting to the candidate model bills for a model judged
+// against itself; both of those are refused.
 //
 //   bun scripts/eval.ts --baseline-model <spec>  # required: A/B needs two models
 //   bun scripts/eval.ts --model <spec> --baseline-model <spec> --out out.json
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
   // picking a winner between its own outputs. The paired quantity the report
   // leads with (regressionDelta = B − A) is then noise around zero, and the
   // absolute floor is being applied to a self-assessment. Refuse rather than
-  // bill for it — the default used to be exactly this run.
+  // bill for it — defaulting `--baseline-model` to `--model` is exactly this run.
   if (baselineSpec === candidateSpec) {
     console.error(
       `Refusing to run: baseline and candidate are both ${candidateSpec}.\n`

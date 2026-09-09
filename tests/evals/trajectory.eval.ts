@@ -590,13 +590,13 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       ? { ...event, error: undefined, result: ARTIFACT_MARKER, outcome: { success: true } } : event);
     const read = await entry.verify({ ...input, events: corrected });
     expect(read.every((subgoal) => subgoal.reached)).toBe(true);
-    const legacy = corrected.map((event): RunEvent => {
+    const noOutcome = corrected.map((event): RunEvent => {
       if (event.type !== 'tool_call_end') return event;
       const { outcome: _outcome, ...withoutOutcome } = event;
       return withoutOutcome;
     });
-    await expect(entry.verify({ ...input, events: legacy })).rejects.toThrow('unmeasured');
-    expect(ledgerTotalsFromEvents(legacy).toolCalls).toBe(2);
+    await expect(entry.verify({ ...input, events: noOutcome })).rejects.toThrow('unmeasured');
+    expect(ledgerTotalsFromEvents(noOutcome).toolCalls).toBe(2);
   });
 
   test('a steering answer cannot invent the other file it lists', async () => {

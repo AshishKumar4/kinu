@@ -7,7 +7,7 @@
 // Heads are LLM-bound, so the HeadController's Promise.all gives real
 // concurrency without subprocesses; the merge LLM runs in this process.
 //
-// ONE DATABASE. A head no longer opens a per-head scratch file under `~/.kinu/heads/`: it is acquired
+// ONE DATABASE. A head opens no per-head scratch file under `~/.kinu/heads/`: it is acquired
 // from the root's ActorHost, so its claims, journal steps, scaffold pointer and
 // program state are its own actor-keyed rows in the workspace's one store —
 // which is what lets a head take a CLAIMED turn (the promoted-loop contract)
@@ -124,9 +124,9 @@ export interface CLIHeadRuntimeDeps {
    * split runs several heads concurrently off one deps object, and a single
    * hosted actor shared between them would give the whole wave one claim
    * ledger, one loop pointer and one row set — the cross-actor collision this
-   * cutover exists to make impossible. Each call registers its own actor,
-   * acquires its runtime objects from the root's host under the origin this
-   * `HeadInput` names, and hands back the release that retires it.
+   * makes impossible. Each call registers its own actor, acquires its runtime
+   * objects from the root's host under the origin this `HeadInput` names, and
+   * hands back the release that retires it.
    *
    * `writes` is the run's own `HeadCapture.files`, and it is a PARAMETER rather
    * than something the seater could know: the head's file attribution is per

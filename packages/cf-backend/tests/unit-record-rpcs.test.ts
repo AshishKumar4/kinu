@@ -5,10 +5,10 @@
 // test cannot reach:
 //
 //   1. THE TABLE EXISTS ON A WORKSPACE THAT HAS NEVER SEARCHED. `exploration_records`
-//      used to be created by the first swarm run, so a leaderboard RPC on any other
-//      workspace was a `no such table` throw dressed as an empty pane. It is now part of
-//      `initWorkspaceSchema`, which is what the orchestrator's own `onStart` runs — so
-//      the empty answer below is a read that ran, not a read that failed.
+//      is part of `initWorkspaceSchema`, which is what the orchestrator's own `onStart`
+//      runs — not something the first swarm run creates. Created there, a leaderboard
+//      RPC on any other workspace is a `no such table` throw dressed as an empty pane.
+//      So the empty answer below is a read that ran, not a read that failed.
 //   2. THE REQUEST CARRIES THE HANDLE BACK. The RPCs take the digests as opaque values,
 //      and `floorDigest: null` and `descriptor: null` have to survive the round trip as
 //      NULLS. A request shape that dropped either would read another comparable set, or

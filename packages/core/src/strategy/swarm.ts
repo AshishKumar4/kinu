@@ -252,22 +252,19 @@ export type SwarmCarrySetting =
   | { readonly kind: 'artifacts'; readonly threshold: number };
 
 /**
- * The `unit` axis, UNTAGGED — and the note recording why it stopped being tagged.
+ * The `unit` axis, UNTAGGED — and the note recording why it carries no parameter.
  *
- * It carried `inherit` on a `trajectory` value, on the argument that only an agent
- * node has a conversation to start from. Both halves of that argument have since
- * become false in the same commit: every node except `thought` is now an agent, so
- * the parameter would belong to two of three values rather than one, and the
- * question it asked is the {@link SWARM_CONTEXTS} axis, which asks it once for the
- * caller-to-root edge and every branch edge together. *One spelling per axis*: *"the
- * caller-to-root edge and every branch edge are the same question and MUST have the
- * same spelling"* — two fields, two names, one question, with a docstring whose only
- * job was telling a reader they were different.
+ * `unit` distinguishes an agent answer from a toolless thought. Inheritance
+ * belongs to `SWARM_CONTEXTS`, which governs the caller-to-root edge and every
+ * branch edge, so `unit` carries no inheritance parameter. *One
+ * spelling per axis*: *"the caller-to-root edge and every branch edge are the same
+ * question and MUST have the same spelling"* — two fields, two names, one question,
+ * with a docstring whose only job is telling a reader they are different.
  *
- * A tagged shape kept for a parameter that moved would be the second spelling
- * *One spelling per axis* exists to prevent, so the variant is a plain union: the
- * remaining tagged axes are {@link SwarmScoreSetting} and {@link SwarmCarrySetting},
- * which still carry parameters no other value of theirs can hold.
+ * A tagged shape kept for a parameter that belongs to a whole axis would be the second
+ * spelling *One spelling per axis* exists to prevent, so the variant is a plain union:
+ * the tagged axes are {@link SwarmScoreSetting} and {@link SwarmCarrySetting}, which
+ * carry parameters no other value of theirs can hold.
  */
 export type SwarmUnitSetting =
   | { readonly kind: 'answer' }
@@ -278,9 +275,9 @@ export type SwarmUnitSetting =
  *
  * **Where a parameter belongs to exactly one axis value, it lives ON that value.**
  * Applied exhaustively: `samples` to `score:'judge'` and the admission thresholds to
- * `carry:'reflections'`/`'artifacts'`. `unit` carried one and no longer does, for the
- * reason recorded on {@link SwarmUnitSetting}: a parameter belonging to a whole
- * SURFACE rather than to one value is an axis, and {@link SWARM_CONTEXTS} is it.
+ * `carry:'reflections'`/`'artifacts'`. `unit` carries none, for the reason recorded on
+ * {@link SwarmUnitSetting}: a parameter belonging to a whole SURFACE rather than to one
+ * value is an axis, and {@link SWARM_CONTEXTS} is it.
  *
  * **Where a parameter belongs to a REGION of values it cannot be tagged, and then its
  * applicability condition must be CHECKED rather than assumed.** `pruneThreshold` and
@@ -584,22 +581,20 @@ export interface SwarmPresetPoint {
 }
 
 /**
- * A row of the preset table. Every row is a POINT.
+ * A row of the preset table. Every row is a POINT, and there is no second arm.
  *
- * THERE USED TO BE A SECOND ARM. A row could be `{undeclared}` — a preset naming a
- * tagged axis value whose parameter the table declined to state — and
- * {@link resolveSwarm} refused that preset quoting the missing declaration. Three
- * rows sat in it and the refusal was honest, but *Presets* requires a named preset to
- * be UNREFUSABLE, and a preset that cannot be constructed is not a preset. The arm
- * also poisoned the one escape hatch its own refusal text recommended: `custom` with
- * `from` naming an undeclared row inherited the refusal, so the way out named by the
- * error did not work.
+ * AN `{undeclared}` ROW — a preset naming a tagged axis value whose parameter the table
+ * declines to state — would be refused by {@link resolveSwarm} quoting the missing
+ * declaration, and that refusal would be honest. It is forbidden anyway: *Presets*
+ * requires a named preset to be UNREFUSABLE, and a preset that cannot be constructed is
+ * not a preset. Such an arm also poisons the one escape hatch its own refusal text
+ * recommends — `custom` with `from` naming an undeclared row inherits the refusal, so
+ * the way out named by the error does not work.
  *
- * The three parameters are now declared, each converted or adopted from a number this
- * repository already holds rather than chosen here — see the rows. With no row left to
- * refuse, the arm is REMOVED rather than left empty and guarded: an unconstructible
- * row can no longer be written down, which is strictly stronger than refusing one, and
- * it is the same move that put `novelty` onto the archive arm.
+ * Every parameter is declared, each converted or adopted from a number this repository
+ * already holds rather than chosen here — see the rows. With the arm absent rather than
+ * empty and guarded, an unconstructible row cannot be written down at all, which is
+ * strictly stronger than refusing one.
  */
 export type SwarmPresetRow = SwarmPresetPoint;
 
@@ -610,14 +605,13 @@ export type SwarmPresetRow = SwarmPresetPoint;
  * no `custom` row: `config` IS the override and `from` names the base, and a second
  * row would be the second spelling *One spelling per axis* exists to prevent.
  *
- * EVERY ROW IS DECLARED. Three of them — `research`, `audit`, `redteam` — used to be
- * `{undeclared}`, each naming a tagged arm whose parameter the table did not state,
- * and each therefore refused. That refusal was accurate and the preset was still
- * useless: the shapes all three describe were reachable through `custom` on the same
- * axes on the same day, so the table was declining to name a tuple the engine already
- * ran. Naming it is not inventing it.
+ * EVERY ROW IS DECLARED, `research`, `audit` and `redteam` included: each names a
+ * tagged arm, and a row that did not state that arm's parameter would be refused —
+ * accurately, and to no purpose, since the shapes all three describe are reachable
+ * through `custom` on the same axes. Declining to name a tuple the engine already runs
+ * buys nothing; naming it is not inventing it.
  *
- * NEITHER NUMBER IS CHOSEN HERE, and that is the whole reason they may now be written:
+ * NEITHER NUMBER IS CHOSEN HERE, and that is the whole reason they may be written:
  *
  *  - `novelty: 0.4` is Rainbow Teaming's τ=0.6 CONVERTED. τ is a similarity ceiling
  *    and this axis is a distance floor, and {@link archiveRegionRefusal} already
@@ -661,20 +655,20 @@ export const SWARM_PRESET_POINTS = {
    * `fresh` rather than `fork`: a probe of a new coverage cell wants the parent's
    * RESULTS, not its transcript.
    *
-   * `verify` rather than `judge`, and this is where the shipped engine overrode the
-   * shape these rows were first drawn in. A cell is keyed by the objective's identity
-   * and its population ordered by the objective's direction, so a judged archive has
-   * nothing to bin under and nothing to rank by — {@link archiveRegionRefusal} refuses
-   * the pair, and `swarm-run.ts` confirms it end to end: a judged candidate carries no
-   * measurement, so the writer skips it and the run reports `records: null`. A COVERAGE
-   * GRID therefore needs a measurable objective.
+   * `verify` rather than `judge`, and the engine's own behaviour is what settles it. A
+   * cell is keyed by the objective's identity and its population ordered by the
+   * objective's direction, so a judged archive has nothing to bin under and nothing to
+   * rank by — {@link archiveRegionRefusal} refuses the pair, and `swarm-run.ts`
+   * confirms it end to end: a judged candidate carries no measurement, so the writer
+   * skips it and the run reports `records: null`. A COVERAGE GRID therefore needs a
+   * measurable objective.
    *
-   * WHAT IT NO LONGER MEANS is that the preset needs one to be CALLABLE. A row scoring
+   * WHAT IT DOES NOT MEAN is that the preset needs one to be CALLABLE. A row scoring
    * by `verify` resolves to {@link unmeasuredPoint} when the call named no `objective`,
    * which drops the archive along with the instrument and leaves a judged sweep — so
    * `{preset, task}` runs, and naming an objective is what buys the grid rather than
-   * what buys a non-refusal. That split is the whole of the ergonomics fix: the shape
-   * these rows describe still requires an instrument, and the CALL does not.
+   * what buys a non-refusal. That split is deliberate: the shape these rows describe
+   * requires an instrument, and the CALL does not.
    *
    * Depth 1 BY CONSTRUCTION, the same way `ideate`'s is: an archive bins at the settle
    * barrier, so within one run there is nothing to select a second level from. The
@@ -741,9 +735,9 @@ export const SWARM_PRESET_POINTS = {
   prove: {
     config: {
       // `answer`: an agent node, so a proof candidate is produced by something
-      // that can run its own checker between steps. `generator` used to sit here
-      // to say that in a second word, and it was the same node — see
-      // {@link SWARM_UNITS} for why the word is gone rather than the intent.
+      // that can run its own checker between steps. {@link SWARM_UNITS} holds two
+      // words and neither is `generator`: a node that generates and checks IS an
+      // `answer` node, and a second word for it would say nothing more.
       unit: { kind: 'answer' }, context: 'fork',
       expand: 'sample',
       // The checker IS the score. `verify` requires an `objective`, which is where
@@ -866,19 +860,18 @@ const CARRY_DOCTRINE = {
  * the enum and named in none of them, while three presets that had stopped resolving
  * went on being described as working.
  *
- * IT LIVES BESIDE THE TABLE NOW, and that is the whole point. It used to sit in
- * tools/registry.ts, one import-free module away from the rows it described, and the
- * distance was the defect: the prose said `optimise` "requires `objective`" while the
- * table decided whether it did, so the two could disagree and did. Only the clause a
- * renderer cannot derive is written by hand, on the row itself
- * ({@link SwarmPresetPoint.doctrine}); every number and every shape word below is read
- * from the axes.
+ * IT LIVES BESIDE THE TABLE, and that is the whole point. Prose an import-free module
+ * away from the rows it describes — in tools/registry.ts, say — drifts from them: the
+ * prose says `optimise` "requires `objective`" while the table decides whether it does,
+ * so the two can disagree. Only the clause a renderer cannot derive is written by hand,
+ * on the row itself ({@link SwarmPresetPoint.doctrine}); every number and every shape
+ * word below is read from the axes.
  */
 export const SWARM_PRESET_DOCTRINE: readonly string[] = [
-  // THE RULE, STATED ONCE. It used to be five copies — one per verifying row — of the
-  // same sentence about what a bare call does, which is 550 characters of boilerplate
-  // in text that renders into three model-facing surfaces. Saying it here and letting
-  // each row print only `Sweep N` costs one line and says strictly more.
+  // THE RULE, STATED ONCE. Five copies — one per verifying row — of the same sentence
+  // about what a bare call does is 550 characters of boilerplate in text that renders
+  // into three model-facing surfaces. Saying it here and letting each row print only
+  // `Sweep N` costs one line and says strictly more.
   'Every preset is callable as `preset` + `task` alone, and nothing else is required. '
     + 'With no `objective` a preset runs a JUDGED SWEEP at its own width: N candidates in '
     + 'parallel, ranked by a judge ensemble, none selected down a tree and none published. '
@@ -932,17 +925,17 @@ export const JUDGE_MARGINALISATION_MIN = 20;
  *
  * WHY THIS EXISTS AT ALL. `judgeCallBudget` splits ONE pool between the generated
  * check suite and the ensemble, so an ensemble is bounded by what the pool leaves:
- * `min(samples, pool − 1)` on a code-bearing candidate. The swarm's judged path used
- * to hand it `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — 4, the MCTS ENGINE's dial, sized
- * for that engine's own `judgeSamples: 3` default — so every judged swarm realised 3
- * however many {@link JUDGE_MARGINALISATION_MIN} demanded. A run admitted at 20 and
- * executed at 3 is the accepted-and-ignored shape in its purest form, and it was
- * DISCLOSED rather than fixed: `swarm.judge_ensemble_clamped` said so on the way past.
+ * `min(samples, pool − 1)` on a code-bearing candidate. Funding the judged path from
+ * `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — 4, the MCTS ENGINE's dial, sized for that
+ * engine's own `judgeSamples: 3` default — caps every judged swarm at 3 however many
+ * {@link JUDGE_MARGINALISATION_MIN} demands. A run admitted at 20 and executed at 3
+ * is the accepted-and-ignored shape in its purest form, and DISCLOSING it is not
+ * fixing it: `swarm.judge_ensemble_clamped` would only say so on the way past.
  *
- * The floor is not what moved. It is a claim about ensemble size, measured, and
- * lowering it to meet a borrowed dial is the one move forbidden here. What moved is
- * the funding: the pool is now DERIVED from the request the validity table already
- * admitted, so the two numbers cannot disagree.
+ * So the pool is DERIVED from the request the validity table already admitted, and
+ * the two numbers cannot disagree. The floor does not bend to meet a borrowed dial:
+ * it is a claim about ensemble size, measured, and lowering it is the one move
+ * forbidden here.
  *
  * `samples + 1` and not a larger figure: the one extra call is exactly the check
  * suite `judgeCallBudget` documents, bought on a code-bearing candidate and left
@@ -1159,11 +1152,10 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
     // NEITHER `key` NOR `objective` IS CHECKED HERE, and for one reason. Both are
     // rules about the RESOLVED configuration — `key` about `advance:'archive'`,
     // `objective` about `score:'verify'` — and both live in {@link swarmValidity},
-    // where `custom` gets the same verdict for the same reason. `objective` used to be
-    // required here by preset NAME, on `optimise` alone. That was one rule about one
-    // name while it was the only verifying preset; with `prove` and the three coverage
-    // rows all scoring by `verify` it would have become five names spelling a rule the
-    // validity table already states once.
+    // where `custom` gets the same verdict for the same reason. Requiring `objective`
+    // here by preset NAME would take five names — `prove` and the three coverage rows
+    // all score by `verify` too — to spell a rule the validity table already states
+    // once.
   }
   return null;
 }
@@ -1184,10 +1176,10 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const baseName: NamedSwarmPreset | null = input.preset === 'custom'
     ? input.from ?? null
     : input.preset;
-  // Every row is a point, so this is a lookup and not a decision. It used to be a
-  // decision, and the arm it chose between REFUSED — which reached `custom` too, so a
-  // composition seeded from an undeclared row was refused for its base's gap rather
-  // than judged on the axes the caller stated. See {@link SwarmPresetRow}.
+  // Every row is a point, so this is a lookup and not a decision. A decision here would
+  // have a REFUSING arm, and that arm reaches `custom` too: a composition seeded from an
+  // undeclared row would be refused for its base's gap rather than judged on the axes
+  // the caller stated. See {@link SwarmPresetRow}.
   const row: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
   // A NAMED preset that was handed no `objective` resolves to its UNMEASURED point:
   // `verify` needs an instrument and the call named none, so the row's judged fallback
@@ -1333,8 +1325,8 @@ function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
  * duplicating them here would be the two-spellings defect this file argues against
  * everywhere else. What this catches is the shape the incident actually produced — a
  * `spec` sent partial, or sent as `{}` because the wire schema only asks for JSON —
- * which used to pass validity, start a run, and come back as a bound instrument's
- * complaint one round trip later.
+ * which would otherwise pass validity, start a run, and come back as a bound
+ * instrument's complaint one round trip later.
  *
  * A non-object `spec` is reported as missing EVERY field rather than as a type error,
  * because the correction is the same either way and one message beats two.
@@ -1713,17 +1705,15 @@ export interface BranchArbitrationInput {
  * caps are refused rather than defaulted: a search whose depth nothing states
  * cannot grant depth, and saying so is not the same as saying the budget ran out.
  *
- * THE FIFTH ARM MOVED AXIS, and Lean moved with it. It used to be stated over
- * sibling-blindness coupled to parent-inheritance, on the reading that what a
- * sibling is SHOWN and what a child STARTS FROM were one question. They are two,
- * only one of them survived as an axis, and it is the one that was always doing the
- * work: {@link SWARM_CONTEXTS} decides what a child starts from. *The six axes* states
- * the rule over the second one — *"a search resolved to the non-inheriting value
- * refuses an inheriting child"* — so the arm compares `context` with `context`, and
- * the theorem is `accepted_respects_context`. Re-pointing that theorem in
- * `lean/Kinu/Exploration/Arbitration.lean` is the cost of the cut, paid here
- * rather than deferred, because a proven theorem about a field that no
- * longer exists is worse than no theorem.
+ * THE FIFTH ARM IS ABOUT CONTEXT, and Lean is stated over the same axis. What a
+ * sibling is SHOWN and what a child STARTS FROM are two questions and not one, and
+ * only the second is an axis — the one doing the work: {@link SWARM_CONTEXTS} decides
+ * what a child starts from. *The six axes* states the rule over it — *"a search
+ * resolved to the non-inheriting value refuses an inheriting child"* — so the arm
+ * compares `context` with `context`, and the theorem is `accepted_respects_context` in
+ * `lean/Kinu/Exploration/Arbitration.lean`. The theorem points at the field the arm
+ * reads, because a proven theorem about a field nothing declares is worse than no
+ * theorem.
  */
 export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitration {
   const { config, caps, atDepth, remainingChildren, proposal } = input;
@@ -1861,7 +1851,7 @@ export interface SwarmCandidate {
  * point: `maxEvalLLMCalls` is the WHOLE per-evaluation call budget and a code-bearing
  * branch spends one of those calls on its generated check suite, so the ensemble is
  * `min(samples, maxEvalLLMCalls − 1)` and a caller asking for 20 is answered by 3.
- * That used to happen with no field anywhere carrying the 3.
+ * With one number instead of two, nothing anywhere would carry the 3.
  */
 export interface JudgeEnsembleReport {
   /** What `score:'judge'` asked for. Never a default: `samples` is tagged onto the

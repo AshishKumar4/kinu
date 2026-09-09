@@ -159,10 +159,10 @@ describe('grounded head outcome scores', () => {
     // The heads have already run and banked their findings. The shared evaluator
     // propagates a judge FAILURE deliberately (mcts/evaluation.ts) because the
     // MCTS engine answers one per branch under its own allSettled; this caller
-    // has no branch to fail, so an unreachable or rate-limited judge used to
-    // reject `run` and take the whole split with it — discarding both reports,
-    // the merge that would have carried them, and the `head_merge` phase that is
-    // the only durable trace a fork ran at all.
+    // has no branch to fail, so an unreachable or rate-limited judge must not
+    // reject `run` and take the whole split with it — that discards both
+    // reports, the merge that would have carried them, and the `head_merge`
+    // phase that is the only durable trace a fork ran at all.
     const { journal } = newJournal();
     const brokenJudge: LLM = {
       stream() { throw new Error('judge provider unreachable'); },
@@ -331,7 +331,7 @@ describe('evidence is not clipped into the merge', () => {
   test('a long finding body survives verbatim into the merge prompt', async () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
-    const longBody = 'X'.repeat(1200); // far past the old 200-char clip
+    const longBody = 'X'.repeat(1200); // far past a 200-char clip
     const manyEv = Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, kind: 'fact' as const, body: `finding-${i}` }));
     const runtime = buildRuntime({
       reports: {
@@ -348,6 +348,6 @@ describe('evidence is not clipped into the merge', () => {
     });
     const prompt = mergePrompts[0]!;
     expect(prompt).toContain(longBody);            // full body, not truncated
-    expect(prompt).toContain('finding-8');         // the 9th evidence item (past the old slice(0,6))
+    expect(prompt).toContain('finding-8');         // the 9th evidence item (past a slice(0,6))
   });
 });

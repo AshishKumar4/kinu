@@ -112,7 +112,6 @@ import {
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
   initWorkspaceBaselineTable, initWorkspaceSchema,
   InstructionApprovalStore, listInstructionApprovals, gatherApprovableInstructions,
-  snapshotExistingInstructions,
   admitInstructionDecision, type AdmittedInstructionDecision,
   openInstructionSource,
   type InstructionSourceRow, type InstructionSourceView,
@@ -378,10 +377,10 @@ export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
  *
  * The assistant row is committed before core can claim anything — the roster is
  * a value this session reads, and reading it is not a durable act — so a process
- * killed in between used to leave a durable answer that `resumeAll()` could not
- * see: `incomplete()` finds CLAIMS, and there was none. Every take, branch,
- * recording, drain, trial and title of that turn was then lost with nothing on
- * disk to say so.
+ * killed in between would leave a durable answer that `resumeAll()` could not
+ * see: `incomplete()` finds CLAIMS, and there would be none. Every take,
+ * branch, recording, drain, trial and title of that turn would be lost with
+ * nothing on disk to say so.
  *
  * This row closes that window because it is written in the SAME transaction as
  * the answer. It carries the roster core's own `declareTerminalRoster` produced
@@ -472,9 +471,9 @@ type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: Ki
  *
  * Installed by the owning host, which is the only thing that knows the parent's
  * rail and whether this turn was the parent's to drive. It is a PORT rather than
- * an event listener because the report is now an owed effect: the host used to
- * start it as an untracked promise off `turn-end`, so a process that died before
- * the parent's ingress admitted it had nothing on disk saying a retry was owed.
+ * an event listener because the report is an OWED EFFECT: an untracked promise
+ * started off `turn-end` leaves a process that dies before the parent's ingress
+ * admits it with nothing on disk saying a retry was owed.
  */
 export interface LocalParentRelay {
   /**
@@ -631,8 +630,8 @@ interface QueueItem {
    * conversation, which means this turn did not happen. That has to reach the
    * producer, because the producer is the only one who can put things back: an
    * event drain has rows bound to a turn nobody will run, and a person has a
-   * message that was never sent. Reporting a refused item as a completed one
-   * (this used to be a bare success-only `resolve()`) loses the event and
+   * message that was never sent. Reporting a refused item as a completed one —
+   * which a success-only `resolve()` cannot help doing — loses the event and
    * discards the message in silence.
    */
   settle: (refusal: Refusal | null) => void;
@@ -743,13 +742,14 @@ export class LocalAgentSession implements BackendHost {
    *
    * The turn loop's own spend reaches this same log as `step_finish`. The judge,
    * the fast tier, the reflection seam and the heads' merge synthesis are
-   * invisible to that row, and each of them used to drop the provider's usage on
-   * the line that received it — so a workspace total read off `step_finish`
-   * alone was the orchestrator's turns while looking like it was everything.
+   * invisible to that row, so each of them files here instead of dropping the
+   * provider's usage on the line that received it — a workspace total read off
+   * `step_finish` alone is the orchestrator's turns while looking like it is
+   * everything.
    *
    * The row itself — usage always present, `usd` only when the rate belongs to
-   * the model that served the call — is built by core, because it was built
-   * twice and the two copies disagreed about exactly that field.
+   * the model that served the call — is built by core, so there is exactly ONE
+   * construction of it and nothing can disagree about that field.
    */
   private readonly modelCallSink: ModelCallSink = (report) => {
     const event = buildModelCallEvent(report, {
@@ -810,10 +810,6 @@ export class LocalAgentSession implements BackendHost {
    *  the authority that decides whether discovered AGENTS.md / skill bytes are
    *  placed as system instructions or as unverified reference material. */
   private readonly instructionApprovals: InstructionApprovalStore;
-  /** The migration is awaited before the first turn can resolve a trust verdict.
-   * It snapshots existing paths once; later paths never receive a first-seen
-   * fallback. */
-  private instructionMigration: Promise<void> | null = null;
   /** Bound once rather than rebuilt per turn: both discovery and skill
    * admission take the resolver as a plain function. */
   private readonly instructionTrust: InstructionTrustResolver =
@@ -930,15 +926,14 @@ export class LocalAgentSession implements BackendHost {
     const approvalScope = tolerate(() => realpathSync(this.cwd), 'enoent') ?? resolve(this.cwd);
     // ONE SCOPE, ONE STORE PER ACTOR. The approval key is
     // `(actor_id, scope, path)`, so a root and every actor beneath it read the
-    // same DIRECTORY's decisions through their own row set. The store is no
-    // longer shared as an object — it is actor-bound — and the sharing that
+    // same DIRECTORY's decisions through their own row set. The store is NOT
+    // shared as an object — it is actor-bound — and the sharing that
     // matters is the scope string, which every actor in one bound directory
     // derives identically.
     this.instructionApprovals = new InstructionApprovalStore(
       this.rt.storage.sql,
       this.rt.actor,
       `local:${approvalScope}`,
-      (body) => opts.db.transaction(body)(),
     );
 
     // The stores every agent has, from core — one list both backends inherit.
@@ -1069,8 +1064,8 @@ export class LocalAgentSession implements BackendHost {
       // interrupted job from its durable checkpoint instead of failing it.
       resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),
       // What a bounded-out job already produced. Same predicate as `resume`, so a
-      // side-effecting kind has nothing partial to read and a SEARCH does — the case
-      // that used to settle empty over candidates it had really measured.
+      // side-effecting kind has nothing partial to read and a SEARCH does — without
+      // it a search settles empty over candidates it had really measured.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.rt.storage.sql, ledger: this.mctsSearchStore, actor: this.rt.actor }, kind, input,
       )),
@@ -1116,34 +1111,6 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
-  private async ensureInstructionApprovalMigration(): Promise<void> {
-    const existing = this.instructionMigration;
-    if (existing !== null) {
-      await existing;
-      return;
-    }
-    const migration = (async () => {
-      const limits = {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      };
-      const agentsMd = discoverAgentsMd(this.cwd, limits, () => 'unverified');
-      const entries = await snapshotExistingInstructions({
-        agentsMd,
-        skillsVfs: skillsVfsOver(this.rt.storage.vfs),
-        admissionTokens: stepContextLimit(limits),
-      });
-      this.instructionApprovals.grandfatherExisting(entries);
-    })();
-    this.instructionMigration = migration;
-    try {
-      await migration;
-    } catch (cause) {
-      if (this.instructionMigration === migration) this.instructionMigration = null;
-      throw cause;
-    }
-  }
-
   /**
    * The owner's instruction-file surface for this working directory
    * (KINU-N028): every AGENTS.md and workspace skill this session would carry,
@@ -1151,10 +1118,10 @@ export class LocalAgentSession implements BackendHost {
    *
    * Discovery runs fresh rather than reporting the last turn's values, because
    * the owner has to be shown what is on disk NOW — approving a digest that has
-   * already moved on would grant nothing and say it granted something.
+   * already moved on would grant nothing and say it granted something. A file
+   * with no owner decision is unverified, however long it has sat on disk.
    */
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    await this.ensureInstructionApprovalMigration();
     const limits = {
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
@@ -1172,7 +1139,6 @@ export class LocalAgentSession implements BackendHost {
 
   /** One row, opened: the bytes of THAT file and nothing else. */
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    await this.ensureInstructionApprovalMigration();
     const clean = path.trim();
     if (clean === '') return null;
     const limits = {
@@ -1191,7 +1157,6 @@ export class LocalAgentSession implements BackendHost {
   /** Follow these exact bytes at this path as instructions. Same admission rule
    *  as the cloud transport, because it is core's rule, not either side's. */
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
-    await this.ensureInstructionApprovalMigration();
     const admitted = admitInstructionDecision(path, reviewedDigest);
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
@@ -1204,7 +1169,6 @@ export class LocalAgentSession implements BackendHost {
 
   /** Stop following a path, and keep the refusal so nothing re-grants it. */
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
-    await this.ensureInstructionApprovalMigration();
     const admitted = admitInstructionDecision(path);
     if (!admitted.ok) return admitted;
     this.instructionApprovals.revoke(admitted.path);
@@ -1287,12 +1251,12 @@ export class LocalAgentSession implements BackendHost {
    * `allow_always` is remembered here rather than in the gate, because the
    * session owns the config store the grant lives in.
    *
-   * It used to switch the whole agent to `allow_all` — one click on one
-   * `sudo` prompt and every gated command everywhere, on the owner's laptop
-   * included, ran unasked for the rest of the session. Now it grants exactly
-   * the rules that were asked about, on the executor they were asked about
-   * (safety/approval-gate.ts's ApprovalGrant), which is what the button says
-   * it does. Revocable from the same config plane that reads it.
+   * It grants exactly the rules that were asked about, on the executor they
+   * were asked about (safety/approval-gate.ts's ApprovalGrant), which is what
+   * the button says it does. NEVER a whole-agent `allow_all`: one click on one
+   * `sudo` prompt would then run every gated command everywhere, on the owner's
+   * laptop included, unasked for the rest of the session. Revocable from the
+   * same config plane that reads it.
    */
   private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
     return async (req) => {
@@ -1560,11 +1524,11 @@ export class LocalAgentSession implements BackendHost {
    * started. A caller outside the pump keeps the execution-awaiting contract,
    * which the fiber wake path depends on.
    *
-   * This was latent until this cutover: turn finalization used to THROW on an
-   * `ON CONFLICT` mismatch before the roster ran at all, so the inline drain
-   * never executed inside the pump and the debounced `scheduleDrain()` timer —
-   * which fires outside it — picked the work up instead. Fixing the schema made
-   * the roster genuinely run, and the deadlock behind it reachable.
+   * The deadlock is reachable because the roster genuinely runs inside the
+   * pump. A turn finalization that THROWS on an `ON CONFLICT` mismatch before
+   * the roster runs hides it: the inline drain never executes inside the pump
+   * and the debounced `scheduleDrain()` timer — which fires outside it — picks
+   * the work up instead.
    */
   private settlingDepth = 0;
 
@@ -2037,15 +2001,15 @@ export class LocalAgentSession implements BackendHost {
    * Recover the work a previous CLI exit interrupted: the fork journal and the
    * background-job registry, in ONE pass rather than two.
    *
-   * They used to be sequential, and the order was the defect. `head_journal.status
-   * = 'running'` means "spawned, no report recorded", nothing carries a head across
+   * Sequential passes make the ORDER the defect. `head_journal.status =
+   * 'running'` means "spawned, no report recorded", nothing carries a head across
    * a process exit, and left alone that row feeds "N of M heads running" into every
    * model step forever — so the journal has to be reconciled. But retiring a run is
-   * not the same act as correcting that claim, and doing both first meant a search
-   * whose durable job was still re-drivable was told, in the agent's own
-   * conversation, that nothing was left to run it. `reconcileInterruptedForks` now
-   * marks the stale rows non-terminally, hands their roots to the job sweep, and
-   * retires only the runs that sweep refused.
+   * not the same act as correcting that claim, and doing both first tells a search
+   * whose durable job is still re-drivable, in the agent's own conversation, that
+   * nothing is left to run it. `reconcileInterruptedForks` marks the stale rows
+   * non-terminally, hands their roots to the job sweep, and retires only the runs
+   * that sweep refused.
    *
    * Fiber rows are read first, because an interrupted `bg:*` fiber row says its
    * job's executor died AFTER settling, which is the only way a lost wake can be
@@ -2076,8 +2040,8 @@ export class LocalAgentSession implements BackendHost {
    *
    * Call once at startup: no fibers are live yet, so every row is an orphan.
    *
-   * Nothing here is optional. Each step used to absorb its own failure, so a
-   * workspace whose fiber rows could not be read recovered NOTHING and then looked
+   * Nothing here is optional. A step that absorbed its own failure would leave a
+   * workspace whose fiber rows could not be read recovering NOTHING and then looking
    * exactly like one that had no interrupted work — while the notice the previous
    * exit printed promised the operator these jobs would resume.
    */
@@ -2176,15 +2140,15 @@ export class LocalAgentSession implements BackendHost {
    * LEASE, because the alternative is two processes running one turn's effects.
    *
    * The in-flight guard core keeps is process-local, so an interactive session
-   * opening a workspace a daemon is already settling used to read the same
-   * pending rows and invoke the same advisor review, completion gate and title
-   * call beside it. Nothing on the row could tell them apart: both saw `pending`
-   * and neither had yet advanced the other's `next_attempt_at`.
+   * opening a workspace a daemon is already settling reads the same pending rows
+   * and would invoke the same advisor review, completion gate and title call
+   * beside it. Nothing on the row tells them apart: both see `pending` and
+   * neither has yet advanced the other's `next_attempt_at`.
    *
    * So the lease is ACQUIRED, through the same gate every other converting
    * boundary asks — the drain, the pump, the host's pass. A session with no gate
    * installed is a session nobody else can be driving (a fixture, a benchmark
-   * harness), and it recovers as before.
+   * harness), and it recovers unguarded.
    *
    * Three sources, in order. First the advisor orphans the startup scan set
    * aside: a review is a model call, and two processes that both read the same
@@ -2210,7 +2174,7 @@ export class LocalAgentSession implements BackendHost {
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn (the completion gate does), and on
     // this path no turn owns the pump. What it must NOT do is decide the advisor's
-    // verdict by arriving early — and it cannot any more: the gate state the
+    // verdict by arriving early — and it cannot: the gate state the
     // review is judged against travels in the improvement-lanes row rather than
     // being re-read from a RAM gate this process never armed.
     this.pump();
@@ -2419,10 +2383,10 @@ export class LocalAgentSession implements BackendHost {
     const running = this.runPump();
     // Assigned only if the pump is STILL running. `runPump` on an empty queue
     // reaches no await, so it runs to completion inside this call and clears both
-    // fields on its way out — and an unconditional assignment then reinstated a
+    // fields on its way out — an unconditional assignment would reinstate a
     // resolved promise as the live one, which every later `settleBackgroundWork`
-    // spun on forever. An empty kick is legitimate (a startup replay makes one),
-    // so the fix belongs here rather than at each caller.
+    // spins on forever. An empty kick is legitimate (a startup replay makes one),
+    // so the guard belongs here rather than at each caller.
     if (this.pumping) this.pumpPromise = running;
   }
 
@@ -2521,12 +2485,12 @@ export class LocalAgentSession implements BackendHost {
    * Seal the in-flight run via the shared core turn-lifecycle bracket.
    * Idempotent per run — clearing the id makes a second call a no-op.
    *
-   * FACTS in, name out. This used to compute `hadError ? 'error' : 'completed'`
-   * itself, and since an interrupt throws `INTERRUPTED_TURN` and the catch folds
-   * that into `hadError`, pressing Stop sealed the run `'error'` here and
-   * `'aborted'` in the cloud — the same user action counted as a failure on one
-   * backend and a choice on the other. `classifyRunEnd` owns the vocabulary now;
-   * this method reports what it saw and returns the reason it was given.
+   * FACTS in, name out. `classifyRunEnd` owns the vocabulary; this method
+   * reports what it saw and returns the reason it was given. Computing
+   * `hadError ? 'error' : 'completed'` here instead would seal a Stop as
+   * `'error'` — an interrupt throws `INTERRUPTED_TURN` and the catch folds that
+   * into `hadError` — while the cloud seals it `'aborted'`, counting the same
+   * user action as a failure on one backend and a choice on the other.
    */
   private closeRun(facts: RunEndFacts, lease: ActorTurnLease): RunEndReason {
     const end = classifyRunEnd(facts);
@@ -2668,7 +2632,6 @@ export class LocalAgentSession implements BackendHost {
     // THIS turn, and both the profile resolution below and the toolset rebuild
     // after it consult it.
     this.turnIsParentAssigned = item.kind === 'programmatic';
-    await this.ensureInstructionApprovalMigration();
     const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
@@ -3042,14 +3005,14 @@ export class LocalAgentSession implements BackendHost {
    * Make this turn durable — the answer, the verdict its run row is sealed with
    * and the frozen roster of everything the answer owes — as ONE commit.
    *
-   * The roster is the only thing a later start can recover the suffix FROM, and
-   * it used to be written a whole finalization after the answer: the assistant
-   * row landed here, and core's claim landed after the signal settle, the
-   * compaction bookkeeping and the run seal. A process killed anywhere in
-   * between left a durable answer with no claim — and `resumeAll()` finds
-   * CLAIMS, so it found nothing, and that turn's takes, branches, recording,
-   * drain, trial and title were lost with nothing on disk saying they were owed.
-   * The intent row written inside this transaction is what closes that window.
+   * The roster is the only thing a later start can recover the suffix FROM, so
+   * it lands in the SAME commit as the answer. A whole finalization later — the
+   * assistant row here, core's claim after the signal settle, the compaction
+   * bookkeeping and the run seal — a process killed anywhere in between leaves
+   * a durable answer with no claim, and `resumeAll()` finds CLAIMS, so it finds
+   * nothing and that turn's takes, branches, recording, drain, trial and title
+   * are lost with nothing on disk saying they were owed. The intent row written
+   * inside this transaction is what closes that window.
    *
    * The transaction is the raw handle's, because `rt.storage.sql` and this
    * session's `db` are the same connection — the runtime is built over it — so
@@ -3176,14 +3139,14 @@ export class LocalAgentSession implements BackendHost {
   // One settled response ends once, and everything it causes hangs off that
   // moment: the alternate-takes claim, the branch settlements, the completion
   // gate, the evolution recording, the reactor drain, the advisor lane, the
-  // shadow trial and the auto title. The CLI used to run that sequence as
-  // straight-line code and release its turn claims as soon as the transcript
-  // was on disk, so a laptop killed anywhere inside it lost the whole suffix
-  // with nothing to say what had already happened.
+  // shadow trial and the auto title. Run as straight-line code with the turn
+  // claims released as soon as the transcript is on disk, a laptop killed
+  // anywhere inside that sequence loses the whole suffix with nothing to say
+  // what had already happened.
   //
-  // Core owns all of that now — the vocabulary, the roster, the state machine,
-  // the per-effect ledger and the replay. What follows is the only two things
-  // this backend genuinely owns: the effect BODIES, and the WAKE.
+  // Core owns all of it — the vocabulary, the roster, the state machine, the
+  // per-effect ledger and the replay. What follows is the only two things this
+  // backend genuinely owns: the effect BODIES, and the WAKE.
 
   /**
    * What this turn owes, as core's own roster reads it.
@@ -3193,7 +3156,7 @@ export class LocalAgentSession implements BackendHost {
    * which lane, keyed on what, and behind which gate is
    * `declareTerminalRoster` — so the CLI cannot answer "does a Plan turn feed
    * the improvement lanes?" differently from the Durable Object, which is
-   * exactly how the two drifted while each spelled its own sequence out.
+   * exactly how two backends drift when each spells its own sequence out.
    */
   private owedTerminalEffects(input: {
     readonly turn: CompletedTurn;
@@ -3321,12 +3284,11 @@ export class LocalAgentSession implements BackendHost {
       };
     }
     parts.autoTitle = { subject: isPlaceholderMission(mission) ? input.userText : mission ?? '' };
-    // The answer this child owes its parent. It used to be an untracked
-    // fire-and-forget promise the HOST started off the `turn-end` event: a
-    // process that died before the parent's ingress admitted it had nothing
-    // recording that a retry was owed, and a task child's errored or
-    // interrupted ending went out through a second, separate detached path.
-    // Both are one claimed effect now. The sequence id is the parent's dedupe
+    // The answer this child owes its parent — ONE claimed effect, covering a
+    // task child's errored and interrupted endings too. An untracked
+    // fire-and-forget promise started off the `turn-end` event instead leaves a
+    // process that dies before the parent's ingress admits it with nothing
+    // recording that a retry was owed. The sequence id is the parent's dedupe
     // key, so a replay is recognised as the report it already holds.
     if (parentReport !== null && relay !== null) {
       parts.parentReport = {
@@ -3455,12 +3417,12 @@ export class LocalAgentSession implements BackendHost {
         // existence IS that decision, already made.
         //
         // THE ROW STAYS OWED UNTIL THE CONFIRMING TURN IS ON DISK. Pushing a
-        // QueueItem is a RAM act: this effect used to report `completed` over it,
-        // the ledger pruned the row, and a process that died before the pump
-        // reached that item lost the confirmation permanently with nothing left
-        // saying it was owed. The queue item carries a key derived from this
-        // sequence, so the turn's own durable row is both the admission record
-        // and the thing that stops a replay queueing a second confirmation.
+        // QueueItem is a RAM act: reporting `completed` over it lets the ledger
+        // prune the row, and a process that dies before the pump reaches that
+        // item loses the confirmation permanently with nothing left saying it
+        // was owed. The queue item carries a key derived from this sequence, so
+        // the turn's own durable row is both the admission record and the thing
+        // that stops a replay queueing a second confirmation.
         run: async ({ text }, scope) => {
           const identity = `${COMPLETION_GATE_EVENT}:${scope}`;
           // The confirming turn's OWN durable row, whose id `processTurn` derives
@@ -3511,7 +3473,7 @@ export class LocalAgentSession implements BackendHost {
           // running, which is the live case; on a startup replay there is no
           // pump yet, and without this kick the confirming turn would sit in the
           // queue until some unrelated message arrived. Arriving early cannot
-          // change the advisor's verdict any more — the gate state the review is
+          // change the advisor's verdict — the gate state the review is
           // judged against is recorded on the improvement-lanes row.
           this.pump();
           return {
@@ -3604,13 +3566,15 @@ export class LocalAgentSession implements BackendHost {
         // The verdict is core's one derivation, asked with the RECORDED mode so
         // a fresh session's default cannot open a lane the turn never earned.
         //
-        // AWAITED TO ITS CHECKPOINT, not to its finish. The lane used to be
-        // started and this row completed in the same breath, and the CLI's
-        // startup recovery re-drove only `bg:*` fibers and DELETED every other
-        // orphan — so a process killed inside the model call lost the review
-        // while the completed row made a retry impossible. Resolving at the
-        // checkpoint is what makes "the lane is recoverable" and "the row is
-        // done" the same fact; the review itself still runs off the queue.
+        // AWAITED TO ITS CHECKPOINT, not to its finish. Starting the lane and
+        // completing this row in the same breath loses the review: before the
+        // checkpoint nothing about the lane is on disk, so a process killed
+        // inside the model call leaves a completed row with no snapshot for
+        // `recoverAdvisorLane` to re-drive. (Startup preserves the advisor
+        // orphan for recovery under the driver lease; the snapshot is what it
+        // re-drives.) Resolving at the checkpoint is what makes "the lane is
+        // recoverable" and "the row is done" the same fact; the review itself
+        // still runs off the queue.
         run: async ({ status, workMode, advisor }) => {
           if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
@@ -3625,7 +3589,7 @@ export class LocalAgentSession implements BackendHost {
           turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
         }),
         // Its OWN row, because its disposition is genuinely different from the
-        // lanes it used to sit beside: a full queue is a refusal a later drain
+        // improvement lanes beside it: a full queue is a refusal a later drain
         // clears, so the trial stays owed while nothing else waits on it.
         run: ({ turn, trialContext, pendingVersion }, scope) => {
           const trialScope = keyedScope(scope);
@@ -3865,8 +3829,8 @@ export class LocalAgentSession implements BackendHost {
    * holds its own title.
    *
    * The slug reaches neither. It is what this agent is ADDRESSED by — its
-   * directory, its `kinu chat` argument — and telling a model that a workspace
-   * is called `handwrought-walnut-4166c321` is what this replaces.
+   * directory, its `kinu chat` argument — so no name here ever tells a model
+   * that a workspace is called `handwrought-walnut-4166c321`.
    */
   private promptIdentity(): PromptIdentity {
     const own = this.config.getDisplayName();
@@ -3878,8 +3842,8 @@ export class LocalAgentSession implements BackendHost {
   /**
    * Auto-title this workspace from what it is FOR — the shared core policy
    * (identity/naming.ts), which both the cloud backend and the create path
-   * already run. The CLI called none of it, so a `kinu chat` workspace kept its
-   * raw slug forever while the same workspace on cloud named itself.
+   * already run. Without it a `kinu chat` workspace keeps its raw slug forever
+   * while the same workspace on cloud names itself.
    *
    * The plan is asked for SYNCHRONOUSLY and first. A titled workspace is the
    * steady state, so every later turn would otherwise pay for a model round
@@ -4051,7 +4015,7 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Passthrough SkillsVfs shim over rt.storage.vfs (core turn-surface). */
+  /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
   private getSkillsVfs(): SkillsVfs {
     if (!this.skillsVfs) this.skillsVfs = skillsVfsOver(this.rt.storage.vfs);
     return this.skillsVfs;
@@ -4698,8 +4662,8 @@ export class LocalAgentSession implements BackendHost {
    *  A programmatic row also STATES its provenance: `metadata` is stamped here,
    *  at the one seam every durable CLI turn is written through, so authorship
    *  and event kind live in the row itself. The `programmatic:` id prefix
-   *  remains only as the read-side fallback for rows written before the stamp
-   *  existed — never the thing a new row leans on.
+   *  remains only as the read-side fallback for rows that carry no stamp —
+   *  never the thing a new row leans on.
    *
    *  A steer row states its provenance the same way, under the two keys core
    *  declares for both backends: that it WAS a steer, and the step it was
@@ -5001,12 +4965,12 @@ export class LocalAgentSession implements BackendHost {
    * The head runtime's dependencies, with the head's own model as the argument.
    *
    * ONE builder for the two places that construct it — the constructor, before
-   * any model is claimed, and every rebind after one. Two copies stood here,
-   * and the second silently omitted `resolveModel`: the constructor's own
-   * `ensureModelState()` rebuilds immediately, so `agents fork`'s per-fork
-   * model was a no-op on this backend forever — a panel asked for three
-   * vendors got three copies of one, which is exactly the defect
-   * `createCLIHeadRuntime`'s own tests pin one layer down.
+   * any model is claimed, and every rebind after one. A second copy that omits
+   * `resolveModel` is invisible: the constructor's own `ensureModelState()`
+   * rebuilds immediately, so `agents fork`'s per-fork model becomes a no-op on
+   * this backend forever — a panel asked for three vendors gets three copies of
+   * one, which is exactly the defect `createCLIHeadRuntime`'s own tests pin one
+   * layer down.
    */
   private headRuntimeOptions(
     model: () => LanguageModel,
@@ -5017,16 +4981,16 @@ export class LocalAgentSession implements BackendHost {
       model,
       // The merge's model, effort and spend label are core's policy
       // (`headMergeLLM`) off this profile; the binding below is the only local
-      // say in it. It used to be the SESSION'S CHAT MODEL at a hardcoded `'low'`
-      // effort, filed as `judge` spend regardless — so the same split was
-      // synthesised by the deep tier in the cloud and by whatever `/model` was
-      // set to here, and the ledger could not tell the two apart.
+      // say in it. Binding the SESSION'S CHAT MODEL at a hardcoded `'low'`
+      // effort and filing it as `judge` spend regardless would have one split
+      // synthesised by the deep tier in the cloud and by whatever `/model` is
+      // set to here, with the ledger unable to tell the two apart.
       profile: () => this.routingProfile(),
       bindMergeModel: (route) => this.bindRouteModel(route),
       // No `spec` stamp: this sink carries the MERGE only (a head's own
       // inference is aggregated from `head_journal`), and the merge runs on the
       // routed judge tier rather than on this session's chat model. Stamping the
-      // chat spec here was the label that made a deep-tier grading look like it
+      // chat spec here is the label that makes a deep-tier grading look like it
       // ran on whatever `/model` was set to. `modelId` from the provider's own
       // response is the honest record, exactly as on the cloud backend.
       reportModelCall: (report) => this.modelCallSink(report),

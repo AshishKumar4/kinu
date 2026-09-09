@@ -1,10 +1,10 @@
 // The Codex credential's revocation path on the hosted backend.
 //
-// A revoked ChatGPT login used to sit in the store forever: the refresh
-// failed, the failure was logged, and the provider kept advertising itself
-// while every model call 401'd. The Cloudflare OAuth credential already has
-// the honest shape (invalid_grant strips the dead token, the connect CTA
-// resurfaces) — these tests pin the same behavior for `codex.oauth`.
+// A revoked ChatGPT login must not sit in the store: a logged refresh failure
+// with the credential left in place keeps the provider advertising itself while
+// every model call 401s. `codex.oauth` has the same honest shape the Cloudflare
+// OAuth credential does — invalid_grant strips the dead token, the connect CTA
+// resurfaces — and these tests pin it.
 import { describe, test, expect } from 'bun:test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { asFetchFunction } from '@kinu.run/core';

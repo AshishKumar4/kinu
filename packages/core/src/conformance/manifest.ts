@@ -395,17 +395,16 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
-    // removal is the entry. It was the Agents SDK's facet registry, created by
-    // the first `subAgent()` call and therefore present the moment a workspace
-    // opened. No Kinu actor spawns a facet any more: a hired subordinate, a
-    // temporary, a head, a swarm node and an MCTS branch are all logical actors
-    // bound over the ONE workspace object's SQLite (`state/actor-host.ts`), so
-    // nothing calls `subAgent()` and the table is never created on any root.
-    // Declaring it `absent` with a reason would say the product could have it
-    // and chose not to; declaring it `wired` said it existed. Neither is true,
-    // so it is not a plane member — the registry enumerates what a workspace
-    // HAS, and the comparator reports an observed-but-undeclared table loudly
-    // if this is ever wrong.
+    // absence is the entry. It is the Agents SDK's facet registry, created by
+    // the first `subAgent()` call. No Kinu actor spawns a facet: a hired
+    // subordinate, a temporary, a head, a swarm node and an MCTS branch are all
+    // logical actors bound over the ONE workspace object's SQLite
+    // (`state/actor-host.ts`), so nothing calls `subAgent()` and the table is
+    // never created on any root. Declaring it `absent` with a reason would say
+    // the product could have it and chose not to; declaring it `wired` would
+    // say it exists. Neither is true, so it is not a plane member — the
+    // registry enumerates what a workspace HAS, and the comparator reports an
+    // observed-but-undeclared table loudly if this is ever wrong.
     // Gated commands parked on the owner. The TABLE is part of the shared
     // workspace schema everywhere; what differs is who can decide the rows —
     // the deferral channel is wired into the approval policy on cf, where the
@@ -429,10 +428,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // the prompt builder classifies AGENTS.md and skills on every turn on every
     // root, and a missing table there would fail the read that decides trust.
     instruction_approvals: EVERYWHERE,
-    // The one-time pre-trust baseline marker. It is read beside
-    // instruction_approvals before every source can resolve trust, so a missing
-    // table is a fault rather than an empty migration.
-    instruction_approval_migrations: EVERYWHERE,
     plan_reviews: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,

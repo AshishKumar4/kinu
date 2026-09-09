@@ -4,9 +4,9 @@
  * The cloud backend mounts the user's machine at /pc over the device tunnel
  * (createDeviceMountVFS). Locally the agent IS on that machine, so the same
  * plane is node:fs directly — no tunnel, no consent round-trip, the same
- * addresses. Without it the local backend had a `laptop` executor whose files
- * were unreachable by composite path, so every /pc address the cloud agent can
- * use silently compat-routed into /local.
+ * addresses. Without it the local `laptop` executor's files are unreachable by
+ * composite path, so every /pc address the cloud agent can use routes silently
+ * into /local instead.
  *
  * Writes snapshot into the same shadow-git checkpoints the bound shell and
  * `laptop.writeFile` use, so /undo covers file-plane mutations too.

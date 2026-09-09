@@ -6,11 +6,9 @@
  *   2. memory({action:'save'}) builtin    — Vercel AI SDK ToolSet
  *   3. saveNoteFromMcp(content) RPC       — MCP server bridge
  *
- * All three previously inlined the same three lines:
- *   memory.append('memory/MEMORY.md', `\n### Note (${date})\n${content}\n`)
- *   memory.index('memory/MEMORY.md')
- *
- * Centralized here so the format stays consistent.
+ * All three do the same two things — append a dated `### Note` heading to
+ * `memory/MEMORY.md`, then index that file — so both live here once and cannot
+ * drift between callers.
  */
 
 import type { VFS, Memory } from '../types/primitives';

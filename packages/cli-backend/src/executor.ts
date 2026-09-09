@@ -2,9 +2,9 @@
  * Local code executor for CLI backend using Bun subprocess.
  *
  * Runs user code in a separate Bun process, under the caller's declared
- * wall-clock budget — and under NO budget when the caller declared none. This
- * used to default to 30 seconds, which is the same number as the foreground
- * detach window: a program that outran the window was killed at the very moment
+ * wall-clock budget — and under NO budget when the caller declared none. A
+ * default of 30 seconds would be the same number as the foreground detach
+ * window: a program that outran the window would be killed at the very moment
  * the window would have handed the model a handle, so the detach could never be
  * observed. A deadline here is a kill; the window is not.
  *

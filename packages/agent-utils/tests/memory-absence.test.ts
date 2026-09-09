@@ -1,7 +1,7 @@
-// MemoryStore's readers answer null/[] for "nothing there". Every failure used
-// to produce that same answer, so an unreachable store and an empty one were
-// one result: the caller read "no memory" and carried on. Only a missing path
-// may mean absence now; anything else has to reach the caller.
+// MemoryStore's readers answer null/[] for "nothing there". ONLY A MISSING PATH
+// MAY MEAN ABSENCE; anything else has to reach the caller. A failure answering
+// null/[] too collapses an unreachable store and an empty one into one result,
+// and the caller reads "no memory" and carries on.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";

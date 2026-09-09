@@ -2,19 +2,19 @@
  * The actor's WORKING HISTORY — the raw message array its future requests are
  * built from, versioned, editable, and in its own coordinate space.
  *
- * WHY THIS IS A SECOND LEDGER AND NOT A COLUMN ON THE OLD ONE. A step's
+ * WHY THIS IS A SECOND LEDGER AND NOT A COLUMN ON THE RENDERED ONE. A step's
  * revision in `actor_context_revisions` is the array a model request actually
  * consumed: after error projection, steering, tool-output pruning, the
  * dynamic-context weave and the destination re-key. Its length is a fact about
  * a RENDERED request. The working history is the array a human or an agent
  * edits, before any of those passes run. The two counts are different numbers,
- * and the defect this module exists to remove was one being used as the other:
- * `applyStagedContext` sliced the live RAW array at `consumedContext(...)
- * .messageCount`, a count taken in rendered space, so a single woven
- * `<dynamic_context>` block or one pruned tool output moved the protected tail
- * boundary and the turn either re-sent work it had already done or dropped it.
- * Two spaces, two ledgers, one pointer between them (`working_revision` on the
- * rendered row); nothing infers one coordinate from the other.
+ * and using one as the other is the defect this module exists to remove:
+ * slicing the live RAW array at `consumedContext(...).messageCount`, a count
+ * taken in rendered space, lets a single woven `<dynamic_context>` block or one
+ * pruned tool output move the protected tail boundary, so the turn either
+ * re-sends work it has already done or drops it. Two spaces, two ledgers, one
+ * pointer between them (`working_revision` on the rendered row); nothing infers
+ * one coordinate from the other.
  *
  * WHAT A REVISION IS. A complete raw `ModelMessage[]`, through the typed native
  * codec (`prompting/message-codec.ts`), so tool calls, tool results, reasoning

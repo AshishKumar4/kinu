@@ -70,7 +70,7 @@ describe('one transport, named once', () => {
     expect(emitted).not.toContain('websocket');
   });
 
-  test('no cf-backend source names websocket as a transport any more', () => {
+  test('no cf-backend source names websocket as a transport', () => {
     for (const site of CALL_SITES) {
       expect(read(site)).not.toContain("transport: 'websocket'");
       expect(read(site)).not.toContain('transport: "websocket"');

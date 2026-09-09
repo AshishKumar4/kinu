@@ -15,11 +15,11 @@
  * decision. `refusedHostname` (packages/core/src/safety/egress-destination.ts)
  * is the project's one classifier, and this is its third enforcement point: the
  * container's egress hop judges with it (`egress/outbound.ts`), the agent's own
- * `web.fetch` judges with it (`core/src/web/url-safety.ts`), and the same
- * request as `fetch()` inside an `execute_tools` program used to be judged by
- * nothing at all — while the identical URL was DENIED as a shell command by the
- * approval gate. One judgment for the whole project means this seam asks it
- * too.
+ * `web.fetch` judges with it (`core/src/web/url-safety.ts`), and so does the
+ * same request as `fetch()` inside an `execute_tools` program. Leave this seam
+ * out and that request is judged by nothing at all — while the identical URL is
+ * DENIED as a shell command by the approval gate. One judgment for the whole
+ * project means this seam asks it too.
  *
  * A REDIRECT IS A DESTINATION. The forwarding fetch uses redirect:manual,
  * like egress/outbound.ts, so that it never follows an unjudged destination.

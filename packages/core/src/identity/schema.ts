@@ -234,12 +234,12 @@ export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
 /**
  * The `fibers` table and its index, alone.
  *
- * ONE OWNER PER TABLE. cli-backend held a second, UNSCOPED copy of this DDL and
- * whichever `CREATE TABLE IF NOT EXISTS` ran first decided the shape: before the
- * actor cutover the copy usually won, its unscoped writes were self-consistent,
- * and nothing said so. Any caller that ran the workspace schema first then got
- * this table and every insert against it violated `actor_id NOT NULL` — a
- * runtime failure that typechecks clean. Exported for the same reason
+ * ONE OWNER PER TABLE. A second, UNSCOPED copy of this DDL lets whichever
+ * `CREATE TABLE IF NOT EXISTS` runs first decide the shape, and neither
+ * outcome says so: when the unscoped copy wins its unscoped writes are
+ * self-consistent and nothing complains, and when the workspace schema wins
+ * every unscoped insert violates `actor_id NOT NULL` — a runtime failure that
+ * typechecks clean. Exported for the same reason
  * `initAgentConfigTable` and `initScaffoldTables` are: a runtime can be built
  * without running the whole workspace schema, and it must then reach the
  * canonical DDL rather than carry a copy of it.

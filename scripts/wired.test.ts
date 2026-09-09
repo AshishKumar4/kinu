@@ -428,9 +428,9 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
   });
 
   test("is NOT reported when a binding annotated `I['k']` supplies it", () => {
-    // `const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts }`. The
-    // indexed access used to yield the OWNER, which is wrong in both directions
-    // at once: it credited `ActorExecutionInput` and withheld the credit from
+    // `const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts }`. An
+    // indexed access that yielded the OWNER would be wrong in both directions
+    // at once: crediting `ActorExecutionInput` and withholding the credit from
     // the interface the key actually names.
     const holder = `${BASE}strategy/holder.ts`;
     const body = "  const chat: Holder['deps'] = { rt: 'x', mission: 'm', logger: 'l' };\n  void chat;\n"

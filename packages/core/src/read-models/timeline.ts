@@ -186,7 +186,7 @@ export function getRunTimeline(
   // Through the recorder, not a raw read: `run_events` is actor-scoped, and a
   // bare `ORDER BY ts DESC` would let a sibling actor sharing the database
   // decide which run this timeline focuses. `listRunsBefore` also excludes
-  // WORKSPACE_RUN_ID, so the fallback can no longer land on the pseudo-run a
+  // WORKSPACE_RUN_ID, so the fallback cannot land on the pseudo-run a
   // between-turn model call is filed under.
   const recent = deps.events.listRunsBefore(null, 1)[0]?.runId;
   const runId = opts?.runId || deps.currentRunId || recent;

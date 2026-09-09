@@ -97,10 +97,10 @@ function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): ty
 /**
  * A minimal but VALID reply for each route these tests drive.
  *
- * The stub `{}` they used to answer with is not a provider response, so every
- * call failed on the way back and each test had to ignore the failure — which
- * also hid a provider that reached the right URL and then produced something
- * unusable. Decodable replies mean the only failures left are real ones.
+ * A stub `{}` is not a provider response: every call fails on the way back,
+ * each test has to ignore that failure, and a provider that reached the right
+ * URL and then produced something unusable hides inside it. Decodable replies
+ * mean the only failures left are real ones.
  */
 const FAKE_RESPONSES_REPLY = {
   id: 'resp_1',

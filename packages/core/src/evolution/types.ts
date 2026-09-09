@@ -30,11 +30,11 @@ export interface CompletedTurn {
    * observed them (orchestrator/craft-cycle.ts).
    *
    * Not derivable from `toolCalls`: a crafted tool is codemode-only and never
-   * appears as a native tool name, so "a call whose name is not built in" —
-   * which is what this used to be inferred from — matches MCP and extension
-   * tools and nothing else. Empty means observed and none (a run with
-   * evolution off observes nothing, since a craft score is evolution state);
-   * absent only on a turn persisted before this field existed.
+   * appears as a native tool name, so "a call whose name is not built in"
+   * matches MCP and extension tools and nothing else. Empty means observed and
+   * none (a run with evolution off observes nothing, since a craft score is
+   * evolution state); absent means the stored turn carries no such observation
+   * at all.
    */
   craftedToolsUsed?: readonly string[];
   /** Total number of agentic steps (from AI SDK maxSteps) */

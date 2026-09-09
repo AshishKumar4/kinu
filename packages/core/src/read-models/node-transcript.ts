@@ -157,7 +157,7 @@ function readHeadTranscript(
   // The run's head rows carry the parent chain; the trace is its own read. Three
   // reads rather than one because only one of them is per-head, and a reader who
   // opened one branch must not pay for its siblings' steps — which is also why
-  // `HeadRunHeadView` no longer carries any.
+  // `HeadRunHeadView` carries none.
   const rows = journal.readTree(runId);
   const row = rows.find((candidate) => candidate.id === nodeId);
   if (!row) return null;

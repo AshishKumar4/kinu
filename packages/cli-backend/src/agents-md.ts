@@ -69,10 +69,10 @@ function errnoOf(thrown: { readonly error: unknown }): string | undefined {
  * Resolve one candidate without ever letting a bad link fail the turn.
  *
  * ELOOP is the case worth naming. `AGENTS.md -> AGENTS.md`, or a two-link cycle
- * between two of them, makes both `statSync` and `realpathSync` throw, and that
- * throw used to propagate out of discovery and take the whole turn with it — one
- * `ln -s` as a denial of service, from a plane the agent writes. A cycle is not
- * an instruction file, so it is reported as unavailable and assembly carries on
+ * between two of them, makes both `statSync` and `realpathSync` throw, and a
+ * throw escaping discovery takes the whole turn with it — one `ln -s` as a
+ * denial of service, from a plane the agent writes. A cycle is not an
+ * instruction file, so it is reported as unavailable and assembly carries on
  * with the files that are real.
  *
  * Only ENOENT and ELOOP are absorbed, and only here. An EACCES or EIO still

@@ -209,8 +209,8 @@ describe('turn_end workMode — the durable GEPA-cadence field', () => {
   });
 
   test('no caller-supplied mode writes no invented one', () => {
-    // Pre-cutover rows look exactly like this, and the cadence query reads
-    // their absence as "before the denominator started", never as build.
+    // A row with no mode looks exactly like this, and the cadence query reads
+    // its absence as outside the denominator, never as build.
     const rec = recorder();
     closeTurnRun(rec, 'run-plain', { turnIndex: 0, reason: 'completed' });
     const end = rec.read('run-plain').find((e) => e.type === 'turn_end');
@@ -339,8 +339,8 @@ describe('creditedTurnId', () => {
 
   // `hadError` is deliberately NOT an input: the accumulator raises it from the
   // transport discriminator on ANY failed tool result, and a turn that ran the
-  // suite, saw it red, fixed it and answered has an answer. The CLI used to
-  // read that flag here and dropped the captures of every such turn.
+  // suite, saw it red, fixed it and answered has an answer. Reading that flag
+  // here drops the captures of every such turn.
   test('a failed tool call inside a turn that still answered does not void the credit', () => {
     const acc = new TurnAccumulator();
     acc.reset(0);

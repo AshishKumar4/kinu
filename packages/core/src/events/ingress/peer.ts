@@ -171,9 +171,8 @@ export async function receivePeerMessage(
 
 /** Delivery retry policy: exponential backoff from 5s over at most 8 attempts, so
  *  the longest wait a row ever gets is 5_000·2⁶ = 320 s and then it dead-letters.
- *  Receiver refusals dead-letter immediately. There is no ceiling constant — the 1h
- *  one that used to sit here could not bind at 8 attempts, so it was a bound that
- *  could not fail. */
+ *  Receiver refusals dead-letter immediately. There is no ceiling constant: a 1h
+ *  ceiling cannot bind at 8 attempts, so it would be a bound that cannot fail. */
 const MAX_DELIVERY_ATTEMPTS = 8;
 const RETRY_BASE_MS = 5_000;
 

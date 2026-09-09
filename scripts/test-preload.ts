@@ -14,7 +14,7 @@ afterAll(release);
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from
 // cloudflare:workers). They exist only inside workerd, so under `bun test`
 // any suite whose graph reaches `agents`' root — every real UserDO or
-// orchestrator harness — failed to LOAD, and its coverage silently never ran.
+// orchestrator harness — fails to LOAD, and its coverage silently never runs.
 // This is a boundary shim, not behavior: the platform semantics of both
 // modules are exercised where they are real, in `tests/workerd` under vitest
 // (see bunfig.toml's runner-boundary note); bun-side tests only need the SDK

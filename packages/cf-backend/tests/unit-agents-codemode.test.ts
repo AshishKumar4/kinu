@@ -183,13 +183,13 @@ function fullDeps(): AgentsToolDeps {
 }
 
 // ── The execute_tools docstring itself ──────────────────────────────────────
-// This tool's description used to be @cloudflare/codemode's DEFAULT_DESCRIPTION:
-// the cf construction passed none, so the model received "Execute code to
-// achieve a goal." and NOTHING from BUILTIN_TOOL_SPECS.execute_tools — no
-// Use-when, no Avoid-when, no workspace doctrine, no Returns — plus a worked
-// example calling `codemode.searchWeb(...)`, a member no sandbox here binds.
-// Both halves are asserted here because both were absent from any test: the
-// registry's doctrine, and the namespace declarations it wraps.
+// The description the model receives is the REGISTRY's, not
+// @cloudflare/codemode's DEFAULT_DESCRIPTION. Passing none leaves the model with
+// "Execute code to achieve a goal." and NOTHING from
+// BUILTIN_TOOL_SPECS.execute_tools — no Use-when, no Avoid-when, no workspace
+// doctrine, no Returns — plus a worked example calling `codemode.searchWeb(...)`,
+// a member no sandbox here binds. Both halves are asserted: the registry's
+// doctrine, and the namespace declarations it wraps.
 
 describe('the execute_tools docstring the model receives', () => {
   test('carries the registry doctrine, not the vendor default', () => {

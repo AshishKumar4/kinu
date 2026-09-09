@@ -3,16 +3,15 @@
  * schema, six primitives exercised through it, then a minimal MCTS run and the
  * rows it leaves behind.
  *
- * The runtime comes from `createTestRuntime`, not from a fixture of its own.
- * The fixture this file used to carry declared `workspace_identity (id TEXT,
- * name TEXT)` by hand and inserted a row into it, which is a workspace no
- * composition root can produce: the real column list carries `owner_user_id`,
- * and the actor DIRECTORY the identity binds through was never created at all.
- * A seeded identity row is also the signal `createTestActor` reads to take the
- * OPEN path — `openWorkspaceMainActor` — so every test here died in the fixture
- * on `no such column: owner_user_id` before reaching an assertion. Hand-written
- * DDL beside a real schema is how a harness ends up testing a shape production
- * never has.
+ * The runtime comes from `createTestRuntime`, not from a fixture of its own. A
+ * hand-declared `workspace_identity (id TEXT, name TEXT)` with a row inserted
+ * into it is a workspace no composition root can produce: the real column list
+ * carries `owner_user_id`, and the actor DIRECTORY the identity binds through
+ * is never created at all. A seeded identity row is also the signal
+ * `createTestActor` reads to take the OPEN path — `openWorkspaceMainActor` — so
+ * a fixture like that dies on `no such column: owner_user_id` before reaching
+ * an assertion. Hand-written DDL beside a real schema is how a harness ends up
+ * testing a shape production never has.
  */
 
 import { describe, test, expect } from 'bun:test';

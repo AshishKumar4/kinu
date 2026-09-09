@@ -102,15 +102,15 @@ describe('workspace diff lifecycle', () => {
 
     // The invariant is PEAK RESIDENCY, not total reads: comparing a file against
     // its baseline necessarily reads that baseline, but the bodies must arrive
-    // one at a time. The old shape returned every body in ONE array and held it
-    // beside the whole workspace map and the diff output — three copies, each up
-    // to 400 x 256 KiB = 102.4 MiB, against a ~200 MiB silent-reset wall. So
-    // what is measured here is the largest number of bodies any single query
-    // result carried.
+    // one at a time. Returning every body in ONE array holds it beside the whole
+    // workspace map and the diff output — three copies, each up to
+    // 400 x 256 KiB = 102.4 MiB, against a ~200 MiB silent-reset wall. So what is
+    // measured here is the largest number of bodies any single query result
+    // carried.
     //
     // Matched on the query's own text rather than by inspecting row shapes,
-    // because `content FROM vfs_baseline` appears in BOTH the per-path read and
-    // the batch read it replaced — so the measurement is not silently vacuous
+    // because `content FROM vfs_baseline` appears in the per-path read AND in the
+    // batch read this rules out — so the measurement cannot go silently vacuous
     // against the shape it exists to rule out. The path-list query and the
     // INSERTs do not contain it.
     const sql = rt.storage.sql;

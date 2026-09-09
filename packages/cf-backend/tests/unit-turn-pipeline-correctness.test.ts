@@ -462,13 +462,13 @@ describe('turn-pipeline correctness wiring', () => {
     // The bug the operator hit: he forked from a message the chat pane was
     // showing and got `fork point not found`, because every reader but the
     // fork cut read the `messages` projection, and the projection skipped
-    // anything that had not been reconciled. The readers now go through the
+    // anything that had not been reconciled. Every reader goes through the
     // canonical conversation store — the SDK's own transcript — so nothing
     // may be written into `messages` for the default chat, and the
     // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
     // The SDK's own transcript table, keyed the way `ensurePaneTable` writes it:
-    // one database now holds every actor's rows, so `actor_id` leads the key and
+    // one database holds every actor's rows, so `actor_id` leads the key and
     // every read the canonical store performs is scoped by it. A table without
     // the column does not read empty here — `conversationPageRows` fails to
     // compile its SELECT.
@@ -548,10 +548,10 @@ describe('turn-pipeline correctness wiring', () => {
   // `creditedTurnId` decides it for both; what THIS suite pins is that the
   // orchestrator asks it and honours the answer.
   //
-  // The plan case is a BEHAVIOUR CHANGE, recorded as one: a completed plan turn
-  // used to claim its mid-turn takes here, because the only guard was
-  // `status === 'completed'` plus a message id. The CLI already excluded plan
-  // mode; a plan is not an answer the captures competed against.
+  // The plan case is the sharp one: a completed PLAN turn does not claim its
+  // mid-turn takes. `status === 'completed'` plus a message id is not guard
+  // enough — a plan is not an answer the captures competed against, which is
+  // why the CLI excludes plan mode too.
   describe('mid-turn captures are credited to the turn only when it answered', () => {
     /** One take set captured mid-turn: written unclaimed, stamped inside the
      *  claiming turn's window (the scoped claim drops anything older). The
@@ -890,19 +890,19 @@ describe('turn-pipeline correctness wiring', () => {
     expect(logRow).toBeGreaterThan(errorCapture);
     expect(runEnd).toBeGreaterThan(logRow);
     const closeArgs = spine.slice(runEnd, spine.indexOf('});', runEnd));
-    // `reason` and `error` are core's `classifyRunEnd` now, fed the driver's raw
-    // facts. They used to be `reason: result.status` and `error: errorText`
-    // chosen here, which is how the identical user Stop came to seal 'aborted'
-    // on this backend and 'error' on the CLI. The error text still has to REACH
-    // the classifier — that is what this pins — and which arm keeps it is core's
-    // rule, behaviourally covered by unit-three-kinds-one-contract's abort arm.
+    // `reason` and `error` are core's `classifyRunEnd`, fed the driver's raw
+    // facts. Choosing them here — `reason: result.status`, `error: errorText` —
+    // is how one identical user Stop seals 'aborted' on this backend and 'error'
+    // on the CLI. The error text still has to REACH the classifier — that is
+    // what this pins — and which arm keeps it is core's rule, behaviourally
+    // covered by unit-three-kinds-one-contract's abort arm.
     //
-    // The classification is hoisted to a local now, because the fleet analytics
-    // row beside this seal reads it too; the spread is what carries it in.
+    // The classification is hoisted to a local, because the fleet analytics row
+    // beside this seal reads it too; the spread is what carries it in.
     expect(closeArgs).toContain('...end');
     expect(closeArgs).not.toContain('reason: result.status');
-    // And the FACTS the classifier is fed, including the one this backend was
-    // missing entirely: Think reports status 'completed' for a turn its own stop
+    // And the FACTS the classifier is fed, the one this backend cannot infer on
+    // its own: Think reports status 'completed' for a turn its own stop
     // condition cut, so `completed` alone cannot tell a finished turn from one
     // that stopped mid-work. `lastFinishReason` is what makes that observable —
     // dropping it makes core's mid-work tripwire permanently silent.
@@ -981,10 +981,10 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('a fresh multi-part ask gets NO delegation nudge at step 0', async () => {
-    // The turn-start hint used to splice a `[Runtime steering …]` message on
-    // every fresh ask telling the model to run the parts as one search. That
-    // pressure is what sent a simple diagnosis into a three-node swarm on
-    // 2026-09-03, and it is gone: the model decides from the tool description.
+    // No turn-start hint splices a `[Runtime steering …]` message onto a fresh
+    // ask. Telling the model to run the parts as one search is the pressure that
+    // sent a simple diagnosis into a three-node swarm on 2026-09-03; the model
+    // decides from the tool description instead.
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const orch = agent.observeOrch();
@@ -1009,8 +1009,8 @@ describe('turn-pipeline correctness wiring', () => {
 
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
-    // One implementation, in core, that both backends' transports call — the
-    // local session used to report every pick as queued without waiting.
+    // One implementation, in core, that both backends' transports call — so
+    // neither can report a pick as queued without waiting for the delivery.
     const pick = takePick.slice(takePick.indexOf('export async function pickAlternateTake('));
     expect(pick).toContain('let continuationQueued = false');
     expect(pick).toContain('const outcome = await deps.signals.deliver');

@@ -108,10 +108,9 @@ describe('tasks tool', () => {
     await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
     await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('tasks.update requires `status` — one of open, active, done, dropped');
     await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
-    // This assertion used to pin `unknown tasks action 'sort'` — a refusal that
-    // named nothing the model could use next. The gate existed and asserted the
-    // defect. It now names the vocabulary AND echoes what arrived, which is the
-    // one wording every native dispatcher shares (registry.unknownActionError).
+    // The refusal names the vocabulary AND echoes what arrived, which is the one
+    // wording every native dispatcher shares (registry.unknownActionError). A bare
+    // `unknown tasks action 'sort'` would name nothing the model could use next.
     await expect(tasks({ action: 'sort' })).rejects.toThrow('tasks requires `action` — one of add, update, list, mode; got "sort"');
   });
 

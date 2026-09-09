@@ -256,8 +256,8 @@ describe('daemon startup hardening', () => {
     };
   }
 
-  // A rejected credential is the one outcome retrying cannot fix. The daemon
-  // used to dial forever on it, filling the log with a failure nobody reads.
+  // A rejected credential is the one outcome retrying cannot fix. Dialling on it
+  // anyway fills the log with a failure nobody reads.
   test('a refused device token stops the loop loudly instead of dialling forever', async () => {
     const scheduled = [];
     const logs = [];
@@ -1223,9 +1223,10 @@ describe('daemon process under Bun against a local hub', () => {
   }, 60_000);
 
   // The supervisor holds a terminal result until the cloud acknowledges it,
-  // and the daemon is the FIFO's only writer. A daemon that dies in that
-  // window used to leave the supervisor waiting forever; 156 of them were
-  // found on one machine in a day, each from a test whose daemon exited.
+  // and the daemon is the FIFO's only writer. So a daemon that dies in that
+  // window leaves nobody who can ack, and a supervisor that only waited would
+  // wait forever; 156 such orphans were found on one machine in a day, each
+  // from a test whose daemon exited.
   test('a supervisor whose daemon is gone stops waiting for an ack nobody can send', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-orphan-'));

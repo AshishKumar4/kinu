@@ -92,11 +92,10 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
 
   test('one binding covers the shell too — the owner is asked once, not once per method', async () => {
-    // What this replaces: a base grant used to leave `exec` still gated, so a
-    // workspace the owner had already approved was asked AGAIN the first time
-    // it ran a command, on a card whose real question was "may I use this
-    // machine" and whose text was a shell line. There is one question now, and
-    // what a command may touch is the device's own Sandbox switch.
+    // ONE question: a grant that left `exec` still gated would ask a workspace
+    // the owner had already approved AGAIN the first time it ran a command, on
+    // a card whose real question is "may I use this machine" and whose text is
+    // a shell line. What a command may touch is the device's own Sandbox switch.
     const harness = await deviceHarness();
     harness.consentDecision = 'always';
     await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/tmp/a'], { agentName: WORKSPACE });
@@ -241,19 +240,15 @@ describe('the per-workspace device grant, enforced at the hub chokepoint', () =>
 
   /**
    * A binding is read BY NAME on every later call, so its lifetime has to be
-   * the lifetime of the thing it names. Two ways it used to outlive them.
+   * the lifetime of the thing it names.
    *
-   * Retired with the tier vocabulary, on the lane owner's call: 'an exec card
-   * cannot record the full tier, however the owner answers it' pinned that an
-   * "always" on an exec card recorded the BASE scope rather than
-   * full_filesystem. With one binding and no scope there is nothing to clamp,
-   * so the property stopped existing rather than stopped being checked
-   * (grepped: no scope column reader or writer remains). 'a grant may only
-   * name a workspace this registry holds and a device that is live' went the
-   * same way with its subject, `setDeviceConsentScope`: the only writer left
-   * is the card path, which is keyed on the PROVEN workspace and runs after
-   * `isActiveDevice`, so a row naming neither is unrepresentable rather than
-   * merely checked.
+   * Two ways it could outlive them are UNREPRESENTABLE rather than checked,
+   * which is why nothing below asserts them. There is one binding and no scope,
+   * so an "always" on an exec card has no BASE scope to record in place of
+   * full_filesystem — no scope column reader or writer exists. And the only
+   * writer of a consent row is the card path, keyed on the PROVEN workspace and
+   * run after `isActiveDevice`, so a row naming a workspace this registry does
+   * not hold, or a device that is not live, cannot be built.
    */
   test('deleting a workspace deletes its device bindings, so a same-name replacement inherits nothing', async () => {
     const harness = await deviceHarness();
@@ -934,11 +929,11 @@ describe('asking for a machine when there is none', () => {
   });
 
   test('a card still waiting is not raised twice by a retrying agent', async () => {
-    // The dedupe is the REGISTRY's, not the caller's. The UserDO used to read
-    // listPendingConsents and skip — a check-then-act across two RPCs that
-    // raced itself, and only ever covered the provisioning method. Now an
-    // identical still-waiting request joins the card already up, so this drives
-    // two identical asks and reads what the authority actually did.
+    // The dedupe is the REGISTRY's, not the caller's: an identical still-waiting
+    // request joins the card already up. A caller-side read of
+    // listPendingConsents and skip is check-then-act across two RPCs that races
+    // itself, and covers only the method that remembers to do it — so this
+    // drives two identical asks and reads what the authority actually did.
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     harness.consentDecision = 'hold';
@@ -1138,11 +1133,12 @@ describe('the machine the agent asked for, as the owner reads it', () => {
 });
 
 /**
- * A stolen `device.json` used to be an indefinite credential: the token never
- * changed and its window slid forward on every use, so a copy stayed valid for
- * as long as the thief kept connecting. Rotation made it a race — and then the
- * race would not END, because a displaced claimant was handed a fresh grace to
- * reconnect on. These pin the properties that make it terminate.
+ * A stolen `device.json` must not be an indefinite credential: a token that
+ * never changes, on a window that slides forward on every use, keeps a copy
+ * valid for as long as the thief keeps connecting. Rotation makes it a race,
+ * and the race has to END — handing a displaced claimant a fresh grace to
+ * reconnect on is what stops it terminating. These pin the properties that
+ * make it terminate.
  */
 describe('a copied device.json goes stale', () => {
   /** The daemon's own connect handshake, as `pc-handler` drives it: exchange the
@@ -1266,10 +1262,9 @@ describe('a copied device.json goes stale', () => {
     expect(thief).toBeTruthy();
 
     // The real machine is displaced, redials with the secret on its disk, and
-    // spends the grace. Before this fix that accept minted a FRESH grace over
-    // the thief's token, so each side's reconnect re-armed the other's and the
-    // pair alternated every second indefinitely, both always holding a live
-    // token.
+    // spends the grace. That accept must not mint a FRESH grace over the thief's
+    // token: each side's reconnect would re-arm the other's and the pair would
+    // alternate every second indefinitely, both always holding a live token.
     const real = await connectDaemon(harness, stolen);
     expect(real).toBeTruthy();
     expect(real).not.toBe(thief);
@@ -1322,8 +1317,8 @@ describe('a copied device.json goes stale', () => {
 
     // A second claimant arrives while that socket is live and TAKES the slot: a
     // real machine redialling must not be locked out by a socket the hub has
-    // not noticed closing. What stops the alternation this used to start is the
-    // one-shot grace above, not a refusal here.
+    // not noticed closing. What stops the alternation a take-over would
+    // otherwise start is the one-shot grace above, not a refusal here.
     expect(await claimAgainstLiveSocket(harness, rotated ?? '')).toBe(101);
 
     // Recorded where the owner reads the device, and the incumbent is closed.

@@ -490,8 +490,8 @@ export function createCLIRuntime(
   };
   const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
   // THE installation. Every local runtime is born here, so every local runtime
-  // routes — a session-less one included. `kinu evolve` used to spend a whole
-  // search against lanes that threw for want of this line.
+  // routes — a session-less one included. Without this line `kinu evolve`
+  // spends a whole search against lanes that throw for want of a resolver.
   let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
     () => profiles.resolvePreTurn();
   /**
@@ -815,9 +815,10 @@ export async function buildLocalActorRuntime(
  * rows are its own rows in the parent's database rather than a file of its
  * own: its scaffold pointer, its claims, its journal steps and its program
  * state are all actor-keyed, and the parent can therefore read what its own
- * fork did. It used to open a per-head scratch file under `~/.kinu/heads/` and provision a whole
- * second workspace inside it — a second filesystem, a second memory index, a
- * second craft store — which is precisely the per-actor store open-38 removes.
+ * fork did. A per-head scratch file under `~/.kinu/heads/` would provision a
+ * whole second workspace inside it — a second filesystem, a second memory
+ * index, a second craft store — which is precisely the per-actor store open-38
+ * removes.
  *
  * What stays private is what makes this a FORK rather than a second view: its
  * own HOME in the one filesystem (`headAgentName`, uid-confined where the
@@ -1089,8 +1090,9 @@ function createLocalLaptopExecutor(
     // one its relative paths already resolve against (`toHostPath`).
     homeDir: async () => cwd,
     // Probed on this very machine rather than declared for a machine like it:
-    // `git` and `npm` used to be claimed unconditionally, and the model reads
-    // this set as a routing instruction (host-toolchain.ts says why).
+    // the model reads this set as a routing instruction (host-toolchain.ts says
+    // why), so an unconditional claim of `git` and `npm` routes work onto tools
+    // that may not be here.
     capabilities: new Set(hostToolchainCapabilities()),
     // Declared, not dropped: nothing on PATH settles `docker` or `gpu`, and an
     // omission reads to the model exactly like a measured absence.

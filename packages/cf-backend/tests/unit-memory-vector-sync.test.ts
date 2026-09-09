@@ -172,8 +172,8 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     const all = store.allChunksAfter('', 10000);
     expect(all.length).toBeGreaterThanOrEqual(3);
 
-    // The real store over a Vectorize index that is down — the shape that used
-    // to advance the cursor and set the marker over chunks it never embedded.
+    // The real store over a Vectorize index that is down — it must not advance
+    // the cursor or set the marker over chunks it never embedded.
     let down = true;
     const index: VectorizeIndex = {
       async insert() { return {}; },

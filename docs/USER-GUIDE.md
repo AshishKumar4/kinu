@@ -118,8 +118,8 @@ A long command is not killed for being long. Nothing deadlines the work itself.
 A live session backgrounds a call still running after 30 seconds. It wakes the
 agent when the call settles. Under `kinu exec` the threshold is 300 seconds,
 because a one-shot process exits after the answer and a handle nobody reads is
-worse than waiting. A 60-second ceiling used to sit inside the container and
-kill work the layer above meant to detach. That ceiling is gone.
+worse than waiting. Nothing inside the container caps a command: a ceiling
+there kills work the layer above means to detach.
 
 In the sandbox container, commands run in `/workspace`, the directory that
 survives recycling. Bytes written elsewhere vanish at the next fresh instance.
@@ -162,7 +162,7 @@ kinu jobs jarvis       # background jobs, and cancel them
 kinu actors jarvis     # every agent in this workspace, retired ones included
 ```
 
-`kinu actors` answers a question that used to have no answer: a workspace is
+`kinu actors` answers one question: a workspace is
 one database, and the agents it hired, the reasoning heads it forked and the
 search nodes it opened all live in it. Dismissed agents are listed and flagged
 rather than dropped, because their transcripts are kept — and `kinu actors

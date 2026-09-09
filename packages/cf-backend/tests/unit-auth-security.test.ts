@@ -286,9 +286,9 @@ describe('auth and desktop security invariants', () => {
     }
   });
 
-  // Sign-in was once gated on this lookup and broke login for everyone. A
-  // failing accounts API used to throw out of cloudflareTokenToCredential, so
-  // setCredential never ran and the refresh token was lost with it.
+  // Sign-in must not be gated on this lookup: it broke login for everyone. A
+  // failing accounts API throwing out of cloudflareTokenToCredential means
+  // setCredential never runs and the refresh token is lost with it.
   test('an accounts API failure still yields a storable credential', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response(
@@ -510,7 +510,7 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     expect(store).not.toContain('kv.put(');
   });
 
-  test('browser auth no longer accepts Cloudflare Access as a session', () => {
+  test('Cloudflare Access is never a browser session', () => {
     const access = source('src/auth/session.ts');
     const wrangler = source('wrangler.jsonc');
     const health = source('src/health-route.ts');

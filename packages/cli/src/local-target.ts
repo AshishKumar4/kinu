@@ -18,7 +18,7 @@ import { printError } from './display';
 
 /**
  * The local workspace `name` addresses: its database, and the project its file
- * and shell planes bind to. Adopts an unplaced legacy workspace into the
+ * and shell planes bind to. Adopts an unplaced workspace into the
  * calling project unless `adopt: false` says this is a read.
  */
 export function requireLocalAgent(name: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {

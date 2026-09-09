@@ -153,7 +153,7 @@ export interface SkippedTest {
 /**
  * One failed test and enough of its message to tell WHICH KIND of failure it is.
  *
- * `failures: number` used to be all this carried, so the gate's refusal read
+ * A bare `failures: number` would make the gate's refusal read
  * `N test failure(s) in the report` for every N — identical whether the model
  * answered wrongly or the deployment never answered at all. In a tier that runs
  * against a live account those are opposite repairs, and a reader who cannot

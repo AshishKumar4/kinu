@@ -3,25 +3,25 @@
  *
  * WHY AN EXECUTOR AND NOT A MOUNT
  *
- * A head (and a subordinate) runs in its own Durable Object facet with its own
- * SQLite, so its own Nimbus workspace is genuinely its own — private scratch a
- * sibling cannot see. The parent's durable files live in a DIFFERENT object and
- * are reachable only over Durable Object RPC, which is asynchronous by nature.
+ * A head (and a subordinate) works in actor-scoped storage that siblings
+ * cannot see — private scratch by construction. The parent's durable files
+ * live outside that scope and are reachable only through an async handle,
+ * which is asynchronous by nature.
  *
  * That makes the parent workspace exactly what the sandbox container and the
  * user's machine are: another environment, reached over an async channel, in
  * ITS OWN native paths. So it is registered the same way they are — as an
  * `ExecutorProvider` with a `parent.*` codemode namespace and a `run { runtime:
  * 'parent' }` target — rather than being folded into this agent's filesystem as
- * a `/parent` directory. Folding it in is what previously required a router
- * above Nimbus and a second, emulated shell that could walk that router; both
- * are gone.
+ * a `/parent` directory. Folding it in would require a router above Nimbus and
+ * a second, emulated shell that could walk that router.
  *
- * The fork gains capability from the change, not loses it. `/parent` could only
- * ever be read by the emulated shell's dozen-and-a-half builtins, one RPC per
- * file; `parent.exec` runs the parent's REAL shell — its ~95 coreutils, pipes
- * and all — in a single round trip. `grep -rn X .` over the parent's tree is now
- * one call that greps, instead of a walk that reads every file across the wire.
+ * The fork gains capability this way, not loses it. A per-file RPC projection
+ * would require a filesystem router and an emulated shell; a shell limited to
+ * a dozen-and-a-half builtins also exposes fewer commands. `parent.exec` runs
+ * the parent's real shell, with its approximately 95 coreutils and pipes, so
+ * `grep -rn X .` searches the parent's tree in one round trip instead of
+ * reading each file across the wire.
  */
 
 import * as v from 'valibot';

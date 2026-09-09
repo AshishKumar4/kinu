@@ -43,9 +43,9 @@
  *    a static `allowedHosts`/`deniedHosts` on a container class, so totality
  *    does not rest on the ordering of somebody else's switch.
  *
- * 5. DNS. Previously reported here as an open residual — "DNS leaves, to
- *    Cloudflare's resolvers, so query LABELS are a low-bandwidth channel
- *    outward". MEASURED FALSE on the deployed worker (0.2.0+28bc79307), inside a
+ * 5. DNS. NOT an open residual. The claim — "DNS leaves, to Cloudflare's
+ *    resolvers, so query LABELS are a low-bandwidth channel outward" — is
+ *    MEASURED FALSE on the deployed worker (0.2.0+28bc79307), inside a
  *    real KinuSandbox container reached through `executeInExecutor`:
  *
  *      raw UDP/53 to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 — no reply
@@ -327,8 +327,9 @@ function copyVersion(module: string): string {
  * artifact itself resolves: this repository loads `@cloudflare/sandbox`, and
  * Sandbox's own modules load the Containers copy nested beneath it.
  *
- * A literal path used to name the top-level copy here. That copy is a different
- * version and ships nothing, so the property asserted below held by accident.
+ * Resolved rather than spelled: a literal path names the TOP-LEVEL copy, which
+ * is a different version and ships nothing, so the property asserted below
+ * would hold by accident.
  */
 export function boundContainers(): BoundContainers {
   const host = resolveFrom(`${root}package.json`, CONTAINERS_HOST);

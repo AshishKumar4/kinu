@@ -250,8 +250,8 @@ import Kinu.Storage.DurableRoot
 #print axioms Kinu.Exploration.floorAdmissible_rejects_negative_margin
 #print axioms Kinu.Exploration.floorAdmissible_rejects_breaching_baseline
 #print axioms Kinu.Exploration.floorAdmissible_rejects_adversary
-#print axioms Kinu.Exploration.old_majority_floor_escapes_c1
-#print axioms Kinu.Exploration.fixed_majority_floor_has_more_room
+#print axioms Kinu.Exploration.defective_majority_floor_escapes_c1
+#print axioms Kinu.Exploration.corrected_majority_floor_has_more_room
 #print axioms Kinu.Exploration.c1_refuses_a_refuted_floor
 
 /-! ### Kinu/Exploration/Publication.lean -/

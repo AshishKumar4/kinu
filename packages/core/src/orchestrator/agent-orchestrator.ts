@@ -99,8 +99,8 @@ export type TurnContinuity = 'conversation' | 'independent_task';
 
 /** Turns between session-level evolution passes — the cadence the durable
  *  window is measured against. Not an option: nothing a host can read (config
- *  key, flag, profile field) chooses it, so a per-host knob was a second copy
- *  of this number and nothing more. */
+ *  key, flag, profile field) chooses it, so a per-host knob would be a second
+ *  copy of this number and nothing more. */
 const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 export interface AgentOrchestratorDeps {
@@ -400,9 +400,9 @@ export class AgentOrchestrator {
     // The append CARRIES the obligation: a turn with no follow-up coming is
     // inserted already `queued`, and the durable queued-review lane
     // (`settleEvolution` → `takeQueuedReviews`, with `resetStaleClaims` for a
-    // dead claimer) is what runs it. There is no inline dispatch here any more:
-    // it sat AFTER this insert, so an eviction between the two lost the review
-    // while a replay of the recording ran it twice. One durable write, one
+    // dead claimer) is what runs it. NOTHING DISPATCHES INLINE HERE: a dispatch
+    // after this insert loses the review to an eviction between the two, and
+    // runs it twice when the recording is replayed. One durable write, one
     // claimant.
     const appendOpts = { awaitsFollowup, id: opts?.id };
     this.window.append(
@@ -609,9 +609,9 @@ export class AgentOrchestrator {
    * Wait for the TURN LANE this instance dispatched — the outcome review and
    * the sampled shadow eval — with NO elapsed bound. Evolution makes LLM calls
    * that outlive a turn, so a process about to exit must wait or the work is
-   * simply killed, which is what made headless runs produce no evolution at
+   * simply killed, which is what makes a headless run produce no evolution at
    * all. A host that joins is a host that chose to run the lane; abandoning
-   * honest work because it takes long would only relabel the old exit-tail
+   * honest work because it takes long would only relabel the exit-tail
    * defect. Work still in flight when this returns never happens: there is no
    * such path here.
    *
@@ -819,20 +819,18 @@ export class AgentOrchestrator {
 
   // THE SETTLE SPINE IS THE TERMINAL ROSTER, and it is not here.
   //
-  // Two shapes stood here before it: `completeTurn`, a status-blind record+drain
-  // pair, and then `settleTurn`, which took the driver's verdict and ran
-  // turn-end → record → drain in one call. Both are gone, because a settle that
-  // runs as one call cannot record which half of itself an eviction interrupted.
-  // `declareTerminalRoster` (orchestrator/terminal-roster.ts) owns that sequence
-  // now — `turn_end_extensions`, `turn_record`, `event_drain`,
-  // `improvement_lanes`, in that order, each a separately claimed row — and
-  // every backend drives it through `TerminalTransitions.settle`.
+  // A settle that runs as one call cannot record which half of itself an eviction
+  // interrupted, so no such call exists. `declareTerminalRoster`
+  // (orchestrator/terminal-roster.ts) owns that sequence — `turn_end_extensions`,
+  // `turn_record`, `event_drain`, `improvement_lanes`, in that order, each a
+  // separately claimed row — and every backend drives it through
+  // `TerminalTransitions.settle`.
   //
-  // What survives here is what those rows ASK: {@link recordTurn} for the
+  // What lives here is what those rows ASK: {@link recordTurn} for the
   // recording itself, {@link drainPendingEvents} for the reactor, and the two
   // pure rules below. They are public precisely because a backend claiming the
   // sub-effects separately has to ask each question without running a settle,
-  // and asking twice is how the two backends drifted in the first place.
+  // and asking twice is how two backends drift.
 
   /**
    * Whether the COMPLETED-only improvement lanes — shadow trial, advisor
@@ -845,9 +843,9 @@ export class AgentOrchestrator {
    *
    * PURE and public, because a backend that claims the settle's sub-effects
    * separately has to ask the question without re-running the settle to be
-   * told the answer. The condition therefore exists once: the CLI used to
-   * queue shadow trials for turns that FAILED while the cloud spine did not,
-   * because each backend spelled it for itself.
+   * told the answer. The condition therefore exists once: a backend spelling
+   * it for itself is how one side queues shadow trials for turns that FAILED
+   * while the other does not.
    */
   improvementLanesOpen(status: RunEndReason, workMode?: WorkMode): boolean {
     // `workMode` is for a REPLAY: a backend re-driving a recorded turn on a fresh
@@ -862,7 +860,7 @@ export class AgentOrchestrator {
    * given for a turn that ended this way.
    *
    * A turn can throw outside the accumulator's view — that is why one backend
-   * had to set `acc.hadError` by hand in its catch — so on the `'error'` arm
+   * sets `acc.hadError` by hand in its catch — so on the `'error'` arm
    * the status is the more reliable witness. An ABORT is deliberately left
    * alone: the user pressing Stop did not make the agent fail, and stamping
    * their turn as an error would feed the outcome classifier a negative label

@@ -11,10 +11,11 @@ export const SlateBindingRequestSchema = v.strictObject({
   /**
    * Which app invocation this call is made from, as the host named it.
    *
-   * The guest carries this and nothing else about its lineage. A chain used to
-   * ride here directly, which meant a slate could hand back a shorter one and
-   * start a shorter lineage; an id names an invocation the host is running, so
-   * the chain comes out of {@link resolveSlateChain} instead of off the wire.
+   * The guest carries this and nothing else about its lineage. An id names an
+   * invocation the host is running, so the chain comes out of
+   * {@link resolveSlateChain} and never off the wire: a chain riding here
+   * directly would let a slate hand back a shorter one and start a shorter
+   * lineage.
    *
    * EVERY request a guest can reach carries one. A hop is named by
    * `ResidentSlateHost.call`, a browser hitting the preview by

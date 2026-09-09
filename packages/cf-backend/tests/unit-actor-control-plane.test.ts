@@ -3,16 +3,15 @@
  * hosted child keeps for itself.
  *
  * These four RPCs — getStoredModelSpec, setModel, steerTurn, cancelCurrentWork —
- * used to be declared twice, once on OrchestratorAgent and once on
- * SubordinateAgent. There is now one Durable Object and therefore one RPC
- * surface: a hosted subordinate has no Think turn queue to steer or stop. What
- * remains per actor is the durable state those RPCs used to duplicate — the
- * model row, the turn queue rows, and the activity rows — so this suite keeps
- * the root's behaviour and then proves the child's rows are its own.
+ * are declared ONCE, on the one Durable Object: a hosted subordinate has no
+ * Think turn queue to steer or stop. What is per actor is the durable state the
+ * surface reads — the model row, the turn queue rows, and the activity rows —
+ * so this suite keeps the root's behaviour and then proves the child's rows are
+ * its own.
  *
  * Behaviour through the public classes, not source text: the source-level ratchet
- * that stops the copies reappearing lives in unit-rpc-surface.test.ts, where the
- * declared-member machinery already is.
+ * that stops a second copy of the surface appearing lives in
+ * unit-rpc-surface.test.ts, where the declared-member machinery already is.
  */
 
 import { describe, expect, test } from 'bun:test';

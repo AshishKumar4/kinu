@@ -8,10 +8,10 @@
  *   3. The target lands it in its own SQLite (writeForkSnapshot)
  *
  * Both halves are core's, so this exercises the production path rather than a
- * transcription of it: the copy used to be defined a second time inside the CF
- * backend as a SqlExecutor shim answering the exact SELECTs the write issues,
- * and a third time here, and each transcription was a place the shapes could
- * drift apart in silence.
+ * transcription of it. Any second definition of the copy — a SqlExecutor stub
+ * inside the CF backend answering the exact SELECTs the write issues, or a
+ * hand-rolled one in this file — is a place the shapes can drift apart in
+ * silence.
  *
  * Verifies the same invariants as unit-fork.test.ts, over the full round trip.
  */

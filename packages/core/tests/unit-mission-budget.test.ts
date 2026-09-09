@@ -315,8 +315,8 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
   test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
     const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)).toBeCloseTo(expected, 12);
-    // Cache writes used to fall into `fresh` and bill at the plain input rate,
-    // which under-charges them by the 25% premium Anthropic publishes.
+    // Cache writes falling into `fresh` bill at the plain input rate, which
+    // under-charges them by the 25% premium Anthropic publishes.
     const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)).toBeGreaterThan(asPlainInput);
   });

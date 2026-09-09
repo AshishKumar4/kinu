@@ -5,8 +5,8 @@ import { join } from 'node:path';
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 const hook = source('src/hooks/use-kinu.ts');
 const page = source('src/pages/WorkspacePage.tsx');
-// The composer is one shared component now; the mode control and the
-// Steer-as-Branch gate moved into it out of WorkspacePage.
+// The composer is one shared component: the mode control and the
+// Steer-as-Branch gate live in it, not in WorkspacePage.
 const composer = source('src/components/Composer.tsx');
 const review = source('src/components/surfaces/PlanReviewView.tsx');
 const css = source('src/index.css');
@@ -14,11 +14,11 @@ const css = source('src/index.css');
 describe('Plan mode browser contract', () => {
   test('stamps typed intent, and a retry cannot lose it', () => {
     expect(hook).toContain('metadata: { kinuMode: mode }');
-    // Retry no longer COPIES the intent onto a fresh message — it re-runs the
+    // Retry does not COPY the intent onto a fresh message — it re-runs the
     // turn the intent is already stamped on, so the stamp cannot drift from
-    // the turn it governs. Copying was also how a retry appended a duplicate.
-    // (`return`, not `void`: retry now settles through the send-admission
-    // latch, so the caller can await the same turn it re-ran.)
+    // the turn it governs, and no duplicate is appended. (`return`, not
+    // `void`: retry settles through the send-admission latch, so the caller
+    // can await the same turn it re-ran.)
     expect(hook).toContain('return regenerate()');
     expect(hook).toContain('parsePlanReview(msg.plan)');
     expect(hook).toContain('"getActivePlanReview"');

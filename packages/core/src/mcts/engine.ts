@@ -184,8 +184,8 @@ export async function runMCTS(
       // that 0 up the persisted tree. Stopping here settles the tree on what it
       // actually explored instead.
       if (await outOfBudget()) break;
-      // Depth cap lives in selection (WP-A4): a maxed-out argmax no longer
-      // aborts the search — selection skips depth-capped nodes and the budget
+      // Depth cap lives in selection (WP-A4): a maxed-out argmax does not abort
+      // the search — selection skips depth-capped nodes and the budget
       // keeps flowing to the shallower frontier. Break only when nothing is
       // selectable (frontier exhausted or every open node is at the cap).
       const selected = selectNode(rt.storage.sql, rt.actor, rootId, W, maxDepth);
@@ -344,12 +344,12 @@ export async function runMCTS(
             }
             // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
             // request: it shares one per-evaluation call pool with check
-            // generation, so a request the pool cannot fund is realised lower —
-            // and used to be realised lower with no field anywhere carrying the
-            // realised number. Reported from the evaluator's own answer rather
-            // than predicted from the knobs, and only when the ensemble was
-            // reached at all: a cascade that short-circuited before judging
-            // attempted zero samples, which is not a clamp.
+            // generation, so a request the pool cannot fund is realised lower,
+            // and this is the only field carrying the realised number. Reported
+            // from the evaluator's own answer rather than predicted from the
+            // knobs, and only when the ensemble was reached at all: a cascade
+            // that short-circuited before judging attempted zero samples, which
+            // is not a clamp.
             const realised = r.value.judgeSamplesAttempted;
             if (realised > 0) {
               // On the ledger row as well as in the diagnostic, because the surface

@@ -87,17 +87,15 @@ export function delegationExhausted(budget: DelegationBudget): boolean {
  * caller at the cap has to reach for something that is not a subordinate, and it
  * cannot tell that from "denied" alone.
  *
- * BOTH SPAWNING RUNGS reach this, which is why the wording no longer says
- * "hire": a role-targeted `ask` births a child through the identical substrate
+ * BOTH SPAWNING RUNGS reach this, which is why the wording does not say "hire"
+ * alone: a role-targeted `ask` births a child through the identical substrate
  * and adds a level exactly as a hire does. A refusal that named only one of them
- * described a cap the other walked past.
+ * would describe a cap the other walked past.
  *
- * ONE REMEDY, not two. This offered "do it yourself, or fork (action=fork)" —
- * two imperatives, and the second named an action the tool no longer has, so the
- * only actionable half was the one a caller reads second. A search is what runs
- * work without a subordinate now: `DELEGATION_MAX_DEPTH` bounds the subordinate
- * tree and a search tree carries its own `depth` cap (`strategy/swarm.ts`), so a
- * swarm at the delegation cap is not a tree deeper — it is a different tree.
+ * The refusal names one actionable remedy: a search, which performs work
+ * without adding a subordinate level. `DELEGATION_MAX_DEPTH` bounds the
+ * subordinate tree, while a search has its own `depth` cap, so a swarm at the
+ * delegation cap is a different tree rather than a deeper subordinate tree.
  */
 export interface DelegationDepthRefusal {
   readonly reason: Extract<ErrorCode, 'denied'>;

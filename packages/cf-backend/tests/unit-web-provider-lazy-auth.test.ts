@@ -1,8 +1,8 @@
 // The cf web-search provider is cached for the DO lifetime, and the toolset
-// holding it is cached across turns. buildCfWebSearchProvider used to bake the
-// owner-scoped getAuth at construction — so a first web call before owner claim
-// froze getAuth=undefined and the Tavily upgrade never engaged even after the
-// claim. The fix takes a thunk resolved PER CALL. This pins that behavior.
+// holding it is cached across turns. buildCfWebSearchProvider takes a thunk
+// resolved PER CALL: baking the owner-scoped getAuth at construction freezes
+// getAuth=undefined for a first web call made before owner claim, and the
+// Tavily upgrade then never engages even after the claim. This pins that.
 import { describe, test, expect, afterEach } from 'bun:test';
 import type { AuthResolver } from '@kinu.run/core';
 import { buildCfWebSearchProvider } from '../src/lib/web-provider';

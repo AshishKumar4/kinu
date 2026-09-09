@@ -42,19 +42,19 @@ export function decodeScaffoldRunWire(wire: string): ScaffoldRunWire {
  *
  * Lives beside the wire it is a cursor over, and not inside the route, because
  * the route reaches `agents` and therefore `cloudflare:*`: a subject nothing can
- * import is a subject a suite ends up re-implementing, and the copy this replaced
- * asserted nothing about the shipped rule.
+ * import is a subject a suite ends up re-implementing, and a re-implemented copy
+ * asserts nothing about the shipped rule.
  *
  * `-1` is both the replay-from-the-start sentinel and the floor. Any other
  * negative, any fraction, and anything unparseable replays from the start rather
  * than seeking to a position no event can occupy — a NaN cursor compares false
  * against every index, so it would re-deliver the whole run on each reconnect.
  *
- * A BLANK header is absent, not zero. `Number('')` is 0, so the previous rule
- * read `Last-Event-ID:` with no value — what a client sends when its last-event
- * buffer is empty — as "I have seen event 0" and resumed AFTER it, silently
- * dropping the first event of the run. The copy of this rule that used to live in
- * a test never exercised the empty string, which is how it survived.
+ * A BLANK header is absent, not zero. `Number('')` is 0, so a rule that trusts
+ * it reads `Last-Event-ID:` with no value — what a client sends when its
+ * last-event buffer is empty — as "I have seen event 0" and resumes AFTER it,
+ * silently dropping the first event of the run. A test copy of this rule that
+ * never exercises the empty string is how that survives unseen.
  */
 export function resumeIndexFromLastEventId(lastEventId: string | null): number {
   if (lastEventId === null || lastEventId.trim() === '') return -1;

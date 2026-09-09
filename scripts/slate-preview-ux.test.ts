@@ -108,7 +108,7 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
           return { padding: parseFloat(getComputedStyle(box).paddingLeft), tabs };
         });
         // Flush with the strip's own content edge: not centred, not indented,
-        // and not trailing the fixed surfaces the previews used to sit behind.
+        // and ahead of the fixed surfaces rather than behind them.
         expect(strip.tabs[0]?.name).toBe('Dashboard');
         expect(Math.round(strip.tabs[0]!.left - strip.padding)).toBe(0);
         const previews = ['Dashboard', 'Sandbox app', 'Device app'];
@@ -129,8 +129,8 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
             controls: [...header.querySelectorAll('button, a')].map((control) => control.getAttribute('title')),
           };
         });
-        // The URL is the header's first thing, flush left — it used to carry
-        // the indent that separated it from a label the tabs now own.
+        // The URL is the header's first thing, flush left — no indent, because
+        // the tabs own the label it would otherwise be separated from.
         expect(chrome.offset).toBe(0);
         expect(chrome.controls).toEqual(['Copy the preview URL', 'Open in new tab']);
       }

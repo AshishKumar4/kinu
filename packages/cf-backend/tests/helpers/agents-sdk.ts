@@ -199,13 +199,13 @@ export function mockAgentsSdk(): void {
        * The real `Agent._ensureSchema` is called BY THE CONSTRUCTOR on every wake
        * and is documented as protected precisely so a test agent can re-run the
        * real migration path; `cf_agents_schedules` is one of the tables it
-       * creates. The stand-in used to create that table lazily inside its own
-       * schedule helpers instead, and the ORDER was the defect: an actor's
-       * activation sweep (`orchestrator.ts` — the unrunnable-row DELETE) ran
-       * before anything had created the table, so it failed with `no such table`
-       * and swept nothing, while a subordinate never observed the table at all.
-       * A production-present table was therefore outside the conformance census
-       * on one root and invisible on the other.
+       * creates. Creating it here rather than lazily inside the schedule
+       * helpers is an ORDER requirement: an actor's activation sweep
+       * (`orchestrator.ts` — the unrunnable-row DELETE) runs before any
+       * schedule helper, so a lazily created table fails with `no such table`
+       * and sweeps nothing, while a subordinate never observes the table at
+       * all — a production-present table outside the conformance census on one
+       * root and invisible on the other.
        *
        * Only the schedules table is mirrored, because the schedule registry is
        * what this stand-in implements and what the timer chain reads. The SDK's

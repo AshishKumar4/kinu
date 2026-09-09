@@ -20,9 +20,9 @@
  * ledger issues while a full search runs unbudgeted.
  *
  * That negative is also why the last describe exists. The mission port is a CAP
- * and it is a no-op without a label, so for an unlabelled search the rollout
- * usage the engine captures off the wire used to be captured and then dropped.
- * The report sink is the LEDGER, and it is asked unconditionally.
+ * and it is a no-op without a label, so an unlabelled search has no cap to
+ * debit and the rollout usage the engine captures off the wire has nowhere else
+ * to land. The report sink is the LEDGER, and it is asked unconditionally.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -326,8 +326,8 @@ describe('every rollout is reported, labelled or not', () => {
 
     await search(rt, null, 3, 2, (report) => reports.push(report));
 
-    // The search really ran, and no ledger was involved — this is the exact
-    // shape whose spend used to vanish.
+    // The search really ran, and no ledger was involved — the exact shape whose
+    // spend has nowhere to go but the report sink.
     expect(rollouts()).toBe(6);
     expect(reflections()).toBeGreaterThan(0);
     expect(reports.length).toBe(rollouts() + reflections());

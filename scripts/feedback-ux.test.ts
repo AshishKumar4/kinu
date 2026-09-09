@@ -716,8 +716,8 @@ async function run(): Promise<Observed> {
     await draw.mouse.move(box.x + box.w * 0.9, bandTop + Math.max(12, (target.height / 900) * box.h), { steps: 8 });
     await draw.mouse.up();
     // The canvas states how many marks it has painted, so the measurement waits
-    // on the PAINT rather than on the button's enabled state — those used to be
-    // different commits, which is how an async repaint read as a lost undo.
+    // on the PAINT rather than on the button's enabled state — those are
+    // different commits, which is how an async repaint reads as a lost undo.
     const painted = async (count: number): Promise<void> => {
       await draw.waitForFunction(
         (want: number) => document.querySelector('[data-feedback-canvas]')

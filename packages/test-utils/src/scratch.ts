@@ -27,13 +27,13 @@
  *      remember anything and a FAILING file's scratch is still removed
  *      (measured: both, plus the failing case). What does NOT work, measured
  *      three ways, is `process.on('exit')` — bun's test runner never reaches it,
- *      which is why the first version of this module was a leak with a nicer
- *      name and why `test-preload` had been stranding one KINU_HOME per
- *      invocation while claiming otherwise. Past SIGKILL nothing can run, and
- *      `scripts/preflight.ts --reclaim` stays the backstop for that.
+ *      so anything hung on it is a leak with a nicer name: the cleanup is
+ *      claimed and never runs, one stranded KINU_HOME per invocation. Past
+ *      SIGKILL nothing can run, and `scripts/preflight.ts --reclaim` stays the
+ *      backstop for that.
  *   3. ONE CATALOGUE, read by the collector. `scripts/preflight.ts` imports
  *      {@link SCRATCH_PREFIXES} instead of keeping its own copy, so counting and
- *      reclaiming can no longer disagree with minting about what is ours.
+ *      reclaiming cannot disagree with minting about what is ours.
  */
 
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';

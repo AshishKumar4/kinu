@@ -2,12 +2,12 @@
  * One box, one meaning: what you type when you create a workspace is its
  * MISSION — what the workspace is for — and not the first thing you say to it.
  *
- * It used to be read as both. The mission seeded SOUL.md and titled the
- * workspace AND rode along in navigation state to be replayed as an opening
- * user turn, so a workspace created with "My personal assistant, Jarvis" got a
- * reply that began "This is a very short, ambiguous statement": a standing
- * brief handed over as a task. The second reading is gone; these pin that it
- * cannot come back through the one mission-first creation surface.
+ * Read as both, it seeds SOUL.md and titles the workspace AND rides along in
+ * navigation state to be replayed as an opening user turn, so a workspace
+ * created with "My personal assistant, Jarvis" gets a reply that begins "This
+ * is a very short, ambiguous statement": a standing brief handed over as a
+ * task. These pin that the second reading cannot reach the one mission-first
+ * creation surface.
  *
  * Wiring assertions over source, the technique unit-agent-naming.test.ts
  * already uses for the same reason: the app has no DOM test harness, and the

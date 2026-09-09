@@ -1,11 +1,11 @@
 // S18 acceptance, over the ONE workspace database: a branch is a
 // `workspace_actors` row that runs its rollouts in a separate OS process, and
-// it opens NO store of its own. So there is no longer a per-branch `<key>.db`
-// under a `branches/` directory to be swept after the worker exits — the claim
-// is stronger now, "never written at all", and the residue that CAN outlive a
-// branch is its directory row. After the worker exits — success, abort, or a
-// startup refusal — that row has given up its name and no file bears the
-// branch's physical key.
+// it opens NO store of its own. So there is no per-branch `<key>.db` under a
+// `branches/` directory to be swept after the worker exits — the claim is
+// "never written at all" — and the residue that CAN outlive a branch is its
+// directory row. After the worker exits — success, abort, or a startup
+// refusal — that row has given up its name and no file bears the branch's
+// physical key.
 import { test, expect, afterAll } from 'bun:test';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,10 +86,10 @@ function branchRow(branchId: string) {
 }
 
 /** Everything in this fixture's own tree named for the branch's physical key —
- *  a per-branch store and its WAL sidecars, if the branch had one. It never has
- *  one now, which is why this is asserted while the worker is LIVE as well as
- *  after it exits: the old shape passed the second check by having its
- *  directory deleted, and that is not the same claim. */
+ *  a per-branch store and its WAL sidecars, if the branch had one. It never
+ *  has one, which is why this is asserted while the worker is LIVE as well as
+ *  after it exits: a store that is created and then deleted still passes the
+ *  after-exit check, and "swept" is not the claim "never written". */
 function branchStores(storageKey: string): string[] {
   return readdirSync(dir, { recursive: true }).map(String).filter((entry) => entry.includes(storageKey));
 }

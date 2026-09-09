@@ -389,9 +389,9 @@ function reportAuditFailure(
  * progress, and a walk whose ordering changes silently repeats and skips rows.
  * So the walk reconciles once, at the top, and says so.
  *
- * PAGED, because an account with more than `CONTROL_PAGE_MAX` workspaces
- * previously had every row past 200 unreachable while the page's own copy said
- * the table was reconciled.
+ * PAGED, because an unpaged account with more than `CONTROL_PAGE_MAX`
+ * workspaces leaves every row past 200 unreachable while the page's own copy
+ * says the table was reconciled.
  */
 async function handleUserDetail(
   env: ControlEnv,

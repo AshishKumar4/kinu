@@ -341,16 +341,15 @@ describe('a re-drive continues under the profile it started under', () => {
     //
     // `lead`'s default is `ideate`, scored `none`. `auditor`'s is `audit`, which is
     // scored `verify` and, with nothing to measure, resolves to its judged sweep. So
-    // the outcome names which preset was resolved, and before this fix both calls took
-    // `ideate` and both ran.
+    // the outcome names which preset was resolved; route both to `ideate` and both
+    // calls simply run, discriminating nothing.
     //
-    // THE DISCRIMINATOR MOVED and the property did not. It used to be `audit`'s
-    // `score:"verify"` REFUSAL, which is gone: a named preset with no objective is a
-    // legal call now, so `audit` re-drives into a judged sweep instead of a scolding.
-    // What still separates the two presets is that one of them ASKS A JUDGE — this
-    // harness scripts a model that returns nothing parseable, so the ensemble comes
-    // back empty and the run faults on its scorer. `ideate` is scored `none` and can
-    // never produce that, which is exactly the asymmetry the pair needs.
+    // THE DISCRIMINATOR IS THE JUDGE, not a refusal. A named preset with no objective
+    // is a legal call, so `audit` re-drives into a judged sweep rather than a scolding.
+    // What separates the two presets is that one of them ASKS A JUDGE — this harness
+    // scripts a model that returns nothing parseable, so the ensemble comes back empty
+    // and the run faults on its scorer. `ideate` is scored `none` and can never produce
+    // that, which is exactly the asymmetry the pair needs.
     const stored = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: stored.rt, task, roleId: 'auditor' });
     const pending = stored.execute({ action: 'swarm', task }, REDRIVE);

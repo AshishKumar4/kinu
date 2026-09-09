@@ -198,9 +198,9 @@ describe('what a caller is told about a role change', () => {
     roleChangeOutcomeText(requested, outcome, current);
 
   test('an approval widening is refused with the approval named', () => {
-    // The defect this replaces: a widening self-switch answered `staged`,
-    // which promised an owner approval no surface ever delivers. The refusal
-    // names the approval instead, so the agent asks the owner to switch.
+    // A widening self-switch answering `staged` would promise an owner approval
+    // no surface ever delivers. The refusal names the approval instead, so the
+    // agent asks the owner to switch.
     const text = say({ kind: 'refused', reason: 'approval-required' });
     expect(text).toContain('approval');
     expect(text).not.toContain('awaiting owner approval');

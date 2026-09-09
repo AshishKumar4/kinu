@@ -172,14 +172,13 @@ describe('an eviction part-way through a terminal sequence', () => {
   });
 
   /**
-   * The indeterminate instant, which is the one the old design refused to
-   * replay: the side effect HAPPENED and the isolate died before anything
-   * recorded that it had.
+   * The indeterminate instant: the side effect HAPPENED and the isolate died
+   * before anything recorded that it had.
    *
    * There is no way to tell that row from one whose effect never ran, so the
    * replay runs the body a second time — and the effect still happens once,
-   * because its boundary is keyed. That is what replaces refusing: the
-   * execution count doubles and the side-effect count does not.
+   * because its boundary is keyed. Keying is what makes replaying safe instead
+   * of refusing: the execution count doubles and the side-effect count does not.
    */
   it('replays an effect cut after its side effect, and the keyed boundary holds', async () => {
     const stub = probe('indeterminate');

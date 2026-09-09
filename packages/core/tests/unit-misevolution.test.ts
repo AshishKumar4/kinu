@@ -172,11 +172,11 @@ describe('criteria immutability from agent-reachable paths', () => {
 
     // Exercise every store an agent can reach (config rows, VFS files,
     // memory, arbitrary SQL) with payloads that try to disable the gate.
-    // Written through the REAL `actor_config` shape, which is actor-keyed. The
-    // local `CREATE TABLE IF NOT EXISTS` that used to stand here declared a
-    // two-column table and could never take effect — the workspace schema had
-    // already created the actor-keyed one — so these tamper writes were failing
-    // their NOT NULL constraint instead of exercising the store they name.
+    // Written through the REAL `actor_config` shape, which is actor-keyed. A
+    // local `CREATE TABLE IF NOT EXISTS` declaring a two-column table here can
+    // never take effect — the workspace schema has already created the
+    // actor-keyed one — so the tamper writes would fail their NOT NULL
+    // constraint instead of exercising the store they name.
     void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value)
       VALUES (${rt.actor.actorId}, 'misevolution_criteria', '[]')`;
     void rt.storage.sql`INSERT INTO actor_config (actor_id, key, value)

@@ -334,12 +334,12 @@ export const REVIEWED_ADVISORIES = {
     ids: [1124268, 1124271, 1124272, 1124276, 1138769],
   },
   'shell-quote': {
-    reason: 'TRANSITIVE since the unused @kinu.run/agent-utils declaration was deleted: the '
-      + 'only remaining edge is @opentui/react -> react-devtools-core (^1.6.1), a devtools '
-      + 'bridge no shipped code path starts, and the quadratic parse() is called by no tracked '
-      + 'source. No fixed release exists either: the advisory covers <=1.8.4, which is the '
-      + 'latest publish. Deleting the direct declaration was what this entry used to ask for '
-      + 'and it did not clear the id, because the package stayed in the graph underneath.',
+    reason: 'TRANSITIVE: the only edge is @opentui/react -> react-devtools-core '
+      + '(^1.6.1), a devtools bridge no shipped code path starts, and the quadratic '
+      + 'parse() is called by no tracked source. No fixed release exists either: the '
+      + 'advisory covers <=1.8.4, which is the latest publish. Deleting the direct '
+      + '@kinu.run/agent-utils declaration does not clear the id, because the package '
+      + 'stays in the graph underneath.',
     ids: [1123944],
   },
   valibot: {

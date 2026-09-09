@@ -198,10 +198,10 @@ export class HeadJournal {
    * so neither needs a reset of its own, and there is no second place where a head
    * row's outcome is cleared.
    *
-   * A plain `INSERT` could not be reached twice, which is why both paths used to
-   * retire the old rows and mint a parallel set: a five-branch request grew five
+   * A plain `INSERT` cannot be reached twice, so a re-drive would have to retire the
+   * previous rows and mint a parallel set: a five-branch request would grow five
    * fresh `aborted` rows per attempt until thirty rows described five branches, and
-   * the surface drew every one of them as a failure.
+   * the surface would draw every one of them as a failure.
    *
    * WHAT A RE-OPEN CLEARS is everything the previous attempt asserted about an
    * OUTCOME — the terminal status, its clock, its summary, its error, its decisions
@@ -475,9 +475,9 @@ export class HeadJournal {
    * Record one finished step of a head that is still running.
    *
    * The ONLY writer of `head_steps`. A head calls this as each step lands, so
-   * `assembleRun` serves a branch's trace mid-flight instead of the empty pane
-   * a running fork used to show. Keyed `${headId}-s${seq}` and written with
-   * INSERT OR REPLACE so a retried step overwrites rather than duplicates.
+   * `assembleRun` serves a branch's trace mid-flight rather than an empty pane for
+   * a running fork. Keyed `${headId}-s${seq}` and written with INSERT OR REPLACE
+   * so a retried step overwrites rather than duplicates.
    *
    * `created_at` is this step's own arrival time and is what liveness is read
    * from — do not rewrite it in bulk later.

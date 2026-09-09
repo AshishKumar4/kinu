@@ -23,11 +23,10 @@
 
   -- THE FIFTH ARM'S AXIS. The trigger is `Context.fresh`, and that spelling is
   the contract's: `SWARM_CONTEXTS` is `fork | fresh` (`strategy/swarm.ts`), and
-  `check-traceability.mjs` mirrors this inductive against it. `fresh` used to be
-  ambiguous — a second axis, `decorrelate`, decided what a sibling was SHOWN while
-  `context` decided what a child STARTS FROM, and coupling them is the drift this
-  arm used to carry. That axis was cut, so `fresh` now names one thing only, and
-  this arm reads it.
+  `check-traceability.mjs` mirrors this inductive against it. `fresh` names one
+  thing only — what a child STARTS FROM — and this arm reads it. Nothing decides
+  separately what a sibling is SHOWN: a second axis over that would put two
+  meanings on one spelling, and coupling them is the drift.
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
   1. THE BUILD-TIME GATE. *Build-time exclusion* requires that a tool which can

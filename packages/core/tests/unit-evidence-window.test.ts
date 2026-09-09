@@ -1,9 +1,9 @@
 // The evolution loop's evidence budget: one policy, applied at every reader.
 //
 // The behaviour under test is not "text gets shorter" — it is that the END of a
-// long turn reaches the judge. Every one of these readers used to keep only the
-// first n characters, which made a win that lands at step 9 of 12 invisible to
-// the thing that is supposed to select for it.
+// long turn reaches the judge. A reader that keeps only the first n characters
+// makes a win that lands at step 9 of 12 invisible to the thing that is
+// supposed to select for it.
 import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -117,10 +117,10 @@ describe('the readers can see the end of a long turn', () => {
     expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
 
-  // The budget is applied in ONE place. It used to be applied twice — the
-  // orchestration clamped, then the judge clamped what was already clamped —
-  // and windowing a window reports the SECOND pass's omission count, so the
-  // number the judge was shown was wrong by four orders of magnitude.
+  // The budget is applied in ONE place. Applying it twice — the orchestration
+  // clamps, then the judge clamps what is already clamped — makes windowing a
+  // window report the SECOND pass's omission count, and the number the judge
+  // sees is wrong by four orders of magnitude.
   test('the orchestrated path windows once, so the omission count is the true one', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
