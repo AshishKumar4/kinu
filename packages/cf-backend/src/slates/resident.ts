@@ -40,9 +40,7 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
   for (const asset of assets) files[asset.path] = asset.contents;
   return [
     'import { DurableObject } from "cloudflare:workers";',
-    'import { AsyncLocalStorage } from "node:async_hooks";',
     'import application from "./application.js";',
-    'const callDepth = new AsyncLocalStorage();',
     'class BindingRefusal extends Error { constructor(result) { super(result.reason + ": " + result.error); this.reason = result.reason; } }',
     'function errorText(cause) {',
     '  const parts = []; const seen = new Set();',
@@ -51,12 +49,19 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '  return parts.join(": ");',
     '}',
     `const assets = Object.freeze(${JSON.stringify(files)});`,
-    'function bindings(env) {',
+    // The invocation id is a parameter of the binding map, not ambient async
+    // state and not a lineage the guest composes. It was a chain in an
+    // AsyncLocalStorage store, and a continuation created outside the `run` —
+    // a `.then()` built at authored-module top level — read an EMPTY store, so
+    // authored code reset its own lineage by accident. A map built per request
+    // cannot be read from the wrong request, and the id it carries is one the
+    // host retires when that request settles.
+    'function bindings(env, invocation) {',
     '  return Object.freeze(Object.fromEntries(Object.entries(env).map(([name, stub]) => [name, new Proxy(Object.create(null), {',
     '    get(_target, member) {',
     '      if (typeof member !== "string" || member === "then") return undefined;',
     '      return async (...args) => {',
-    '        const result = await stub.call(member, args, callDepth.getStore() ?? 0);',
+    '        const result = await stub.call(member, args, invocation);',
     '        if (!result.ok) throw new BindingRefusal(result);',
     '        return result.value;',
     '      };',
@@ -64,18 +69,20 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '  })])));',
     '}',
     'export class NimbusProcess extends DurableObject {',
-    '  constructor(ctx, env) { super(ctx, env); this.bindings = bindings(env); }',
+    '  constructor(ctx, env) { super(ctx, env); }',
     '  async startProcess() {',
     '    if (typeof application?.fetch !== "function") throw new TypeError("package.json main must export a default fetch handler");',
     '    return { ok: true };',
     '  }',
     '  async fetch(request) { return this.handleHttpRequest(request); }',
     '  async handleHttpRequest(request) {',
-    '    const depth = Number(request.headers.get("x-slate-depth") ?? "0");',
-    '    try { return await callDepth.run(depth, () => this.respond(request)); }',
+    '    try {',
+    '      const invocation = request.headers.get("x-slate-call");',
+    '      return await this.respond(request, bindings(this.env, invocation));',
+    '    }',
     '    catch (cause) { return Response.json({ reason: cause instanceof BindingRefusal ? cause.reason : "io", error: errorText(cause) }, { status: 500 }); }',
     '  }',
-    '  async respond(request) {',
+    '  async respond(request, bound) {',
     '    const path = new URL(request.url).pathname;',
     '    const asset = Object.hasOwn(assets, path) ? assets[path] : undefined;',
     '    if (asset !== undefined && (request.method === "GET" || request.method === "HEAD")) {',
@@ -84,7 +91,7 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '        "cache-control": "no-store"',
     '      }});',
     '    }',
-    '    return application.fetch(request, this.bindings, { waitUntil: (work) => this.ctx.waitUntil(work) });',
+    '    return application.fetch(request, bound, { waitUntil: (work) => this.ctx.waitUntil(work) });',
     '  }',
     '}',
   ].join('\n');

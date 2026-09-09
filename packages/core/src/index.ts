@@ -1,9 +1,9 @@
 // @kinu.run/core — barrel export
 
 // Identity system
-export { initActorTables, initAllTables, tableExists } from './identity/schema';
-export { SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
-export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess, type SubordinateInspectionPort } from './subordinates/inspection-path';
+export { initActorTables, initAllTables, initFiberTable, tableExists } from './identity/schema';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 // The once-only lifecycle of one settled response, and the per-effect ledger it
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
 // machine over the same table and supply only effect bodies and a wake.
@@ -35,7 +35,7 @@ export {
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
-export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspace-schema';
+export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './identity/workspace-schema';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -220,14 +220,12 @@ export {
   type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './evolution/changelog';
-// Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
-// surface is no longer exported.
 
 // Configuration
 export { DEFAULT_CONFIG } from './config';
 export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
 
-// Typed accessors over the `agent_config` key/value table — collapses ~23
+// Typed accessors over the `actor_config` key/value table — collapses ~23
 // raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
@@ -253,7 +251,7 @@ export { SqliteSlateInvocations, type SlateInvocationAuthority } from './slates/
 export { SlateFiles, slateDirectory } from './slates/files';
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './slates/runtime';
 export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
-export { SlateBindingRequestSchema, routeSlateBindingCall, type SlateBindingRequest, type SlateBindingRoute } from './slates/bindings';
+export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 export {
@@ -339,7 +337,7 @@ export {
 // Chat engine (shared between server and CLI)
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatOptions,
+  type ChatEvent, type ChatOptions, type ChatToolOutput,
 } from './chat';
 
 // Extension seam (public plugin API — observe + extend a turn)
@@ -356,15 +354,41 @@ export {
 export {
   composePrepareStep,
   type StepCachePlan,
+  type StepContextPlane,
   type StepDynamicContext,
   type StepPipeline,
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
 export {
+  applyStagedContext, unpairedToolCallIds, STAGED_CONTEXT_DEFERRALS,
+  type StagedContextEdit, type StagedContextDeferral, type StagedContextOutcome,
+} from './prompting/staged-context';
+
+// The actor's editable working history, and the `/context` projection of it.
+export {
+  ActorWorkingContextStore, initActorWorkingContextTables,
+  type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
+  type WorkingStatus, type WorkingVia, type WorkingClosedReason,
+} from './orchestrator/working-context';
+export {
+  createActorContextPlane,
+  type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
+  type SettledContext, type ContextEditReceipt, type ContextEditEffect, type ContextPlaneState,
+  // The audit port every host wires per actor, and the event it takes. Exported
+  // because the hosts that construct a session are in other packages: a
+  // recorder that satisfies this is what turns a landed context edit into
+  // evidence, and `null` is the stated spelling for a host that publishes none.
+  type ContextEventRecorder, type ContextEditEvent,
+} from './orchestrator/context-plane';
+export {
+  contextMount,
+  type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
+} from './vfs/context-plane';
+export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
+export {
   pruneStepToolOutputs,
   stepContextLimit,
   outputReserveTokens,
-  STEP_RECENT_TOOL_BUDGET_TOKENS,
   type ModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';
@@ -474,7 +498,7 @@ export {
   renderExecuteToolsDescription,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
-  // panel, which used to guess it from ToolSet keys.
+  // panel, so none of them has to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
   // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
@@ -495,7 +519,28 @@ export {
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
-export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider } from './tools/state-codemode';
+export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider, type ProgramStateStore } from './tools/state-codemode';
+export {
+  APP_TABLE_SCOPES, APP_MUTATIONS,
+  initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
+  type AppColumn, type AppColumnType, type AppTableScope, type AppMutation,
+  type AppTableSpec, type AppTableRecord, type AppPredicate, type AppWhere,
+  type AppSelect, type AppOp, type AppOpResult, type AppRow,
+  type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
+} from './tools/db-codemode';
+export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
+export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
+export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
+// open-38: ONE physical workspace SQLite for every logical actor. The host that
+// binds an issued actor's runtime objects over that one database, and the loop
+// origin every created actor is seeded with.
+export {
+  createActorHost, recoverActorTurns, childContextResolver,
+  type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
+  type LoopSeed, type ActorRetirement, type ResumableActorTurn,
+} from './state/actor-host';
+export { seedActorLoop, defaultLoopOrigin, type LoopOrigin } from './scaffold/bootstrap';
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {
@@ -641,6 +686,7 @@ export {
   type CraftedToolSource,
 } from './tools/crafted-executor';
 export {
+  assignedTurnFraming,
   buildSystemPromptSync,
   currentDateForPrompt,
   FALLBACK_PURPOSE,
@@ -648,6 +694,7 @@ export {
   unverifiedInstructionsMessage,
   WORKSPACE_INSTRUCTIONS_HEADER,
   type UnverifiedInstructions,
+  type AssignedTurnFraming,
   type SystemPromptOptions,
 } from './prompt';
 // The boundaries of an assembled request — shared by the renderers that write
@@ -876,7 +923,7 @@ export {
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
   type ScaffoldDefaultInferenceChunk,
-  type ScaffoldEvent,
+  type ScaffoldEvent, type ScaffoldModelEvent, type ScaffoldToolOutput,
   type ScaffoldEmitFn,
 } from './scaffold/executor';
 export { pumpScaffoldEvents } from './scaffold/event-pump';
@@ -890,6 +937,7 @@ export {
   getPendingScaffold,
   getCurrentScaffoldVersion,
   readScaffoldVersion,
+  readVersionedScaffoldSource,
   readShadowVerdict,
   recordShadowEvaluation, scoredShadowTrial, trimTrialContext,
   decidePromotion,
@@ -1107,10 +1155,12 @@ export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
   ExecutionRecoveryRecord,
+  ContextEditVia, ContextEditStatus, ContextEditBoundary,
   CacheHitStats, StepTelemetry,
 } from './events/index';
 export {
   FAILURE_WITHOUT_ERROR,
+  CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
   initRunEventTables,
   parseStoredRunEvent,
   RunEventSchema,
@@ -1142,6 +1192,7 @@ export {
   type ModelOperationSink,
   type SpendSource,
   type SpendTally,
+  type DeferredRunEvent,
   type RunEventListener,
   type RunEventQuery,
   type BoundedRunEventQuery,
@@ -1200,6 +1251,7 @@ export {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
   PlanReviewStore,
+  PlanReviewSchema,
   admitPlanReviewAnnotations,
   applyPlanEdits,
   formatPlanWithLineNumbers,
@@ -1398,7 +1450,7 @@ export {
   // resolve it identically
   headMergeLLM,
   type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
-  extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
+  extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   type HeadInferenceDeps, type HeadWorkspaceLayout,
@@ -1429,6 +1481,7 @@ export {
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
+export { withTaskPlan, bindTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
@@ -1439,6 +1492,14 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
+export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
+export {
+  ActorClaimStore, initActorClaimTables, programIdentityOf, verifyClaimedProgram,
+  type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
+  type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
+} from './orchestrator/actor-claims';
+export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 export { SignalDelivery } from './orchestrator/signals';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
@@ -1523,8 +1584,8 @@ export type {
 // Only the entry points + persistence + types are public; the algorithm
 // internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
 // The scaffold evolution CONTROL PLANE — the drivers over those primitives.
-// They used to be Durable Object methods, which is why GEPA could not be run
-// from the CLI at all; both backends now call these.
+// Plain module functions rather than backend methods, so every composition
+// root calls the same drivers and GEPA is runnable from the CLI.
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
@@ -1567,12 +1628,12 @@ export {
   DEFAULT_GEPA_BUDGET,
   // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
-  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHook,
+  listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
 } from './evolution/gepa/index';
 export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
-  GepaIterationState, GepaResult,
+  GepaIterationState, GepaProgressHooks, GepaResult,
   RunScaffoldGepaOpts, RunScaffoldGepaResult,
   RunSectionGepaOpts, RunSectionGepaResult,
   GepaRunSummary,
@@ -1607,8 +1668,8 @@ export type {
 // Backend conformance gate — the manifest of which composition root wires
 // which capability (or why deliberately not), plus the comparator the
 // per-backend harnesses run their observed surfaces through. Kills the
-// "X never worked on Y backend" class: a forgotten wire can no longer look
-// like a design decision.
+// "X never worked on Y backend" class: a forgotten wire cannot look like a
+// design decision.
 export {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
   compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
@@ -1713,7 +1774,7 @@ export type {
 export { buildPendingActions } from './read-models/pending-actions';
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
-  previewInstruction, gatherApprovableInstructions, snapshotExistingInstructions,
+  previewInstruction, gatherApprovableInstructions,
 } from './read-models/instruction-approvals';
 export type {
   InstructionSourceKind, InstructionSourceMeta, InstructionSourceRow,

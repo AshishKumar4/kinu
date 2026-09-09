@@ -52,21 +52,21 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     // A wrong turn graded through the user's own reply: the lesson is born
     // corroborated — a row in the ledger, never a MEMORY.md copy.
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');
-    const lessons = listLessons(rt.storage.sql, { status: 'corroborated' });
+    const lessons = listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' });
     expect(lessons).toHaveLength(1);
     const lessonText = lessons[0]!.text;
 
     // THE RESET: the whole memory file plane is wiped, as a workspace reset
-    // does. Under the old design this erased every lesson copy with it.
+    // does. A lesson kept as a MEMORY.md copy goes with it.
     await rt.storage.vfs.writeFile('memory/MEMORY.md', '');
 
     // 1. The prompt view still carries the lesson.
-    expect(renderRecentLessons(rt.storage.sql)).toContain(lessonText);
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).toContain(lessonText);
     // 2. Search still finds it.
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .filter((lesson) => lesson.text.includes('cluster'))).toHaveLength(1);
     // 3. The session-reflection pass reads the same rows, not a heading parse.
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 'msg-1', outcome: 'corrected', confidence: 0.9, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a',
     });
@@ -94,51 +94,51 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
 
   test('the effective reader resolves one verdict per turn, explicit wins', () => {
     const rt = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 't1', outcome: 'accepted', confidence: 0.9, source: 'classifier',
       userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 3,
     });
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 't1', outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a', scaffoldVersion: 3,
     });
 
     // One EFFECTIVE verdict per identified turn — never both.
-    const rows = listTurnOutcomes(rt.storage.sql);
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ turnId: 't1', outcome: 'corrected', source: 'explicit' });
     // Downstream gates read the effective verdict too.
-    expect(hasNegativeOutcome(rt.storage.sql, ['t1'])).toBe(true);
-    const rates = realOutcomeScaffoldRates(rt.storage.sql);
+    expect(hasNegativeOutcome(rt.storage.sql, rt.actor, ['t1'])).toBe(true);
+    const rates = realOutcomeScaffoldRates(rt.storage.sql, rt.actor);
     expect(rates.get(3)).toEqual({ accepted: 0, negative: 1 }); // counted once
   });
 
   test('calibration still addresses the classifier row its label was spent on', () => {
     const rt = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 't1', outcome: 'accepted', confidence: 0.9, source: 'classifier',
       userMessage: 'u', assistantResponse: 'a',
     });
-    const [classifierRow] = listTurnOutcomes(rt.storage.sql, { outcomes: ['accepted'] });
+    const [classifierRow] = listTurnOutcomes(rt.storage.sql, rt.actor, { outcomes: ['accepted'] });
     expect(classifierRow!.source).toBe('classifier');
 
     // The human's gold label lands on THAT row, by id.
-    const written = recordOutcomeLabels(rt.storage.sql, {
+    const written = recordOutcomeLabels(rt.storage.sql, rt.actor, {
       labeler: 'owner', labels: [{ outcomeId: classifierRow!.id, label: 'corrected' }],
     });
     expect(written).toBe(1);
-    const gold = goldLabels(rt.storage.sql);
+    const gold = goldLabels(rt.storage.sql, rt.actor);
     expect(gold.get(classifierRow!.id)!.label).toBe('corrected');
 
     // …and the calibration universe is drawn from classifier rows only, so a
     // later explicit verdict neither dilutes nor deletes the measured error.
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 't1', outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 'u', assistantResponse: 'a',
     });
-    const universe = calibrationUniverse(rt.storage.sql);
+    const universe = calibrationUniverse(rt.storage.sql, rt.actor);
     expect(universe.map(r => r.id)).toEqual([classifierRow!.id]);
     expect(universe[0]!.predicted).toBe('accepted'); // what the model GUESSED
-    expect(listLessons(rt.storage.sql)).toHaveLength(0); // untouched lane
+    expect(listLessons(rt.storage.sql, rt.actor)).toHaveLength(0); // untouched lane
   });
 });

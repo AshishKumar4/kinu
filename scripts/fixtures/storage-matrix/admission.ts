@@ -69,8 +69,8 @@ export interface ArmEvidence {
   /** Whether this arm's numbers may be ranked. Must be false for every
    *  non-candidate kind. */
   readonly rankEligible: boolean;
-  /** The red witnesses this arm MUST produce, preregistered before the run:
-   *  e.g. overlay-cas's unbounded restore claim, r2fs's known semantic gaps.
+  /** The red witnesses this arm MUST produce, preregistered before the run —
+   *  a documented defect of the strategy the arm is.
    *  Empty for an arm with no preregistered defect. These are MEASURED COSTS
    *  reproduced to prove the instrument still sees them; a competing arm may
    *  carry them and still win on its numbers. */
@@ -296,9 +296,9 @@ function censorProblems(scored: readonly ScoredCell[]): string[] {
 function semanticsProblems(record: StorageRunRecord): string[] {
   const problems: string[] = [];
   for (const arm of record.arms) {
-    // WITNESSES ARE JUDGED ON EVERY ARM, whatever its rank eligibility. This
-    // used to run only on the non-candidate branch, so an instrument that made
-    // its arms rank-eligible silently stopped checking that their preregistered
+    // WITNESSES ARE JUDGED ON EVERY ARM, whatever its rank eligibility. Gating
+    // this on the non-candidate branch would let an instrument that made its
+    // arms rank-eligible silently stop checking that their preregistered
     // defects still reproduced. Preregistration is a drift detector; it is not
     // a statement about who may win, and the two must not be wired together.
     problems.push(...witnessProblems(arm));

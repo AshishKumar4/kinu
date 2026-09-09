@@ -1,12 +1,12 @@
 /**
  * Owner-only files are VERIFIED, not requested.
  *
- * The shape these replace was `writeFileSync(path, data, { mode: 0o600 })`
- * followed by `try { chmodSync(path, 0o600) } catch {}`. Both halves matter:
- * `mode` is honoured only on creation, so a file an earlier version left
- * group-readable keeps its bits on rewrite, and the chmod that was meant to fix
- * that was the one call whose failure was discarded. A refresh token then sits
- * in a world-readable file with nothing anywhere saying so.
+ * `writeFileSync(path, data, { mode: 0o600 })` followed by
+ * `try { chmodSync(path, 0o600) } catch {}` is wrong in both halves: `mode` is
+ * honoured only on creation, so a file already left group-readable keeps its
+ * bits on rewrite, and the chmod meant to fix that is the one call whose
+ * failure is discarded. A refresh token then sits in a world-readable file
+ * with nothing anywhere saying so.
  */
 
 import { describe, test, expect, afterEach } from 'bun:test';
@@ -34,7 +34,7 @@ describe('writeSecretFile', () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
-  test('narrows a file an earlier version left group- and world-readable', () => {
+  test('narrows an existing group- and world-readable file', () => {
     // The regression `writeFileSync(..., { mode })` alone cannot fix: the mode
     // option is ignored for an existing file.
     const path = join(scratch(), 'config.json');

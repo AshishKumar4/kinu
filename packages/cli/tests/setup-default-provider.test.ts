@@ -1,10 +1,9 @@
 // What `kinu setup` recommends.
 //
-// The default used to be the ChatGPT Codex subscription: menu option 1, and
-// what `--yes` picked. That overrode the native Cloudflare Workers AI model the
-// platform otherwise resolves to, which is the one the account already serves.
-// Native is now option 1 and the `--yes` answer; the other providers are all
-// still reachable, just not preferred.
+// The native Cloudflare Workers AI model is option 1 and the `--yes` answer: it
+// is the one the account already serves. Recommending a BYO subscription — the
+// ChatGPT Codex one, say — would override what the platform otherwise resolves
+// to. Every other provider stays reachable, just not preferred.
 //
 // Driven through the real `setupCommand` in a subprocess, because config.ts
 // binds KINU_HOME at import.

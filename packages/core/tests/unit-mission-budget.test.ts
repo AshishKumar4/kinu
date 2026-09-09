@@ -9,6 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import {
   MissionGovernor, MissionBudgetExhausted, priceCall, readMissionLimits,
   type MissionBudgetRefusal,
@@ -18,14 +19,19 @@ import { estimateUsdCost } from '../src/llm';
 import type { LLM } from '../src/types/primitives';
 import type { ModelPricing } from '../src/providers/types';
 
+/** A governor and the actor whose spend it caps. The mission ledger is keyed by
+ *  the owner, so `actor` is returned too: the "fresh governor over the same
+ *  storage" case has to revive over the SAME handle or it would open an empty
+ *  ledger and read as a lost mission rather than a scoping fault. */
 function makeGovernor(opts: {
   onExhausted?: (r: MissionBudgetRefusal) => void;
   pricing?: () => ModelPricing | null;
 } = {}) {
   const db = new Database(':memory:');
   const storage = { sql: makeSql(db), execRaw: makeExecRaw(db) };
-  const governor = new MissionGovernor({ storage, ...opts, now: () => 1_000 });
-  return { governor, storage, db };
+  const actor = createTestActors(storage.sql, storage.execRaw).main;
+  const governor = new MissionGovernor({ storage, actor, ...opts, now: () => 1_000 });
+  return { governor, storage, actor, db };
 }
 
 /** Claude Sonnet's published models.dev rates, USD per 1M tokens. */
@@ -148,12 +154,15 @@ describe('mission budget — transitive rollup', () => {
   });
 
   test('the ledger survives a fresh governor over the same storage', () => {
-    const { governor, storage } = makeGovernor();
+    const { governor, storage, actor } = makeGovernor();
     governor.declare('mission', { tokens: 100 });
     governor.activate(['mission']);
     governor.debit(100);
 
-    const revived = new MissionGovernor({ storage });
+    // The SAME actor, because the ledger row is that actor's: reviving under a
+    // new handle would read an empty ledger, which is indistinguishable from
+    // the durability failure this case exists to catch.
+    const revived = new MissionGovernor({ storage, actor });
     revived.activate(['mission']);
     expect(revived.scope).toEqual(['mission']);
     expect(revived.guard('model_call')?.label).toBe('mission');
@@ -306,8 +315,8 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
   test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
     const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)).toBeCloseTo(expected, 12);
-    // Cache writes used to fall into `fresh` and bill at the plain input rate,
-    // which under-charges them by the 25% premium Anthropic publishes.
+    // Cache writes falling into `fresh` bill at the plain input rate, which
+    // under-charges them by the 25% premium Anthropic publishes.
     const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
     expect(priceCall(ANTHROPIC, SONNET)).toBeGreaterThan(asPlainInput);
   });

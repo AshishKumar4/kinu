@@ -5,7 +5,7 @@
  * The question: should an agent's `/workspace` live on R2, on the container's
  * own disk, or on a hybrid of the two — and if a hybrid, which one. It has been
  * answered by assertion until now, including by a comment in the product
- * (`kinu-sandbox.ts:210-211`) that is no longer true of the SDK it describes.
+ * (`kinu-sandbox.ts:210-211`) that is not true of the SDK it describes.
  * This is the instrument that answers it with numbers.
  *
  *   bun scripts/bench-r2-workspace.ts --plan          # print the plan, run nothing

@@ -24,7 +24,8 @@
 // imported by every file that needs the class.
 import { mock } from 'bun:test';
 
-import { sha256Hex } from '../../src/cas/hash';
+import { createHash } from 'node:crypto';
+
 import { describeThrown } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
 import { sessionShellRefusal } from './session-shell';
@@ -97,7 +98,7 @@ export type LiveProcess = FakeProcessRow & {
 };
 
 /**
- * One candidate runner start, as the container sees it: the argv the box
+ * One supervised runner start, as the container sees it: the argv the box
  * composed, split back into words, and the control snapshot the box wrote to
  * the `--control` path before starting it. `action` and `resultPath` are the
  * two the fake itself has to read; a runner reads the rest with
@@ -199,7 +200,7 @@ export interface FakeStorage {
    * so the nearest honest stand-in is the attempt's first durable write, which
    * propagates exactly as a real attach failure does: past the recovery ladder,
    * not into the incompleteness reason. Every step AFTER the attach reports
-   * instead of throwing, which is why a container fault is no longer usable for
+   * instead of throwing, which is why a container fault cannot stand in for
    * this.
    */
   faultOn(key: string, error: Error): void;
@@ -252,7 +253,7 @@ export function fakeStorage(): FakeStorage {
       if (existed) keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
       return Promise.resolve(existed);
     },
-    // THE CANDIDATE CONTROL ROW'S READ-MODIFY-WRITE. The runtime runs the
+    // A DURABLE ROW'S READ-MODIFY-WRITE. The runtime runs the
     // closure against a transaction whose writes land together when it
     // settles and not at all when it throws; a closure that refused (the head
     // CAS naming a stale parent) must leave the row it read untouched. Buffered
@@ -334,13 +335,12 @@ export function fakeStorage(): FakeStorage {
  * The one command the boot-id stamp issues, and the last write a restoration
  * makes. Faulting or gating it fails or parks an attempt at its final await.
  *
- * THE PATH, NOT THE VERB. This used to be `printf %s`, and a prefix like that
- * identifies a command by the least specific thing about it: the listener proof
- * writes its answer with `printf %s` too, so the fake would have parked that
- * probe on the stamp gate, fired a stamp fault at it, and counted it as a
- * stamp — a silent, wrong answer to a real command, which is exactly the class
- * of fake defect `session-shell.ts` exists to stop. The boot-id path is what
- * makes this command the stamp.
+ * THE PATH, NOT THE VERB. A prefix like `printf %s` identifies a command by the
+ * least specific thing about it: the listener proof writes its answer with
+ * `printf %s` too, so the fake would park that probe on the stamp gate, fire a
+ * stamp fault at it, and count it as a stamp — a silent, wrong answer to a real
+ * command, which is exactly the class of fake defect `session-shell.ts` exists
+ * to stop. The boot-id path is what makes this command the stamp.
  */
 export const STAMP_COMMAND = '> /tmp/devbox-boot-id';
 
@@ -416,7 +416,7 @@ export class FakeSandbox {
    * point — and `unmountBucket` goes through that session with no cwd of its
    * own. A shell standing on a mount is a reference to it, so this field is
    * what decides whether an unmount can succeed. Modelling it is the repair to
-   * this fake: without it, every deployed r2fs stop could refuse EBUSY while
+   * this fake: without it, a deployed stop could refuse EBUSY while
    * this suite stayed green, because the one reference that actually held the
    * mount was not represented at all.
    */
@@ -485,7 +485,7 @@ export class FakeSandbox {
    *  back. True unless a test says otherwise, so no existing flow changes. */
   journalSocketUp = true;
   /**
-   * THE CANDIDATE RUNNER, as the container runs it. The box starts `bun
+   * A SUPERVISED RUNNER, as the container runs it. A box starts `bun
    * <runner> --action … --result <path>` as a supervised process, waits for
    * the row to settle, and reads the reply from the result path; a test that
    * sets this answers that process. Invoked from `startProcess` for every
@@ -499,7 +499,7 @@ export class FakeSandbox {
   /** The container's files, as far as the box reads them: runner result paths
    *  and workload files accepted through the SDK boundary. */
   readonly files = new Map<string, string>();
-  /** A workload write the fake accepted. Candidate fixtures use this to hand
+  /** A workload write the fake accepted. A fixture uses this to hand
    *  the same bytes to the runner's journal model; unset, the file write is
    *  still kept in {@link files}. */
   fileWritten: ((path: string, content: string) => Promise<void> | void) | undefined;
@@ -576,20 +576,20 @@ export class FakeSandbox {
    * One command, answered as the container's PERSISTENT session shell answers
    * it.
    *
-   * THE PARSE COMES FIRST, and it is a real one — see `session-shell.ts`. This
-   * fake used to accept any string and answer it by prefix, so a command
-   * template that no shell would run was green here and dead on the
-   * deployment: `releaseWorkdirHoldersCommand` reached run
-   * `e2e20260901140445` with no separator before its `done`, and every arm's
-   * stop came back as `Session 'sandbox-default' shell exited (exit code: 2)`.
-   * A fake that answers what a shell refuses cannot hold that class of defect.
+   * THE PARSE COMES FIRST, and it is a real one — see `session-shell.ts`. A
+   * fake that accepted any string and answered it by prefix would pass a
+   * command template no shell would run: `releaseWorkdirHoldersCommand`
+   * reached run `e2e20260901140445` with no separator before its `done`, and
+   * every arm's stop came back as `Session 'sandbox-default' shell exited
+   * (exit code: 2)`. A fake that answers what a shell refuses cannot hold that
+   * class of defect.
    */
   /**
    * Stand the session in `cwd`, or REFUSE — a cwd the container does not hold
    * is a refusal, not a move.
    *
    * The session shell chdirs before it runs anything, so a command whose cwd
-   * does not exist never runs at all. The deployed r2fs arm died of exactly
+   * does not exist never runs at all. A deployed box died of exactly
    * that, twice on 2026-09-03: `Failed to change directory to
    * '/var/tmp/devbox'`, on a fresh container where nothing had created the
    * runtime directory its ports name as their cwd — and the mkdir that would
@@ -621,7 +621,7 @@ export class FakeSandbox {
 
   /**
    * THE RUNNER RESULT'S RETIREMENT and the chain's directory resets: `rm -f
-   * '<reply>'` after one attempt, `rm -rf '<dir>'` when the candidate is
+   * '<reply>'` after one attempt, `rm -rf '<dir>'` when the box is
    * discarded, and a `rm -rf` of several directories at once, which is how
    * `resetDirs` empties the upper and the stage. Every quoted path loses its
    * subtree in the file table the runner writes into, so a reply the box
@@ -646,11 +646,11 @@ export class FakeSandbox {
   /**
    * THE HOLDER-RELEASE COMMAND, answered the way the real container answers
    * it: the signal work happens inside the same command, and STDOUT IS WHO IS
-   * STILL HOLDING WHEN IT ENDS. That last part is the repair — the command
-   * used to echo the list it captured BEFORE signalling, so a writer it had
-   * just killed successfully was still named as a holder, which is how
-   * deployed runs `probe09011530` and `hp0901170218` both blamed a `bun` pid
-   * that the `/proc` report taken afterwards shows was already gone.
+   * STILL HOLDING WHEN IT ENDS. That last part is the point — a command that
+   * echoed the list it captured BEFORE signalling would still name a writer it
+   * had just killed successfully, which is how deployed runs `probe09011530`
+   * and `hp0901170218` both blamed a `bun` pid that the `/proc` report taken
+   * afterwards shows was already gone.
    *
    * The fake's `workdirHolder` IS its process table, so clearing it is what
    * the real command's SIGTERM achieves; a holder marked `survives` is one the
@@ -659,11 +659,10 @@ export class FakeSandbox {
    * and is invisible to an fd match. None of the last three is signalled, so
    * all three are still holding when the scan ends and all three are named.
    *
-   * MATCHED ON THE SCAN ITSELF, not on the command's first word: the first
-   * word changed the moment the command grew its ancestor walk, and a fake
-   * keyed on it answered the empty string to a command it no longer
-   * recognised — a silent, wrong answer to a real command. Null for any other
-   * command.
+   * MATCHED ON THE SCAN ITSELF, not on the command's first word: adding an
+   * ancestor walk can change the prefix without changing the holder-release
+   * operation, and a prefix-keyed fake can then silently answer the wrong
+   * command. Null for any command that does not contain the scan.
    */
   #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     if (!command.includes('/proc/$pid/fd')) return null;
@@ -727,7 +726,11 @@ export class FakeSandbox {
       // The shipped caller fingerprints exactly one directory, the overlay
       // upper, and nests its quoting inside another quoted command, so the
       // path is matched rather than parsed out of the quoting.
-      return { stdout: sha256Hex(this.synthesizeArchive('/var/tmp/devbox/upper')), stderr: '', exitCode: 0 };
+      return {
+        stdout: createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex'),
+        stderr: '',
+        exitCode: 0,
+      };
     }
     if (command.includes('then seen=1; break; fi')) {
       // The layer-visibility probe: `ready` exactly when the store holds the
@@ -805,8 +808,7 @@ export class FakeSandbox {
       // EVERY path the box's own `mountBucket` holds, not just the work
       // directory — the same fact `/proc/mounts` reports in a real container,
       // so a strategy's read-back observes the world the fake changed rather
-      // than a world the test staged. The candidate arms mount their object
-      // store somewhere else entirely and read it back the same way.
+      // than a world the test staged.
       const lines = [
         'proc /proc proc rw,relatime 0 0',
         ...[...this.s3fsMounts].map(
@@ -837,8 +839,7 @@ export class FakeSandbox {
     if (command.startsWith('test -e')) {
       // `#pathExists` asks `test -e '<path>' && echo yes || echo no`; the fake
       // holds no filesystem, so the answer is yes for any path a strategy
-      // asked about — the cache directory the r2fs attach read-back wants is
-      // the one `mountBucket` created beside its mount.
+      // asked about.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
     }
     // THE JOURNAL SOCKET PROBE, answered the way the container answers it:
@@ -922,7 +923,7 @@ export class FakeSandbox {
     // on a mount holds that mount. So an unmount asked for while the session
     // still stands inside the work directory is refused no matter how many
     // holders were killed first — which is the deterministic reason every
-    // deployed r2fs stop refused, measured in probe `hp0901170218`, where the
+    // deployed stop refused, measured in probe `hp0901170218`, where the
     // identical `fusermount -u` returned 0 the moment the session was parked.
     if (mountPath === '/workspace'
       && (this.sessionCwd === mountPath || this.sessionCwd.startsWith(`${mountPath}/`))) {
@@ -996,8 +997,8 @@ export class FakeSandbox {
     const action = runnerOption(argv, 'action');
     if (action === undefined || this.runner === undefined) return this.#live(row);
     // THE RUNNER ANSWERS BEFORE START REPLIES, which is one shape the real one
-    // has (candidate-runner.test.ts: "reads the result when the runner
-    // completed before start replied") and the only deterministic one: the
+    // has — a runner that completed before start replied — and the only
+    // deterministic one: the
     // first exit poll finds a settled row, and the reply is at its path.
     const resultPath = runnerOption(argv, 'result');
     const controlPath = runnerOption(argv, 'control');
@@ -1021,10 +1022,9 @@ export class FakeSandbox {
     return { content };
   }
 
-  /** One file write through the SDK boundary. The tests drive text because
-   *  the candidate journal model's byte semantics live in its own suite; this
-   *  stand-in keeps the bytes at the path and tells an installed candidate
-   *  runner that a workload mutation occurred. A write under the work
+  /** One file write through the SDK boundary. The tests drive text; this
+   *  stand-in keeps the bytes at the path and tells an installed runner that a
+   *  workload mutation occurred. A write under the work
    *  directory also lands in the overlay upper, which is where an overlayfs
    *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
@@ -1258,8 +1258,7 @@ export class FakeSandbox {
    * no row for any runner or daemon the previous life started. What a stop
    * does NOT take is the instance disk: the boot marker under `/tmp` and the
    * runner's result files stay, which is the same-instance wake the platform
-   * can produce (`src/snapshot-chain.ts`, "the same-instance path") and the
-   * one the candidate repair is judged on.
+   * can produce (`src/snapshot-chain.ts`, "the same-instance path").
    */
   stop(): Promise<void> {
     this.stops += 1;
@@ -1365,7 +1364,7 @@ export const TEST_BOX_ID = 'devbox-under-test';
  * that need one keep the default below.
  */
 export function deriveBoxId(strategy: string, name: string): string {
-  return sha256Hex(new TextEncoder().encode(`${strategy}:${name}`));
+  return createHash('sha256').update(`${strategy}:${name}`).digest('hex');
 }
 
 /** One box, its container and its durable rows. */
@@ -1379,9 +1378,9 @@ export interface Harness<Box> {
 /**
  * One box on a fresh container and fresh durable rows.
  *
- * `id` is the Durable Object identity, defaulting to the legacy fixed one so
- * every existing test keeps its box. Pass `deriveBoxId` output to model
- * production, where the identity derives from the strategy and the box name.
+ * `id` is the Durable Object identity, defaulting to {@link TEST_BOX_ID} so a
+ * test that does not care which box it addresses shares one. Pass `deriveBoxId`
+ * output to model production, where the identity derives from strategy and name.
  * `container.running` starts true, so the readiness gate drives the restoration
  * rather than starting a container: an ephemeral box — no store — attaches
  * nothing, which is a real state and the one that keeps these tests about the

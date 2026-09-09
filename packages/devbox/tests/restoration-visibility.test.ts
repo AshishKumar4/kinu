@@ -1,7 +1,7 @@
 // A restoration in flight is a restoration the box admits to.
 //
-// MEASURED DEFECT THIS HOLDS, and it is the reason bounded-layers read as a box
-// that never attached rather than as a box that was slow. On the deployed arm
+// MEASURED DEFECT THIS HOLDS, and it is the reason a deployed box read as one
+// that never attached rather than as one that was slow. On that box
 // (probe `blp1`: one Worker, one container, `wrangler tail` open across the
 // whole attempt) the sequence was:
 //

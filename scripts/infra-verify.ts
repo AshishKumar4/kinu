@@ -48,12 +48,12 @@
  * `wrangler secret list` returns names; Cloudflare will not return a value and
  * nothing here asks for one. An ordinary config var is checked the same way
  * against that environment's own `vars`. Per environment is the load-bearing
- * half: the census used to union every environment's bindings and vars before
- * comparing, so production's `EMAIL_DOMAIN` answered for staging, which has
- * none, and every `config-var` entry was skipped outright. A missing required
- * value fails loudly — `NIMBUS_RUNTIME_CACHE` was declared a `string` for months
- * while being an R2 bucket, and the reason that survived is that no program ever
- * asked whether the names in `Env` were satisfied by anything.
+ * half: unioning environments lets production's `EMAIL_DOMAIN` answer for
+ * staging, which has none; skipping `config-var` entries is a separate hole that
+ * leaves ordinary variables unchecked. Every required value is checked against
+ * its own environment, because a declared name or type alone does not prove that
+ * a resource supplies it — which is how `NIMBUS_RUNTIME_CACHE` goes months
+ * declared a `string` while being an R2 bucket.
  *
  * THREE PHASES, AND ONLY ONE OF THEM IS EVER RELAXED — see {@link PHASES}. The
  * split exists because "does this resource exist" has two different answers
@@ -62,10 +62,10 @@
  * or does not exist at all, while a Durable Object namespace, a container
  * application, a route and the Worker itself are created BY the deploy. Demanding
  * the second kind BEFORE the upload refuses the only command that could satisfy
- * it — which is what happened to staging when `ControlPlaneDO` was added to
- * `migrations`: the pre-deploy gate refused the deploy that would have created
- * the namespace, and printed `bun run infra:provision` as the fix, a command
- * that cannot create a Durable Object namespace and is forbidden from trying.
+ * it. A class new to `migrations` — `ControlPlaneDO` on staging — makes the
+ * pre-deploy gate refuse the deploy that would create the namespace and print
+ * `bun run infra:provision` as the fix, a command that cannot create a Durable
+ * Object namespace and is forbidden from trying.
  *
  * It needs a Cloudflare session, so it runs at the deploy tier and carries a
  * `CI_EXEMPT` entry. Without a session the whole assertion is unreachable, which
@@ -319,10 +319,9 @@ export interface SupplyRow {
  * environment actually carries: secrets against the Worker's secret names,
  * ordinary config vars against that environment's `vars`.
  *
- * A `config-var` entry used to be skipped here entirely, while the comment said
- * it was checked against `vars` — so an ordinary variable present in production
- * and missing from staging was checked by nothing at all. A plain value put in
- * the secret store still works, so both stores count for one.
+ * Skipping the `config-var` entries here would leave an ordinary variable
+ * present in production and missing from staging checked by nothing at all. A
+ * plain value put in the secret store still works, so both stores count for one.
  */
 export function supplyRows(
   environment: InfraEnvironment,
@@ -383,9 +382,9 @@ export function supplyRows(
  *
  * Equality in both directions: an unclassified field is a value nobody decided
  * how to obtain, and a stale entry reads as a considered decision about a name
- * that no longer exists. The census used to be unioned across environments
- * first, which made "supplied" mean "supplied somewhere" — production's
- * `EMAIL_DOMAIN` var answered for staging, which has none.
+ * that no longer exists. Unioning the census across environments first would
+ * make "supplied" mean "supplied somewhere" — production's `EMAIL_DOMAIN` var
+ * answering for staging, which has none.
  */
 export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
   const fields = envFields();
@@ -441,13 +440,13 @@ export interface Audit {
 /**
  * What CREATES the absent thing, for the fix line.
  *
- * It used to say `bun run infra:provision` for every absence, and for a resource
- * the manifest marks `wrangler-deploy` that instruction cannot work and must not:
- * there is no wrangler verb that creates a Durable Object namespace, and
- * provisioning is explicitly forbidden from touching what the upload owns. That
- * is not hypothetical — `ControlPlaneDO` landed in `migrations`, this gate refused
- * staging's deploy, and the one command it named could never have fixed it. A fix
- * line that cannot work is how a real red gets bypassed instead of read.
+ * `bun run infra:provision` is the wrong line for a resource the manifest marks
+ * `wrangler-deploy`: there is no wrangler verb that creates a Durable Object
+ * namespace, and provisioning is explicitly forbidden from touching what the
+ * upload owns. That is not hypothetical — a class new to `migrations` like
+ * `ControlPlaneDO` makes this gate refuse staging's deploy, and a provisioning
+ * command could never fix it. A fix line that cannot work is how a real red gets
+ * bypassed instead of read.
  */
 function remedy(entry: Row, phase: Phase): string {
   if (!deployOwned(entry.origin)) {

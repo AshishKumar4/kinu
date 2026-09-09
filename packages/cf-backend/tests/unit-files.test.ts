@@ -862,8 +862,8 @@ describe("getExecutorFiles isolates one child's failure", () => {
     const out = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(out.entries?.map((e) => e.name).sort()).toEqual(["a.txt", "b.txt", "c.txt", "d"]);
     expect(listings).toBe(1);
-    // No per-child stat at all. The old shape ran one per entry, and on the
-    // container plane each of those was itself a full relisting of the parent.
+    // No per-child stat at all. One stat per entry costs a full relisting of the
+    // parent on the container plane, once per child.
     expect(stats).toBe(0);
   });
 });

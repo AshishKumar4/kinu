@@ -66,11 +66,10 @@ interface CountBody {
  * Either a converted piece of the count body, or the reason no exact count of
  * this request exists.
  *
- * One shape for every step of the conversion, and a DISCRIMINATED one: the
- * failure reason used to ride back as a bare string, which made the callers
- * read a representation (`typeof x === 'string'`) where they needed a
- * contract — and a tool result whose content legitimately IS a string would
- * have been read as a failure.
+ * One shape for every step of the conversion, and a DISCRIMINATED one: a bare
+ * string failure reason makes the callers read a representation
+ * (`typeof x === 'string'`) where they need a contract — and a tool result whose
+ * content legitimately IS a string is then read as a failure.
  */
 type Converted<T> = { ok: true; value: T } | { ok: false; reason: string };
 

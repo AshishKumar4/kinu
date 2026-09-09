@@ -15,13 +15,30 @@
  * the re-arm now depends on.
  */
 import { describe, expect, test } from 'bun:test';
-import { orchestratorHarness, subordinateHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import type { Database } from 'bun:sqlite';
+import { openWorkspaceMainActor } from '@kinu.run/core';
+import { makeSql } from '../../core/tests/helpers';
+import { hostedSubordinateHarness, orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+
+/**
+ * The actor these rows belong to.
+ *
+ * The journal, the job registry and the search ledger are actor-private, so a
+ * seed the activation is meant to sweep has to carry the owner the AGENT
+ * resolves — read back the way that agent resolves it rather than assumed.
+ * Every harness database here is a workspace database: a hosted child shares
+ * its parent's database and directory, so there is no second arm for a
+ * subordinate's own store.
+ */
+function harnessActorId(db: Database): string {
+  return openWorkspaceMainActor(makeSql(db)).actorId;
+}
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A schedule write that fails — the storage failure that used to end the
- *  chain, injected where it happens. */
+/** A schedule write that fails — the storage failure that would end the chain,
+ *  injected where it happens. */
 function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
   Object.defineProperty(agent, 'schedule', {
     configurable: true,
@@ -53,15 +70,15 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
 
-  test('a row whose callback is no longer a method is dropped at any age and type', async () => {
+  test('a row whose callback names no method on the class is dropped at any age and type', async () => {
     // PRODUCTION, 2026-09-01: `wrangler tail` reported `Callback
     // snapshotWorkspaceIfDue not found or is not a function` every few minutes.
     // The framework's alarm loop logs that and CONTINUES without deleting the
     // row, so the same row re-reports on every wake for as long as the object
     // lives. No horizon reaches it either: a recurring row re-dates itself past
-    // any cutoff, and a fresh one is inside it. The method is what left — the
-    // snapshot machinery moved to another package — so nothing makes the row
-    // runnable again.
+    // any cutoff, and a fresh one is inside it. Nothing on the class answers to
+    // `snapshotWorkspaceIfDue` — the snapshot machinery lives in another
+    // package — so nothing can ever make the row runnable.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const insert = db.prepare(
@@ -137,62 +154,109 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(fibersLeft()).toBe(0);
   });
 
-  test('a subordinate activation arms the same wake, and the inherited tick serves it', async () => {
-    // The wake machinery lives on the actor base; the subordinate must not
-    // need its own copy — evidence, not assumption, that the inherited
-    // callback fires against the subordinate's own storage.
-    const harness = subordinateHarness();
-    await harness.agent.listSchedules();
-    harness.db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
+  test('a hired child shares the workspace wake, and its backlog drains through it', async () => {
+    // The wake machinery lives on the workspace root. Hiring a child must not
+    // create a second wake: the backlog below lives in the one database both
+    // actors share, and the root's activation is what drains it.
+    const workspace = orchestratorHarness();
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'wake-child',
+      displayName: 'Wake Child',
+      nameOrigin: 'user',
+      mission: 'share one wake',
+    });
+    const rootId = harnessActorId(workspace.db);
+    expect(child.actor.handle.actorId).not.toBe(rootId);
+    await workspace.agent.listSchedules();
+    workspace.db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
       id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
-    const insert = harness.db.prepare(
+    const insert = workspace.db.prepare(
       `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
     );
     const expired = Date.now() - 25 * 60 * 60 * 1000;
     for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
 
-    await harness.agent.activateActor();
-    await harness.agent.harnessSettleBackgroundTasks();
+    await workspace.agent.activateActor();
+    await workspace.agent.harnessSettleBackgroundTasks();
 
     // Seeded rows only: the activation's own terminal-lane fiber writes its
     // carrier row here, fresh and correctly spared.
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
-    const left = (): number => harness.db
+    const left = (): number => workspace.db
       .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`).values()[0]?.[0] as number;
     expect(left()).toBe(12);
-    expect((await harness.agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
+    const wakes = (await workspace.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+    expect(wakes).toHaveLength(1);
 
-    await harness.agent._kinuTerminalRetryTick();
+    await workspace.agent._kinuTerminalRetryTick();
     expect(left()).toBe(0);
   });
 
-  test('a subordinate activation restores the wake of a deferred job whose row was lost', async () => {
-    // A subordinate drives background jobs through the shared runner, and a
-    // claim arms the next attempt's wake as a schedule row. An eviction between
-    // the claim and that write leaves the instant in the registry with no row
-    // to fire at it. The root re-arms from `owedWorkExists` on activation and
-    // its first tick sweeps the registry. This actor's tick serves a deferred
-    // job only at its own instant, so the activation has to arm that instant.
-    const harness = subordinateHarness();
-    await harness.agent.activateActor();
-    await harness.agent.harnessSettleBackgroundTasks();
+  test('a hired child deferred job is restored by the workspace wake', async () => {
+    // A hosted child drives background jobs through the shared runner, and a
+    // claim records the next attempt's instant in `resume_after`. An eviction
+    // between the claim and the wake write leaves that instant in the registry
+    // with no row to fire at it. The root notices from `owedWorkExists` on
+    // activation — a workspace-wide existence read, so a row stamped with the
+    // CHILD's actor id counts — and arms one wake; its first tick is what turns
+    // that wake into the child's own instant, because the activation classifies
+    // and the tick dispatches.
+    const workspace = orchestratorHarness();
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'deferred-child',
+      displayName: 'Deferred Child',
+      nameOrigin: 'user',
+      mission: 'wait for one wake',
+    });
+    await workspace.agent.activateActor();
+    await workspace.agent.harnessSettleBackgroundTasks();
     // Nothing owed: the activation invents no wake.
-    expect(await harness.agent.listSchedules()).toEqual([]);
+    expect(await workspace.agent.listSchedules()).toEqual([]);
 
     // Seeded the way the runner leaves it after a claim: running, input kept,
     // the next attempt's instant in `resume_after`, and no schedule row.
     const now = Date.now();
     const resumeAt = now + 60_000;
-    harness.db.prepare(
-      `INSERT INTO background_jobs (id, kind, work_mode, status, input_json, resume_after, created_at)
-       VALUES ('job-waiting', 'agents', 'build', 'running', '{}', ?, ?)`,
-    ).run(resumeAt, now);
+    workspace.db.prepare(
+      `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, resume_after, created_at)
+       VALUES (?, 'job-waiting', 'agents', 'build', 'running', '{}', ?, ?)`,
+    ).run(child.actor.handle.actorId, resumeAt, now);
 
-    await harness.agent.activateActor();
-    await harness.agent.harnessSettleBackgroundTasks();
+    await workspace.agent.activateActor();
+    await workspace.agent.harnessSettleBackgroundTasks();
 
-    const wakes = (await harness.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
-    expect(wakes.map((row) => row.time)).toEqual([Math.ceil(resumeAt / 1000)]);
+    // The activation ARMS, and only arms: an existence read cannot know WHEN the
+    // work comes due, so the row it writes is immediate and the tick it delivers
+    // is what turns it into the child's instant.
+    const wakes = async (): Promise<Array<{ id: string; time: number }>> =>
+      (await workspace.agent.listSchedules())
+        .filter((row) => row.callback === '_kinuTerminalRetryTick')
+        .map((row) => ({ id: row.id, time: row.time }));
+    const owedAt = Math.ceil(resumeAt / 1000);
+    const armed = await wakes();
+    expect(armed).toHaveLength(1);
+    const wake = armed[0];
+    if (!wake) throw new Error('the activation armed no wake for the child\'s owed job');
+    // IMMEDIATE, and named as not-the-instant. "A wake exists" was already true
+    // before the chain was fixed — `hasLiveJobsInWorkspace` said so — so a case
+    // that only counted rows could not tell an armed workspace from a stranded
+    // one. WHEN it fires is the whole difference.
+    expect(wake.time).not.toBe(owedAt);
+
+    // One delivery, in the platform's own order: a one-shot `scheduled` row is
+    // CONSUMED when its alarm fires and the callback runs after. The order is
+    // load-bearing — the armer is soonest-wins, so a tick re-arming while its
+    // own immediate row is still armed would change nothing and this case would
+    // pass over a workspace that had lost the instant. The alarm itself is
+    // workerd's (tests/workerd/do-alarm.test.ts fires a real one); the row
+    // bookkeeping around it is what this file drives.
+    await workspace.agent.cancelSchedule(wake.id);
+    await workspace.agent._kinuTerminalRetryTick();
+
+    // Restored: the child's own instant, from a workspace-wide read the root
+    // performed. Without the re-arm the registry is EMPTY here — the immediate
+    // wake is spent, the attempt was not yet due, and nothing else ever looks.
+    expect((await wakes()).map((row) => row.time)).toEqual([owedAt]);
   });
 
   test('a failed re-arm leaves the previous wake row in place', async () => {
@@ -224,16 +288,17 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    const actorId = harnessActorId(db);
     const insertBranch = (id: string, spawnedAt: number): void => {
       db.prepare(
-        `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
-         VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
-      ).run(id, `branch-${id}`, spawnedAt);
+        `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+         VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
+      ).run(actorId, id, `branch-${id}`, spawnedAt);
     };
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (id: string): string => db
-      .prepare(`SELECT status FROM head_journal WHERE id = '${id}'`)
-      .values()[0]?.[0] as string;
+      .prepare(`SELECT status FROM head_journal WHERE actor_id = ? AND id = ?`)
+      .values(actorId, id)[0]?.[0] as string;
 
     insertBranch('stale-head', Date.now() - 60_000);
     insertBranch('live-head', Date.now() + 5);
@@ -260,17 +325,18 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    const actorId = harnessActorId(db);
     const insertRun = (root: string, createdAt: number): void => {
       db.prepare(
         `INSERT INTO mcts_search_runs
-           (root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
-         VALUES (?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
-      ).run(root, `msg-${root}`, createdAt, createdAt);
+           (actor_id, root_id, root_msg_id, task, engine, status, config_json, budget, created_at, updated_at)
+         VALUES (?, ?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
+      ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
     };
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (root: string): string => db
-      .prepare(`SELECT status FROM mcts_search_runs WHERE root_id = '${root}'`)
-      .values()[0]?.[0] as string;
+      .prepare(`SELECT status FROM mcts_search_runs WHERE actor_id = ? AND root_id = ?`)
+      .values(actorId, root)[0]?.[0] as string;
 
     insertRun('stale-swarm', Date.now() - 60_000);
     insertRun('live-swarm', Date.now() + 5);
@@ -285,16 +351,19 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
 
+    // An orchestrator binds the workspace main actor, so these rows are written
+    // and read under the id the agent's own recorder uses.
+    const actorId = harnessActorId(db);
     const start = (run: string, ts: number): void => {
       db.prepare(
-        `INSERT INTO run_events (run_id, event_index, type, ts, payload)
-         VALUES (?, 1, 'run_start', ?, '{}')`,
-      ).run(run, new Date(ts).toISOString());
+        `INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
+         VALUES (?, ?, 1, 'run_start', ?, '{}')`,
+      ).run(actorId, run, new Date(ts).toISOString());
     };
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
     const ended = (run: string): boolean => (db
-      .prepare(`SELECT COUNT(*) AS held FROM run_events WHERE run_id = '${run}' AND type = 'run_end'`)
-      .values()[0]?.[0] as number) > 0;
+      .prepare('SELECT COUNT(*) AS held FROM run_events WHERE actor_id = ? AND run_id = ? AND type = \'run_end\'')
+      .values(actorId, run)[0]?.[0] as number) > 0;
 
     start('stale-run', Date.now() - 60_000);
     start('live-run', Date.now() + 5);
@@ -319,11 +388,12 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
     const insert = db.prepare(
-      `INSERT INTO head_journal (id, root_id, depth, task, status, spawned_at)
-       VALUES (?, ?, 0, 'take a branch', 'running', ?)`,
+      `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
+       VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
     );
+    const actorId = harnessActorId(db);
     const stale = Date.now() - 60_000;
-    for (let i = 0; i < 769; i++) insert.run(`floor-head-${i}`, `branch-floor-${i}`, stale);
+    for (let i = 0; i < 769; i++) insert.run(actorId, `floor-head-${i}`, `branch-floor-${i}`, stale);
     // ONE alarm, as the platform delivers it: the SDK deletes its own one-shot
     // row once the callback returns, so the next tick starts with no armed row
     // — and the delay the tick chose is what the platform waited. Modelled
@@ -464,12 +534,13 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
-    // The race the harness used to hide. `onStart` DETACHES the wake reconcile
-    // (`void this.reconcileTimerRow()`), so an activation reconcile and a
-    // registration arm interleave: every `await` in `armTimer` is a suspension
-    // point, both callers pre-read an EMPTY registry, both write, and a collapse
-    // over each caller's own pre-read set cancels nothing. That left two wake
-    // rows permanently — the one state this whole suite is named against.
+    // The race a serialized harness would hide. `onStart` DETACHES the wake
+    // reconcile (`void this.reconcileTimerRow()`), so an activation reconcile
+    // and a registration arm interleave: every `await` in `armTimer` is a
+    // suspension point, both callers pre-read an EMPTY registry, both write,
+    // and a collapse over each caller's own pre-read set cancels nothing. That
+    // is two wake rows permanently — the one state this whole suite is named
+    // against.
     //
     // Two registrations are the same shape and need no internals: each arms, and
     // the pair must agree on one survivor. It has to be the SOONER wake, because

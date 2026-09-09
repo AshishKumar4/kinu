@@ -118,10 +118,10 @@ export interface VfsListedEntry {
  * the cost, not the clipping.
  *
  * `readdirStats` is a listing that already carries type and size. Two planes
- * return both from ONE call and used to throw them away, after which the
- * listing statted every child separately — and the container's `stat` derives
- * itself from the PARENT LISTING, so an N-child directory cost N+1 full
- * listings of the same directory.
+ * return both from ONE call, and declaring it here is what keeps the listing
+ * from statting every child separately — the container's `stat` derives itself
+ * from the PARENT LISTING, so an N-child directory would cost N+1 full listings
+ * of the same directory.
  */
 export interface VfsNativeReads {
 	readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
@@ -391,9 +391,9 @@ export function withMountTable(
 	 *
 	 * A mount point is an entry of THIS plane, so mutating it is EPERM — and that
 	 * refusal outranks an absent mount, because the path names something no tree
-	 * behind the table owns either way. The reject used to be its own pass over
-	 * the path, so every write, unlink and mkdir parsed its argument twice and
-	 * two readers had to agree about which answer came first.
+	 * behind the table owns either way. Both answers come out of ONE route, so
+	 * every write, unlink and mkdir parses its argument once and no second
+	 * reader can disagree about which answer comes first.
 	 */
 	const mutate = async <T>(
 		path: string, operation: string, op: (files: VFS, native: string) => Promise<T>,
@@ -456,7 +456,20 @@ export function withMountTable(
 		unlink(path) {
 			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
 		},
-		mkdir(path, opts) {
+		async mkdir(path, opts) {
+			// `mkdir -p` on a directory that already exists is success, and a live
+			// mount point IS a directory of this plane — the same answer `stat`
+			// gives it. Refusing it as "a mount point cannot be created" broke
+			// every write to a file at the ROOT of a mount, because the one write
+			// path in the file surface calls `ensureDir` on the parent first
+			// (`tools/file-tool.ts`), and an unrecognised refusal there is
+			// re-thrown. A non-recursive mkdir of a mount point is still EPERM:
+			// nothing may create one.
+			const routed = routeOf(path);
+			if ('mount' in routed && routed.native === '/' && opts?.recursive === true) {
+				if (routed.mount.files() !== null) return;
+				throw absentError(routed.mount, path);
+			}
 			return mutate(path, 'created', (files, native) => files.mkdir(native, opts));
 		},
 		async exists(path) {

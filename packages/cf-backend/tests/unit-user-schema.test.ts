@@ -118,14 +118,14 @@ describe('UserDO schema bootstrap', () => {
     db.close();
   });
 
-  test('a legacy database holding two case-colliding names still opens', () => {
-    // The whole per-user plane rode on this. `initUserTables` runs inside
+  test('a database already holding two case-colliding names still opens', () => {
+    // The whole per-user plane rides on this. `initUserTables` runs inside
     // `ensureInit` before `_initialized`, ahead of every `sqlx` read, and
     // `CREATE UNIQUE INDEX` over rows that already collide RAISES — so an
-    // unconditional build failed profile, workspaces, credentials, sessions and
-    // devices for that user on every activation, unrecoverably. The pair is
-    // reachable: the pre-fix write path SELECTed, awaited a header seal, then
-    // INSERTed, so two concurrent adds could both land.
+    // unconditional build would fail profile, workspaces, credentials, sessions
+    // and devices for that user on every activation, unrecoverably. The pair is
+    // reachable: a write path that SELECTs, awaits a header seal, then INSERTs
+    // lets two concurrent adds both land, and such rows are already stored.
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
     db.run(`DROP INDEX idx_user_mcp_servers_name_unique`);

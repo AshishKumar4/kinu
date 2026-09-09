@@ -8,6 +8,7 @@ import {
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
 import { Database } from "bun:sqlite";
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 import {
   readWorkspaceDisplayName, readWorkspaceIdentityId,
 } from "../src/config";
@@ -111,16 +112,15 @@ describe("CLI config safety", () => {
     const dbPath = join(dir, "agent.db");
     const db = new Database(dbPath, { create: true });
     db.exec("PRAGMA journal_mode = WAL");
-    db.exec("CREATE TABLE workspace_identity (id TEXT)");
-    db.exec("INSERT INTO workspace_identity (id) VALUES ('ws-durable-1')");
-    db.exec("CREATE TABLE agent_config (key TEXT, value TEXT)");
-    db.exec("INSERT INTO agent_config (key, value) VALUES ('display_name', 'Smokey')");
+    const rt = createCLIRuntime(db, { dbPath, llm: null, hostRoot: null, agentName: 'Smokey' });
+    rt.actor.config.setDisplayName('Smokey');
+    const identityId = readWorkspaceIdentityId(dbPath);
     db.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
     db.close();
     rmSync(`${dbPath}-wal`, { force: true });
     rmSync(`${dbPath}-shm`, { force: true });
 
-    expect(readWorkspaceIdentityId(dbPath)).toBe("ws-durable-1");
+    expect(readWorkspaceIdentityId(dbPath)).toBe(identityId);
     expect(readWorkspaceDisplayName(dbPath)).toBe("Smokey");
   });
 });
@@ -162,7 +162,8 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   // Item 11.2: the owner runs on the native Workers AI model because it is the
   // one he is not billed per-token for. Every BYO credential shape at once, and
   // no chosen model, must still resolve to it — a key sitting on disk is not a
-  // selection. `openaiCompat` was the hole: its branch matched unconditionally.
+  // selection. `openaiCompat` is the one to watch: a branch that matched
+  // unconditionally would answer for every one of them.
   test("no chosen model lands on the native default however many BYO credentials are stored", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,

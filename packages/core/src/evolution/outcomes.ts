@@ -17,6 +17,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
 import type { EvalInstance } from './gepa/types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
@@ -154,8 +155,8 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  *  pattern extracted from them encodes nothing reusable, which is why the
  *  extractor skips them too. One definition, both readers.
  *
- *  `fact` was folded into `memory`; stored turns from before that carry the old
- *  name and must still score the same, so it is recognised too. */
+ *  Turn records carry `fact` as well as `memory` for the same read, and a
+ *  recall under either name must score the same, so both are recognised. */
 export function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
   return call.name === 'fact' && call.args.action === 'recall';
@@ -170,11 +171,10 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
  * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
  *
  * The evidence is the tool-execution record the turn already carries, read
- * SYMMETRICALLY: it used to be consulted only when it said "something broke",
- * so a headless ledger could record that a turn went wrong and could never
- * record that one went right, and every downstream estimate (craft EMA and
- * retirement, GEPA's split, the archive's real-outcome priors) inherited that
- * pessimism.
+ * SYMMETRICALLY: consulted only when it says "something broke", a headless
+ * ledger could record that a turn went wrong and never that one went right, and
+ * every downstream estimate (craft EMA and retirement, GEPA's split, the
+ * archive's real-outcome priors) would inherit that pessimism.
  *
  *   • no non-lookup tool call → null. The turn never acted on the world, so
  *     the world returned no verdict, and an ungraded turn is recorded as
@@ -312,7 +312,8 @@ export async function classifyTurnOutcome(
 // ── The durable outcome ledger ───────────────────────────────────
 
 const TURN_OUTCOMES_DDL = `(
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     turn_id TEXT,
     session_id TEXT NOT NULL DEFAULT 'default',
     outcome TEXT NOT NULL CHECK (outcome IN (${sqlCheckList(TURN_OUTCOMES)})),
@@ -323,7 +324,8 @@ const TURN_OUTCOMES_DDL = `(
     followup TEXT,
     scaffold_version INTEGER,
     created_at INTEGER NOT NULL,
-    evidence TEXT
+    evidence TEXT,
+    PRIMARY KEY (actor_id, id)
   )`;
 
 export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
@@ -338,9 +340,11 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
   // replay applies what was DECIDED rather than asking a model that may decide
   // differently. Retired as soon as its tombstone lands.
   execRaw(`CREATE TABLE IF NOT EXISTS pattern_extractions (
-    effect_key TEXT PRIMARY KEY,
+    actor_id   TEXT NOT NULL,
+    effect_key TEXT NOT NULL,
     answer     TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, effect_key)
   )`);
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
   // Gold labels — turns a HUMAN judged directly, the calibration set that
@@ -348,23 +352,40 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec): void {
   // (calibration.ts). Append-only: a re-label inserts a new row and the newest
   // wins, so nothing a human spent attention on is overwritten in place.
   execRaw(`CREATE TABLE IF NOT EXISTS outcome_labels (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     outcome_id TEXT NOT NULL,
     label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)})),
     labeler TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
   // The same verdicts from LLM judges instead of the human — one row per model
   // per turn (evolution/ensemble.ts). Kept beside the gold labels rather than
   // in them so a model's opinion can never be counted as ground truth by a
   // query that forgot to filter; append-only for the same reason as above.
   execRaw(`CREATE TABLE IF NOT EXISTS outcome_ensemble_labels (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     outcome_id TEXT NOT NULL,
     model TEXT NOT NULL,
     label TEXT NOT NULL CHECK (label IN (${sqlCheckList(OUTCOME_LABELS)})),
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
+  // Every read here is one actor's, and the effective-verdict window partitions
+  // by turn before it orders — so the owner leads each index, or the window
+  // scans every sibling's ledger to find this actor's rows.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_turn_outcomes_actor
+             ON turn_outcomes(actor_id, created_at DESC, id DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_turn_outcomes_actor_turn
+             ON turn_outcomes(actor_id, turn_id)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_outcome_labels_actor
+             ON outcome_labels(actor_id, created_at DESC, id DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_outcome_ensemble_labels_actor
+             ON outcome_ensemble_labels(actor_id, created_at DESC, id DESC)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_lessons_actor
+             ON lessons(actor_id, created_at DESC)`);
 }
 
 export interface OutcomeLabelRow {
@@ -376,15 +397,16 @@ export interface OutcomeLabelRow {
 }
 
 /** Append a labeling pass. Returns how many rows were written. */
-export function recordOutcomeLabels(sql: SqlExecutor, input: {
+export function recordOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, input: {
   labeler: string;
   labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
   now?: number;
 }): number {
+  actor.assertCurrent();
   const now = input.now ?? nowMs();
   for (const entry of input.labels) {
-    void sql`INSERT INTO outcome_labels (id, outcome_id, label, labeler, created_at)
-        VALUES (${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
+    void sql`INSERT INTO outcome_labels (actor_id, id, outcome_id, label, labeler, created_at)
+        VALUES (${actor.actorId}, ${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
   }
   return input.labels.length;
 }
@@ -403,19 +425,22 @@ function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
 /** Every stored label, newest first. Unbounded when `limit` is omitted: the
  *  gold set is the whole basis of every corrected number, and a window that
  *  silently dropped the oldest labels would drop the turns they speak for. */
-export function listOutcomeLabels(sql: SqlExecutor, limit?: number): OutcomeLabelRow[] {
+export function listOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, limit?: number): OutcomeLabelRow[] {
+  actor.assertCurrent();
   const rows = limit === undefined
-    ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC`
+    ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels WHERE actor_id = ${actor.actorId}
+        ORDER BY created_at DESC, id DESC`
     : sql<RawOutcomeLabelRow>`
-        SELECT * FROM outcome_labels ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
+        SELECT * FROM outcome_labels WHERE actor_id = ${actor.actorId}
+        ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
   return rows.map(toOutcomeLabelRow);
 }
 
 /** The label that counts for each turn: the most recent one. Append-only
  *  storage makes a correction a new row, so "newest wins" is the whole read. */
-export function goldLabels(sql: SqlExecutor): Map<string, OutcomeLabelRow> {
+export function goldLabels(sql: SqlExecutor, actor: ActorHandle): Map<string, OutcomeLabelRow> {
   const latest = new Map<string, OutcomeLabelRow>();
-  for (const row of listOutcomeLabels(sql)) {
+  for (const row of listOutcomeLabels(sql, actor)) {
     if (!latest.has(row.outcomeId)) latest.set(row.outcomeId, row);
   }
   return latest;
@@ -431,25 +456,28 @@ export interface EnsembleLabelRow {
 }
 
 /** Append one model's pass over a set of turns. */
-export function recordEnsembleLabels(sql: SqlExecutor, input: {
+export function recordEnsembleLabels(sql: SqlExecutor, actor: ActorHandle, input: {
   model: string;
   labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }>;
   now?: number;
 }): number {
+  actor.assertCurrent();
   const now = input.now ?? nowMs();
   for (const entry of input.labels) {
-    void sql`INSERT INTO outcome_ensemble_labels (id, outcome_id, model, label, created_at)
-        VALUES (${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
+    void sql`INSERT INTO outcome_ensemble_labels (actor_id, id, outcome_id, model, label, created_at)
+        VALUES (${actor.actorId}, ${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
   }
   return input.labels.length;
 }
 
 /** The verdict that counts for each (turn, model): the most recent one. Same
  *  "append-only, newest wins" read as `goldLabels`. */
-export function ensembleLabels(sql: SqlExecutor): EnsembleLabelRow[] {
+export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLabelRow[] {
+  actor.assertCurrent();
   const rows = sql<{
     id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
-  }>`SELECT * FROM outcome_ensemble_labels ORDER BY created_at DESC, id DESC`;
+  }>`SELECT * FROM outcome_ensemble_labels WHERE actor_id = ${actor.actorId}
+      ORDER BY created_at DESC, id DESC`;
   const latest = new Map<string, EnsembleLabelRow>();
   for (const r of rows) {
     const key = `${r.outcome_id}\n${r.model}`;
@@ -502,13 +530,16 @@ export interface RecordTurnOutcomeInput {
  *  Texts are windowed to keep rows bounded — and this is the ceiling for
  *  everything downstream, since the GEPA eval instances and the replay judge
  *  both read these rows and can never see more than was stored. */
-export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInput): string {
+export function recordTurnOutcome(
+  sql: SqlExecutor, actor: ActorHandle, input: RecordTurnOutcomeInput,
+): string {
+  actor.assertCurrent();
   const id = `outc-${nanoid()}`;
   void sql`INSERT INTO turn_outcomes
-        (id, turn_id, session_id, outcome, confidence, source,
+        (actor_id, id, turn_id, session_id, outcome, confidence, source,
          user_message, assistant_response, followup, scaffold_version, created_at, evidence)
       VALUES
-        (${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
+        (${actor.actorId}, ${id}, ${input.turnId ?? null}, ${input.sessionId ?? 'default'}, ${input.outcome},
          ${input.confidence}, ${input.source}, ${evidenceWindow(input.userMessage, EVIDENCE_BUDGETS.storedUserMessage)},
          ${evidenceWindow(input.assistantResponse, EVIDENCE_BUDGETS.storedAssistantResponse)},
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
@@ -560,6 +591,7 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
  *  `hasNegativeOutcome` does, so the precedence rule stays in one place. */
 export function listTurnOutcomes(
   sql: SqlExecutor,
+  actor: ActorHandle,
   opts: {
     limit?: number;
     outcomes?: ReadonlyArray<TurnOutcome>;
@@ -567,11 +599,11 @@ export function listTurnOutcomes(
   } = {},
 ): TurnOutcomeRow[] {
   if (opts.turnIds === undefined) {
-    return selectEffectiveTurnOutcomes(sql, opts.limit ?? 50, opts.outcomes);
+    return selectEffectiveTurnOutcomes(sql, actor, opts.limit ?? 50, opts.outcomes);
   }
   if (opts.turnIds.length === 0) return [];
   const wanted = new Set(opts.turnIds);
-  return selectEffectiveTurnOutcomes(sql, undefined, opts.outcomes)
+  return selectEffectiveTurnOutcomes(sql, actor, undefined, opts.outcomes)
     .filter((row) => row.turnId !== null && wanted.has(row.turnId))
     .slice(0, opts.limit ?? wanted.size);
 }
@@ -585,9 +617,12 @@ export function listTurnOutcomes(
  *  nothing. */
 function selectEffectiveTurnOutcomes(
   sql: SqlExecutor,
+  actor: ActorHandle,
   limit: number | undefined,
   outcomes?: ReadonlyArray<TurnOutcome>,
 ): TurnOutcomeRow[] {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   const wanted = TURN_OUTCOMES.filter((o) => !outcomes || outcomes.includes(o));
   const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
   const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
@@ -600,11 +635,12 @@ function selectEffectiveTurnOutcomes(
                  created_at DESC, id DESC
       ) AS eff_rn
       FROM turn_outcomes
-      WHERE turn_id IS NOT NULL
+      WHERE actor_id = ${actorId} AND turn_id IS NOT NULL
     )
     WHERE eff_rn = 1 AND outcome IN (${w0}, ${w1}, ${w2}, ${w3})
     UNION ALL
-    SELECT *, 1 AS eff_rn FROM turn_outcomes WHERE turn_id IS NULL
+    SELECT *, 1 AS eff_rn FROM turn_outcomes
+      WHERE actor_id = ${actorId} AND turn_id IS NULL
     ORDER BY created_at DESC, id DESC
     LIMIT ${limit === undefined ? -1 : limit}`;
   return ranked.map(toOutcomeRow);
@@ -612,11 +648,14 @@ function selectEffectiveTurnOutcomes(
 
 /** The outcome an Alternate Takes pick already recorded for this turn, if
  *  any — the follow-up classifier must not overwrite that explicit signal. */
-export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefined): TurnOutcome | null {
+export function takePickOutcome(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string | null | undefined,
+): TurnOutcome | null {
   if (!turnId) return null;
+  actor.assertCurrent();
   const rows = sql<{ outcome: TurnOutcome }>`
     SELECT outcome FROM turn_outcomes
-    WHERE turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
+    WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
   return rows[0]?.outcome ?? null;
 }
 
@@ -633,13 +672,14 @@ export function takePickOutcome(sql: SqlExecutor, turnId: string | null | undefi
  * system reads.
  */
 export function recordedTurnVerdict(
-  sql: SqlExecutor, turnId: string | null | undefined,
+  sql: SqlExecutor, actor: ActorHandle, turnId: string | null | undefined,
 ): { outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number } | null {
   if (!turnId) return null;
+  actor.assertCurrent();
   const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
   const rows = sql<{ outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number }>`
     SELECT outcome, source, confidence FROM turn_outcomes
-    WHERE turn_id = ${turnId}
+    WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId}
     ORDER BY CASE source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1
              WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
              created_at DESC, id DESC
@@ -651,10 +691,12 @@ export function recordedTurnVerdict(
  *  outcome — the session-reflection gate's real-signal check. Effective, not
  *  raw: an old classifier `corrected` that a later explicit thumb overruled
  *  must not keep a turn flagged negative forever. */
-export function hasNegativeOutcome(sql: SqlExecutor, turnIds: ReadonlyArray<string>): boolean {
+export function hasNegativeOutcome(
+  sql: SqlExecutor, actor: ActorHandle, turnIds: ReadonlyArray<string>,
+): boolean {
   if (turnIds.length === 0) return false;
   const wanted = new Set(turnIds);
-  return selectEffectiveTurnOutcomes(sql, undefined, NEGATIVE_TURN_OUTCOMES)
+  return selectEffectiveTurnOutcomes(sql, actor, undefined, NEGATIVE_TURN_OUTCOMES)
     .some((r) => r.turnId !== null && wanted.has(r.turnId));
 }
 
@@ -670,9 +712,11 @@ export interface RealOutcomeRate {
  *  Counts EFFECTIVE verdicts only — one observation per turn, so a turn the
  *  user explicitly accepted after a classifier `corrected` is counted once,
  *  on their word. */
-export function realOutcomeScaffoldRates(sql: SqlExecutor): Map<number, RealOutcomeRate> {
+export function realOutcomeScaffoldRates(
+  sql: SqlExecutor, actor: ActorHandle,
+): Map<number, RealOutcomeRate> {
   const rates = new Map<number, RealOutcomeRate>();
-  for (const row of selectEffectiveTurnOutcomes(sql, undefined)) {
+  for (const row of selectEffectiveTurnOutcomes(sql, actor, undefined)) {
     if (row.scaffoldVersion === null) continue;
     const rate = rates.get(row.scaffoldVersion) ?? { accepted: 0, negative: 0 };
     if (row.outcome === 'accepted') rate.accepted++;
@@ -852,13 +896,15 @@ export type LessonStatus = 'provisional' | 'corroborated';
  *  by `initTurnOutcomeTables` (declared above; function bodies evaluate after
  *  module init, so the order is safe). */
 const LESSONS_DDL = `(
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     turn_ids TEXT NOT NULL,
     text TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN (${sqlCheckList(LESSON_SOURCES)})),
     status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
     created_at INTEGER NOT NULL,
-    corroborated_at INTEGER
+    corroborated_at INTEGER,
+    PRIMARY KEY (actor_id, id)
   )`;
 
 export interface LessonRow {
@@ -871,7 +917,7 @@ export interface LessonRow {
   corroboratedAt: number | null;
 }
 
-export function recordLesson(sql: SqlExecutor, input: {
+export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
   turnIds: ReadonlyArray<string>;
   text: string;
   source: LessonSource;
@@ -888,12 +934,13 @@ export function recordLesson(sql: SqlExecutor, input: {
    */
   key?: string;
 }): string {
+  actor.assertCurrent();
   const id = input.key === undefined ? `lsn-${nanoid()}` : `lsn-${input.key}`;
   const now = input.now ?? nowMs();
-  void sql`INSERT INTO lessons (id, turn_ids, text, source, status, created_at, corroborated_at)
-      VALUES (${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
+  void sql`INSERT INTO lessons (actor_id, id, turn_ids, text, source, status, created_at, corroborated_at)
+      VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
               ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})
-      ON CONFLICT(id) DO NOTHING`;
+      ON CONFLICT(actor_id, id) DO NOTHING`;
   return id;
 }
 
@@ -916,20 +963,25 @@ function toLessonRow(r: RawLessonRow): LessonRow {
 
 export function listLessons(
   sql: SqlExecutor,
+  actor: ActorHandle,
   opts: { status?: LessonStatus; source?: LessonSource; limit?: number } = {},
 ): LessonRow[] {
+  actor.assertCurrent();
   const status = opts.status ?? null;
   const source = opts.source ?? null;
   const rows = sql<RawLessonRow>`SELECT * FROM lessons
-    WHERE (${status} IS NULL OR status = ${status})
+    WHERE actor_id = ${actor.actorId}
+      AND (${status} IS NULL OR status = ${status})
       AND (${source} IS NULL OR source = ${source})
     ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
   return rows.map(toLessonRow);
 }
 
 /** One lesson by id, or null. */
-export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
-  const rows = sql<RawLessonRow>`SELECT * FROM lessons WHERE id = ${id} LIMIT 1`;
+export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): LessonRow | null {
+  actor.assertCurrent();
+  const rows = sql<RawLessonRow>`SELECT * FROM lessons
+    WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`;
   return rows[0] ? toLessonRow(rows[0]) : null;
 }
 
@@ -938,8 +990,8 @@ export function getLesson(sql: SqlExecutor, id: string): LessonRow | null {
  * context weaves in place of the MEMORY.md copies this module stopped writing.
  * Derived from the ledger, so it is exactly what corroboration admits, no more.
  */
-export function renderRecentLessons(sql: SqlExecutor, limit = 5): string {
-  return listLessons(sql, { status: 'corroborated', limit })
+export function renderRecentLessons(sql: SqlExecutor, actor: ActorHandle, limit = 5): string {
+  return listLessons(sql, actor, { status: 'corroborated', limit })
     .map((lesson) => lesson.text)
     .join('\n');
 }
@@ -947,11 +999,14 @@ export function renderRecentLessons(sql: SqlExecutor, limit = 5): string {
 /** A real negative outcome landed on `turnId`: flip every provisional lesson
  *  tied to that turn to corroborated. Corroboration is a row-status change
  *  only — nothing is appended to MEMORY.md; readers derive from these rows. */
-export function corroborateLessonsForTurn(sql: SqlExecutor, turnId: string, now = nowMs()): LessonRow[] {
-  const provisional = listLessons(sql, { status: 'provisional', limit: 200 });
+export function corroborateLessonsForTurn(
+  sql: SqlExecutor, actor: ActorHandle, turnId: string, now = nowMs(),
+): LessonRow[] {
+  const provisional = listLessons(sql, actor, { status: 'provisional', limit: 200 });
   const matched = provisional.filter((l) => l.turnIds.includes(turnId));
   for (const lesson of matched) {
-    void sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${lesson.id}`;
+    void sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now}
+      WHERE actor_id = ${actor.actorId} AND id = ${lesson.id}`;
   }
   return matched.map((l) => ({ ...l, status: 'corroborated' as const, corroboratedAt: now }));
 }

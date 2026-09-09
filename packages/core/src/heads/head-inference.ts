@@ -1,17 +1,23 @@
 // The backend-agnostic run of an agent that reports rather than chats — the
 // divergent-reasoning-thread fork that produces a HeadReport, and the swarm node
-// that produces one too. Every backend drives this: the cf-backend's Facet head
-// (SubordinateAgent.runAsHead), the CLI's in-process head-worker, and both
-// transports of a swarm node (strategy/node-agent.ts).
+// that produces one too. Every backend drives this: the hosted head, the CLI's
+// in-process head-worker, and both transports of a swarm node
+// (strategy/node-agent.ts).
 //
-// IT OWNS NO LOOP OF ITS OWN. The turn body is `runChat` (../chat.ts) — the one
-// place a model request is issued, tools are dispatched, the stream is watched
-// for a stall, the step context is pruned and an unpaired tool call is repaired.
-// This module owns what that body cannot know: how many TURNS this agent gets,
-// the record_evidence / record_decision accumulator tools, the head system
-// prompt + inherited-context messages, the per-step journal trace, the mission
-// ledger it charges, and the HeadReport assembly (via the shared head-summary
-// helpers).
+// Every turn it takes is a CLAIMED actor turn on the common `ActorSession`: the
+// session selects and pins this actor's program, admits the durable claim that
+// names the version and the source digest it runs, records the exact array each
+// step consumes, and owns the abort. A head and a node are full actor kinds, and
+// before this they were the two that ran under no durable identity at all — so
+// neither could be recovered, verified against the bytes it ran, nor told apart
+// from the activation that replaced it. The builtin arm still uses the shared
+// chat loop and a promoted program still uses the same host bridges as an actor
+// chat.
+//
+// This module owns how many turns the reporting agent gets, the record_evidence
+// / record_decision accumulator tools, the head system prompt +
+// inherited-context messages, the per-step journal trace, the mission ledger it
+// charges, and the HeadReport assembly (via the shared head-summary helpers).
 //
 // The backend provides the model + a HeadCapture + its own tool surface (the cf
 // head forks its parent workspace's; the CLI head runs in-process over an
@@ -24,7 +30,10 @@ import {
   tool, jsonSchema,
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult,
 } from 'ai';
-import { runChat, type ChatOptions } from '../chat';
+import type { HostedActor } from '../state/actor-host';
+import type { WorkMode } from '../prompting/surface';
+import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
+import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';
 import {
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
@@ -32,7 +41,7 @@ import {
   budgetExhausted,
 } from './types';
 import type { ToolCallRecord } from '../evolution/types';
-import type { MissionBudgetRefusal, MissionScope } from '../mission-budget';
+import { MissionBudgetExhausted, type MissionBudgetRefusal, type MissionScope } from '../mission-budget';
 import { failedToolOutcome, type ToolOutcome } from '../tools/outcome';
 import { addUsage, normalizeUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { nanoid } from '../utils/nanoid';
@@ -41,7 +50,7 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderCauseChain, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 
@@ -69,9 +78,8 @@ export class HeadCapture {
   usage: Usage = {};
 
   /** Accumulate one step's report. Takes a whole {@link Usage} rather than bare
-   *  counts so a field the provider omitted stays omitted here — the boundary
-   *  where absence used to be flattened into 0 before it ever reached the
-   *  report. */
+   *  counts so a field the provider omitted stays omitted here — bare counts
+   *  would flatten absence into 0 before it ever reached the report. */
   recordStepUsage(usage: Usage): void {
     this.usage = addUsage(this.usage, usage);
   }
@@ -312,12 +320,12 @@ export function buildHeadSystemPrompt(
 /**
  * The head's conversation — the inherited messages, structurally, then its task.
  *
- * A head used to receive its whole inheritance flattened into ONE user message
- * of `[role/toolName] text` prose lines, while a SubordinateAgent received real
- * structured messages. That asymmetry is why a fork could not be watched the
- * way a subordinate can: there was no per-message structure left to render, so
- * clicking into a fork showed a wall of prose instead of a conversation. One
- * inherited message becomes one ModelMessage here, carrying its own role.
+ * One inherited message becomes one ModelMessage here, carrying its own role —
+ * the same structured shape a hired subordinate receives. Flatten the whole
+ * inheritance into ONE user message of `[role/toolName] text` prose lines and
+ * there is no per-message structure left to render, so clicking into a fork
+ * shows a wall of prose instead of a conversation and a fork cannot be watched
+ * the way a subordinate can.
  *
  * No re-windowing: `inheritedContext` arrives already capped per message at
  * EVIDENCE_BUDGETS.inheritedMessage by orchestrator/heads-support.ts, which is
@@ -422,6 +430,45 @@ function exhaustedMissionReport(
 }
 
 export interface HeadInferenceDeps {
+  /**
+   * The HOSTED logical actor this run IS — its handle, its actor-scoped stores
+   * over the one workspace database, its runtime and its session.
+   *
+   * A head and a swarm node ARE actors, and they run on the actor's session.
+   * Handed a bare runtime and running their inference inline — select the
+   * program, start the turn, write no claim — two of the five full actor kinds
+   * would take model and tool effects under no durable identity, recoverable by
+   * nothing, unverifiable against the bytes they ran, and indistinguishable from
+   * the activation that replaced them.
+   */
+  actor: HostedActor;
+  /**
+   * The activation's run id. Every turn this loop admits is claimed under it,
+   * so a recovered activation's re-admission of the same turn is a new epoch of
+   * the same turn rather than an untraceable second run.
+   */
+  runId: string;
+  /**
+   * How this actor's turn is profiled — the role, tier and allowed-tool
+   * narrowing that an actor's chat turn already resolves.
+   *
+   * REQUIRED, and the requirement is the whole point: with no profile a head runs
+   * with whatever toolset its spawner assembled and no role at all, so the one
+   * kind that reaches the shared workspace with full tools is the one kind no
+   * role restriction applies to. The backend resolves it, because the authority (an
+   * account catalog or the local one) is the backend's to know.
+   */
+  profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
+    => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
+  /**
+   * This actor's live per-step block — its own jobs, tasks, approvals and
+   * missing capabilities, snapshotted per step by the common step pipeline.
+   *
+   * Required rather than defaulted to empty: a head that renders nothing live
+   * is a decision the backend makes and states, and an empty default is how a
+   * kind ends up unable to see the background work it is itself holding.
+   */
+  dynamic: () => DynamicContext;
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
   /** The head's FULL toolset — the accumulator tools (buildHeadAccumulatorTools)
@@ -492,6 +539,16 @@ export interface HeadInferenceDeps {
    * consumer that concatenates holds exactly what the model emitted. A transport
    * that crosses an isolate boundary must therefore not await it.
    *
+   * WIRED ON THE CLOUD BACKEND ONLY, and that is a property of the consumer
+   * rather than a dropped wire. The frame's wire discriminant is `head_stream`,
+   * validated at `cf-backend/src/hooks/use-kinu.ts:339` and painted under the
+   * last durable step at `components/NodeTranscript.tsx:266`; no CLI or core
+   * reader names it, and the local head's liveness is the `head_journal` rows
+   * {@link reportStep} writes, which BOTH backends wire. Wiring a local sink
+   * would add a producer with no consumer. `AgentsForkDeps.reportNodeDelta` and
+   * `announceHeadActivity` are the same asymmetry, accepted for the same reason
+   * before this contract existed.
+   *
    * Omitted where nothing is watching. Absence costs nothing: no reader ever
    * reads a frame back, so the branch is exactly as legible either way once its
    * steps land.
@@ -560,14 +617,56 @@ export interface HeadInferenceDeps {
 const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.string() });
 
 /**
+ * WHAT ENDED THE RUN, and how it reads: the report's `status` and the
+ * `stopReason` every non-completed summary and `errorMessage` is built from.
+ *
+ * A throw the abort or the deadline already explains is NOT a failure of the
+ * work: the turn body ends a cut turn by yielding `done` and then throwing, so
+ * the steps it recorded are already in the report and the throw only says the
+ * turn did not finish. Anything else — a dead provider stream, a stalled one,
+ * a model that cannot call the tools it was given — IS the failure.
+ *
+ * THE CAUSE CHAIN, not the bare message, when it broke. `runNodeAgent`'s
+ * transport catch renders one for the same column of the same store, so a run
+ * whose LOOP failed getting the outermost sentence only would put two terminal
+ * rows written minutes apart at different depths — and the one with the real
+ * reason in it is the one nobody has to debug.
+ *
+ * Its own function because the two outputs are ONE reading: `status` and
+ * `stopReason` must name the same cut, and a status derived in one place and a
+ * reason in another is how an `errored` report ends up carrying an abort's
+ * reason. The gates are read here, once, in the order the run reads them —
+ * the deadline first, then the spawner's cancel — so the verdict is taken on
+ * one observation rather than two that a cut between them could split.
+ */
+function classifyHeadOutcome(
+  budget: HeadInput['budget'],
+  deps: Pick<HeadInferenceDeps, 'isAborted' | 'abortReason'>,
+  failure: KinuError | undefined,
+) {
+  const budgetGate = budgetExhausted(budget);
+  const aborted = deps.isAborted();
+  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
+  const status: HeadReport['status'] = broke
+    ? 'errored'
+    : aborted
+      ? 'aborted'
+      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
+  const stopReason = broke
+    ? renderThrownChain({ cause: failure })
+    : deps.abortReason?.()
+      ?? (budgetGate.exhausted
+        ? `${budgetGate.reason} budget exhausted`
+        : null);
+  return { status, stopReason };
+}
+
+/**
  * RUN ONE AGENT — every kind that is not an actor's own chat — AND ASSEMBLE ITS
  * REPORT.
  *
- * THE TURN BODY IS {@link runChat} AND NOTHING HERE REPEATS IT. This function
- * used to hold a second `generateText` call, which is how a fork missed the
- * shared loop's dead-stream detection, mid-step abort, step-boundary pruning,
- * and unpaired-tool-call repair. Each exists once in the turn body; driving the
- * same body deletes the second path.
+ * The turn body is selected by {@link prepareActorProgram}; report collection
+ * does not reimplement the native loop or reload a promoted program's live alias.
  *
  * WHAT IS LEFT HERE is what a turn body cannot know: how many turns this agent
  * gets, what a finished step means to its journal, which ledger it charges, and
@@ -601,11 +700,24 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     return refusal !== null;
   };
 
+  const assertActive = (): void => {
+    if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
+    const gate = budgetExhausted(input.budget);
+    if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
+  };
+  const prepareModelStep = async () => {
+    await outOfBudget();
+    assertActive();
+    if (refusal !== null) throw new MissionBudgetExhausted(refusal);
+    return undefined;
+  };
+
   // Steps recorded so far — the trace's dense sequence and the report's count.
   // ONE counter across every turn, because `head_steps` is keyed `${id}-s${seq}`
   // and a per-turn counter would overwrite the first turn's trace with the
-  // second's. A step with no prose, reasoning or tool call is padding and is not
-  // recorded, exactly as the whole-run walk used to drop it.
+  // second's. A step with no prose, reasoning or tool call is padding and is
+  // not recorded. The counter advances only for recorded steps, keeping the
+  // trace sequence dense across turns.
   let recorded = 0;
   // `extractFinalText`'s two inputs, tracked as the steps land: the last
   // text-bearing step's prose, and the last reasoning. A whole-run walk is not
@@ -620,17 +732,25 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // resumed turn's request a prefix of the previous one that a provider can
   // cache. The seed is the prefix a child inherits UP TO, so what this run
   // produced is everything past it.
-  const history: ModelMessage[] = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
-  const seeded = history.length;
+  //
+  // The array is the SESSION's, not a second copy: the session is what admits
+  // the claim whose revisions record the exact array each step consumed, so a
+  // private array here would be a working history no revision could be checked
+  // against. Seeding through `restoreHistory` with no admitted turn is its
+  // hydration arm.
+  const session = deps.actor.session;
+  const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
+  session.restoreHistory(seed);
+  const seeded = seed.length;
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
   // The resolved model as the prompt layer names it, read off the model the
   // caller already resolved rather than asked for as a second dep nobody would
-  // set. It buys two things the fork loop had neither of: the real context
-  // window, which is what step-boundary tool-output pruning is measured against,
-  // and the tool-capability check the actor already refuses a turn on — a fork
-  // handed a model that cannot call tools used to burn its whole envelope
-  // producing none, and now says so in its report instead.
+  // set. It buys two things: the real context window, which is what
+  // step-boundary tool-output pruning is measured against, and the
+  // tool-capability check the actor already refuses a turn on — without it a
+  // fork handed a model that cannot call tools burns its whole envelope
+  // producing none instead of saying so in its report.
   //
   // PARSED, not type-narrowed: `LanguageModel` is the SDK's "constructed model OR
   // bare id", two representations of one domain value, and the third arm is a
@@ -649,7 +769,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   /** What ended the run early, when something threw. Classified below with the
    *  natural path rather than in a catch of its own, so an aborted run reads the
    *  same whether the abort landed between steps or inside one. */
-  let failure: unknown;
+  let failure: KinuError | undefined;
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
     if (step.text.trim()) lastText = step.text;
@@ -685,88 +805,114 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     });
   };
 
+  // The spawner's cancellation, bridged onto the session's own abort rather than
+  // handed to the SDK as `deps.signal`: the session owns the signal its steps run
+  // under, so an external cancel becomes the same interrupt an actor's own cancel
+  // is — one cancellation path for every kind.
+  const cancelled = (): void => { session.interrupt(); };
+  deps.signal?.addEventListener('abort', cancelled, { once: true });
   try {
-    for (;;) {
+    for (let index = 0; ; index++) {
       // Before the first call, between steps, AND between turns: an agent
       // spawned into an already-spent mission must not get one free inference
       // out of it, and neither must a resumed one.
       if (await outOfBudget()) break;
-      const turn: ChatOptions = {
-        model: deps.model,
-        system,
-        history,
-        tools: deps.tools,
-        modelContext,
-        cache: {
-          providerId: modelContext.provider,
-          modelId: modelContext.id,
-          sessionKey: agentAffinityKey(input.rootId),
-        },
-        stopWhen: async () => {
+      // ONE turn id per iteration, derived from the run's own id rather than
+      // minted: a recovered activation re-admits the SAME turn under the next
+      // epoch, which is what the epoch fence is for, and a fresh id would make
+      // the recovered turn a second turn nobody can reconcile.
+      const lease = session.beginTurn(
+        { runId: deps.runId, turnId: index === 0 ? input.id : `${input.id}#${index}` },
+        input.mode, Date.now(),
+      );
+      let turnFailed = false;
+      try {
+        const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
+        session.bindProfile(lease, resolved.profile, resolved.inputs);
+        const stopWhen = async (): Promise<boolean> => {
           if (deps.isAborted()) return true;
           if (budgetExhausted(input.budget).exhausted) return true;
-          return outOfBudget();
-        },
-        onStep,
-      };
-      if (deps.signal !== undefined) turn.signal = deps.signal;
-      for await (const event of runChat(turn)) {
-        // Forwarded as the provider drew them: one frame per delta, in order,
-        // never held. Nothing survives the step boundary, so the durable row that
-        // lands next supersedes the paint without a tail to reconcile.
-        if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); continue; }
-        if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); continue; }
-        if (event.type !== 'done') continue;
-        settled = true;
-        // The turn's own response messages, tool calls already paired by the
-        // turn body. Appended, never accumulated per step: every step's
-        // `response.messages` is CUMULATIVE (ai 6 builds one array and clones it
-        // onto each step), so pushing them per step handed a forking child the
-        // same assistant message once per remaining step.
-        history.push(...event.responseMessages);
+          return await outOfBudget();
+        };
+        const outcome = await session.execute(lease, {
+          task: input.task,
+          // Read per turn, off this actor's OWN pointer, so a promotion that
+          // landed between two turns of a long run is picked up at the next
+          // turn and never mid-turn.
+          loopVersion: await deps.actor.runtime.identity.scaffold.version(),
+          chat: {
+            model: deps.model,
+            system,
+            tools: deps.tools,
+            modelContext,
+            cache: {
+              providerId: modelContext.provider,
+              modelId: modelContext.id,
+              sessionKey: agentAffinityKey(input.rootId),
+            },
+            stopWhen,
+            onStep,
+          },
+          extensions: [{ name: 'kinu.head-lifetime', prepareStep: prepareModelStep }],
+          dynamic: deps.dynamic,
+          assertActive,
+          scaffoldStreamOptions: { onStep, stopWhen, prepareStep: prepareModelStep },
+        }, (event) => {
+          // Forwarded as the provider drew them: one frame per delta, in order,
+          // never held. Nothing survives the step boundary, so the durable row
+          // that lands next supersedes the paint without a tail to reconcile.
+          if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); return; }
+          if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); return; }
+          if (event.type !== 'done') return;
+          settled = true;
+        });
+        if (outcome.failure !== null) {
+          turnFailed = true;
+          failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
+        }
+        // A promoted loop's answer is its own final text: the builtin arm
+        // accumulates prose per step, a scaffold reports one result.
+        if (outcome.program?.kind === 'scaffold' && outcome.text.trim()) lastText = outcome.text;
+        // The claim closes under the outcome THIS turn reached, in the same
+        // vocabulary the run ledger uses — never the host's silence read as
+        // success. `interrupted` covers both the spawner's cancel and the
+        // budget cut, which are aborts of the turn and not failures of it.
+        session.settleTurnClaim(lease, turnFailed ? 'error' : outcome.interrupted ? 'aborted' : 'completed');
+      } finally {
+        session.finishTurn(lease);
       }
       // A run the spawner cancelled, or one past the deadline it was granted,
       // gets no further turn however much work it is still holding.
-      if (deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
+      if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
       const resumed = await deps.resume?.();
       if (!resumed) break;
-      history.push(...resumed);
+      // Appended through the session's own hydration arm, between turns, so the
+      // next turn's claim is admitted against the array the wake produced.
+      session.restoreHistory([...session.history, ...resumed]);
     }
-    if (settled) deps.reportMessages?.(history.slice(seeded));
   } catch (err) {
-    failure = err;
+    failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+  } finally {
+    deps.signal?.removeEventListener('abort', cancelled);
+  }
+
+  if (settled) {
+    try {
+      deps.reportMessages?.(session.history.slice(seeded));
+    } catch (cause) {
+      failure = toKinuError({
+        doing: `report agent ${input.id} conversation`,
+        cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
+        otherwise: 'unavailable',
+      });
+    }
   }
 
   if (refusal) {
     return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
   }
 
-  const budgetGate = budgetExhausted(input.budget);
-  const aborted = deps.isAborted();
-  // A throw the abort or the deadline already explains is NOT a failure of the
-  // work: the turn body ends a cut turn by yielding `done` and then throwing, so
-  // the steps it recorded are already in this report and the throw only says the
-  // turn did not finish. Anything else — a dead provider stream, a stalled one,
-  // a model that cannot call the tools it was given — IS the failure.
-  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
-  const status: HeadReport['status'] = broke
-    ? 'errored'
-    : aborted
-      ? 'aborted'
-      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
-  // THE CAUSE CHAIN, not the bare message. `runNodeAgent`'s transport catch
-  // renders one for the same column of the same store, and a run whose LOOP
-  // failed used to get the outermost sentence only — so two terminal rows written
-  // minutes apart read at different depths and the one with the real reason in it
-  // was the one nobody had to debug.
-  const stopReason = broke
-    ? renderCauseChain(toKinuError({
-      doing: `run agent ${input.id} to a report`, cause: failure, otherwise: 'unavailable',
-    }))
-    : deps.abortReason?.()
-      ?? (budgetGate.exhausted
-        ? `${budgetGate.reason} budget exhausted`
-        : null);
+  const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
   const summary = status === 'completed'
     ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
       || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })

@@ -1,11 +1,12 @@
+import type { ChatEvent } from '../src/chat';
 // Regression tests for the scaffold-proposal contract.
 //
-// The proposal prompt used to instruct "Use only rt.* methods (rt.llm,
-// rt.memory, rt.executor, rt.schedule)" — a phantom API: the executor passes
-// the task STRING as `rt` and exposes only the `host.*` bridge, so every
-// proposal written against those instructions crashed in shadow eval. These
-// tests pin the prompt to the real contract and prove a proposal written
-// against the documented API survives the executor's smoke path.
+// The executor passes the task STRING as `rt` and exposes only the `host.*`
+// bridge, so a prompt that instructs "Use only rt.* methods (rt.llm,
+// rt.memory, rt.executor, rt.schedule)" names a phantom API and every proposal
+// written against it crashes in shadow eval. These tests pin the prompt to the
+// real contract and prove a proposal written against the documented API
+// survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
 import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine';
 import { recordLesson } from '../src/evolution/outcomes';
@@ -80,7 +81,7 @@ describe('a proposal written against the documented API', () => {
       rt,
       task: 'summarize the release notes',
       emit: (e) => { events.push(e); },
-      llmStream: async function* () { yield 'the answer'; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: 'the answer' } satisfies ChatEvent; },
       scaffoldCodeOverride: pendingCode,
     });
 
@@ -107,7 +108,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
   const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });
-  recordLesson(rt.storage.sql, {
+  recordLesson(rt.storage.sql, rt.actor, {
     turnIds: ['t1'],
     text: 'The loop re-read the same file.',
     source: 'session_reflection',
@@ -134,7 +135,8 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
   for (let index = 0; index < 3; index++) await engine.onSessionComplete(window);
 
   const pending = rt.storage.sql<{ version: number }>`
-    SELECT version FROM scaffold_versions WHERE status = 'pending'`;
+    SELECT version FROM scaffold_versions
+    WHERE actor_id = ${rt.actor.actorId} AND status = 'pending'`;
   expect(pending).toHaveLength(1);
   const pendingVersion = pending[0]?.version;
   if (pendingVersion === undefined) throw new Error('expected one pending scaffold version');

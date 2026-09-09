@@ -18,15 +18,15 @@
  *     to 22, 2222, 3306, 5432, 6379 and 8080 all time out while 80 and 443
  *     connect — so the probe demonstrably distinguishes the two, and the denials
  *     are an observation rather than the absence of one.
- *   DNS                                — MEASURED CLOSED, correcting what this
- *     comment used to claim. Inside a real container on the deployed worker,
- *     raw UDP/53 and TCP/53 to 1.1.1.1 / 8.8.8.8 / 2606:4700:4700::1111 get no
- *     reply, and every name — `<random>.invalidtld-nothing-here` included —
- *     resolves to the same private ULA `fd00::119:1`. A public resolver cannot
- *     return an fd00::/8 address nor answer an impossible TLD, so resolution is
- *     synthesized by the platform to steer 80/443 into interception; the query
- *     never leaves. So there is no low-bandwidth label channel here. It is a
- *     PLATFORM property and can regress with no diff in this file —
+ *   DNS                                — MEASURED CLOSED. Inside a real
+ *     container on the deployed worker, raw UDP/53 and TCP/53 to 1.1.1.1 /
+ *     8.8.8.8 / 2606:4700:4700::1111 get no reply, and every name —
+ *     `<random>.invalidtld-nothing-here` included — resolves to the same
+ *     private ULA `fd00::119:1`. A public resolver cannot return an fd00::/8
+ *     address nor answer an impossible TLD, so resolution is synthesized by the
+ *     platform to steer 80/443 into interception; the query never leaves. So
+ *     there is no low-bandwidth label channel here. It is a PLATFORM property
+ *     and can regress with no diff in this file —
  *     `scripts/egress-interception.ts` records the probe.
  *   A container that distrusts the CA  — fails the handshake. Fails CLOSED: no
  *     request, no secret, a visible error.
@@ -214,11 +214,11 @@ function destinationRefusal(host: string, payload: Refusal): Response {
 /**
  * Substitute, forward, and scrub the way back.
  *
- * ONE construction site for the request that leaves. The no-substitution case
- * used to hand the intercepted `Request` straight to `fetch`, which meant the
- * `User-Agent` policy would have had to be applied twice or not at all; it now
- * runs through the same builder with an empty substitution set, where every
- * scrub is the identity and the response is returned untouched.
+ * ONE construction site for the request that leaves. Handing the intercepted
+ * `Request` straight to `fetch` in the no-substitution case would mean the
+ * `User-Agent` policy is applied twice or not at all, so that case runs through
+ * the same builder with an empty substitution set, where every scrub is the
+ * identity and the response is returned untouched.
  *
  * Every redirect the container asked for is `manual`, not just the credentialed
  * case. The runtime's own follower never re-enters this handler, so a hop it

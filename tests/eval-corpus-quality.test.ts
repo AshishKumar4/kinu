@@ -106,11 +106,10 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
       expect(outcomeRates(record)).toEqual([]);
     }
 
-    // The refusal now comes BEFORE the pairing, so the comparator reaches no
-    // pair at all. It used to pair 13 and drop every one — 12 as
-    // `baseline-unverified` and `tool-001` as `baseline-not-scored`. Those same
-    // 12 and 1 are asserted below, read off the records rather than off a
-    // comparison that no longer runs.
+    // The refusal comes BEFORE the pairing, so the comparator reaches no pair at
+    // all: nothing to drop as `baseline-unverified` (12) or `baseline-not-scored`
+    // (`tool-001`). Those same 12 and 1 are asserted below, read off the records
+    // rather than off a comparison that never runs.
     const comparison = compareRuns(flashA, flashB);
     expect(comparison.comparable).toBe(false);
     if (comparison.comparable) throw new Error('expected a refusal, not a comparison');
@@ -125,9 +124,9 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
     }
   });
 
-  test('the old activity headline could not vary: psi is exactly 0 over 6 tasks', () => {
+  test('an activity headline cannot vary: psi is exactly 0 over 6 tasks', () => {
     // Measured, not asserted from memory. Both runs are the same arm, so this is
-    // the corpus's own run-to-run noise, and it is zero because the metric was
+    // the corpus's own run-to-run noise, and it is zero because the metric is
     // `turns > 0 && toolCalls > 0` — satisfied by construction.
     const activityRates = [flashA, flashB].map((r) =>
       scoredOf(r).map((o) => (o.turns > 0 && o.toolCalls > 0 ? 1 : 0)));
@@ -169,12 +168,11 @@ describe('the properties PASS on a corpus that declares ground truth and has hea
 
 describe('a run that attempted nothing writes no record at all', () => {
   // The writer's side of the same defect. `skipIf(!TARGET)` skips every case
-  // without a credential, and each arm's `afterAll` used to write the record
-  // regardless: 81 of the corpus's first 89 records reported 0 observations over
-  // 1 to 17 declared tasks, and the largest group the triage instrument found
-  // was that one fact repeated 45 times. `publishRunRecord` is now the only path
-  // that writes a record, so the guard covers every family that has one and
-  // every family that gets one.
+  // without a credential, and an `afterAll` that writes the record regardless is
+  // how 81 of the corpus's first 89 records reported 0 observations over 1 to 17
+  // declared tasks — the largest group the triage instrument found, that one fact
+  // repeated 45 times. `publishRunRecord` is the only path that writes a record,
+  // so the guard covers every family that has one and every family that gets one.
   const inputs = (transcripts: string, observations: readonly EvalObservation[]) => ({
     family: 'behaviour', tier: 'flash' as const, modelId: EVAL_MODELS.flash,
     repeats: 1, seed: 1,

@@ -15,9 +15,9 @@ import { isVfsError } from '@kinu.run/core';
 import { scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime() {
-  const db = new Database(':memory:');
+  const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
   return createCLIRuntime(db, {
-    dbPath: scratchPath('mount-plane', 'agent.db'),
+    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
 }

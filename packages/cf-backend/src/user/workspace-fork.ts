@@ -1,6 +1,6 @@
 import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
 import type { ForkFrame } from '@kinu.run/core';
-import type { SqlExecutor, ForkFileSource } from '@kinu.run/core';
+import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from './workspace-capability';
 import type { WorkspaceEntry } from './user-do';
 
@@ -29,6 +29,16 @@ export interface CloudForkTarget {
 
 export interface CloudForkSource {
   sql: SqlExecutor;
+  /**
+   * The actor whose transcript is being cut.
+   *
+   * Not derivable here and deliberately not derived: a workspace database holds
+   * every actor it issued, and the pane and message rows the frames read are
+   * keyed per actor, so a snapshot taken without one would carry a sibling's
+   * conversation. The sender supplies its OWN fenced handle — the same one the
+   * driver checked the fork point against.
+   */
+  actor: ActorHandle;
   /** The workspace plane, with the ranged read the wire streams each inherited
    *  file through. */
   vfs: ForkFileSource;

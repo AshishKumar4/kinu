@@ -1,17 +1,18 @@
 /**
- * TEMPORARY AGENTS — one full child agent, run to completion inside the call
- * that asked for it, and released when it answers.
+ * TASK-LIFETIME AGENTS — one full child agent, run to completion inside the
+ * call that asked for it, and released when it answers.
  *
- * `agents({action:'ask', role, message})` is the third lifetime on the one
- * delegation ladder, and the only one whose answer arrives as the tool RESULT.
- * A `hire` is durable and stays; an `ask` to an existing agent is a handoff
- * whose report wakes the caller turns later; a role-targeted `ask` creates an
- * agent for exactly this question, waits for its single answer, and retires it.
+ * `agents({action:'hire', lifetime:'task', role, mission})` is the cheap half of
+ * the hire rung, and the only delegation whose answer arrives as the tool
+ * RESULT. A `lifetime:'durable'` hire stays in the roster; a hire naming an
+ * agent that already exists is a handoff whose report wakes the caller turns
+ * later; this one creates an agent for exactly this question, waits for its
+ * single answer, and retires it.
  *
  * IT IS THE SAME CHILD, IN THE SAME ROSTER. There is no second child substrate,
  * no second loop, no second facet builder — and no second table. A temporary run
  * is provisioned through the very {@link SubordinateRuntime} a hire goes
- * through, and it is booked in `workspace_subordinates` like every other helper.
+ * through, and it is booked in `actor_subordinates` like every other helper.
  * What distinguishes it there is ONE non-derivable column, `lifetime`, plus the
  * `task_event_id` of the assignment it is working on:
  *
@@ -39,21 +40,21 @@
 import type { WorkMode } from '../prompting/surface';
 import type { RoleId } from '../profiles/catalog';
 import type { SubordinateReportStatus } from '../events/hub/types';
-import { classifyErrorCode, type ErrorCode } from '../obs/error';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
+import { finishSubordinateBirth, type SubordinateBirth } from './birth';
 
 /**
- * How long a roster row is meant to live. The one non-derivable fact a
- * role-targeted ask adds to the roster, and the reason it is a column rather
+ * How long a roster row is meant to live. The one non-derivable fact `hire`'s
+ * `lifetime` field writes onto the roster, and the reason it is a column rather
  * than an inference: a task-lifetime row working on its question and a durable
  * row working on an assignment are indistinguishable by state.
  */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
-/** The lifetime a temporary agent is listed under. */
+/** The lifetime a task-lifetime hire is listed under. */
 export const TEMPORARY_LIFETIME = 'task';
 
 
@@ -94,7 +95,7 @@ export interface TemporaryRunOutcome {
 }
 
 /**
- * A refusal RAISED BEFORE THE CHILD EXISTS — the only shape a role-targeted ask
+ * A refusal RAISED BEFORE THE CHILD EXISTS — the only shape a task-lifetime hire
  * returns that is not {@link TemporaryRunOutcome}, and not an exception to "one
  * stable shape": there is no agent yet to report on, so an outcome naming one
  * would be a fiction.
@@ -112,12 +113,16 @@ export interface TemporaryRunRequest {
   readonly roleLabel: string;
   readonly task: string;
   /**
-   * Workspace paths the child reads ITSELF.
+   * Workspace paths the child reads ITSELF, named in its brief.
    *
-   * The bytes never enter the asking agent's window: this side only authorizes
-   * the paths against the workspace file plane and names them in the child's
-   * brief. That is the whole point of the channel — material a parent does not
-   * need to look at should not cost the parent its context to ask about.
+   * PROGRAMMATIC CALLERS ONLY. The model-facing field this used to mirror is
+   * gone: a task-lifetime hire shares this workspace's file plane, so naming a
+   * path in the question is already enough, and the preflight that used to
+   * authorize the paths here only duplicated the refusal the child's own file
+   * read produces — one round trip earlier and one agent further from the
+   * error. What remains is for callers that ASSEMBLE the list rather than
+   * typing it: `evolution/refinement-lane.ts` fills it from what the workspace
+   * actually holds, and renders it as "Files you may read yourself".
    */
   readonly contextRefs?: readonly string[];
   readonly mode: WorkMode;
@@ -133,7 +138,7 @@ export interface TemporaryRunRequest {
  * listing method here would be a second read model over the same state.
  *
  * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever a backend wires a roster: an
- * actor without it has no role-targeted ask in its schema, in its codemode
+ * actor without it has no `lifetime` field in its schema, in its codemode
  * namespace or in its prompt, so absence is structural rather than a runtime
  * refusal.
  */
@@ -156,7 +161,7 @@ export interface TemporaryAgentPort {
    * mid-task `progress` note, which is NOT the answer
    * ({@link temporaryRunSettles}) and must therefore not discharge what it owes
    * — suppressing the terminal report on "the child spoke this turn" rather than
-   * on "the child already answered" is precisely how an ask came to park forever.
+   * on "the child already answered" is precisely how a task hire came to park forever.
    * Both backends track the two facts separately for that reason.
    *
    * So silence is not a reachable state rather than a bounded one, which is the
@@ -231,7 +236,7 @@ const TASK_ENDING_REPORT = {
  * turn and an empty one, because an answer nobody asked for is not progress —
  * and applying that selectivity to a task child turned three ordinary endings
  * (a provider error, an interruption, a turn that finished with nothing to say)
- * into an ask that never returned.
+ * into a hire that never returned.
  *
  * So the rule inverts for this lifetime: a task child ALWAYS reports, exactly
  * once, and the status is what differs. `completed` is the answer; `blocked`
@@ -286,11 +291,11 @@ export function temporaryRunSettles(input: {
 }
 
 /**
- * A temporary agent's brief.
+ * A task-lifetime hire's brief.
  *
  * Three facts, in the order they change what gets written: what it is being
  * asked, which paths hold the material, and that its NEXT MESSAGE is the whole
- * deliverable. The last one is the difference between this rung and a hire — a
+ * deliverable. The last one is the difference between the two lifetimes — a
  * durable subordinate can come back for more, and this one cannot, so a partial
  * first answer is the only answer.
  */
@@ -314,7 +319,7 @@ export function renderTemporaryTaskBrief(input: {
 }
 
 /**
- * THE TEMPORARY-AGENT POLICY, over the SAME roster and the SAME child substrate.
+ * THE TASK-LIFETIME POLICY, over the SAME roster and the SAME child substrate.
  *
  * Every durable step here is one the roster and the event log already own:
  * `provision` writes the row (with `lifetime:'task'`), `runtime.assign` admits
@@ -343,14 +348,6 @@ export function createTemporaryAgentPort(deps: {
    * other handoff rule, and this rung consumes it rather than re-deciding it.
    */
   renderInheritedContext(): string | undefined;
-  /**
-   * The workspace file plane one `context_ref` path is AUTHORIZED against —
-   * existence only, never the bytes. Reading them here would put the material in
-   * the asking agent's isolate, which is the one cost this channel exists to
-   * avoid. Absent is a session with no file plane, and then a ref is refused by
-   * name instead of silently ignored.
-   */
-  statRef?(path: string): Promise<boolean>;
 }): TemporaryAgentPort {
   // A task-lifetime agent receives one assignment. Its name exists before the assignment RPC can report.
   const waiters = new Map<string, (answer: TemporarySettlement) => void>();
@@ -394,32 +391,10 @@ export function createTemporaryAgentPort(deps: {
 
     run: async (request) => {
       const task = request.task.trim();
-      if (!task) return { reason: 'bad_input', error: 'ask requires a non-empty message' };
+      if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
       const refs = request.contextRefs ?? [];
-      if (refs.length > 0) {
-        const statRef = deps.statRef;
-        if (!statRef) {
-          return {
-            reason: 'unavailable',
-            error: 'context_ref names workspace paths and this session wired no file plane to '
-              + 'authorize them against, so they could only be ignored. Put the material in '
-              + '`message` instead.',
-          };
-        }
-        const missing = (await Promise.all(refs.map(async (path) =>
-          (await statRef(path)) ? null : path))).filter((path) => path !== null);
-        if (missing.length > 0) {
-          return {
-            reason: 'missing',
-            error: `context_ref paths this workspace cannot resolve: ${missing.join(', ')}. `
-              + 'Nothing was sent and nothing was guessed — a helper answering about material '
-              + 'it never saw is worse than this message.',
-          };
-        }
-      }
-
       const roleLabel = request.roleLabel.trim();
-      if (!roleLabel) return { reason: 'bad_input', error: 'ask requires a role' };
+      if (!roleLabel) return { reason: 'bad_input', error: 'hire requires a role' };
       const name = deps.createName(`ask-${roleLabel}`);
       const startedAt = deps.now();
       const failure = (
@@ -439,111 +414,39 @@ export function createTemporaryAgentPort(deps: {
       /** Archive the row and retire the actor. History is ALWAYS kept: a
        *  temporary agent is not a temporary transcript. */
       const release = async (): Promise<void> => {
+        const actor = deps.roster.requireExisting(name).actorReference;
+        if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
-        await deps.runtime.dismiss(name, true);
+        await deps.runtime.dismiss(name, true, actor);
       };
 
-      // Tracked rather than re-read, exactly as `rollbackSpawn` tracks it on the
-      // durable path. `if (roster.get(name))` was wrong in one reachable case: if
-      // `create` ITSELF threw on a primary-key collision — the generated
-      // `ask-<role>-<nanoid6>` colliding with an existing row — that guard found
-      // the OTHER agent's row and deleted it, orphaning a live durable
-      // subordinate from the roster. Only a row THIS call wrote may be removed.
-      let rosterCreated = false;
-      try {
-        deps.roster.create({
-          name,
-          createdBy: 'orchestrator',
-          status: 'working',
-          currentTask: task,
-          createdAt: startedAt,
-          dismissedAt: null,
-          lifetime: TEMPORARY_LIFETIME,
-          taskEventId: null,
-        });
-        rosterCreated = true;
-        await deps.runtime.spawn({
-          name,
-          // Blank and `auto`: nobody named this agent, and it will not live long
-          // enough for the first-interaction title policy to matter.
-          displayName: '',
-          nameOrigin: 'auto',
-          role: request.role,
-          mission: task,
-          // The child's own copy of the fact its report policy turns on.
-          lifetime: TEMPORARY_LIFETIME,
-        });
-      } catch (error) {
-        // REMOVED, not archived, and that is the same call `rollbackSpawn` makes
-        // on the durable path: no child was born, so there is no history to keep
-        // and an archived row would name an agent that never existed.
-        //
-        // A cleanup that throws must not swallow what it was cleaning up after:
-        // reporting only the rollback error would lose the create/spawn failure
-        // that caused it, which is the single most useful fact here. Both survive,
-        // in the answer, the way `rollbackSpawn` keeps both in an AggregateError.
-        let cleanupError: unknown;
-        if (rosterCreated) {
-          try {
-            deps.roster.remove(name);
-          } catch (removeError) {
-            cleanupError = removeError;
-          }
-        }
-        const cause = `the temporary agent could not be created: ${renderThrownChain({ cause: error })}`;
-        return failure(
-          classifyErrorCode({ cause: error }) ?? 'unavailable',
-          cleanupError === undefined
-            ? cause
-            : `${cause}\n\nIts roster row could also not be removed, so it may still be listed: `
-              + renderThrownChain({ cause: cleanupError }),
-          // The row survived the failed cleanup, so an actor may yet be found
-          // under this name — `none` would be a claim this call cannot make.
-          cleanupError === undefined ? 'none' : 'kept',
-        );
-      }
-
-      // A child can report before the assignment acknowledgement returns.
+      const creationId = crypto.randomUUID();
+      const assignment: NonNullable<SubordinateBirth['assignment']> = {
+        body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
+      };
+      const inherited = deps.renderInheritedContext();
+      if (inherited) assignment.inheritedContext = inherited;
+      if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
+      deps.roster.create({
+        name, actorReference: null, deleteRequested: false,
+        birth: { creationId, assignment, seed: { name, displayName: '', nameOrigin: 'auto', role: request.role, mission: task, lifetime: TEMPORARY_LIFETIME } },
+        createdBy: 'orchestrator', status: 'working', currentTask: task, createdAt: startedAt,
+        dismissedAt: null, lifetime: TEMPORARY_LIFETIME, taskEventId: null,
+      });
+      // A child can report before its assignment acknowledgement returns.
       const waiter = registerWaiter(name, request.signal);
       try {
-        const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
-          body: renderTemporaryTaskBrief({ task, contextRefs: refs }),
-          mode: request.mode,
-        };
-        const inherited = deps.renderInheritedContext();
-        if (inherited) Object.assign(assignment, { inheritedContext: inherited });
-        const handoff = await deps.runtime.assign(name, assignment);
-        deps.roster.recordAssignmentEvent(name, handoff.eventId);
-      } catch (error) {
+        await finishSubordinateBirth(deps.roster, deps.runtime, name);
+      } catch (cause) {
         waiter.cancel();
-        try {
-          await release();
-        } catch (releaseError) {
-          // Both survive, the way `rollbackSpawn` keeps both in an
-          // AggregateError: reporting only the release failure would lose the
-          // assignment failure that caused it, and reporting only the
-          // assignment failure would lose the row that may still be listed.
-          const combined = new AggregateError(
-            [error, releaseError],
-            'temporary agent assignment failed and its release also failed',
-            { cause: error },
-          );
-          return failure(
-            classifyErrorCode({ cause: combined }) ?? classifyErrorCode({ cause: error }) ?? 'unavailable',
-            `the temporary agent was created but could not be given the work: ${renderThrownChain({ cause: error })}`
-              + `\n\nIts release also failed, so the row may still be listed: ${renderThrownChain({ cause: releaseError })}`,
-          );
-        }
-        return failure(
-          classifyErrorCode({ cause: error }) ?? 'unavailable',
-          `the temporary agent was created but could not be given the work: ${renderThrownChain({ cause: error })}`,
-        );
+        const error = toKinuError({ doing: 'completing an admitted temporary actor birth', cause, otherwise: 'unavailable' });
+        return failure(error.code, renderCauseChain(error));
       }
 
       const settlement = await waiter.promise;
       await release();
       if (settlement === 'cancelled') {
-        return failure('cancelled', 'the caller cancelled this ask before the agent answered.');
+        return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
       }
       if (settlement.status === 'blocked') return failure('unavailable', settlement.content);
       return {

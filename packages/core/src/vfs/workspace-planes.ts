@@ -2,11 +2,10 @@
  * The hosted workspace's other byte planes: the protected SOUL write, the two
  * halves of a fork transfer, and the archive walk.
  *
- * Each was previously a Durable Object RPC into the workspace's own session
- * object; each is now an ordinary operation on the filesystem this actor holds.
- * That is the whole change, and it is what makes the fork's staging atomic: the
- * rename that publishes a staged file now happens in the same SQLite as the
- * row that records the transfer, so `transactionSync` covers both.
+ * Each is an ordinary operation on the filesystem this actor holds, not an RPC
+ * into another object, and that is what makes the fork's staging atomic: the
+ * rename that publishes a staged file happens in the same SQLite as the row
+ * that records the transfer, so `transactionSync` covers both.
  *
  * They are here rather than on {@link HostedWorkspace} because they are not part
  * of what a turn reaches. The workspace's file plane, shell and executor are

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createAgentConfigStore, initAgentConfigTable, type LLMProviderConfig } from '@kinu.run/core';
+import { initAgentConfigTable, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime } from '@kinu.run/cli-backend';
 
 // `AGENT_HOME` is resolved at MODULE LOAD (config.ts), so the only way this file
@@ -40,10 +40,10 @@ afterEach(() => {
 function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'user' | 'auto' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-title-agent-'));
   tempDirs.push(dir);
-  const db = new Database(':memory:');
+  const db = new Database(join(dir, 'agent.db'));
   const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
   initAgentConfigTable(rt.storage.execRaw);
-  const config = createAgentConfigStore(rt.storage.sql);
+  const config = rt.actor.config;
   if (stored.displayName !== undefined) config.setDisplayName(stored.displayName);
   if (stored.nameOrigin) config.setNameOrigin(stored.nameOrigin);
   upsertAgentConfig({ name, mode: 'local', localName: name, displayName: stored.displayName ?? name });

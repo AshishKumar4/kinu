@@ -16,8 +16,10 @@
  *
  * Lifecycle:
  *   1. parent calls HeadController.split({ rationale, heads: [...] })
- *   2. controller materializes each head as a Facet via runtime hook
- *   3. each head runs its task autonomously (own ephemeral storage)
+ *   2. the controller acquires each head as a logical ACTOR of the workspace
+ *      (state/actor-host.ts) — its own session, stores and queue over the one
+ *      workspace database, seeded with the loop origin its input names
+ *   3. each head runs its task autonomously, as a claimed actor turn
  *   4. heads may call splitHeads() on themselves (recursive, decremented depth)
  *   5. controller awaitAll(heads) collects HeadReport[]
  *   6. merge(reports, strategy) → LLM synthesis → MergeResult
@@ -30,6 +32,7 @@ import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
 import type { BuiltinToolName } from '../tools/registry';
+import type { LoopOrigin } from '../scaffold/loop-origin';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -107,6 +110,16 @@ export interface HeadInput {
    * no query, no RPC, no refusal.
    */
   readonly missionLabels?: readonly string[];
+  /**
+   * Where this head's agentic loop comes from — always stated, never inferred.
+   *
+   * A head opened a FRESH scaffold store, found no row and ran the shipped
+   * bootstrap loop, so a workspace whose owner had promoted three generations
+   * of loop still forked with the first one and nothing said so. `inherit` is
+   * this kind's default (`defaultLoopOrigin`): a fork explores under the loop
+   * it is forking FROM.
+   */
+  readonly loop: LoopOrigin;
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
   readonly mergeStrategy: MergeStrategy;
 }
@@ -166,13 +179,13 @@ export interface HeadStep {
  * holds once a report has landed.
  *
  * A LIST and not just a union, because two readers outside this module have to
- * ask a `TEXT` column which of these it holds, and both used to answer with a
- * hand-written subset that named `completed` and treated the rest as one lump.
- * The exploration-facet sweep classified a facet terminal on `completed` or
- * `aborted` alone, so a head that THREW or blew its budget kept its facet for the
- * life of the workspace; the cold branch settle reported every non-`completed`
- * status as `errored`, so a branch that ran out of wall clock was recorded as
- * having thrown. Four statuses, none of them a lump.
+ * ask a `TEXT` column which of these it holds, and a hand-written subset in either
+ * of them names `completed` and treats the rest as one lump. Let the
+ * exploration-facet sweep classify a facet terminal on `completed` or `aborted`
+ * alone and a head that THREW or blew its budget keeps its facet for the life of
+ * the workspace; let the cold branch settle report every non-`completed` status as
+ * `errored` and a branch that ran out of wall clock is recorded as having thrown.
+ * Four statuses, none of them a lump.
  */
 const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
 export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];

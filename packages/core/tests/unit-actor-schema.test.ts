@@ -40,14 +40,16 @@ describe('actor schema', () => {
   });
 
   test('scaffold_versions carries the columns the scaffold code reads, however it was created', () => {
-    // The unified initializer used to own a second, drifted copy of this DDL:
-    // a workspace created through it had no `status` / `parent_version`, so the
-    // shadow rollout and the DGM lineage archive read columns that did not exist.
+    // ONE DDL behind every entry point. A second, drifting copy in the unified
+    // initializer gives a workspace created through it no `status` /
+    // `parent_version`, and the shadow rollout and the DGM lineage archive then
+    // read columns that do not exist.
     for (const init of [initAllTables, initActorTables]) {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
-        ['version', 'written_at', 'rationale', 'canary_score', 'baseline_score', 'status', 'parent_version', 'pathology'],
+        ['actor_id', 'version', 'written_at', 'rationale', 'canary_score', 'baseline_score',
+          'status', 'parent_version', 'pathology'],
       );
       db.close();
     }
@@ -55,16 +57,17 @@ describe('actor schema', () => {
       const db = new Database(':memory:');
       initScaffoldTables((ddl) => db.exec(ddl));
       expect(columnNames(db, 'scaffold_versions')).toEqual(
-        ['version', 'written_at', 'rationale', 'canary_score', 'baseline_score', 'status', 'parent_version', 'pathology'],
+        ['actor_id', 'version', 'written_at', 'rationale', 'canary_score', 'baseline_score',
+          'status', 'parent_version', 'pathology'],
       );
       db.close();
     }
   });
 
   test('search_nodes carries the columns its readers select, however it was created', () => {
-    // Same failure shape as scaffold_versions above: the unified initializer
-    // owned a second copy of this DDL, so a column added to one was missing
-    // from workspaces created through the other.
+    // Same failure shape as scaffold_versions above: a second copy of this DDL
+    // in the unified initializer means a column added to one is missing from
+    // workspaces created through the other.
     for (const init of [initAllTables, initActorTables]) {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));

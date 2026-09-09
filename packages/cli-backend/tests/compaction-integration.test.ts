@@ -123,14 +123,14 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
 
 describe('default compaction over the real storage plane', () => {
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('compaction-integration', 'agent.db'), { create: true });
     const rt = createCLIRuntime(db, {
-      dbPath: scratchPath('compaction-integration', 'agent.db'),
+      dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
 
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const state = createCompactionStateStore(rt.storage.sql);
+    const state = createCompactionStateStore(rt.storage.sql, rt.actor);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     let summarizeCalls = 0;
@@ -294,13 +294,13 @@ describe('default compaction over the real storage plane', () => {
   });
 
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
-    const db = new Database(':memory:');
+    const db = new Database(scratchPath('compaction-integration-rung', 'agent.db'), { create: true });
     const rt = createCLIRuntime(db, {
-      dbPath: scratchPath('compaction-integration-rung', 'agent.db'),
+      dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const state = createCompactionStateStore(rt.storage.sql);
+    const state = createCompactionStateStore(rt.storage.sql, rt.actor);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     const extension = createCompactionExtension({

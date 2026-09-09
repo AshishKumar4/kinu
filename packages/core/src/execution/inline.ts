@@ -17,13 +17,14 @@
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
-import { KinuError, refusalOf, toKinuError } from '../obs/index';
+import { diagnostics, ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
@@ -73,13 +74,10 @@ export interface InlineExecutorDeps {
   resourceLimits?: ResourceLimits;
   /** Optional — used to look up crafted-tool quality columns for listTools(). */
   sql?: SqlExecutor;
-  /**
-   * Optional mid-turn notification — fires synchronously from workspace.createTool
-   * after a successful create/update. The hosted sandbox does not need it
-   * because it reads craftStore.list() fresh on every execute; other adapters
-   * can use it for eager notification.
-   */
-  onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+  /** Whose executor. Present exactly when `sql` is: the misevolution veto this
+   *  writes lands in `evolution_events`, which is actor-scoped, so a veto with
+   *  no owner would be filed against whoever read the stream next. */
+  actor?: ActorHandle;
   /**
    * The turn's read/edit ledger, read live — SHARED with the native `file`
    * tool, so workspace.writeFile/editFile's read-before-write enforcement
@@ -96,7 +94,7 @@ export interface InlineExecutorDeps {
    * any tool here actually runs, a turn has always already begun.
    *
    * Returns `undefined`, not omitted, for an actor that has no turn-scoped
-   * ledger at all (SubordinateAgent in head mode or node mode): the caller can supply
+   * ledger at all (a hosted head or swarm node): the caller can supply
    * the thunk unconditionally without itself touching whatever lazily-built
    * state decides the answer, which is what keeps this safe to wire from
    * inside another lazy getter's own construction. Undefined (from the
@@ -148,7 +146,7 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
 }
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
-  const { vfs, memory, craftStore, shell, sql, resourceLimits, onToolRegistered } = deps;
+  const { vfs, memory, craftStore, shell, sql, actor, resourceLimits } = deps;
   // Private fallback for callers that share no turn-scoped ledger (tests, the
   // identity bootstrap path) — stable across calls, so it still behaves like
   // ONE ledger for THIS executor's lifetime even though it is not turn-shared.
@@ -204,7 +202,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // `refusalOf`, not `refusalText`: this tool's declared result is already an
         // OBJECT carrying `reason` then `error`, so the classification travels as
         // the field the dispatcher's own refusals use rather than as JSON in a
-        // string. What it replaces was an `{ error }` with no reason at all.
+        // string. A bare `{ error }` would carry no reason at all.
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
         // Built per call: the SAME dispatcher and ledger the native `file`
@@ -288,7 +286,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'List crafted tools as an array of { name, description, qualityScore }.',
       execute: async () => {
         // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
-        // Previous implementation returned a joined markdown string and broke .filter/.map.
+        // A joined markdown string has no .filter/.map and would break that call.
         const crafted = craftStore.list();
         // Pull quality scores. The columns live on the crafted_tools row the
         // store just wrote (identity/workspace-schema.ts ensures the shape),
@@ -333,11 +331,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
-        // Admission BEFORE any write: the source is normalized to one expression
-        // and proven to parse, so a `const name = …` body can no longer be stored
-        // verbatim and turn every later program in the workspace into a
-        // SyntaxError. What parses but does not evaluate to a function is caught
-        // per tool at load, and blamed on that tool alone.
+        // Admission precedes every write: normalize the source to one
+        // expression and prove that it parses. The per-tool loader checks that
+        // the expression evaluates to a function and attributes a load failure
+        // to that tool.
         const admitted = admitCraftedSource(code, toolName);
         if (!admitted.ok) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
@@ -359,11 +356,24 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // rollout knobs, the gate entry points, or the consent settings.
           const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
           if (!misevolution.ok) {
-            if (sql) {
-              recordMisevolutionVeto(sql, {
+            if (sql && actor) {
+              recordMisevolutionVeto(sql, actor, {
                 surface: 'craft_tool', violation: misevolution,
                 detail: `workspace.createTool("${toolName}") rejected`,
               });
+            }
+            else {
+              // REPORTED, never dropped. `evolution_events` is actor-scoped, so
+              // recording a veto needs both the store and the actor whose row it
+              // is; an executor built with one and not the other cannot write it.
+              // Silence here would be the worst arm available: the gate fires,
+              // the tool is refused, and the workspace's own audit of what its
+              // gates refused has a hole in it that nothing reports. The refusal
+              // below is unaffected — this says only that the RECORD is missing.
+              diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
+                'unavailable',
+                'a misevolution veto fired with no actor-scoped store to record it against',
+              ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
             }
             // `denied`, which is the one code that exists for this: a GATE
             // refused and the work correctly never ran. It reached the census as
@@ -379,7 +389,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           }
           if (existing) {
             craftStore.update(toolName, { description: desc, code: codeStr });
-            onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
             return { ok: true, name: toolName, action: 'updated' };
           }
           const caseHit = craftStore.list().find(t =>
@@ -405,9 +414,6 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // The column defaults seed the neutral prior inside the same INSERT,
           // so the decay + injection floor can see the new tool at all — one
           // statement, no second write to race it.
-          // Optional eager notification; the hosted sandbox reads
-          // craftStore.list() live on every program, so CF leaves this a no-op.
-          onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
           // The craft store is SQLite in this agent's own object, so `io` is what
@@ -419,8 +425,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
       },
     },
-
-    slate: {
+  };
+  const slate = deps.slate;
+  if (slate !== undefined) {
+    tools.slate = {
       planAllowed: true,
       description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
       execute: async <Input>(input: Input): Promise<JsonValue> => {
@@ -428,26 +436,22 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
           'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
-        if (deps.slate === undefined) return { ok: false, ...refusalOf(new KinuError('unsupported',
-          'This backend has no slate host')) };
-        const result = await deps.slate(parsed.output);
+        const result = await slate(parsed.output);
         return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
       },
-    },
-  };
+    };
+  }
 
   const types = `declare namespace workspace {
   /**
    * A refused call, CLASS first: branch on \`reason\`, never on the prose.
    * \`empty_anchor\`/\`not_found\`/\`ambiguous\`/\`overlap\`/\`no_change\`/\`unread\`/
    * \`stale\` are the file plane's verdicts about an anchor or a read;
-   * \`bad_input\`/\`missing\`/\`io\`/\`denied\`/\`unsupported\` are the classes every
-   * tool in this runtime shares. This is exactly the vocabulary the durable
-   * failure ledger reads, so anything you branch on here is what gets counted.
+   * the remaining reasons are the shared runtime failure codes.
    */
   type Refusal = {
     reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
-      | 'unread' | 'stale' | 'missing' | 'io' | 'bad_input' | 'denied' | 'unsupported';
+      | 'unread' | 'stale' | ${ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ')};
     error: string;
   };
   function readFile(path: string): Promise<string>;
@@ -487,8 +491,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
-  /**
-   * A slate is /home/user/slates/<id>/package.json and an authored TypeScript tree.
+  ${slate === undefined ? '' : `/**
+   * Prefer a slate for dashboards, live-data views and workspace UI; use a full app
+   * toolchain when the user asks for a standalone, ship-ready web application.
+   * A slate is /home/user/slates/<id>/package.json and an authored JS/TS tree.
    * package.json main names a Worker module exporting default { fetch(request, env) }.
    * The strict slate field declares {title?,port?,runtime?:'worker',bindings?:Record<NAME,Binding>}.
    * Binding = {kind:'namespace',namespace:string,members?:string[]}
@@ -497,17 +503,23 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    *         | {kind:'app',id:string}.
    * A binding passes YOUR capability into env.NAME.member(...args), gated exactly as your own call.
    * Serve UI from fetch; app calls POST a JSON argument array to /<method> and receive JSON.
+   * Call workspace.slate({op:"preview",id}) directly to compile and boot the Worker.
+   * This does not use workspace node; no node import precheck or commit is needed.
+   * On success read value.url. On refusal inspect reason/error and fix that cause.
+   * Keep durable application data in admitted bindings, not process memory.
    * A preview boots on demand and its running process is never durable. Commit freezes source;
    * fork copies a committed version; restore changes source, not deployment history.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
+  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number } } | ({ ok: false } & Refusal)>;
   function slate(input:
     | { op: 'list' }
-    | { op: 'preview' | 'commit' | 'history'; id: string }
+    | { op: 'commit' | 'history'; id: string }
     | { op: 'call'; id: string; method: string; args?: SlateValue[] }
     | { op: 'fork'; version: string }
     | { op: 'restore'; id: string; version: string }
   ): Promise<{ ok: true; value: SlateValue } | ({ ok: false } & Refusal)>;
+`}
 }`;
 
   const provider: ExecutorProvider = {
@@ -524,15 +536,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     tools: withVfsGuidance(vfs, tools),
     types,
     positionalArgs: true,
-    // workspace executor runs INSIDE the Worker — no inbound TCP port
-    // surface available. The agent should use `sandbox` for anything
-    // that needs to expose an HTTP server.
+    // This fallback has no inbound TCP surface. Hosted composition supplies
+    // its own process/port methods; Worker slates use their separate host.
     async exposePort(port) {
       return {
         supported: false,
         reason:
           `workspace executor runs in the Worker and cannot expose inbound ports. ` +
-          `Use the 'sandbox' executor for any server you want to preview (port ${port}).`,
+          `Use an available preview-capable executor for a Node/Vite server (port ${port}). ` +
+          `For an authored Worker slate, use its declared slate preview operation when available.`,
       };
     },
     async unexposePort() { /* nothing to do */ },

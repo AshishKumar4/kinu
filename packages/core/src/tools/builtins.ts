@@ -74,7 +74,6 @@ import {
 } from './registry';
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
-import { createAgentConfigStore } from '../config/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
 import { dispatchReport, type ReportToolInput } from './report-tool';
 import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
@@ -557,8 +556,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       } catch (caught) {
         // A remote executor that cannot kill an in-flight command stops WAITING
         // and throws (execution/signal.ts), and the platform's own memory wall
-        // throws prose. Both used to leave this tool by raising, so the durable
-        // row recorded `threw` and the class was gone — the caller could not
+        // throws prose. Unclassified, both leave this tool by raising, so the
+        // durable row records `threw` with the class gone — the caller cannot
         // tell a cancelled wait from an OOM from a dead transport. Classified
         // here and returned as a refusal the reader can branch on.
         const failure = toKinuError({
@@ -583,8 +582,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // The file plane: read / edit / write over the same filesystem `run` and
   // execute_tools address, so one tool serves every mount on both backends.
   // Unconditional — every runtime has rt.storage.vfs, and a model without an
-  // exact-match editor falls back to sed -i and heredocs, which is what this
-  // replaces.
+  // exact-match editor falls back to sed -i and heredocs.
   tools.file = createFileTool({
     vfs: rt.storage.vfs,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
@@ -603,7 +601,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
   const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
+    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
   });
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
@@ -653,8 +651,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // neither TaskListStore nor ConversationSearchStore holds process state.
   // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
   // codemode namespace (tasks-codemode.ts).
-  const taskList = new TaskListStore(rt.storage.sql);
-  const runTasksAction = createTasksDispatcher(taskList, createAgentConfigStore(rt.storage.sql), deps.roleAuthority);
+  const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+  const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
     inputSchema: jsonSchema<TasksToolInput>({
@@ -765,8 +763,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         required: ['status', 'content'],
       }),
       // The SAME dispatcher `report.*` in codemode calls, so one capability
-      // validates its two arguments one way on both surfaces (this body used to
-      // hand-check `content` and never check `status` at all).
+      // validates its two arguments one way on both surfaces — a hand-check in
+      // this body is how `status` goes unchecked while `content` is checked.
       execute: async (args: ReportToolInput) => dispatchReport(report, args),
     }));
   }

@@ -223,7 +223,7 @@ class CloudEvalTarget implements AgentEvalTarget {
    * inside the DO, so this arm reports through the same read model as every other
    * arm and the meter has one definition of what a workspace spent. No `steps`
    * argument: it bounds the snapshot's step TELEMETRY, which this does not read,
-   * and the spend half is no longer windowed at all.
+   * and the spend half is not windowed at all.
    * The two figures NOT read here are deliberate: `getRunSummaries`' cost fold
    * answers a narrower question, and `budget.snapshot()` a third — the
    * orchestrator's own comment says two mission figures on one panel teach a

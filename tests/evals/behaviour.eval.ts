@@ -66,6 +66,7 @@ import {
   type EvalTier,
 } from '@kinu.run/test-utils';
 import { runBehaviourTask, type BehaviourOutput } from './harness';
+import { PROBES, PROBE_ENV, probeCases, probeFor, type ProbeFiles } from './behaviour-probes';
 import { disposeFailedCase } from './episode-failure';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
@@ -119,8 +120,9 @@ const ARM: EvalArmState = {
 
 /**
  * The corpus: `behaviour.jsonl` first, because those are the cases that hand over
- * an environment; then the HARD TASKS, which are the only cases that declare
- * ground truth and therefore the only ones the headline can be computed over.
+ * an environment; then the HARD TASKS and the BEHAVIOUR PROBES, which are the
+ * cases that declare ground truth and therefore the ones the headline can be
+ * computed over.
  *
  * seed.jsonl is kept whole rather than replaced, but its no-tool cases are
  * filtered out BY TAG rather than deleted. "What is 17 * 23?" cannot exercise a
@@ -141,7 +143,7 @@ function loadCorpus(): EvalCase[] {
   const behaviour = read('behaviour.jsonl');
   const toolUsing = read('seed.jsonl').filter((c) =>
     c.tags?.some((t) => t === 'tool-use' || t === 'multi-step') === true);
-  return [...behaviour, ...toolUsing, ...hardTaskCases()];
+  return [...behaviour, ...toolUsing, ...hardTaskCases(), ...probeCases()];
 }
 
 const CORPUS = loadCorpus();
@@ -216,8 +218,8 @@ const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
 const opened: Database[] = [];
 const observationByKey = new Map<string, EvalObservation>();
 /** What this process adopted from an interrupted predecessor rather than drove.
- *  A rehydrated observation used to arrive without the spend that bought it, so
- *  the record's case list covered the run and its cost covered one process. */
+ *  Without this, a rehydrated observation arrives with no spend behind it, so
+ *  the record's case list covers the run while its cost covers one process. */
 const adoptedSpend = new AdoptedSpendMeter();
 let model: LanguageModel;
 let published = false;
@@ -380,10 +382,10 @@ for (const { task, repetition } of CASES) {
     // give: the attempt stored activity but no totals. Registering it is what
     // turns the omission into a stated one — this process will retry the case and
     // pay for it again, and the first attempt's cost stays outside the published
-    // figure. THREE causes reach here now: an operator cancellation, a process
-    // that died mid-case, and a turn the ENVIRONMENT killed. The third is the one
-    // this file used to settle terminally, which made a transient outage a
-    // permanent verdict; the accounting is identical for all three.
+    // figure. THREE causes reach here: an operator cancellation, a process that
+    // died mid-case, and a turn the ENVIRONMENT killed. Settling the third
+    // terminally would make a transient outage a permanent verdict; the
+    // accounting is identical for all three.
     adoptedSpend.adopt(observation, record.activity);
   }
 }
@@ -461,10 +463,10 @@ const tagExpectation = createJudge<EvalInput, BehaviourOutput>(
     };
   },
 );
-
 const JUDGES = [
   'steering_conversion', 'craft_reuse', 'edit_landing',
   'recovery_durability', 'completion_honesty', 'spill_retrieval', 'tool_outcomes',
+  'budget_adherence',
 ].map(ledgerJudge).concat([tagExpectation]);
 
 /** This tier's `craft_reuse` is the AUTONOMOUS arm. The instructed transfer arm
@@ -484,7 +486,7 @@ const INSTRUCTED_CRAFTING =
  * 7 could — a 2.4x overstatement of the design's power, printed before the spend
  * that the number was there to justify.
  */
-const OUTCOME_BEARING = CORPUS.filter((c) => hardTaskFor(c) !== undefined).length;
+const OUTCOME_BEARING = CORPUS.filter((c) => hardTaskFor(c) !== undefined || probeFor(c) !== undefined).length;
 
 function publishBehaviourRecord(): void {
   if (published) return;
@@ -685,9 +687,9 @@ describeEval('Agent behaviour over the run-event ledger', {
           // ratchet.
           //
           // AN OUTAGE IS NOT A VERDICT, so `disposeFailedCase` also decides
-          // whether the case SETTLES. Both halves used to be derived here and the
-          // pair `errored` + `markSettled` was the defect: a resumed run skipped
-          // the outage-killed cases and inherited a result the environment
+          // whether the case SETTLES. Deriving both halves here invites the pair
+          // `errored` + `markSettled`, and that pair is the defect: a resumed run
+          // skips the outage-killed cases and inherits a result the environment
           // produced, permanently, for a failure that is transient by definition.
           //
           // The thrown error still fails THIS run's test with INFRA_FAILURE_MARKER
@@ -743,16 +745,16 @@ describeEval('Agent behaviour over the run-event ledger', {
     // task.
     expect(out.toolCalls, `${input.task.id}: turn was ungraded — 0 tool calls`).toBeGreaterThan(0);
 
-    // WHAT IS DELIBERATELY *NOT* ASSERTED HERE, having been tried and removed.
-    // An earlier version asserted that an `edit`-tagged task must have attempted
-    // a file edit. The first live flash run made it red: given `ws-inventory` the
-    // agent solved the task correctly using four `run` calls and shell
-    // redirection, never touching the `file` primitive, so `edit_landing` had a
-    // zero denominator. That is a genuine BEHAVIOURAL FINDING — the model prefers
-    // shell over the edit primitive, which also means those turns produce no
-    // gradable edit signal at all — and turning a finding into a gate is exactly
-    // the flaky red this file's next paragraph warns about. It is measured by
-    // `tag_expectation` below and reported as a rate instead.
+    // WHAT IS DELIBERATELY *NOT* ASSERTED HERE: that an `edit`-tagged task must
+    // have attempted a file edit. On the first live flash run, given
+    // `ws-inventory` the agent solved the task correctly using four `run` calls
+    // and shell redirection, never touching the `file` primitive, so
+    // `edit_landing` had a zero denominator. That is a genuine BEHAVIOURAL
+    // FINDING — the model prefers shell over the edit primitive, which also
+    // means those turns produce no gradable edit signal at all — and turning a
+    // finding into a gate is exactly the flaky red this file's next paragraph
+    // warns about. It is measured by `tag_expectation` below and reported as a
+    // rate instead.
 
     // Scores RECORDED, never gated on a floor. The mechanism this panel once
     // headlined converted 0% of eligible turns on a recorded baseline where a
@@ -779,12 +781,12 @@ describeEval('Agent behaviour over the run-event ledger', {
  * good and the agent bad, and that is the finding we want; what neither of these
  * tolerates is a corpus on which no finding is POSSIBLE.
  *
- * These deliberately do NOT assert mechanism coverage. An earlier version of this
- * ticket asserted that every scorer must have a non-zero eligibility count, and
- * that was wrong: it makes mechanism coverage a target, and adding tasks to move
- * a mechanism meter is how a rate that converted 4/4 wherever the work
- * was divisible came to be reported as an 85% failure. Mechanism telemetry is
- * recorded in full and explains a moved outcome after the fact. It is not a bar.
+ * These deliberately do NOT assert mechanism coverage — no scorer is required to
+ * have a non-zero eligibility count. Such a bar makes mechanism coverage a
+ * target, and adding tasks to move a mechanism meter is how a rate that
+ * converted 4/4 wherever the work was divisible came to be reported as an 85%
+ * failure. Mechanism telemetry is recorded in full and explains a moved outcome
+ * after the fact. It is not a bar.
  */
 describe('corpus quality — can this corpus rank anything at all', () => {
   test('craft reuse here is autonomous; no case instructs crafting or reuse', () => {
@@ -809,6 +811,183 @@ describe('corpus quality — can this corpus rank anything at all', () => {
       `${String(CORPUS.length)} tasks cannot supply the ${String(floor)} DIFFERING pairs the `
       + 'exact paired test needs; no outcome on this corpus could be significant at any effect size',
     ).toBeGreaterThanOrEqual(floor);
+  });
+
+  /**
+   * Static: the probe registry and the corpus must name the same set. A probe
+   * with no corpus row never runs; a corpus row with `env: behaviour-probe`
+   * and no probe resolves to nothing in the harness dispatch and runs with no
+   * verifier — the exact silent-unmeasured shape this file refuses elsewhere.
+   */
+  test('probes and corpus agree — every probe runs exactly once, with a budget', () => {
+    const ids = PROBES.map((probe) => probe.id);
+    expect(new Set(ids).size, `duplicate probe ids: ${ids.join(', ')}`).toBe(ids.length);
+    for (const probe of PROBES) {
+      const rows = CORPUS.filter((c) => c.id === probe.id);
+      expect(rows.length, `${probe.id} runs ${String(rows.length)} times`).toBe(1);
+      expect(rows[0]?.env).toBe(PROBE_ENV);
+      expect(rows[0]?.task).toBe(probe.prompt);
+      expect(rows[0]?.budget).toEqual(probe.budget);
+    }
+    const orphaned = CORPUS.filter((c) => c.env === PROBE_ENV && probeFor(c) === undefined);
+    expect(orphaned.map((c) => c.id)).toEqual([]);
+  });
+
+  /**
+   * Static: cost without a ceiling is a number nobody can hold anything to. A
+   * case that names no budget still has its cost MEASURED and recorded — the
+   * harness always appends the row — but nothing can say whether the spend was
+   * proportionate, which is the whole question the budget covariate exists to
+   * answer. So the corpus carries its ceilings as data, beside the prompts.
+   */
+  test('every case declares what it may spend', () => {
+    const unbudgeted = CORPUS.filter((c) => c.budget === undefined).map((c) => c.id);
+    expect(unbudgeted).toEqual([]);
+  });
+
+  /**
+   * Static, over synthetic ledgers: a verifier that passes everything measures
+   * nothing, and one that fails everything grades nothing. So every probe must
+   * pass its happy path outright and refuse the degenerate input (no files, no
+   * events) on EVERY subgoal — and three probes additionally prove their
+   * subgoals move independently, so a later edit that couples them fails here
+   * rather than in a paid run.
+   */
+  test('every probe grades its happy path and refuses its miss', async () => {
+    const files = (entries: Record<string, string>): ProbeFiles => ({
+      readText: async (path: string) => entries[path] ?? null,
+    });
+    let index = 0;
+    const toolEnd = (
+      name: string, action: string, path: string | undefined, success: boolean, reason?: 'unread' | 'not_found',
+    ): RunEvent => {
+      index += 1;
+      return {
+        type: 'tool_call_end', runId: 'probe', eventIndex: index,
+        timestamp: `2026-09-08T00:00:${String(index).padStart(2, '0')}Z`,
+        name, toolCallId: `probe-${String(index)}`,
+        args: path === undefined ? { action } : { action, path },
+        outcome: success ? { success: true } : { success: false, reason: reason ?? null },
+      };
+    };
+    // No annotation: the eight keys are literal, and indexing a literal-keyed
+    // object by an arbitrary string is correctly refused. So the loop runs
+    // fixture-first over `Object.entries`, and the coverage assertion below —
+    // every probe id appears exactly once — is what holds the two in agreement.
+    const HAPPY = {
+      'probe-blind-edit': {
+        files: { 'src/blind.txt': 'The vault is OPEN shut.\n' },
+        events: [
+          toolEnd('file', 'edit', 'src/blind.txt', false, 'unread'),
+          toolEnd('file', 'read', 'src/blind.txt', true),
+          toolEnd('file', 'edit', 'src/blind.txt', true),
+        ],
+      },
+      'probe-absent-anchor': {
+        files: { 'src/anchor.txt': 'The vault is OPEN shut.\n' },
+        events: [
+          toolEnd('file', 'edit', 'src/anchor.txt', false, 'not_found'),
+          toolEnd('file', 'read', 'src/anchor.txt', true),
+          toolEnd('file', 'edit', 'src/anchor.txt', true),
+        ],
+      },
+      'probe-file-roundtrip': {
+        files: { 'roundtrip.txt': 'ALPHA\nBRAVO\nGAMMA\n' },
+        events: [
+          toolEnd('file', 'write', 'roundtrip.txt', true),
+          toolEnd('file', 'read', 'roundtrip.txt', true),
+        ],
+      },
+      'probe-codemode-branch': {
+        files: { 'diagnosis.txt': 'reason:unread' },
+        events: [toolEnd('execute_tools', 'run', undefined, true)],
+      },
+      'probe-codemode-throw': {
+        files: { 'aftermath.txt': 'readFile threw: the file does not exist' },
+        events: [
+          toolEnd('execute_tools', 'run', undefined, false),
+          toolEnd('file', 'write', 'aftermath.txt', true),
+        ],
+      },
+      'probe-memory-notes': {
+        files: { 'found.txt': 'BLUEBIRD' },
+        events: [
+          toolEnd('memory', 'save', undefined, true),
+          toolEnd('memory', 'search', undefined, true),
+        ],
+      },
+      'probe-memory-facts': {
+        files: { 'recalled.txt': 'BLUEBIRD' },
+        events: [
+          toolEnd('memory', 'remember', undefined, true),
+          toolEnd('memory', 'recall', undefined, true),
+          toolEnd('memory', 'forget', undefined, true),
+        ],
+      },
+      'probe-task-list': {
+        files: { 'status.txt': 'probe-first:done' },
+        events: [
+          toolEnd('tasks', 'add', undefined, true),
+          toolEnd('tasks', 'update', undefined, true),
+          toolEnd('tasks', 'list', undefined, true),
+        ],
+      },
+    };
+    expect(Object.keys(HAPPY).sort()).toEqual(PROBES.map((probe) => probe.id).sort());
+    for (const [id, happy] of Object.entries(HAPPY)) {
+      const probe = probeFor({ id, env: PROBE_ENV });
+      if (probe === undefined) throw new Error(`fixture without probe: ${id}`);
+      const passed = await probe.verify({ files: files(happy.files), events: happy.events });
+      expect(passed.length, `${id} declares no subgoals`).toBeGreaterThan(0);
+      for (const subgoal of passed) {
+        expect(subgoal.reached, `${id}/${subgoal.what}: ${subgoal.detail}`).toBe(true);
+      }
+      const missed = await probe.verify({ files: files({}), events: [] });
+      expect(missed.map((subgoal) => subgoal.what).sort()).toEqual(
+        passed.map((subgoal) => subgoal.what).sort());
+      for (const subgoal of missed) {
+        expect(subgoal.reached, `${id}/${subgoal.what} reached on empty input`).toBe(false);
+      }
+    }
+
+    // A read-first trajectory fixes the file without ever meeting the gate:
+    // the content subgoal holds while both refusal subgoals miss.
+    const blind = probeFor({ id: 'probe-blind-edit', env: PROBE_ENV });
+    if (blind === undefined) throw new Error('missing probe-blind-edit');
+    const readFirst = await blind.verify({
+      files: files({ 'src/blind.txt': 'The vault is OPEN shut.\n' }),
+      events: [
+        toolEnd('file', 'read', 'src/blind.txt', true),
+        toolEnd('file', 'edit', 'src/blind.txt', true),
+      ],
+    });
+    expect(readFirst.find((s) => s.what === 'content-fixed')?.reached).toBe(true);
+    expect(readFirst.find((s) => s.what === 'refusal-observed')?.reached).toBe(false);
+    expect(readFirst.find((s) => s.what === 'recovered-after-refusal')?.reached).toBe(false);
+
+    // A refusal that escaped the program fails the call: the diagnosis holds
+    // while the handled-shape subgoal misses.
+    const branch = probeFor({ id: 'probe-codemode-branch', env: PROBE_ENV });
+    if (branch === undefined) throw new Error('missing probe-codemode-branch');
+    const escaped = await branch.verify({
+      files: files({ 'diagnosis.txt': 'reason:unread' }),
+      events: [toolEnd('execute_tools', 'run', undefined, false)],
+    });
+    expect(escaped.find((s) => s.what === 'refusal-diagnosed')?.reached).toBe(true);
+    expect(escaped.find((s) => s.what === 'execute_tools-succeeded')?.reached).toBe(false);
+
+    // A fact transcribed but never forgotten: value holds, forget misses.
+    const facts = probeFor({ id: 'probe-memory-facts', env: PROBE_ENV });
+    if (facts === undefined) throw new Error('missing probe-memory-facts');
+    const unforgotten = await facts.verify({
+      files: files({ 'recalled.txt': 'BLUEBIRD' }),
+      events: [
+        toolEnd('memory', 'remember', undefined, true),
+        toolEnd('memory', 'recall', undefined, true),
+      ],
+    });
+    expect(unforgotten.find((s) => s.what === 'value-transcribed')?.reached).toBe(true);
+    expect(unforgotten.find((s) => s.what === 'forgotten')?.reached).toBe(false);
   });
 
   /**

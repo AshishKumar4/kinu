@@ -124,8 +124,8 @@ describe('a workspace whose delete has begun', () => {
     await expect(harness.userDO.removeWorkspace(owner, 'doomed', USER_ID)).rejects.toThrow('refused to go');
 
     // The row survives because the teardown is still owed — but the authority
-    // does not, which is what a fail-closed teardown used to get backwards: the
-    // marked row kept its live capability token indefinitely.
+    // does not. A fail-closed teardown that kept both would leave the marked row
+    // holding a live capability token indefinitely.
     expect(harness.db.prepare<{ delete_pending: number }, []>(
       `SELECT delete_pending FROM user_workspaces WHERE name = 'doomed'`,
     ).all()).toEqual([{ delete_pending: 1 }]);
@@ -564,10 +564,10 @@ describe('a capability rotation whose subtree push missed a replica', () => {
   }
 
   test('the next touch repushes it to convergence, and only then forgets it', async () => {
-    // The push misses one descendant. Pre-fix, `installWorkspaceCapability`
-    // swallowed that as a diagnostics line and answered `{ ok: true }`: the
-    // registry recorded the rotation as landed while a live subordinate went on
-    // presenting a token this account no longer recognizes — no retry existed.
+    // The push misses one descendant. Swallowing that as a diagnostics line and
+    // answering `{ ok: true }` would record the rotation as landed while a live
+    // subordinate goes on presenting a token this account does not recognize,
+    // with nothing standing to retry it.
     let missed = 1;
     const harness = createTestUserDO({
       durableObjectId: USER_ID,

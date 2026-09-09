@@ -17,6 +17,7 @@ import {
   type ToolCallPart,
   type StepResult,
   type StopCondition,
+  type TextStreamPart,
 } from 'ai';
 import {
   assertToolsSupportedByModel,
@@ -24,7 +25,7 @@ import {
 } from './prompting/model-profile';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints';
 import type { TurnContextMeter } from './context-meter';
-import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step';
+import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
@@ -86,6 +87,8 @@ export type ChatEvent =
   | { type: 'error'; message: string }
   | { type: 'done'; text: string; responseMessages: ModelMessage[] };
 
+export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
+
 export interface ChatOptions {
   model: LanguageModel;
   system: string;
@@ -99,6 +102,11 @@ export interface ChatOptions {
   /** Per-step context measurement. runChat opens the turn on it with this
    *  turn's system + tools; the step pipeline then measures each request. */
   meter?: TurnContextMeter;
+  /** The claim's durable context plane. The step pipeline records the exact
+   *  array each step consumes on it, and lands a staged mid-turn edit at the
+   *  first safe boundary. Absent for unclaimed work — a head's own inference,
+   *  a shadow-eval replay. */
+  stepContext?: StepContextPlane;
   /** Turn-local context (skill activation reasons, device notice) — spliced
    *  at the tail of the turn's initial array for THIS turn only; never visible
    *  to a transform and never treated as durable history. */
@@ -172,6 +180,9 @@ export interface ChatOptions {
    *  failures handles them (heads/head-inference.ts does).
    */
   onStep?: (step: StepResult<ToolSet>) => Promise<void> | void;
+  /** Raw SDK output for a host UI bridge, before presentation/model conversion.
+   * Not included in the serializable ChatEvent projection. */
+  onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
 }
 
 /**
@@ -216,7 +227,7 @@ export const UNBOUNDED_MAX_STEPS = Number.MAX_SAFE_INTEGER;
  * the `swarm.branch_failed` event a surface renders still carry these two
  * openings, and they distinguish two causes that need different answers — a
  * wedge is a fault to investigate, a rate limit is capacity to wait for or pace
- * against. Nothing produces the prose any more; the classifier below is what
+ * against. Nothing in the engine writes the prose; the classifier below is what
  * keeps the recorded rows readable. The prefixes stay module-scoped so no second
  * reader can grow its own copy of the vocabulary.
  */
@@ -414,6 +425,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // an interrupted turn's history says what the turn actually did. Cleared at
     // every step boundary: from there the step is the SDK's to report.
     let stepContent: Array<TextPart | ToolCallPart> = [];
+    // Tool execution can begin before fullStream publishes its tool-call part.
+    // Keep dispatched calls until the SDK completes their step, so cancellation
+    // cannot erase work already admitted by the tool boundary.
+    let dispatchedCalls: Map<string, ToolCallPart> | undefined;
 
     /** This call's cumulative generated array as of its last finished step. The
      *  SDK accumulates `step.response.messages` within the call and never
@@ -440,6 +455,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // Capture instead: the error still reaches callers through the rethrow
       // below, so there is exactly one place that decides how a failure reads.
       onError: ({ error }) => { streamError = error; },
+      experimental_onToolCallStart: ({ toolCall }) => {
+        dispatchedCalls ??= new Map();
+        dispatchedCalls.set(toolCall.toolCallId, { type: 'tool-call',
+          toolCallId: toolCall.toolCallId, toolName: toolCall.toolName, input: toolCall.input });
+      },
       onAbort: ({ steps }) => {
         // The caller's abort interrupts the TURN. This callback is the only
         // terminal handover: an aborted run never settles `result.steps`, so
@@ -460,11 +480,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           dynamic: opts.dynamicContext,
           destinationProviderId: opts.cache?.providerId,
           meter: opts.meter,
+          context: opts.stepContext,
         }, { stepNumber: stepOffset + stepNumber, messages, steps }),
       onStepFinish: async (step) => {
         stepCount++;
         const usage = normalizeUsage(step.usage);
         responseSoFar = [...step.response.messages];
+        for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
         const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
         if (usageReported(usage)) event.usage = usage;
         pendingStepEvents.push(event);
@@ -529,6 +551,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             break;
           }
           case 'tool-result': {
+            await opts.onToolOutput?.(chunk);
             const raw = chunk.output;
             // Full text, never a head slice: this string is the call's durable
             // record (recordToolCall → the evolution signal) AND the identity the
@@ -587,13 +610,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     }
 
     // A DEFINITIVE provider or transport failure crosses as a CLASSIFIED failure
-    // when the caller did not cancel the turn. It used to be rethrown verbatim,
-    // which meant an `APICallError` reached the CLI and the chat surface with its
-    // raw `responseBody` still attached and its own message saying only
-    // "AI_APICallError" — so the overflow-recovery classifier read nothing usable
-    // while the user read the endpoint's whole body. `toProviderError` puts the
-    // provider's own reason (and its status/code) in the message and keeps the
-    // raw failure on `cause`, where diagnostics can still reach it.
+    // when the caller did not cancel the turn. Rethrown verbatim it would reach the
+    // CLI and the chat surface as an `APICallError` with its raw `responseBody`
+    // still attached and its own message saying only "AI_APICallError" — so the
+    // overflow-recovery classifier would read nothing usable while the user read
+    // the endpoint's whole body. `toProviderError` puts the provider's own reason
+    // (and its status/code) in the message and keeps the raw failure on `cause`,
+    // where diagnostics can still reach it.
     if (streamError !== undefined && !interrupted) {
       throw toProviderError({ doing: 'calling the model', cause: streamError });
     }
@@ -629,6 +652,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // already recorded has no result anywhere, and `streamText` refuses to
     // assemble EVERY later request from that history — including the
     // continuation request below, whose prefix IS this array.
+    if (cut && dispatchedCalls) {
+      for (const call of dispatchedCalls.values()) {
+        if (!stepContent.some(part => part.type === 'tool-call' && part.toolCallId === call.toolCallId)) stepContent.push(call);
+      }
+    }
     const produced = cut && stepContent.length > 0
       ? [...finished, { role: 'assistant' as const, content: stepContent }]
       : finished;
@@ -649,11 +677,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   //
   // A step that ends at OUTPUT_LIMIT_REACHED is a model that had more to say and
   // was not allowed to say it — after prose, and equally after a completed tool
-  // result, which is the case that used to publish a turn as finished with the
-  // work after the tool never done. The SDK's own loop does not continue it: it
+  // result, the case that would otherwise publish a turn as finished with the work
+  // after the tool never done. The SDK's own loop does not continue it: it
   // re-issues a request only while a step ended with tool calls whose outputs all
-  // landed, so a length finish with no pending call ends the loop, and the
-  // accumulated partial answer was accepted as the turn's.
+  // landed, so a length finish with no pending call ends the loop and the
+  // accumulated partial answer stands as the turn's.
   //
   // The continuation request is the SAME prefix plus what the turn has already
   // produced — every assistant message and every tool result, in order. So the

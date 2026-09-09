@@ -85,16 +85,16 @@ describe('assertExecutableRuntime', () => {
   });
 });
 
-describe('the birth runtime no longer fabricates an exploration result', () => {
+describe('the birth runtime refuses to fabricate an exploration result', () => {
   test('spawnBranch THROWS and names the runtime that implements it', async () => {
     const { dir, dbPath } = scratch();
     const db = new Database(dbPath);
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
-      // It used to answer `{ text: 'exploration result' }`, which no consumer
-      // could tell from a real exploration — so every MCTS-shaped measurement
-      // taken on this runtime scored a fabricated string.
+      // A `{ text: 'exploration result' }` answer here is one no consumer could
+      // tell from a real exploration — so every MCTS-shaped measurement taken on
+      // this runtime would score a fabricated string.
       expect(() => rt.spawnBranch('any')).toThrow(/does not implement spawnBranch/);
       expect(() => rt.spawnBranch('any')).toThrow(/openWorkspaceCLI/);
     } finally {

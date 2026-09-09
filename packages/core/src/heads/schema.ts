@@ -1,5 +1,5 @@
 /**
- * SQLite schema for branching heads.
+ * SQLite schema for branching heads, PRIVATE to the actor that owns the run.
  *
  * Tables:
  *   head_runs     — one row per split: the run identity (rationale + spawn time)
@@ -10,9 +10,15 @@
  * Schema is idempotent (IF NOT EXISTS) so this runs on every DO cold-start.
  * Each CREATE TABLE statement declares every column readers name.
  *
- * Lives on the orchestrator's storage. Heads themselves (Facets) keep their
- * own ephemeral state in their own SQLite — the journal here is the
- * orchestrator's view for telemetry, UI, and merge-time gathering.
+ * EVERY TABLE CARRIES `actor_id`, AND IT IS IN EVERY PRIMARY KEY, because none
+ * of these ids is minted globally. A fork re-drive derives a head id from its
+ * branch point and slot rather than minting one (`journal.ts` insertSpawn), a
+ * step id is `${headId}-s${seq}`, and evidence ids come from the report — so two
+ * actors branching the same way produce the same ids, and a bare `id PRIMARY
+ * KEY` would make one of them overwrite the other's trace. Owning the column on
+ * each table rather than joining every statement back to `head_runs` also keeps
+ * the roster read the dynamic context takes on EVERY model step a single
+ * indexed scan.
  */
 
 import type { RawSqlExec } from '../types/primitives';
@@ -52,15 +58,16 @@ export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null }
  * One row per head. Every usage column is NULLable and carries NO default on
  * purpose: NULL means this head's provider never reported that count, which is
  * not the same claim as reporting zero. A head aborted before its first model
- * call spent an unknown number of tokens, and `DEFAULT 0` used to record it as
+ * call spent an unknown number of tokens, and `DEFAULT 0` would record it as
  * having spent none.
  *
- * The invariant "absent means not reported, never zero" cannot be held by
- * application code alone while the DDL manufactures zeros underneath it — the
- * default WAS the fabricator here, because `insertSpawn` names no usage column.
+ * `insertSpawn` names no usage column, so a `DEFAULT 0` here would fabricate
+ * measured zero usage before application code could preserve absence — which
+ * is why these columns carry no default.
  */
 const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
-  id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  id TEXT NOT NULL,
   parent_id TEXT,
   root_id TEXT NOT NULL,
   depth INTEGER NOT NULL,
@@ -84,7 +91,8 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   tool_calls_json TEXT,
   child_head_ids_json TEXT,
   file_changes_json TEXT,
-  merge_strategy TEXT NOT NULL DEFAULT 'synthesize'
+  merge_strategy TEXT NOT NULL DEFAULT 'synthesize',
+  PRIMARY KEY (actor_id, id)
 )`;
 
 /**
@@ -96,7 +104,8 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
  * unknown cost, and `NOT NULL` left the writer no way to say that.
  */
 const HEAD_MERGE_RESULTS_DDL = `CREATE TABLE IF NOT EXISTS head_merge_results (
-  root_id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL,
+  root_id TEXT NOT NULL,
   merged_narrative TEXT NOT NULL,
   selected_decisions_json TEXT,
   unresolved_questions_json TEXT,
@@ -107,7 +116,8 @@ const HEAD_MERGE_RESULTS_DDL = `CREATE TABLE IF NOT EXISTS head_merge_results (
   cost_max_depth INTEGER NOT NULL,
   merged_at INTEGER NOT NULL,
   merge_strategy TEXT NOT NULL,
-  blind_spots_json TEXT
+  blind_spots_json TEXT,
+  PRIMARY KEY (actor_id, root_id)
 )`;
 
 export function initHeadsTables(execRaw: RawSqlExec): void {
@@ -115,41 +125,51 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   // top-level splits (synthetic root_id, every head parent_id NULL) had no row
   // to anchor the run, so the UI saw each head as its own empty "root".
   execRaw(`CREATE TABLE IF NOT EXISTS head_runs (
-    root_id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    root_id TEXT NOT NULL,
     rationale TEXT,
-    spawned_at INTEGER NOT NULL
+    spawned_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, root_id)
   )`);
 
   execRaw(HEAD_JOURNAL_DDL);
 
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_root ON head_journal(root_id)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_parent ON head_journal(parent_id)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(status)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_root ON head_journal(actor_id, root_id)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_parent ON head_journal(actor_id, parent_id)`);
+  // `root_id` trails the status so the live-roster read stays what its measured
+  // note in `journal.ts` claims: `listLive` asks for DISTINCT root_id among this
+  // actor's RUNNING heads, and with the root column in the index that seek reads
+  // only the open rows instead of every head the actor ever spawned.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(actor_id, status, root_id)`);
 
   execRaw(`CREATE TABLE IF NOT EXISTS head_evidence (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     body TEXT NOT NULL,
     ref TEXT,
     confidence REAL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
 
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_evidence_head ON head_evidence(head_id)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_evidence_head ON head_evidence(actor_id, head_id)`);
 
   // Ordered reasoning trace per head — one row per generateText step.
   execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
     text TEXT,
     reasoning TEXT,
     tool_calls_json TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, id)
   )`);
 
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_steps_head ON head_steps(head_id)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_head_steps_head ON head_steps(actor_id, head_id, seq)`);
 
   execRaw(HEAD_MERGE_RESULTS_DDL);
 

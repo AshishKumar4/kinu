@@ -2,7 +2,7 @@ import {
   agentDbPath,
   listAgentDirs,
   listConfiguredAgentRefs,
-  listLegacyAgentNames,
+  listUnplacedAgentNames,
   readWorkspaceDisplayName,
   requireAuthConfig,
   updateConfigFile,
@@ -22,7 +22,7 @@ export interface ListedAgent {
   readError?: string;
   localName?: string;
   cloudName?: string;
-  /** Canonical project root this local agent is placed in; unplaced legacy
+  /** Canonical project root this local agent is placed in; unplaced
    *  agents carry neither this nor `workspaceId`. */
   cwd?: string;
   /** Virtual workspace inside `cwd`. Peers share the pair `{cwd, workspaceId}`. */
@@ -40,14 +40,14 @@ export interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
   readonly projectRoot: string;
   /** Virtual workspaces, the current project's first, in first-seen order. */
   readonly workspaces: readonly AgentWorkspaceGroup<T>[];
-  /** Local agents no ref places in any project (pre-placement `~/.kinu/<name>`). */
+  /** Local agents no ref places in any project (a `~/.kinu/<name>` directory). */
   readonly unplaced: readonly T[];
   /** Remote cloud workspaces. */
   readonly remote: readonly T[];
 }
 
 /** The display label a placed local agent's workspace falls back to when its
- *  ref predates `workspaceId`: the same directory-basename slug placement
+ *  ref records no `workspaceId`: the same directory-basename slug placement
  *  writes. Display-only — placement itself always stores the real id. */
 function workspaceIdForRoot(root: string): string {
   const base = root.replace(/\/+$/u, '').split('/').at(-1) ?? '';
@@ -59,7 +59,7 @@ function workspaceIdForRoot(root: string): string {
 }
 
 /**
- * The virtual-workspace bucket an agent belongs to: `'unplaced'` for a legacy
+ * The virtual-workspace bucket an agent belongs to: `'unplaced'` for a
  * local agent no ref places anywhere, `null` for cloud, otherwise the
  * `{cwd, workspaceId}` pair peers share.
  */
@@ -73,7 +73,7 @@ export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): stri
 /**
  * Split a flat agent list into the sidebar's shape: virtual workspaces of the
  * current project first, then any group another project contributed, then
- * unplaced legacy agents, then cloud workspaces. Grouping is pure metadata —
+ * unplaced agents, then cloud workspaces. Grouping is pure metadata —
  * rows are never reordered inside their group.
  */
 export function groupAgentWorkspaces<T extends ListedAgent>(
@@ -148,17 +148,17 @@ function localRefsByDirName(refs: readonly KinuAgentConfig[]): Map<string, KinuA
 
 /**
  * Every local workspace on this machine: this directory's placed agent
- * directories plus legacy names no project claims, deduped. The roster `kinu
+ * directories plus unplaced names no project claims, deduped. The roster `kinu
  * list`, `kinu transcripts` and the chat picker all read — one function, so a
  * workspace cannot show on one surface and miss another.
  */
 export function listLocalAgentNames(cwd = process.cwd()): string[] {
-  return [...new Set([...listAgentDirs(cwd), ...listLegacyAgentNames()])];
+  return [...new Set([...listAgentDirs(cwd), ...listUnplacedAgentNames()])];
 }
 
 /**
  * The TUI navigator roster for one directory: this project's placed agents,
- * unplaced legacy agents (openable here; opening one adopts it), and the
+ * unplaced agents (openable here; opening one adopts it), and the
  * signed-in account's cloud workspaces. A cloud ref sharing a local agent's
  * name stays listed — the two are different workspaces, not one row.
  */

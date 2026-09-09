@@ -6,9 +6,10 @@
  *
  *   1. A reload really happens, exactly once, and the route really renders after
  *      it. A navigation count is the only honest way to assert "once".
- *   2. `React.lazy` memoises a REJECTION, so the ErrorBoundary's "Try again" was
- *      decorative on these routes. Nothing but a real mount/unmount through the
- *      real boundary can prove it is not any more.
+ *   2. `React.lazy` memoises a REJECTION, so a boundary that only resets rethrows
+ *      the same failure without the loader being called at all. `lazyRoute`
+ *      regenerates the rejected loader, and nothing but a real mount/unmount
+ *      through the real boundary can prove the retry re-attempts.
  *   3. Regenerating one route's loader leaves its siblings alone. Two lazy routes
  *      are on the page, and the healthy one's attempt count is the assertion.
  *   4. A reader whose failure is NOT a stale chunk, and a reader whose reload has

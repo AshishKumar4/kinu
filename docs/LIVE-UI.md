@@ -4,13 +4,61 @@ A slate is an authored project under `/home/user/slates/<id>/` in the workspace
 file plane. Source and versions are durable. Compilation, resident processes,
 and preview URLs are derived from that source, not a second source of truth.
 
+## Preview tabs and plans
+
+Each preview has a titled tab at the left of the workspace surface strip. A live
+slate and its exposed workspace port share one tab, derived from the current
+caller/source resident rather than a second preview registry. Previews fill the
+available height and use the same URL/copy/open frame and security policy as
+compact chat cards. New preview identities take focus once; refreshing a source
+or reconnecting does not replay that focus. Diffs have their own conditional tab.
+
+Work browses plan revisions across the workspace: root, active agents and retained
+nested or dismissed actors. It pages the existing read-only actor-inspection
+protocol, with an explicit “Older plans / more actors” frontier rather than an
+eager recursive scan. Actor-qualified selection keeps identical plan IDs separate.
+Root/current-actor decisions stay inline; reviewing another active direct agent
+explicitly opens its conversation. Nested and dismissed history is read-only.
+Any new plan opens Work without switching the chat, including one from an actor
+no page of the walk has ever named. The workspace broadcasts only a
+path/id/revision reference; the browser resolves that exact reference through the
+same read-only inspection, which verifies every stored ownership hop, before
+anything is shown or focused. A reference the workspace cannot resolve is
+reported beside the other unreadable actors and focuses nothing; a repeated one
+is not a second arrival; a pane holding an undecided plan keeps it in front of
+the reader. Whether a plan reads as live or retained derives once from the
+workspace roster, so the history label and the read-only banner cannot disagree.
+Loading older history does not steal focus. Failed refreshes retain the last
+usable history and progress beside the failure. Inspection never starts an actor.
+
+Tasks created by a verified approval submission retain that
+plan ID, revision and session in `plan_task_links`; revisions never relabel older
+tasks. Subtasks inherit their parent’s association. Ordinary and pre-existing
+tasks remain unassociated. The new table uses the existing idempotent schema
+initializer, with no ALTER, historical backfill or reset. Task status updates
+change progress, not provenance. The store commits task and link writes in one
+synchronous storage transaction, including inherited subtasks outside a turn.
+Approved authority is captured once for native tools and promoted-program host
+bridges; an unrelated turn or metadata without the real admitted approval cannot
+attribute new work.
+
 ## Authoring
 
-Write TypeScript and `package.json` through the ordinary file plane. For a
+Write JavaScript/TypeScript and `package.json` through the ordinary file plane. For a
 Worker project, `main` names a module whose default export implements
 `fetch(request, env)`. The handler serves the UI and any JSON POST routes that
 other slates or the agent call. There is no separate publish tool or host-rendered
 UI vocabulary.
+
+Prefer a slate for a workspace dashboard, live-data view or dynamic UI. A
+standalone, ship-ready Node/Vite application belongs in an available executor
+that supports its toolchain, not the hosted Worker runtime.
+
+For a Worker slate, call `workspace.slate({op: 'preview', id})` directly. That
+operation compiles and boots the authored module; no workspace `node -e`
+import check or source commit is required first. Success returns
+`{ok: true, value: {url, port}}`. Use `value.url`; a refusal carries
+`reason` and `error`, not an alternative URL field to guess.
 
 ```json
 {
@@ -96,7 +144,7 @@ removed reach.
 | `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
 | `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a facet holds none of them natively, so a facet-held `rpc` binding is `denied`. |
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry depth through the resident request and its AsyncLocalStorage context; a ninth app hop refuses. |
+| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the id of the app invocation the host issued for that request; the host holds the chain of slate ids already running and looks it up. A hop into a slate already on that chain refuses as a cycle and names it. A preview visit is named the same way and released when it settles. A retired or foreign invocation id is refused by reason, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
 
 A queued approval is not a simulated success. Namespace refusal results keep
 their failure class. MCP results retain their own `isError` protocol and read
@@ -175,8 +223,8 @@ even when no listener remains; no user/authentication reset is necessary.
 `getExposedPorts("workspace")` lists live listeners, not orphaned exposure keys,
 so an empty list does not establish that every old persisted key was removed.
 
-Visitor-supplied `x-slate-depth` is stripped before routing, so a preview visitor
-cannot choose the internal app-call depth.
+Visitor-supplied `x-slate-call` is stripped before routing, so a preview visitor
+cannot name an internal app invocation: the host drops the visitor's header and sets its own.
 
 Implementation: `packages/cf-backend/src/slates/resident.ts`,
 `packages/cf-backend/src/workspace-host.ts`, and

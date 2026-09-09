@@ -35,10 +35,15 @@ export { DeviceLedgerProbeDO } from './device-inflight-probe';
 // The terminal-effect ledger — the same charter exception, for what one settled
 // turn still owes after the isolate running its effects dies.
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
+// The `db` capability — the same charter exception, for two mechanisms only the
+// platform provides: `ctx.storage.transactionSync` (which is the whole of the
+// all-or-nothing batch and of evidence rolling back with its mutation) and
+// `… RETURNING` (which is how a row count crosses the SqlExecutor seam).
+export { DbCapabilityProbeDO } from './db-capability-probe';
 // The Files-tab EIO probe — the same charter exception: the real workspace
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
-export { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
+export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 // The production sandbox egress entrypoint, exported here exactly as
 // `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
 // `exports` loopback resolves it under the compatibility date we deploy.
@@ -215,12 +220,12 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
   private ensureSchema(): void {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS event_log (id TEXT PRIMARY KEY)');
     this.ctx.storage.sql.exec(
-      `CREATE TABLE IF NOT EXISTS workspace_subordinates (
+      `CREATE TABLE IF NOT EXISTS actor_subordinates (
          name TEXT PRIMARY KEY, status TEXT NOT NULL
        )`,
     );
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO workspace_subordinates (name, status) VALUES ('relay', 'working')",
+      "INSERT OR IGNORE INTO actor_subordinates (name, status) VALUES ('relay', 'working')",
     );
   }
 
@@ -237,7 +242,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
     if (failRoster) throw new Error('unknown subordinate "relay"');
     this.ctx.storage.sql.exec(
-      "UPDATE workspace_subordinates SET status = 'idle' WHERE name = 'relay'",
+      "UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'",
     );
   }
 
@@ -278,7 +283,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
         'SELECT COUNT(*) AS n FROM event_log',
       ).one().n,
       rosterStatus: this.ctx.storage.sql.exec<{ status: string }>(
-        "SELECT status FROM workspace_subordinates WHERE name = 'relay'",
+        "SELECT status FROM actor_subordinates WHERE name = 'relay'",
       ).one().status,
     };
   }

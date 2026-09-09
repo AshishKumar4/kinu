@@ -4,16 +4,16 @@
  *
  * The {@link TerminalEffectLedger} owns each effect's disposition and
  * {@link TerminalTransitions} owns the once-only boundary around them. What
- * lives here is the third thing, and the one that used to be copied: the ROSTER.
- * Which effects a settled response owes, in which order, on which lane, keyed on
- * what, and gated by which facts about the turn.
+ * lives here is the third thing, in ONE copy: the ROSTER. Which effects a
+ * settled response owes, in which order, on which lane, keyed on what, and
+ * gated by which facts about the turn.
  *
- * Every one of those is a rule, and every one of them was written out separately
- * in each backend before this existed — so the workspace root, the subordinate
- * facet and the CLI each had their own answer to questions like "does an aborted
- * turn close an event lease?" and "does a Plan turn feed the improvement lanes?".
- * They are the same questions. A backend that answered one of them differently
- * was a bug nobody could see by reading either copy.
+ * Every one of those is a rule, and a per-backend copy of them lets the
+ * workspace root, the subordinate facet and the CLI hold different answers to
+ * questions like "does an aborted turn close an event lease?" and "does a Plan
+ * turn feed the improvement lanes?". They are the same questions, so a backend
+ * that answers one of them differently is a bug nobody could see by reading
+ * either copy.
  *
  * Every field is a VALUE the caller reads, never a decision it makes. That split
  * is the whole design: only the caller can read its own accumulator, its pending
@@ -57,9 +57,9 @@ export interface TerminalTurnFacts {
    * Whether THIS session recorded evolution state at all.
    *
    * Recorded for the same reason the continuity and the mode are: the recording
-   * body used to read the ambient gate, so a turn produced under
-   * `--no-auto-evolve` and recovered by an ordinary session was written into the
-   * window it never earned, and the inverse silently dropped one it did.
+   * body must not read the ambient gate. A turn produced under `--no-auto-evolve`
+   * and recovered by an ordinary session would be written into the window it
+   * never earned, and the inverse would silently drop one it did.
    */
   readonly evolutionEnabled: boolean;
 }

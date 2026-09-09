@@ -13,6 +13,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 export interface ActivityLogEntry {
   readonly event: string;
@@ -23,10 +24,14 @@ export interface ActivityLogEntry {
 
 /** The newest entries, oldest first. `limit` is a hard bound — the table is
  *  append-only and unbounded, so every reader states how much it wants. */
-export function readActivityLog(sql: SqlExecutor, limit: number): ActivityLogEntry[] {
+export function readActivityLog(
+  sql: SqlExecutor, actor: ActorHandle, limit: number,
+): ActivityLogEntry[] {
+  actor.assertCurrent();
   const rows = sql<{ event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
     SELECT event, detail, elapsed_ms, created_at
     FROM activity_log
+    WHERE actor_id = ${actor.actorId}
     ORDER BY created_at DESC, id DESC
     LIMIT ${Math.max(0, Math.floor(limit))}`;
   return rows.map((row) => ({

@@ -33,15 +33,15 @@ const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(proc
 /**
  * One window of one file's bytes, off the session's own filesystem.
  *
- * A file read must not require a shell: the reader below used to run
- * `node -e <one-line CJS reader>` through the box's exec, and the `node`
- * command compiles its `-e` source with `new Function` — which the Workers
- * runtime forbids outright, so the first ranged read on a hosted workspace
- * died as EIO with "Code generation from strings disallowed for this
- * context" while every Node-run test stayed green. The box's file plane now
- * carries the native ranged read; the shell reader survives only as the
- * fallback for an SDK handle that predates it, and no hosted deployment is
- * on one (the box carries the op on both sides of the RPC).
+ * A file read must not require a shell. The box's file plane carries the native
+ * ranged read; the shell reader below is the fallback for an SDK handle whose
+ * file plane lacks the op. Reading through `node -e <one-line CJS reader>` over
+ * the box's exec makes the `node` command compile its `-e` source with
+ * `new Function` — which the Workers runtime forbids outright, so a ranged read
+ * on a hosted workspace dies as EIO with "Code generation from strings
+ * disallowed for this context" while every Node-run test stays green. No
+ * hosted deployment is on such a handle (the box carries the op on both sides
+ * of the RPC).
  */
 async function readNimbusOriginRange(
   box: NimbusSandboxHandle, path: string, offset: number, length: number,
@@ -57,7 +57,7 @@ async function readNimbusOriginRange(
     return bytes;
   }
   // Path and offsets travel as JSON in one environment value, never through
-  // shell text, for the handles that still need the session's own Node.
+  // shell text, for the handles that need the session's own Node.
   const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
     env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
   });
@@ -220,8 +220,8 @@ const NOT_CONFIGURED =
  *
  * Its own bucket matters more here than anywhere else: Nimbus IS the workspace
  * (`createNimbusWorkspaceExecutor` registers it as `workspace`), so an absent box
- * used to answer every single call with prose that `isFailingResultText` reads as
- * a clean success.
+ * touches every single call — and bare prose is what `isFailingResultText`
+ * reads as a clean success.
  */
 const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
@@ -255,7 +255,8 @@ const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace
 
 const WORKSPACE_NODE_REFUSAL =
   `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
-  + `Use the 'sandbox' executor for any server you want to preview.`;
+  + `Run Node/Vite programs in an available capable executor, such as sandbox. `
+  + `Worker slates compile separately; use the declared slate preview operation when available, without a node precheck.`;
 
 /** Whether `command` reaches the workspace `node` shim. */
 function invokesWorkspaceNode(command: string): boolean {
@@ -280,8 +281,9 @@ function workspaceExecFailure(input: { doing: string; cause: unknown; command?: 
 const NO_LISTENER_MARK = 'No process is listening';
 
 function workspaceNoListenerReason(port: number): string {
-  return `workspace port ${port} has no server listening: node programs cannot start on this host, so nothing here will answer it. `
-    + `Use the 'sandbox' executor for any server you want to preview.`;
+  return `workspace port ${port} has no server listening. `
+    + `Start an ordinary Node/Vite server in an available capable executor. `
+    + `For an authored Worker slate, use its declared preview operation when available.`;
 }
 
 function workspacePortFailure(input: { port: number; cause: unknown }): KinuError {
@@ -839,10 +841,11 @@ ${SESSION_CONTROL_TYPES}
       const unexpose = ports.unexpose.bind(ports);
       await touch(() => unexpose(port));
     },
-    // A port the host reports as exposed with no URL used to be dropped here,
-    // so the Ports surface showed nothing for a workspace whose previews could
-    // not be addressed and never said why. The host's reason travels as a
-    // refusal: the surface renders it, and the code says a retry cannot help.
+    // A port the host reports as exposed with no URL is NOT dropped here:
+    // dropping it shows nothing on the Ports surface for a workspace whose
+    // previews cannot be addressed, and never says why. The host's reason
+    // travels as a refusal: the surface renders it, and the code says a retry
+    // cannot help.
     async listExposedPorts() {
       const ports = box?.ports;
       if (!ports?.list) return [];

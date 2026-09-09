@@ -59,34 +59,43 @@ I re-grepped `this.tracing.invocation` on 2026-08-24: still six, same sites.
 | `cf-backend/src/orchestrator.ts` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
 | `cf-backend/src/orchestrator.ts` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
 | `cf-backend/src/actor-agent.ts` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
-| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.mcts.branch` | `SubordinateAgent.explore` |
-| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.head.run` | `SubordinateAgent.runAsHead` |
-| `cf-backend/src/subordinate-agent.ts` | `rpc` | `rpc.swarm.node` | `SubordinateAgent.runAsNode` |
 
 `InvocationKind` declares `fetch`, `alarm`, `rpc`, `websocket`
 (`obs/agent-tracing.ts`). Only `alarm` and `rpc` run. The class distinguishes an
 uncontended `alarm` from client-holding `fetch`. Methods outlast line numbers.
 
+THREE ROWS ARE GONE, and their absence is the point. `rpc.mcts.branch`,
+`rpc.head.run` and `rpc.swarm.node` were `tracing.invocation('rpc', …)` call
+sites because a branch, a head and a swarm node each ran in a SEPARATE object
+with its own storage, reached across an RPC. They are logical actors of one
+workspace object now (`core/src/state/actor-host.ts`), hosted by
+`cf-backend/src/exploration-hosting.ts`, so those operations run inside the
+invocation that asked for them: an in-object function call has no RPC boundary
+to name, and labelling one `rpc` would be exactly the mislabelling this table
+exists to prevent. Their child phases go with them — including `head.home` and
+`swarm.node.home`, which were the facet-home provisioning spans.
+
+AND THE DISCRIMINATOR IS THE ACTOR, which is the more useful half.
+`SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]` — a
+DURABLE OBJECT path. With one object per workspace it is constant for every span
+the workspace emits, so it separates no two forks. Nor can a Durable
+Object id: a facet's id resolves to the root's `durableObjectId`
+(`do.facet.id_is_root_namespace`). What distinguishes two forks' spans is the
+ACTOR the span was opened under, which every hosted actor carries.
+
 | Root | Phases |
 | --- | --- |
 | `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.timer_rearm` |
-| `rpc.swarm.node` | `swarm.node.deps`, `swarm.node.loop` |
-| `rpc.head.run` | `head.deps`, `head.inference` |
-| `rpc.mcts.branch` | `mcts.branch.model` |
 
 - `alarm.tick`. Its phases distinguish a slow alarm from slow email reconcile.
-- `rpc.swarm.node`. On 2026-08-19, three nodes ran 605 s,
-  `swarm.node_silent` x3 at ~600,000 ms idle, zero steps, zero model calls,
-  no error. The unclosed phase resolves the two hypotheses rows could not.
-- `rpc.head.run`. No report means dependency acquisition or loop failure.
-- `rpc.mcts.branch`. A 120 s branch RPC cap killed rollouts against
-  151/294/509 s turns.
 - `rpc.swarm.arbitrate`. Waiting and never asking otherwise look alike.
 - `rpc.head.record_step`. A slow journal write looks like a quiet facet.
 
-`SubordinateAgent` hosts heads, nodes and MCTS branches through the
+The workspace object hosts heads, nodes and MCTS branches itself, through the
 orchestrator `tracing` getter and
-`AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts:211`).
+`AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts:211`). The
+120 s RPC cap that would kill MCTS rollouts against 151/294/509 s turns does
+not reach that path: there is no RPC in it.
 One kind alone cannot explain the other two.
 
 ### A turn cannot be a span at this pin
@@ -240,8 +249,9 @@ caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
    `CompletedTurn.missionLabels` from the active scope. It persists in the
    session window and deferred row because a drainer has no scope or a later
    one. It is wired at `cli-backend/src/local-session.ts:558`,
-   `cf-backend/src/orchestrator.ts:579`,
-   `cf-backend/src/subordinate-agent.ts:221`.
+   `cf-backend/src/orchestrator.ts:579`, and — for every hosted logical actor,
+   through the one orchestration builder each of them gets —
+   `cf-backend/src/actor-hosting.ts`.
 
    No labels means an unwrapped `LLM`. A spent cap throws
    `MissionBudgetExhausted` before a request. `runDeferredTurnReviews`
@@ -443,11 +453,11 @@ channels, not a predicate for arbitrary tool output.
 
 | Tool | The distinction it buys |
 | --- | --- |
-| `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window were one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
+| `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window arrive as one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
 | `nimbus.ts` | An absent binding (`unavailable`) apart from a session handle that has no such surface (`unsupported`). A retry against a permanence, and on the CF backend Nimbus *is* the workspace, so this is every call. |
-| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). This was the worst of the five. The old prose reached no reader as a failure at all. |
-| `inline.ts` | `denied` for the misevolution veto, a gate refusing, which used to be filed as a defect in the tool it protected. And `bad_input` for arguments that never described an operation. Its `exec` still throws a shell failure with the chain intact, which is correct and unchanged. |
-| `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. What *was* missing is `cancelled`. The abort signal was parsed and dropped, so one class of the nine was unreachable on one of the five tools. It races the RPC now. |
+| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). The starkest of the five: a prose string in place of either code reaches no reader as a failure at all. |
+| `inline.ts` | `denied` for the misevolution veto — a gate refusing, not a defect in the tool it protected. And `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact, which is the right answer for a shell failure. |
+| `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. The exception is `cancelled`: the abort signal races the RPC, and a signal parsed and dropped instead leaves one class of the nine unreachable on one of the five tools. |
 
 Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
 
@@ -490,7 +500,8 @@ The Executors terminal uses the structural command result and forwards its
   cli-backend two generated-string hits (`executor.ts:177,179`). The
   2026-08-17 AST census in `obs/log.ts:12-31` was cli 479, cf-backend 99,
   core 55, cli-backend 17, 650 across 86 files. AST and regex denominators
-  differ; core, cf-backend and cli-backend migrated since.
+  differ, and the 2026-08-17 figures are a baseline: core, cf-backend and
+  cli-backend reach the terminal through the sink, not through `console.*`.
 - `command_not_found` and `not_executable`. Neither belongs in `ErrorCode`.
   `missing` loses absent-program versus cannot-execute, and both come from
   shell exit codes rather than an error classifier.

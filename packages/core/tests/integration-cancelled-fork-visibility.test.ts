@@ -26,7 +26,10 @@ import {
 } from '../src/prompting/volatile-context';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { ModelMessage } from 'ai';
+import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const HEADS = 4;
 const ROOT = 'root-research';
@@ -55,8 +58,9 @@ function workspace() {
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const journal = new HeadJournal(sql);
-  const jobs = new BackgroundJobStore(sql);
+  const actor = createTestActorsOver(db).main;
+  const journal = new HeadJournal(sql, actor);
+  const jobs = new BackgroundJobStore(sql, actor);
 
   const now = Date.now() - SPAWNED_A_MINUTE_EARLIER_MS;
   jobs.create({
@@ -70,6 +74,7 @@ function workspace() {
       task: `angle ${i}`, rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
+      loop: defaultLoopOrigin('head'),
     });
   }
   // The operator cancel, as `kinu stop` / the repair path writes it: the job
@@ -180,7 +185,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('the fork run that died is closed in the run-event ledger, not left mid-split', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // The dispatching turn, as the ledger records a split.
     recorder.emit(RUN, {
@@ -205,7 +211,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a fork whose split was never recorded reconciles without inventing a run', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // No `head_split` row: a benchmark trial, or a fork dispatched before the
     // ledger existed. There is no run to close, and guessing one would put a
@@ -236,7 +243,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a run a dead activation left open is closed, and a live one is not touched', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
 
     // The turn that dispatched the fork, cut before it could close itself.
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
@@ -274,7 +282,8 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a second activation closes nothing again', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
-    const recorder = new RunEventRecorder(makeSql(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
 
     await reconcileInterruptedForks({
@@ -349,6 +358,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       task: 'the continuation', rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: activationStart + 5 },
+      loop: defaultLoopOrigin('node'),
     });
 
     const agent = idleAgent();
@@ -369,14 +379,14 @@ describe('an operator-cancelled fork is not reported as running', () => {
   });
 
   /**
-   * THE SECOND ACTIVATION, which is where the offered set was wrong.
+   * THE SECOND ACTIVATION, where the offered set decides everything.
    *
    * `markInterrupted` transitions `running` rows only, so a run an EARLIER
-   * activation already marked is returned by nobody. The gate used to be
-   * offered exactly that return value, while `abandonRunning` swept every
-   * unclaimed `interrupted` row — so the run the job registry was re-driving
-   * right now was retired underneath it, and the agent was sent the
-   * "re-fork the work you still need" wake about work that was executing.
+   * activation already marked is returned by nobody. The gate is therefore
+   * offered more than that return value, because `abandonRunning` sweeps every
+   * unclaimed `interrupted` row: a gate blind to those rows retires the run the
+   * job registry is re-driving right now, and sends the agent the "re-fork the
+   * work you still need" wake about work that is executing.
    */
   test('a run an EARLIER activation marked is still offered to the resume gate', async () => {
     const w = workspace();

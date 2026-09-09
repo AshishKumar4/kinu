@@ -46,9 +46,9 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
    * Bumped by every read AND by every local edit, because both make an older
    * reply wrong. Four things trigger a refresh — mount, a 30s interval, window
    * focus, a visibility change — so two are routinely in flight at once and the
-   * slower one used to land last and win. It also undid the optimistic edits:
-   * a workspace created or deleted while a list was in flight reappeared, or
-   * vanished, when that list arrived.
+   * slower one would otherwise land last and win. It would also undo the
+   * optimistic edits: a workspace created or deleted while a list is in flight
+   * reappears, or vanishes, when that list arrives.
    */
   const generation = useRef(0);
 

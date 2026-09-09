@@ -243,13 +243,13 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
   });
 
   it(`reaches the platform ${MEMBER} at the pinned compatibility date`, () => {
-    // BEHAVIOURAL, and it has to be. This test used to read the member off the
-    // singleton and assert `typeof member === 'function'`, which measured the
-    // platform's declaration rather than the runtime. Worse, once the capability
-    // guard landed, `ran: 1` stopped proving the member exists at all, because
-    // the fallback also runs the callback exactly once. A NON-frozen span is the
-    // only observation here that separates the two paths, and the traced path
-    // can only be taken if the runtime supplied a callable member.
+    // BEHAVIOURAL, and it has to be. Reading the member off the singleton and
+    // asserting `typeof member === 'function'` measures the platform's
+    // declaration rather than the runtime. And `ran: 1` proves nothing about the
+    // member existing, because the capability guard's fallback also runs the
+    // callback exactly once. A NON-frozen span is the only observation here that
+    // separates the two paths, and the traced path can only be taken if the
+    // runtime supplied a callable member.
     expect(attempt('probe.callable', () => 'entered')).toMatchObject({
       ran: 1,
       returned: 'entered',

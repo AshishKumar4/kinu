@@ -1,12 +1,12 @@
 // The Last-Event-ID resume contract of the SSE stream route.
 //
-// This file used to hold a hand-copied MIRROR of the validator, with a docstring
-// asking the next editor to keep both in sync. It therefore asserted nothing
-// about the route: flipping the shipped `n >= -1` to `n >= 0`, or dropping the
-// `Number.isInteger` arm, left all ten cases green while a reconnect either
-// replayed events the client already had or seeked past them. The subject is now
-// the exported function the route actually calls — it lives beside the run-event
-// wire rather than in the route because the route reaches `cloudflare:*`.
+// The subject is the exported function the route actually calls, never a
+// hand-copied MIRROR of the validator kept in sync by docstring. A mirror
+// asserts nothing about the route: flipping the shipped `n >= -1` to `n >= 0`,
+// or dropping the `Number.isInteger` arm, leaves every case here green while a
+// reconnect either replays events the client already had or seeks past them.
+// The function lives beside the run-event wire rather than in the route because
+// the route reaches `cloudflare:*`.
 import { describe, test, expect } from 'bun:test';
 import { resumeIndexFromLastEventId } from '../src/lib/orchestrator-wire';
 

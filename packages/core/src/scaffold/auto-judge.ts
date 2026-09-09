@@ -69,7 +69,7 @@ export interface AutoJudgeConfig {
   /** Auto-apply promotion/rollback when decision is conclusive. The engine
    *  default is false (a bare runAutoShadowEval never mutates state); both
    *  backends pass the agent-level switch, which defaults ON
-   *  (agent_config auto_promote_scaffold, config/store.ts). */
+   *  (actor_config auto_promote_scaffold, config/store.ts). */
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;
@@ -155,7 +155,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const config: AutoJudgeConfig = { ...DEFAULT_AUTO_JUDGE_CONFIG, ...opts.config };
   const rng = opts.random ?? Math.random;
 
-  const pending = getPendingScaffold(opts.rt.storage.sql);
+  const pending = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
   if (!pending) return { skipped: true, reason: 'no_pending' };
 
   // ALREADY SCORED. The rollout below drives the pending scaffold through the
@@ -166,7 +166,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   // every later proposal.
   const scored = opts.trialId === undefined
     ? null
-    : scoredShadowTrial(opts.rt.storage.sql, opts.trialId);
+    : scoredShadowTrial(opts.rt.storage.sql, opts.rt.actor, opts.trialId);
   if (scored) {
     const settled = await settlePromotion(opts, config, pending);
     return { skipped: false, evaluation: { ...scored }, ...settled };
@@ -234,13 +234,14 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const evaluation = {
     // Derived from status — after rollback cycles the live version is NOT
     // pending - 1 (the numbering is non-contiguous).
-    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql) ?? pending.version - 1,
+    currentVersion: getCurrentScaffoldVersion(opts.rt.storage.sql, opts.rt.actor) ?? pending.version - 1,
     pendingVersion: pending.version,
     ...evidence,
     judgeResult,
   };
   recordShadowEvaluation(
     opts.rt.storage.sql,
+    opts.rt.actor,
     opts.trialId === undefined ? evaluation : { ...evaluation, trialId: opts.trialId },
   );
 
@@ -270,7 +271,7 @@ async function settlePromotion(
   config: AutoJudgeConfig,
   pending: { version: number },
 ): Promise<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
-  const fresh = getPendingScaffold(opts.rt.storage.sql);
+  const fresh = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
   // A candidate that moved on is one this trial can no longer decide about.
   if (!fresh || fresh.version !== pending.version) return { decision: 'continue', applied: null };
   const decision = decidePromotion(fresh, config.shadowConfig).decision;
@@ -310,14 +311,14 @@ interface JudgeTrialOpts {
 /**
  * Judge one trial with the order-swapped double-win rule.
  *
- * The bias this removes: the incumbent used to be pinned to "Response A" and
- * labelled CURRENT, the candidate to "Response B" labelled PENDING. That is
- * two systematic, DIRECTIONAL handicaps stacked on the pending — position
- * bias, which peaks exactly when two candidates are close in quality (the
- * shadow regime by construction), plus a status-quo/novelty bias carried by
- * the labels themselves. The Monte Carlo that settled DEFAULT_SHADOW_CONFIG
- * models judge error as SYMMETRIC noise, so a directional bias was never
- * inside its guarantees.
+ * The bias this removes: pinning the incumbent to "Response A" labelled
+ * CURRENT and the candidate to "Response B" labelled PENDING stacks two
+ * systematic, DIRECTIONAL handicaps on the pending — position bias, which
+ * peaks exactly when two candidates are close in quality (the shadow regime by
+ * construction), plus a status-quo/novelty bias carried by the labels
+ * themselves. The Monte Carlo that settled DEFAULT_SHADOW_CONFIG models judge
+ * error as SYMMETRIC noise, so a directional bias is nowhere inside its
+ * guarantees.
  *
  * The rule: neutral labels, a randomized presentation order, and two calls
  * with the orders swapped. A candidate takes the trial only by winning BOTH

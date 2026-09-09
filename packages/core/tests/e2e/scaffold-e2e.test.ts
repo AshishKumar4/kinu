@@ -16,7 +16,7 @@ import { initScaffoldTables } from '../../src/scaffold/schemas';
 import type { AgentRuntime } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import {
-  makeSql, makeExecRaw, createMemoryVFS, createMemoryMemory,
+  makeSql, makeExecRaw, createTestActor, createMemoryVFS, createMemoryMemory,
   createMemoryCraftStore, createMockExecutor, createMemorySchedule,
 } from '../helpers';
 
@@ -26,11 +26,13 @@ function createScaffoldTestRuntime(llm: LLM) {
   const execRaw = makeExecRaw(db);
   const vfs = createMemoryVFS(db);
 
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test');
   const rt: AgentRuntime = {
-    storage: { vfs, sql, execRaw },
+    actor,
+    storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
-    llm, schedule: createMemorySchedule(db),
+    llm, schedule: createMemorySchedule(db, actor),
     identity: {
       id: 'scaffold-test', name: 'scaffold-test',
       scaffold: {
@@ -38,13 +40,13 @@ function createScaffoldTestRuntime(llm: LLM) {
         exists: () => vfs.exists('scaffold/agent.js'),
         read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
-        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
+        version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
+          FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }) }),
+    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   };
   return { rt };
 }
@@ -123,13 +125,12 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     expect(modResult.ok).toBe(true);
     expect(modResult.version).toBe(1);
 
-    // The live file does NOT move on accept. This test used to assert
-    // `read() === validCode`, which was the behaviour before gate 4 started
-    // writing proposals to the versioned path — modify.ts states the reason: a
-    // live file equal to the pending one makes shadow eval compare the new code
-    // to itself, and promotion a flag flip with no on-disk consequence. Because
-    // the whole describe is skipIf(!isE2EConfigured()), nothing ever ran the
-    // stale assertion to say so.
+    // The live file does NOT move on accept: gate 4 writes the proposal to the
+    // versioned path, and modify.ts states the reason — a live file equal to the
+    // pending one makes shadow eval compare the new code to itself, and
+    // promotion a flag flip with no on-disk consequence. Both sides asserted
+    // here because the whole describe is skipIf(!isE2EConfigured()), so an
+    // assertion that drifts out of step with modify.ts fails nowhere.
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
     expect(await rt.storage.vfs.readFile(
       `${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' },

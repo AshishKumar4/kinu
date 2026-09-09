@@ -54,7 +54,7 @@ describe('diversity angles', () => {
   test('the first six branches read exactly as they always did', () => {
     // The six shapes are the honest distinctions and every run this engine has done
     // was asked in those words. The second axis is reached only by a wider wave, so a
-    // five-wide `ideate` is byte-identical before and after the fix.
+    // five-wide `ideate` reads byte-identically at either width.
     for (let i = 0; i < 6; i += 1) {
       expect(diversityAngle(i, 6)).not.toContain('starting from');
       expect(diversityAngle(i, 30)).toBe(diversityAngle(i, 6));

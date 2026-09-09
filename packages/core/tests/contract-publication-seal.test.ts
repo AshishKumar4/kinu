@@ -1,13 +1,13 @@
 // The publication seal, over every surface rather than over one table.
 //
-// This is the test that would have caught the audit's top finding. The seal was
-// once stated as reachability over RECORDS-STORE writes alone, while a
-// carry:'artifacts' route through `experience_library` was called publication
-// "separate and unchanged". The Lean statement then VERIFIED and the laundering
-// channel remained, because the theorem quantified over records-store actions
-// and the laundering channel was not one of them: a true theorem about a false
-// property. A run that breached its floor could publish cross-workspace while
-// the leaderboard was sealed.
+// This is the test that would have caught the audit's top finding. Stating the
+// seal as reachability over RECORDS-STORE writes alone leaves the
+// carry:'artifacts' route through `experience_library` outside it, called
+// publication "separate and unchanged". The Lean statement then VERIFIES and
+// the laundering channel remains, because the theorem quantifies over
+// records-store actions and the laundering channel is not one of them: a true
+// theorem about a false property. A run that breaches its floor could publish
+// cross-workspace while the leaderboard is sealed.
 //
 // So the property is stated over an ENUMERATION and this file holds two legs of
 // it, each of which fails LOUDLY rather than passing by omission:

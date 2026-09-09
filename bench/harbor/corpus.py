@@ -11,7 +11,8 @@ measured on 2.0 and compared against a 2.1 leaderboard.
 So every corpus directory carries a ``corpus.json`` written at fetch time, and
 every run resolves and reports it. ``content_hash`` is computed from the task
 files themselves, so an edited corpus stops matching its own manifest and says
-so rather than quietly scoring a different benchmark under the old name.
+so: an edited task set is a different benchmark and must not be scored as
+the same one.
 """
 
 from __future__ import annotations

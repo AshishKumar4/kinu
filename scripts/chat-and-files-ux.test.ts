@@ -36,9 +36,9 @@ interface TailFrame {
    * `::after` width on the LAST BLOCK the markdown emitted.
    *
    * A pseudo-element belongs to that block's own inline flow, so a caret with
-   * a width here is a caret after the final character. The shape this replaced
-   * could not satisfy it at all: the caret was a `<span>` SIBLING of the
-   * rendered markdown, which is why it drew on a line of its own.
+   * a width here is a caret after the final character. A caret that is a
+   * `<span>` SIBLING of the rendered markdown cannot satisfy this at all — it
+   * draws on a line of its own.
    */
   readonly caretWidth: string;
   /**
@@ -101,7 +101,7 @@ interface Observed {
    *  device's consented directory rather than on the device root. */
   readonly filesInMount: { crumbs: string; entries: string[] };
   readonly filesAfterUp: string;
-  /** File names the TREE pane carries — it used to carry only folders. */
+  /** File names the TREE pane carries, not only its folders. */
   readonly treeFileNames: string[];
   /** Markdown opens rendered, through the app's one markdown renderer. */
   readonly filesMarkdownRendered: { heading: string; showsSource: boolean };
@@ -138,11 +138,16 @@ interface Observed {
     mutationHeight: number;
     ground: string;
     pageGround: string;
+    /** The mode the page actually rendered in, so a colour claim cannot be
+     *  satisfied by the wrong theme. */
+    mode: string | null;
+    /** What the preview card shows while the run is still folded. */
+    collapsedPreview: { text: string | null; height: number; folded: string | null };
   };
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
-const LEGACY_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
+const UNSTAMPED_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
 const STAMPED_GATE_ROW = 'programmatic:completion-gate-1';
 const TYPED_ROW = 'u1';
 const DRAIN_ROW = 'd1';
@@ -275,7 +280,7 @@ async function run(): Promise<Observed> {
     await chatPage.setViewport({ width: 1280, height: 1600 });
     await chatPage.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
     await chatPage.reload({ waitUntil: 'networkidle0' });
-    await chatPage.waitForSelector(`[data-chat-row="${LEGACY_FORK_ROW}"]`);
+    await chatPage.waitForSelector(`[data-chat-row="${UNSTAMPED_FORK_ROW}"]`);
     const chat = await readChatRows(chatPage);
     // Folded by DEFAULT, not folded permanently: the words are still reachable,
     // which is what makes hiding them by default honest rather than lossy.
@@ -285,7 +290,7 @@ async function run(): Promise<Observed> {
     // selector reports the whole file red — including the streaming and file
     // panes, which such a regression does not touch. The named assertions below
     // carry the failure instead, and say which wire broke.
-    const toggle = `[data-chat-row="${LEGACY_FORK_ROW}"] [data-system-event] button`;
+    const toggle = `[data-chat-row="${UNSTAMPED_FORK_ROW}"] [data-system-event] button`;
     if (await chatPage.$(toggle) !== null) {
       await chatPage.click(toggle);
       await chatPage.waitForFunction(
@@ -293,7 +298,7 @@ async function run(): Promise<Observed> {
         { timeout: 10_000 }, toggle,
       );
     }
-    const forkInterruptedAfterClick = (await readChatRows(chatPage))[LEGACY_FORK_ROW]!;
+    const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW]!;
     const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
       (cards) => cards.map((card) => [
@@ -305,8 +310,20 @@ async function run(): Promise<Observed> {
 
     const tools = await browser.newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
-    await tools.evaluateOnNewDocument(() => localStorage.setItem('kinu-mode', 'light'));
+    // `theme` is the key the pre-paint script in gallery.html reads (hooks/
+    // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
+    // default mode, and the light-mode assertion below then photographs dark.
+    await tools.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'light'); });
     await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
+    await tools.reload({ waitUntil: 'networkidle0' });
+    // The run's preview call points at the gallery's preview origin, which no
+    // server here answers. Serve it, so what is asserted below is a frame that
+    // really rendered rather than an element that merely exists.
+    await tools.setRequestInterception(true);
+    tools.on('request', async (request) => {
+      if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) { await request.continue(); return; }
+      await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
+    });
     await tools.reload({ waitUntil: 'networkidle0' });
     await tools.waitForSelector('[data-tool-group]');
     const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
@@ -321,8 +338,21 @@ async function run(): Promise<Observed> {
         mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
         ground: getComputedStyle(group).backgroundColor,
         pageGround: getComputedStyle(document.body).backgroundColor,
+        mode: document.documentElement.dataset.mode ?? null,
       };
     });
+    // The preview card, read while the group is still folded: the reader has
+    // clicked nothing, and the app the turn started is on screen.
+    const previewFrameHandle = await tools.waitForSelector('[data-tool-group] iframe');
+    if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
+    const previewDocument = await previewFrameHandle.contentFrame();
+    if (!previewDocument) throw new Error('the preview frame created no document');
+    await previewDocument.waitForSelector('[data-run-preview]');
+    const collapsedPreview = {
+      text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
+      height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
+      folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
+    };
     await tools.click('[data-tool-group-toggle]');
     await tools.waitForFunction(
       () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
@@ -331,7 +361,7 @@ async function run(): Promise<Observed> {
       '[data-tool-group] [data-tool-state]',
       (rows) => rows.length,
     );
-    const toolActivity = { ...collapsedActivity, expandedRows };
+    const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
     await tools.close();
 
     const files = await browser.newPage();
@@ -394,9 +424,9 @@ async function run(): Promise<Observed> {
     await waitForRow('user');
     const filesAfterUp = await crumbs();
 
-    // The tree carries FILES, not only folders — it used to drop every file
-    // entry when it recursed, so the sidebar could never reach one. Each level
-    // is expanded through its own caret.
+    // The tree carries FILES, not only folders — a recursion that drops file
+    // entries leaves the sidebar unable to reach one. Each level is expanded
+    // through its own caret.
     await files.click(rowSelector('user'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
@@ -570,7 +600,7 @@ describe('the streaming turn, as a browser lays it out', () => {
 
   test('a turn that went quiet between steps says so at its tail', () => {
     // Prose closed, both calls settled, request still open. This is the state
-    // that used to render nothing at all.
+    // with no active part of its own to draw, and it still has to say so.
     expect(observed.tails[AFTER_TOOLS]!.thinkingRows).toBe(1);
     expect(observed.tails[AFTER_TOOLS]!.caretWidth).toBe('none');
   });
@@ -610,8 +640,22 @@ describe('large tool runs, as the activity timeline draws them', () => {
     expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
   });
 
+  test('the app a mid-run call started is on screen before any click', () => {
+    // The fold's budget is spent on failures and changes, and this call is
+    // neither — so before this rule it was one of the rows "Show 46 more
+    // calls" hid, and the running app the turn produced was reachable only by
+    // expanding a 54-row list.
+    const { collapsedPreview } = observed.toolActivity;
+    expect(collapsedPreview.folded).toBe('false');
+    expect(collapsedPreview.text).toBe('the running app');
+    expect(collapsedPreview.height).toBeGreaterThan(200);
+  });
+
   test('light mode uses a recessed activity ground instead of white cards', () => {
     const activity = observed.toolActivity;
+    // First: that this page IS light. Without it the two colour assertions
+    // below are satisfied by the default dark theme, where they say nothing.
+    expect(activity.mode).toBe('light');
     expect(activity.ground).not.toBe(activity.pageGround);
     expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
@@ -632,7 +676,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
     // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
-    const fork = observed.chat[LEGACY_FORK_ROW]!;
+    const fork = observed.chat[UNSTAMPED_FORK_ROW]!;
     expect(fork.userBubbles).toBe(0);
     expect(fork.systemEvent).toBe('fork_interrupted');
     expect(Math.abs(fork.offsetFromCentrePx)).toBeLessThan(20);
@@ -649,7 +693,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // Collapsed by default is a measurement here, not a class name: the body
     // holds more than it shows. Clicking it makes the row taller and stops it
     // overflowing, which is the difference between folded and truncated.
-    expect(observed.chat[LEGACY_FORK_ROW]!.folded).toBe(true);
+    expect(observed.chat[UNSTAMPED_FORK_ROW]!.folded).toBe(true);
     expect(observed.forkInterruptedAfterClick.folded).toBe(false);
   });
 
@@ -681,9 +725,9 @@ describe('the drive, browsing the one composite plane', () => {
   });
 
   test('crossing into /pc lands inside the consented device directory', () => {
-    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses, so
-    // the first click used to answer EACCES. The mount point lands on the
-    // directory the owner consented to instead.
+    // `/pc` strips to the DEVICE's `/`, which its consent boundary refuses with
+    // EACCES, so the mount point lands on the directory the owner consented to
+    // instead.
     expect(observed.filesInMount.crumbs).toBe('//pc/home/dev');
     expect(observed.filesInMount.entries).toEqual(
       expect.arrayContaining(['quarterly-report.txt', 'shot.png']),
@@ -769,17 +813,17 @@ describe('the Environment tab, as a user reads it', () => {
 
 describe('a node the provider rate-limited, as the run list reads it', () => {
   test('the row says rate limit, not fault', () => {
-    // The seam this reads through is `isRateLimitedTurnError`. Before it was
-    // wired here the row rendered `errorMessage` verbatim in the failure tone,
-    // so a node the provider told us to wait for was indistinguishable from a
-    // wedged one — the distinction the classifier was built for.
+    // The seam this reads through is `isRateLimitedTurnError`. Rendering
+    // `errorMessage` verbatim in the failure tone makes a node the provider
+    // told us to wait for indistinguishable from a wedged one — the
+    // distinction the classifier exists for.
     expect(observed.runNodes[RATE_LIMITED_NODE]?.reason).toBe('rate-limited');
     expect(observed.runNodes[RATE_LIMITED_NODE]?.reasonText).toContain('Rate limited');
   });
 
-  test('its dot agrees with its line, and no longer collides with a working node', () => {
-    // Both halves matter. `warning` is the pacing tone — and while a RUNNING node
-    // wore it too, the one signal that the provider asked us to wait rather than
+  test('its dot agrees with its line, and does not collide with a working node', () => {
+    // Both halves matter. `warning` is the pacing tone; if a RUNNING node wore
+    // it too, the one signal that the provider asked us to wait rather than
     // that the node broke was invisible on the row. Working states wear the
     // accent, here as everywhere else in the product.
     expect(observed.runNodes[RATE_LIMITED_NODE]?.dot).toBe('p-dot-warning');
@@ -1343,17 +1387,41 @@ describe('history and roster request generations at actual hook boundaries', () 
       const page = await browser.newPage();
       await page.goto(`${origin}/gallery.html?frame=rosterauthority`, { waitUntil: 'networkidle0' });
       await page.click('[data-roster-local-rename]');
+      // POSITIVE FIRST: the local transition really landed.
       await page.waitForFunction(
         () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
         { timeout: 10_000 },
       );
       await page.click('[data-roster-release]');
-      // The old server row spells "Checkout coupon bug". Once released it must
-      // remain stale and cannot reclaim the public local transition.
-      await page.waitForFunction(
-        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
-        { timeout: 10_000 },
-      );
+
+      // The old server row spells "Checkout coupon bug", and the local edit
+      // retired every read in flight, so the released list must publish
+      // NOTHING. That is a claim about something NOT happening, and the proof
+      // cannot be another `waitForFunction` on the rename: that condition is
+      // already true, returns at once, and passed whatever the roster did
+      // next. It cannot be a task-queue drain either — the publish rides
+      // `startTransition`, which React is free to defer past any number of
+      // turns, so a short drain reports "not yet" as "never".
+      //
+      // So the window is explicit and the observation is the timeout: watch
+      // FOR THE CLOBBER, bounded, and require that it never arrives. Under a
+      // roster that failed to retire the read, the stale spelling appears well
+      // inside this window and the case fails naming it. Only the window
+      // running out means "never"; a crashed page or a detached frame is a
+      // different failure and must not read as a pass.
+      let clobbered = true;
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('[data-roster-probe]')?.textContent?.includes('Checkout coupon bug') === true,
+          { timeout: 5_000 },
+        );
+      } catch (cause) {
+        if (!(cause instanceof TimeoutError)) throw cause;
+        clobbered = false;
+      }
+      expect(clobbered).toBe(false);
+      expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
+        .toBe('checkout-fixes:Renamed locally');
       await page.close();
     });
   }, 240_000);
@@ -1661,9 +1729,9 @@ describe('composer and message continuity at browser boundaries', () => {
 
       await textarea!.evaluate((input) => {
         input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '変換' }));
-        const legacy = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
-        Object.defineProperty(legacy, 'keyCode', { value: 229 });
-        input.dispatchEvent(legacy);
+        const keyCode229 = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        Object.defineProperty(keyCode229, 'keyCode', { value: 229 });
+        input.dispatchEvent(keyCode229);
       });
       expect((await continuityProbe(page)).sends).toBe(0);
 

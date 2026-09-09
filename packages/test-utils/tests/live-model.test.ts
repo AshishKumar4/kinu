@@ -92,9 +92,10 @@ describe('reportLiveModelSpend — a line is the suite\'s own spend, not a runni
     expect(first.usage.input).toBe(100);
 
     const second = reportLiveModelSpend('Suite B');
-    // THE OVER-COUNT, in one line: this used to be 1 call and 100 input tokens
-    // again — suite B claiming suite A's spend — and `totalSpend` sums the lines,
-    // so the tier published 200 input tokens for 100 spent.
+    // THE OVER-COUNT, in one line: a meter that did not drain would report 1
+    // call and 100 input tokens again here — suite B claiming suite A's spend —
+    // and `totalSpend` sums the lines, so the tier would publish 200 input
+    // tokens for 100 spent.
     expect(second.calls).toBe(0);
     expect(second.usage.input).toBeUndefined();
   });

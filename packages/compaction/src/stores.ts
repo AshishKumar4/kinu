@@ -16,7 +16,7 @@
  * it navigable (manifest.ts).
  */
 
-import { SPILL_DIRS, type SqlExecutor, type VFS } from '@kinu.run/core';
+import { SPILL_DIRS, type ActorHandle, type SqlExecutor, type VFS } from '@kinu.run/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
@@ -148,45 +148,72 @@ function parsePlanSnapshot(input: { value: unknown }): PlanSnapshot | null {
   return parsed.success ? parsed.output : null;
 }
 
-export function createCompactionStateStore(sql: SqlExecutor): CompactionStateStore {
+/**
+ * Bind the compaction state to ONE actor.
+ *
+ * A session key is an agent name or an `affinity:sessionId` pair minted per
+ * actor, so two actors of one workspace present the same key — and the plan
+ * snapshot, the measured trigger and the archive index are each what the NEXT
+ * turn of that session assembles from. Sharing them would compact one actor's
+ * history against another's measurement, and cite another's transcript.
+ * `actorId` is captured once and `assertCurrent()` runs before every statement,
+ * exactly as the core stores do.
+ */
+export function createCompactionStateStore(
+  sql: SqlExecutor, actor: ActorHandle,
+): CompactionStateStore {
+  const actorId = actor.actorId;
+  const authorize = actor.assertCurrent;
   return {
     plans: {
       load: (sessionKey) => {
+        authorize();
         const rows = sql<{ plan_json: string | null }>`
-          SELECT plan_json FROM compaction_state WHERE session_key = ${sessionKey} LIMIT 1`;
+          SELECT plan_json FROM compaction_state
+          WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
         const json = rows[0]?.plan_json;
         if (!json) return null;
         const parsed: unknown = JSON.parse(json);
         return parsePlanSnapshot({ value: parsed });
       },
       save: (sessionKey, snapshot) => {
+        authorize();
         const json = snapshot === null ? null : JSON.stringify(snapshot);
-        void sql`INSERT INTO compaction_state (session_key, plan_json) VALUES (${sessionKey}, ${json})
-            ON CONFLICT(session_key) DO UPDATE SET plan_json = excluded.plan_json`;
+        void sql`INSERT INTO compaction_state (actor_id, session_key, plan_json)
+            VALUES (${actorId}, ${sessionKey}, ${json})
+            ON CONFLICT(actor_id, session_key) DO UPDATE SET plan_json = excluded.plan_json`;
       },
     },
     archive: {
-      list: (sessionKey) => sql<ArchiveRangeRow>`
-        SELECT range_hash, path, start_turn, end_turn, user_turns, assistant_turns, first_user_ask
-        FROM compaction_archive WHERE session_key = ${sessionKey} ORDER BY start_turn ASC`
-        .map(toArchiveRange),
+      list: (sessionKey) => {
+        authorize();
+        return sql<ArchiveRangeRow>`
+          SELECT range_hash, path, start_turn, end_turn, user_turns, assistant_turns, first_user_ask
+          FROM compaction_archive
+          WHERE actor_id = ${actorId} AND session_key = ${sessionKey} ORDER BY start_turn ASC`
+          .map(toArchiveRange);
+      },
       append: (sessionKey, range) => {
+        authorize();
         void sql`INSERT INTO compaction_archive
-              (session_key, range_hash, path, start_turn, end_turn,
+              (actor_id, session_key, range_hash, path, start_turn, end_turn,
                user_turns, assistant_turns, first_user_ask)
-            VALUES (${sessionKey}, ${range.rangeHash}, ${range.path}, ${range.startTurn},
+            VALUES (${actorId}, ${sessionKey}, ${range.rangeHash}, ${range.path}, ${range.startTurn},
                     ${range.endTurn}, ${range.userTurns}, ${range.assistantTurns},
                     ${range.firstUserAsk})
-            ON CONFLICT(session_key, range_hash) DO NOTHING`;
+            ON CONFLICT(actor_id, session_key, range_hash) DO NOTHING`;
       },
       clear: (sessionKey) => {
-        void sql`DELETE FROM compaction_archive WHERE session_key = ${sessionKey}`;
+        authorize();
+        void sql`DELETE FROM compaction_archive
+          WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
       },
     },
     loadPromptTokens(sessionKey, historyLength) {
+      authorize();
       const rows = sql<{ last_prompt_tokens: number | null; measured_at_length: number | null }>`
         SELECT last_prompt_tokens, measured_at_length FROM compaction_state
-        WHERE session_key = ${sessionKey} LIMIT 1`;
+        WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
       const row = rows[0];
       const tokens = row?.last_prompt_tokens;
       if (tokens == null || tokens <= 0) return null;
@@ -195,24 +222,31 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
       return tokens;
     },
     savePromptTokens(sessionKey, tokens, historyLength) {
+      authorize();
       if (!Number.isFinite(tokens) || tokens <= 0) return;
       const value = Math.floor(tokens);
       const length = Number.isFinite(historyLength) && historyLength > 0 ? Math.floor(historyLength) : 0;
-      void sql`INSERT INTO compaction_state (session_key, last_prompt_tokens, measured_at_length)
-          VALUES (${sessionKey}, ${value}, ${length})
-          ON CONFLICT(session_key) DO UPDATE SET
+      void sql`INSERT INTO compaction_state
+            (actor_id, session_key, last_prompt_tokens, measured_at_length)
+          VALUES (${actorId}, ${sessionKey}, ${value}, ${length})
+          ON CONFLICT(actor_id, session_key) DO UPDATE SET
             last_prompt_tokens = excluded.last_prompt_tokens,
             measured_at_length = excluded.measured_at_length`;
     },
     armForceCompaction(sessionKey) {
-      void sql`INSERT INTO compaction_state (session_key, force_compaction) VALUES (${sessionKey}, 1)
-          ON CONFLICT(session_key) DO UPDATE SET force_compaction = 1`;
+      authorize();
+      void sql`INSERT INTO compaction_state (actor_id, session_key, force_compaction)
+          VALUES (${actorId}, ${sessionKey}, 1)
+          ON CONFLICT(actor_id, session_key) DO UPDATE SET force_compaction = 1`;
     },
     takeForceCompaction(sessionKey) {
+      authorize();
       const rows = sql<{ force_compaction: number | null }>`
-        SELECT force_compaction FROM compaction_state WHERE session_key = ${sessionKey} LIMIT 1`;
+        SELECT force_compaction FROM compaction_state
+        WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
       if (rows[0]?.force_compaction !== 1) return false;
-      void sql`UPDATE compaction_state SET force_compaction = NULL WHERE session_key = ${sessionKey}`;
+      void sql`UPDATE compaction_state SET force_compaction = NULL
+        WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
       return true;
     },
   };

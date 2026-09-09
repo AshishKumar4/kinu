@@ -56,7 +56,6 @@
 import { AGENT_RPC_ACCESS } from './cli/rpc-gate';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
-import type { SubordinateAgent } from './subordinate-agent';
 import type { UserDO } from './user/user-do';
 
 /**
@@ -86,12 +85,12 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
 
 /**
  * The agents-SDK facet protocol: the `_cf_`-prefixed methods the SDK invokes on
- * a stub rather than on `this`. Facets (`SubordinateAgent` in every mode) live
- * on their parent DO, and every hop between a facet and its root crosses a
- * real RPC boundary (`_rootAlarmOwner()` resolves the root through
- * `getServerByName`), so sealing these would break sub-agents,
- * facet schedules, and sub-agent WebSocket bridging. Only the agent family
- * needs them; `UserDO` neither is a facet nor spawns one.
+ * a stub rather than on `this`. Kinu registers no facet class of its own, but
+ * the SDK still invokes this protocol on the ROOT object — clones, connection
+ * metadata and the root alarm owner all ride it — so sealing these would break
+ * the platform's own bookkeeping, facet schedules, and sub-agent WebSocket
+ * bridging. Only the agent family needs them; `UserDO` neither is a facet nor
+ * spawns one.
  *
  * Derived by reading `agents/dist/index.js` for `_cf_` calls whose receiver is
  * not `this`, so it is the SDK's actual cross-stub surface and not a prefix
@@ -366,7 +365,6 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
-  'nodeArbitrate',
   'onCredentialsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
@@ -407,7 +405,7 @@ const ORCHESTRATOR_METHODS = [
   'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',
-  'facetTurnProfile',
+  'getActorSnapshot',
   'getEmailIngress',
   'getRunEvents',
   'getRunEventsWire',
@@ -420,7 +418,6 @@ const ORCHESTRATOR_METHODS = [
   'listRuns',
   'openDeviceTerminal',
   'prepareTerminal',
-  'publishHeadStream',
   'rawCopyFromFork',
   'readExecutorFileChunk',
   'receivePeerMessage',
@@ -436,32 +433,30 @@ const ORCHESTRATOR_METHODS = [
   'startExecutorFileDownload',
   'transitionReleaseChange',
   'writeExecutorFileChunk',
-  // The workspace's byte plane, for the facets that share it. Here rather than
-  // on the public transport for the same reason `rawCopyFromFork` is: these are
-  // how a facet reaches the object that owns the filesystem, and
-  // `NimbusExecOptions.cred` names a uid — a browser socket that could reach
-  // `workspaceBoxOp` could run a command as uid 0. `routeWorkspacePreview` is
-  // reached only by the preview edge, which has already verified the hostname's
-  // signature, and re-checks the capability handle inside the object.
+  // The workspace's byte plane. `routeWorkspacePreview` is the preview edge's
+  // entry point: the edge verifies the hostname signature and the object
+  // rechecks the capability handle. Hosted actors use the root's workspace
+  // box directly, so no file operation acquires a separate uid-bearing
+  // forwarding RPC — one would be the single widest thing on this transport,
+  // since `NimbusExecOptions.cred` names a uid.
   'routeWorkspacePreview',
-  'workspaceBoxOp',
-  // A facet's home, on the same byte plane and for the same reason: the
-  // answer carries the credential the session runs the facet's commands as,
-  // and the registry it is provisioned in exists only on this object.
-  'provisionFacetHome',
-  'releaseFacetHome',
-  // Introduced bindings and facet actors return through the stub transport,
-  // each stamping the actor it acts as. A browser cannot mint a caller.
+  // A hosted actor's chat address, resolved through the directory: the edge
+  // refuses a name this workspace does not host before the request reaches the
+  // object. Answers a refusal, never a storage key: no physical key appears in
+  // a client-visible URL.
+  'resolveHostedActorRoute',
+  'applyActorDirectory',
+  // Introduced bindings return through the stub transport, each stamping the
+  // actor it acts as. A browser cannot mint a caller.
   'slateAs',
   'slateBindingCallAs',
   // The one method the supervisor entrypoint calls on the object that owns a
-  // workspace: a facet's filesystem calls arrive here through the composed
-  // `OrchestratorAgent` namespace. Listed (not sealed away) but never
-  // `@callable`, exactly like `workspaceBoxOp` — reachable by a Durable
-  // Object stub in this Worker, unreachable from the browser or CLI.
+  // workspace: a workspace process's filesystem calls arrive here through the
+  // composed `OrchestratorAgent` namespace. Listed (not sealed away) but never
+  // `@callable` — reachable by a Durable Object stub in this Worker,
+  // unreachable from the browser or CLI.
   'supervisorOp',
-  // A subagent asks its workspace what it is called: its prompt names the
-  // workspace it works in, and it holds only the slug.
+  // A client asks the workspace what it is called.
   'workspaceTitle',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
@@ -474,74 +469,12 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 ];
 
 /**
- * What the parent orchestrator may call on a subordinate facet. A subordinate
- * carries its parent's capability token, so its reachable surface is kept to
- * the calls the parent actually makes; its chat surface arrives over the SDK's
- * sub-agent WebSocket bridge and is dispatched on `this`, not on a stub.
+ * Hosted actors are acquired and run through root-owned objects, not remote
+ * stubs (`host.acquire`, `host.run`); containment is enforced by actor-scoped
+ * rows, directory identity and each actor's uid on both planes.
  *
- * The parent half of a nested tree — seeding a child, admitting its reports — is
- * on ACTOR_AGENT_RPC_SURFACE, because a subordinate is now on both sides of that
- * relationship.
+ * Their public chat uses the orchestrator's callable surface bound to the actor
+ * resolved from the request path (`agent-routing.ts`), so it is governed by
+ * `ORCHESTRATOR_RPC_SURFACE` above and by nothing else.
  */
-const SUBORDINATE_METHODS = [
-  'decidePlanReview',
-  'enqueueSubordinateTask',
-  'getActivePlanReview',
-  'getSubordinateSnapshot',
-  'getSubordinateStatus',
-  'setSubordinateIdentity',
-  'savePlanReviewAnnotations',
-  'setSubordinateNaming',
-] as const satisfies readonly (keyof SubordinateAgent)[];
 
-export const SUBORDINATE_RPC_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...ACTOR_AGENT_RPC_SURFACE,
-  ...SUBORDINATE_METHODS,
-];
-
-/**
- * What a spawner may call on an exploration facet: seed it, then run it. Its
- * reach back into the workspace goes the other way — a head holds an
- * orchestrator stub and mounts its file plane over ACTOR_AGENT_RPC_SURFACE — so
- * nothing else here needs to be reachable.
- *
- * One class hosts both families now, so these names are members of
- * SubordinateAgent beside the subordinate family's. The constructor seals the
- * boot surface below; the mode's own seed narrows the instance to exactly one
- * family's surface, which is what keeps a head from reaching subordinate
- * seeds (and the reverse) across a stub.
- */
-const EXPLORATION_METHODS = [
-  'abortHead',
-  'slateBindingDispatch',
-  'explore',
-  'generateReflection',
-  'initHead',
-  'initNode',
-  'runAsHead',
-  'runAsNode',
-  'setOwner',
-  'setSharedParent',
-] as const satisfies readonly (keyof SubordinateAgent)[];
-
-export const EXPLORATION_RPC_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...EXPLORATION_METHODS,
-];
-
-/**
- * What a fresh facet seals to in its constructor, before any seed tells it
- * which family it is. The union of both families: the seal only ever narrows
- * (a seed shadows more names, never fewer), so the boot surface must admit
- * every seed. Each seed narrows to its own family's surface above.
- */
-export const SUBORDINATE_AGENT_BOOT_SURFACE: readonly string[] = [
-  ...PLATFORM_RPC_SURFACE,
-  ...AGENTS_FACET_RPC_SURFACE,
-  ...ACTOR_AGENT_RPC_SURFACE,
-  ...SUBORDINATE_METHODS,
-  ...EXPLORATION_METHODS,
-];

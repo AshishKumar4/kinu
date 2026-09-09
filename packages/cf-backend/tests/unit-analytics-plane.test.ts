@@ -406,10 +406,10 @@ describe('the writer holds the limits the platform enforces silently', () => {
   });
 
   test('the budget is per invocation, so two invocations write more than one can', () => {
-    // THE DEFECT THIS REPLACES. Three Durable Objects opened their window in the
-    // CONSTRUCTOR — once per activation — so a hot object had 250 rows for its
-    // whole life and then went silent, with the one `window_exhausted` event
-    // refused by the same spent window that produced it.
+    // No Durable Object opens its window in a CONSTRUCTOR: once per activation
+    // would give a hot object 250 rows for its whole life and then silence,
+    // with the one `window_exhausted` event refused by the same spent window
+    // that produced it.
     const oneInvocation = fakeEnv();
     for (let at = 0; at <= MAX_WRITES_PER_INVOCATION; at += 1) {
       recordToolRow(oneInvocation.env, {
@@ -961,11 +961,11 @@ describe('a feedback marker carries no report', () => {
   });
 
   test('a screenshot-bearing refusal reports the screenshot it carried', () => {
-    // THE UNDER-COUNT. The refusal arms that fire before the bytes are measured
-    // used to write "no screenshot, zero bytes" for submissions that plainly sent
-    // one, so the screenshot columns described every population except the one
-    // they exist for. Presence and size are now two slots and neither rewrites
-    // the other.
+    // THE UNDER-COUNT. Presence and size are two slots and neither rewrites the
+    // other, so a refusal arm that fires before the bytes are measured still
+    // reports the screenshot the submission sent. Writing "no screenshot, zero
+    // bytes" there leaves the screenshot columns describing every population
+    // except the one they exist for.
     const plane = fakeEnv();
     writeFeedbackMarker(plane.env, {
       feedbackId: 'fb_reject', outcome: 'rejected', rejectReason: 'bad_content_type',
@@ -1079,7 +1079,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // rows — a wrong number under the right heading.
     const queries = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '_staging' });
     // Every FROM in every panel, extracted rather than spot-checked: the defect
-    // shape is one builder out of six keeping the old name.
+    // shape is one builder out of six naming the unsuffixed dataset.
     const named = Object.values(queries).flatMap((sql) => [...sql.matchAll(/FROM (\S+)/gu)]
       .map((match) => match[1]));
     expect(named).toHaveLength(6);

@@ -2,10 +2,10 @@
 //
 // A local turn's answer is only half of what the turn causes. The other half —
 // the alternate-takes claim, the completion gate, the evolution recording, the
-// shadow trial, the auto title — used to be straight-line code that released
-// its turn claims as soon as the transcript hit disk, with no recovery at all.
-// A laptop killed anywhere inside that sequence lost every remaining step, and
-// nothing on disk said which ones had happened.
+// shadow trial, the auto title — is a claimed, recoverable sequence. As
+// straight-line code releasing its turn claims as soon as the transcript hit
+// disk, a laptop killed anywhere inside it loses every remaining step with
+// nothing on disk saying which ones had happened.
 //
 // So the subject here is not "does the sequence run" — the ordinary session
 // tests cover that. It is: kill the process at an exact point inside the
@@ -80,7 +80,8 @@ function workspace(): { db: Database; rt: CLIRuntime } {
 const completedTurns = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM completed_turns`[0]?.n ?? 0;
 const queuedTrials = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue`[0]?.n ?? 0;
+  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue
+    WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
 const claimedTakes = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM alternate_takes WHERE turn_id IS NOT NULL`[0]?.n ?? 0;
 /** Every row the transition is still waiting on. Empty means it closed. */
@@ -217,10 +218,10 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 
     expect(asked()).toBe(1);
     expect(probed.length).toBeGreaterThan(0);
-    // STILL OWED, and that is the fix. Pushing a queue item is a RAM act, so the
-    // effect reports owed until the confirming turn's own durable row exists —
-    // before, it reported `completed` over a queue a process death erased, and
-    // the pruned row meant nothing ever asked again.
+    // STILL OWED, and that is the point. Pushing a queue item is a RAM act, so
+    // the effect reports owed until the confirming turn's own durable row
+    // exists. Reporting `completed` over a queue a process death erases prunes
+    // the row, and then nothing ever asks again.
     expect(stillOwed(gated).map((row) => row.effect_name)).toEqual(['completion_gate']);
     await next.end();
 
@@ -405,18 +406,18 @@ describe('a killed CLI process is recovered by the next start', () => {
 /**
  * Three recovery decisions that are not about one effect body: WHO may re-drive
  * an interrupted lane, WHAT gate state its verdict was earned under, and WHOSE
- * auto-evolution setting a recorded turn is recorded with. Each used to be read
- * off the session that found the work instead of off the record, so the answer
- * depended on which process happened to open the workspace next.
+ * auto-evolution setting a recorded turn is recorded with. Each is read off the
+ * RECORD, never off the session that found the work — read off the session, the
+ * answer depends on which process happened to open the workspace next.
  */
 describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';
 
   /** The advisor switched on the way an owner switches it on — the durable
-   *  `agent_config` row — with a reviewer whose prompts this array collects. */
-  function withAdvisor(rt: CLIRuntime, db: Database): string[] {
+   *  `actor_config` row — with a reviewer whose prompts this array collects. */
+  function withAdvisor(rt: CLIRuntime): string[] {
     const asked: string[] = [];
-    db.query(`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('advisor_enabled', 'true')`).run();
+    rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
       stream: async function* () { yield ''; },
       complete: async (prompt: string) => {
@@ -428,8 +429,13 @@ describe('a recovery reads the record, not the session that finds it', () => {
   }
 
   /** The checkpoint a previous process left behind: one advisor lane, stashed and
-   *  then interrupted before it recorded anything. */
-  function stashAdvisorLane(db: Database, opts: { turnId: string; gateOpen: boolean }): void {
+   *  then interrupted before it recorded anything.
+   *
+   *  Written through the runtime's own handle, in the shape `createLinuxFiber`
+   *  writes: `fibers` is keyed `(actor_id, id)` because every agent kind is a
+   *  logical actor of one workspace database, and a row stashed without an owner
+   *  is a lane no recovery could ever claim. */
+  function stashAdvisorLane(rt: CLIRuntime, opts: { turnId: string; gateOpen: boolean }): void {
     const snapshot = {
       turn: {
         userMessage: 'rotate the keys', assistantResponse: 'rotated the staging keys',
@@ -438,8 +444,9 @@ describe('a recovery reads the record, not the session that finds it', () => {
       },
       reachable: [], minSeverity: 'concern', recent: [], gateOpen: opts.gateOpen,
     };
-    db.query(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (?, 'advisor.review', ?, 1)`)
-      .run(`fiber-${opts.turnId}`, JSON.stringify(snapshot));
+    void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
+      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${'advisor.review'},
+              ${JSON.stringify(snapshot)}, 1)`;
   }
 
   const advisorFibers = (rt: CLIRuntime) =>
@@ -453,8 +460,8 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
   test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
-    const asked = withAdvisor(rt, db);
-    stashAdvisorLane(db, { turnId: 'turn-orphan', gateOpen: true });
+    const asked = withAdvisor(rt);
+    stashAdvisorLane(rt, { turnId: 'turn-orphan', gateOpen: true });
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
 
@@ -487,8 +494,8 @@ describe('a recovery reads the record, not the session that finds it', () => {
   test('a checkpointed review keeps the completion-gate verdict it was judged under', async () => {
     for (const gateOpen of [true, false]) {
       const { db, rt } = workspace();
-      const asked = withAdvisor(rt, db);
-      stashAdvisorLane(db, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
+      const asked = withAdvisor(rt);
+      stashAdvisorLane(rt, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
       const { model } = scriptedModel('acknowledged');
       const events: SessionEvent[] = [];
 
@@ -644,7 +651,7 @@ const assistantRows = (rt: CLIRuntime) =>
 const recordedIntents = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;
 const displayName = (rt: CLIRuntime) =>
-  rt.storage.sql<{ value: string }>`SELECT value FROM agent_config WHERE key = 'display_name'`[0]?.value ?? null;
+  rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
 /** The transition's own effect claims — the outer ones, keyed apart from any
  *  tool claim the turn itself made. `open` counts the ones with no disposition:
  *  a sequence that has not been closed. */

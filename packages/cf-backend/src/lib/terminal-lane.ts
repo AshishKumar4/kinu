@@ -6,7 +6,7 @@
  * route that attaches the socket (terminal-route.ts) and the pane that renders
  * it (components/TerminalPane.tsx). A pane that offered a PTY the route
  * refuses would be a terminal that fails on connect, and a pane that fell back
- * to line mode where a PTY exists would be the fake shell this replaces.
+ * to line mode where a PTY exists would be a fake shell.
  *
  * The line driver lives beside the table rather than inside the pane because
  * every rule in it is decided over strings, and this is the module a test can
@@ -332,11 +332,11 @@ function skipEscape(chars: readonly string[], start: number): number {
  *
  * A chunk is the unit, not a keystroke, because a PASTE arrives as one chunk
  * with every newline already turned into CR (xterm's `prepareTextForTerminal`,
- * browser/Clipboard.ts). The loop this replaces submitted the first line and
- * returned, so every later line of a pasted script vanished with no echo and
- * no error. Here a CR that is not the end of the chunk opens the next line of
- * the SAME command, which is what the pasted text means: one shell, one
- * working directory, one call — the script the user copied.
+ * browser/Clipboard.ts). Submitting the first line and returning is how every
+ * later line of a pasted script vanishes with no echo and no error. Here a CR
+ * that is not the end of the chunk opens the next line of the SAME command,
+ * which is what the pasted text means: one shell, one working directory, one
+ * call — the script the user copied.
  */
 export function feedInput(
   term: TerminalWriter,
@@ -351,7 +351,7 @@ export function feedInput(
     if (code === 0x1b) {
       // An escape sequence is a key this editor does not implement: an arrow,
       // Home, a function key. Skipping it whole keeps its final letter out of
-      // the command — `\x1b[A` used to type `[A` at the cursor.
+      // the command: otherwise `\x1b[A` types `[A` at the cursor.
       i = skipEscape(chars, i);
       continue;
     }

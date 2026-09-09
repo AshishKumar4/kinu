@@ -604,7 +604,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
@@ -615,6 +615,14 @@ export const LADDER: readonly Gate[] = [
     // Re-measured 2026-09-05 on the 24-thread box: 23.4/24.4s (in-tier plus solo,
     // 530 tests across 20 files). The 15.4s predates the census suite joining this
     // row. Replaces 15.4s.
+    // `capability-parity.test.ts` joins 2026-09-08: it shipped claimed by no
+    // tier at all, which is the defect ladder.test.ts exists to catch, and a
+    // gate's own self-test belongs beside its twenty siblings here rather than
+    // at a later tier. Measured solo three times on the 24-thread box under
+    // load 12: 0.06/0.06/0.08s wall, 65/65/78ms in-suite, 9 tests. The row
+    // stays 24s — that addition is an order of magnitude inside the 23.4/24.4s
+    // spread already measured for the other twenty, and declaring 24.1s would
+    // claim a resolution these figures do not have.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -647,7 +655,15 @@ export const LADDER: readonly Gate[] = [
       + 'including the `tag@digest` form that pulls correctly and leaves a mutable tag in the '
       + 'file — against the `@cloudflare/sandbox` version that actually ships, and every one of '
       + 'them uploads source maps with the Vite half that produces them, called rather than read '
-      + 'as text.',
+      + 'as text. For capability-parity, the ATTRIBUTION boundary its whole count rests '
+      + 'on: a literal missing a REQUIRED member is a DIFFERENT TYPE, never an adapter '
+      + 'omitting an optional capability — a foreign turn config sharing two '
+      + 'optional-looking names, a fetch options bag sharing `cache` and `signal`, and an '
+      + 'override bag dropping its base requirements are each refused as the contract they '
+      + 'resemble, and every one of those refusals is proven BESIDE a real omission that '
+      + 'stays red, so widening the attribution cannot quietly empty the asymmetry set. A '
+      + 'spread leaves a contract unreadable rather than absent, which is a skip and not a '
+      + 'parity claim.',
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
@@ -718,10 +734,10 @@ export const LADDER: readonly Gate[] = [
       + 'it firing on shapes that are legitimate. 24 cases: RED on each of the five defect '
       + 'shapes actually shipped (a private pattern, a private `git ls-files`, a private walk, '
       + 'a glob scan, a lock published before its measurement), GREEN on their corrected form, '
-      + 'and SILENT on the four its first draft mistook for violations — a URL route, a model '
-      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. That first '
-      + 'draft reported 40 findings of which 38 were `context.report` in an oxlint rule; a gate '
-      + 'whose first run is mostly noise trains people to ignore it.',
+      + 'and SILENT on the four a naive reading mistakes for violations — a URL route, a model '
+      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. Without those '
+      + 'four the gate reports 40 findings of which 38 are `context.report` in an oxlint rule; a '
+      + 'gate whose output is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
   },
@@ -755,7 +771,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'push',
     // Re-measured 2026-09-05 on the 24-thread box: 44.4/42.7s, both RED with the same
     // 16 failures (stale prompt goldens, another lane). A red run's cost is still its
-    // cost; re-measure green after the fix lands. Replaces 34s.
+    // cost; re-measure once those 16 are green — the last green figure was 34s.
     seconds: 44,
     catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
       + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
@@ -1035,7 +1051,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
       + 'CLASSES a failure: which census part makes a failed call a product defect, that a '
       + 'correct refusal never enters the worklist, that dispersion counts only inside one '
-      + 'commit and one arm, and — the one that would have mattered most — that a legacy '
+      + 'commit and one arm, and — the one that would have mattered most — that a '
       + '`tool_outcomes` detail carrying a tool USAGE histogram yields no attribution at all. '
       + 'Reading `run×29` as 29 broken calls would have filed the whole baseline corpus as a '
       + 'product defect. All three directions were proven red by mutation. The live-model '
@@ -1046,21 +1062,21 @@ export const LADDER: readonly Gate[] = [
       + 'and an unverified group both print.',
   },
   {
-    // The COMMAND deploy.sh runs, spelled identically. It used to stop at the
-    // `scripts/bench*` glob while deploy.sh also passed the core bench units, so
-    // the wider command matched no LADDER entry, `gatesFor('deploy')` synthesized
-    // it at a declared cost of ZERO, and the four core bench suites were governed
-    // by an entry that did not name them. The durability probe is explicit rather
+    // The COMMAND deploy.sh runs, spelled identically. Stopping at the
+    // `scripts/bench*` glob while deploy.sh also passes the core bench units leaves
+    // the wider command matching no LADDER entry, `gatesFor('deploy')` synthesizes
+    // it at a declared cost of ZERO, and the four core bench suites end up governed
+    // by an entry that does not name them. The durability probe is explicit rather
     // than absorbed by that glob because its name is a contract: a real container
     // measurement that remains only in stdout is not evidence.
     //
-    // The eight rig self-tests after it are explicit for the same reason, and they
+    // The seven rig self-tests after it are explicit for the same reason, and they
     // are on THIS row because each one guards a `scripts/bench-*.ts` rig or the
-    // fixtures it runs on — bench-capture-probe, bench-devbox-strategies,
-    // bench-payload-transports, and the r2-bench deploy substrate. Not one of
-    // their names starts with `bench`, so all eight shipped tracked, passing by
-    // hand, and claimed by NO tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    // fixtures it runs on — bench-devbox-strategies, bench-payload-transports,
+    // and the r2-bench deploy substrate. Not one of their names starts with
+    // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
+    // tier: 89 tests that ran in no pipeline.
+    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
@@ -1076,11 +1092,9 @@ export const LADDER: readonly Gate[] = [
       + 'commit tier proven able to FAIL, which the committed assertion over a '
       + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
       + 'patch file no tasks.jsonl line names, each driven from a fixture. And now '
-      + 'the four experiment rigs\' own admission and teardown logic: a capture '
-      + 'mechanism decided from a report that never passed the probe contract, an '
-      + 'ephemeral live probe whose generated config carries its own bearer token '
-      + 'or whose teardown cannot replay, a storage cell ranked without its '
-      + 'red-check evidence or scored without the Latin-square order and the '
+      + 'the three experiment rigs\' own admission and teardown logic: a storage '
+      + 'cell ranked without its red-check evidence or scored without the '
+      + 'Latin-square order and the '
       + 'CV/budget censoring the protocol requires, a pilot counted as ranking, a '
       + 'payload arm judged on an image or an operation it never started, and a '
       + 'Wrangler failure read as proof that an ephemeral worker is gone. No '
@@ -1686,9 +1700,9 @@ export function deployGates(
  * deploy.sh enqueues gates and runs each queue at a `flush_gates` line, so a wave
  * is the run of gates between two flushes and every gate in one wave runs beside
  * the others. That makes "runs alone" a property of this grouping rather than of
- * a log, which matters: the first version of the assertion read the ORDER off a
- * stub log, and deleting a barrier left it green because the scheduler happened
- * to launch index 0 first. A test that cannot fail is not a gate.
+ * a log, which matters: an assertion that reads the ORDER off a stub log stays
+ * green when a barrier is deleted, because the scheduler happens to launch index
+ * 0 first. A test that cannot fail is not a gate.
  *
  * A trailing enqueue with no flush after it is a gate nobody runs, so it comes
  * back as its own final wave and `deploy.test.ts` refuses it.

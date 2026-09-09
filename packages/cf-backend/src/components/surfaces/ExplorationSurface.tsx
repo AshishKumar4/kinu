@@ -1,12 +1,11 @@
 /**
  * Exploration — every time the agent tried more than one path.
  *
- * ONE list and ONE tree, not a tab per mechanism. The old surface split MCTS
- * from Branches, which mirrored a storage split: a search writes `search_nodes`
- * for its tree and `head_journal` for each node's transcript. Exploring
- * alternatives therefore landed in a different tab depending on which store a
- * run happened to fill, and the owner twice found an empty pane where his
- * searches should have been.
+ * ONE list and ONE tree, not a tab per mechanism. Splitting MCTS from Branches
+ * mirrors a storage split — a search writes `search_nodes` for its tree and
+ * `head_journal` for each node's transcript — so exploring alternatives lands
+ * in a different tab depending on which store a run happened to fill, which is
+ * how the owner twice found an empty pane where his searches should have been.
  *
  * The unification is honest because a run IS a tree either way: one level with a
  * branch per candidate is that tree at depth 1, and a deeper search is the same
@@ -204,12 +203,12 @@ const RUN_DOT = {
  * The one sentence the run list, the detail pane and the band caption all say, so
  * they cannot come to disagree about a run three surfaces are describing at once.
  *
- * It replaced `describeSettle`, which said what the run was CONFIGURED as:
- * `preset=ideate · settle=merge · 0 branches`, on the row, over the canvas and on
- * every band. That was the sentence the owner's *"User doesnt have to be shoved
- * all these stuff into their faces"* was about, and none of it answered the
- * question a reader of this surface actually has. The resolution is still one
- * click away in {@link SwarmConfigDisclosure}; what leads is the state.
+ * NOT what the run was CONFIGURED as. `preset=ideate · settle=merge · 0
+ * branches` on the row, over the canvas and on every band is what the owner's
+ * *"User doesnt have to be shoved all these stuff into their faces"* is about,
+ * and none of it answers the question a reader of this surface actually has.
+ * The resolution is one click away in {@link SwarmConfigDisclosure}; what leads
+ * is the state.
  *
  * A refusal's distinct reason follows its stored status, so the row names both
  * the canonical state and why it reached no answer.
@@ -237,12 +236,11 @@ function runKind(resolution: SwarmResolution | undefined): string | null {
 
 /**
  * One run, as a row: its NAME and kind, what became of it, and what its
- * nodes are doing — and NOTHING about how it was dispatched. The row used to
- * lead with `preset=ideate · settle=merge · 0 branches`, and the owner's
- * ruling on that is the reason this file changed: *"User doesnt have to be
- * shoved all these stuff into their faces. They can maybe look at the config
- * IF they want to."* The resolution and the axes live behind the disclosure
- * on the selected run.
+ * nodes are doing — and NOTHING about how it was dispatched. No
+ * `preset=ideate · settle=merge · 0 branches` leading the row; the owner's
+ * ruling governs: *"User doesnt have to be shoved all these stuff into their
+ * faces. They can maybe look at the config IF they want to."* The resolution
+ * and the axes live behind the disclosure on the selected run.
  *
  * The name leads because a truncated task paragraph is not an identity; the
  * full task stays on the row as its tooltip.
@@ -387,10 +385,11 @@ export function useForkRunTree(
 /**
  * A run, opened.
  *
- * The owner's report on what this slot used to be: *"this section — does it only
- * show the node? WHY? It should show everything about a particular run in detail
- * including it's live branches being updated live."* It showed nothing at all
- * until a node was clicked on the canvas, and then it showed one node.
+ * The owner's requirement for this slot: *"this section — does it only show the
+ * node? WHY? It should show everything about a particular run in detail
+ * including it's live branches being updated live."* A pane that stays blank
+ * until a node is clicked on the canvas, and then shows one node, does not meet
+ * it.
  *
  * So the pane is the RUN: its objective, what its nodes are doing right now,
  * every report that landed, and its configuration behind a disclosure. A branch
@@ -636,10 +635,10 @@ function RunNodeRow({ node, score, moving, onOpen }: {
 }) {
   const live = node.status === "running";
   // The provider told this turn to wait, and it still produced nothing. That is
-  // capacity to pace against, not a wedge to investigate, and the row used to
-  // render it as the same red prose as a fault. Classified through the one
-  // classifier `chat.ts` exports beside the code that writes these messages,
-  // never a regex here — a reworded sentence must not silently reclassify.
+  // capacity to pace against, not a wedge to investigate, so it does not get the
+  // same red prose as a fault. Classified through the one classifier `chat.ts`
+  // exports beside the code that writes these messages, never a regex here — a
+  // reworded sentence must not silently reclassify.
   const rateLimited = node.errorMessage !== null && isRateLimitedTurnError(node.errorMessage);
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
@@ -737,13 +736,13 @@ const CARD_BORDER = 2;
 /**
  * The canvas: every tree the workspace has grown, on ONE surface.
  *
- * The surface once rendered exactly one tree — the run selected in the list — so
- * a workspace with five forks showed one of them and the other four existed only
- * as rows. Then it rendered one FIXED-HEIGHT canvas per run, stacked in cards,
- * which is worse in the way that matters: the room a tree could use was decided
- * before anyone knew how big the tree was, so a three-node merge held 300px it
- * could not fill while a hundred-node search was squeezed into the same 300px,
- * and a card's chrome and gutter were spent on every run.
+ * Rendering exactly one tree — the run selected in the list — leaves a workspace
+ * with five forks showing one of them while the other four exist only as rows.
+ * One FIXED-HEIGHT canvas per run, stacked in cards, is worse in the way that
+ * matters: the room a tree can use is decided before anyone knows how big the
+ * tree is, so a three-node merge holds 300px it cannot fill while a hundred-node
+ * search is squeezed into the same 300px, and a card's chrome and gutter are
+ * spent on every run.
  *
  * One canvas, one zoom, one scene. Every run is a band inside it under a soft
  * boundary, sized to the tree it holds; the selected band is lit and the others
@@ -784,10 +783,10 @@ function ForkCanvas({
   // rebuild the scene. A fresh array here would redraw every tree per poll.
   //
   // A band's caption says what its run is DOING — the same sentence the list and
-  // the detail pane say. It used to carry the resolution and the branch count,
-  // which put `preset=audit (undeclared) · 2 branches` across the top of every
-  // tree on the canvas: config over a picture, on the surface whose whole
-  // complaint was config over a picture. The resolution is in the disclosure.
+  // the detail pane say. Not the resolution and the branch count: those put
+  // `preset=audit (undeclared) · 2 branches` across the top of every tree on the
+  // canvas — config over a picture, on the surface whose whole complaint is
+  // config over a picture. The resolution is in the disclosure.
   const regions = useMemo(
     () => runs.flatMap((run) => {
       const root = trees.get(run.id);
@@ -827,31 +826,30 @@ function ForkCanvas({
   return (
     // Two boxes, not one. The outer is the column's whole height and is what
     // the canvas budget is measured against; the card inside HUGS what it
-    // holds, so a workspace of short searches no longer draws a bordered box
+    // holds, so a workspace of short searches does not draw a bordered box
     // with several hundred pixels of nothing under its trees.
     <div ref={attachCell} className="h-full min-h-0">
       <div data-tree-card className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
         <div ref={attachChrome} className="shrink-0">
-          {/* The bar the owner stripped: it carried the run count, the focused
-              task and a config chip over every search at once — three facts
-              about ONE run sitting in the GLOBAL area. The count is the list's
-              job, the task is the band caption's, and the resolution lives in
-              the detail pane's disclosure. What remains of the bar is the
-              refusal note when the focused run has one; Expand floats on the
-              canvas itself. */}
+          {/* What the bar does NOT carry: the run count, the focused task and
+              a config chip over every search at once — three facts about ONE
+              run sitting in the GLOBAL area. The count is the list's job, the
+              task is the band caption's, and the resolution lives in the detail
+              pane's disclosure. The bar is the refusal note when the focused
+              run has one; Expand floats on the canvas itself. */}
           {refusal !== null && <RunRefusalNote refusal={refusal} />}
         </div>
         {/* The graph gets every pixel the searches can USE and no more: the
             column's remaining height, capped at what the scene wants at 1:1.
-            `flex-1` alone gave a three-node merge the whole column, which is the
+            `flex-1` alone gives a three-node merge the whole column, which is the
             fixed-height-card defect from the other direction. */}
         <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
           {regions.length === 0 ? (
             <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
               {/* Said in the present tense for a search that is still going, because
                   the past tense is a false claim about it: "each stopped before its
-                  first expansion landed" was printed over runs that were working,
-                  which is the sentence the liveness panel replaces. */}
+                  first expansion" over a run that is working reports a live search
+                  as dead, which is what the liveness panel exists to prevent. */}
               {focused?.status === "running"
                 ? "The search has not written a branch yet."
                 : "These searches wrote no branches. Each stopped before its first expansion."}
@@ -886,13 +884,13 @@ function ForkCanvas({
  * — the preset or composition it resolved, the six axes it resolved to, the caps,
  * the judge clamp and the dispatch parameters — behind one summary chip.
  *
- * It used to be unconditional chrome above every tree, and the owner's ruling on
- * that is quoted at {@link ForkRunRow}. The chip is not nothing, though: the
- * resolved name is the one fact that distinguishes two runs of the same task, so
- * it stays visible and only the tuple folds away.
+ * Never unconditional chrome above every tree — the owner's ruling on that is
+ * quoted at {@link ForkRunRow}. The chip is not nothing, though: the resolved
+ * name is the one fact that distinguishes two runs of the same task, so it
+ * stays visible and only the tuple folds away.
  *
- * ONE component for both surfaces. The full-screen explorer had its own copy of
- * the always-open panel, which is how the same clutter reached the reader twice.
+ * ONE component for both surfaces. A second copy in the full-screen explorer is
+ * how the same clutter reaches the reader twice.
  */
 export function SwarmConfigDisclosure(
   { resolution, paramRows = [], judges = null }: {

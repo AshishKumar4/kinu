@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { createTestActorsOver, toolExecute } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
   PLATFORM_CATALOG,
   PlanReviewStore,
+  PlanReviewSchema,
   applyPlanEdits,
   formatPlanWithLineNumbers,
   initPlanReviewTable,
@@ -64,7 +66,7 @@ function setup() {
   initPlanReviewTable(makeExecRaw(db));
   let id = 0;
   let now = 100;
-  const store = new PlanReviewStore(makeSql(db), {
+  const store = new PlanReviewStore(makeSql(db), createTestActorsOver(db).main, {
     newId: () => `plan-${++id}`,
     now: () => ++now,
   });
@@ -72,6 +74,16 @@ function setup() {
 }
 
 describe('durable plan review lifecycle', () => {
+  test('malformed remote annotations are a failed parse, not an exception escaping safeParse', () => {
+    const { db, store } = setup();
+    try {
+      const submitted = store.submit('default', [{ start: 1, content: '# Plan' }]);
+      if (!submitted.ok) throw new Error(submitted.error);
+      expect(v.safeParse(PlanReviewSchema, submitted.plan).success).toBe(true);
+      expect(v.safeParse(PlanReviewSchema, { ...submitted.plan, annotations: [{ id: 'broken' }] }).success).toBe(false);
+    } finally { db.close(); }
+  });
+
   test('only unresolved review states block Build turns', () => {
     expect(planReviewAwaitingDecision({ status: 'pending', handoffAccepted: false })).toBe(true);
     expect(planReviewAwaitingDecision({ status: 'changes_requested', handoffAccepted: false })).toBe(true);

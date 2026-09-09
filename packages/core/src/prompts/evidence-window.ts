@@ -2,15 +2,14 @@
  * How much of a turn the evolution loop is allowed to see, and which part.
  *
  * Every reader in the loop — the shadow judge, the GEPA reflector, the turn
- * outcome classifier, the replay judge — used to carry its own hard-coded
- * slice, and every one of those slices was `slice(0, n)`: the FIRST n
- * characters. That is not a cost bound, it is a blind spot with a shape. A
- * turn whose payoff lands at step 9 of 12 — which is what a long-horizon win
- * looks like — is invisible to a judge reading its first 2,500 characters, so
- * the fitness function cannot select for the thing it is supposed to select
- * for.
+ * outcome classifier, the replay judge — reads through this one policy. A
+ * per-reader `slice(0, n)` is not a cost bound, it is a blind spot with a
+ * shape: a turn whose payoff lands at step 9 of 12 — which is what a
+ * long-horizon win looks like — is invisible to a judge reading its first
+ * 2,500 characters, so the fitness function cannot select for the thing it is
+ * supposed to select for.
  *
- * Two changes, one policy:
+ * One policy, two properties:
  *
  *   1. Head AND tail. `evidenceWindow` keeps both ends and says how much it
  *      dropped, so a conclusion survives the budget. The split is even, unlike
@@ -21,16 +20,16 @@
  *
  *   2. One table. The budgets below are the single source, and they are
  *      ordered: a reader's budget is never larger than the budget the text was
- *      STORED at, because reading further than the row goes buys nothing. The
- *      old numbers had no such relation — the replay judge asked for 3,000
- *      characters of a response the ledger had already cut to 4,000 for
- *      reasons nobody had written down.
+ *      STORED at, because reading further than the row goes buys nothing.
+ *      Unordered per-reader numbers have no such relation — that is how a
+ *      replay judge comes to ask for 3,000 characters of a response the ledger
+ *      had already cut to 4,000, for reasons nobody had written down.
  *
  * What this deliberately does not touch: the judge protocols themselves, the
  * promotion thresholds, the sampling rates. Only how much evidence reaches an
  * unchanged reader. That is still not free — DEFAULT_SHADOW_CONFIG's decisive
- * yield and tie rate were Monte-Carlo-calibrated against the OLD evidence
- * (scripts/shadow-veto-monte-carlo.ts), and richer evidence moves both — so
+ * yield and tie rate were Monte-Carlo-calibrated against a head-only evidence
+ * slice (scripts/shadow-veto-monte-carlo.ts), and richer evidence moves both — so
  * the calibration is due a re-run against these budgets, and the promotion
  * rule is byte-unchanged until it has been.
  */

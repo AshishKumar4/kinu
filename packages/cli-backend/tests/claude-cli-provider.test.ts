@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { generateText, streamText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
@@ -11,7 +12,7 @@ import {
   type SpawnedClaude,
 } from '../src/claude-cli-provider';
 import { createLocalModelResolver } from '../src/model-resolver';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -431,12 +432,12 @@ describe('claude-cli provider — tool loop composition', () => {
       claudeCli: { spawn },
     });
 
-    const db = new Database(':memory:');
-    db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, { dbPath: scratchPath('claude-cli-provider', 'agent.db'), llm: openaiLlm });
+    const db = new Database(scratchPath('claude-cli-provider', 'agent.db'), { create: true });
+    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: openaiLlm });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({
       rt, db,

@@ -98,12 +98,11 @@ interface ConversationTurn {
  * in place with this turn's user message and everything the model produced —
  * assistant text and tool traffic — exactly as the AI SDK hands it back.
  *
- * It used to take one string and send `messages: [user]`, so "5-turn
- * conversation" was five one-turn conversations wearing that title: turn 5
- * asked "Summarize what we discussed", the model honestly answered "We haven't
- * actually discussed anything yet", and the test PASSED, because the only
- * per-turn assertion was `length > 0`. The history is the subject of that
- * suite's title, so it is threaded here, once, for every caller.
+ * Sending `messages: [user]` instead makes "5-turn conversation" five one-turn
+ * conversations wearing that title: turn 5 asks "Summarize what we discussed",
+ * the model honestly answers "We haven't actually discussed anything yet", and a
+ * suite whose only per-turn assertion is `length > 0` PASSES. The history is the
+ * subject of that suite's title, so it is threaded here, once, for every caller.
  *
  * `sent` IS RETURNED BECAUSE CONTENT CANNOT PROVE THREADING. The agent holds a
  * `memory` tool whose conversation-search action queries the same `messages`
@@ -149,8 +148,10 @@ async function chatTurn(
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+    VALUES (${rt.actor.actorId}, ${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
     sent,
@@ -364,9 +365,9 @@ describe('E2E Lifecycle', () => {
       // sink they happen and go unattributed — this step ran for 456s and reported
       // `0 model call(s)`, which is the floor-as-a-total shape the tier's own
       // liveness verdict refuses.
-      reportModelCall: liveModelCallSink(rt.storage.sql),
+      reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
     });
-    recordLiveModelEpisode(rt.storage.sql);
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);

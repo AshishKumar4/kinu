@@ -15,7 +15,7 @@ import {
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 import { forkFilePaths } from '../src/identity/fork';
 import type { VFS } from '../src/types/primitives';
-
+import { WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
  *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a
@@ -30,26 +30,26 @@ async function seedSource(
   },
 ) {
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
+  const actor = new WorkspaceActorDirectory(sql, { workspaceId: opts.identity.id, ownerUserId: '' }).createMain({ name: opts.identity.name });
   await writeSoul(vfs, sql, opts.purpose);
   let previousId: string | null = null;
   for (const m of opts.messages) {
     const parent = m.parent_id !== undefined ? m.parent_id : previousId;
-    void sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
+    void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
     previousId = m.id;
   }
   for (const t of opts.craftedTools ?? []) {
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${null}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})`;
   }
-  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
-  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
+  actor.config.setModel('@cf/moonshotai/kimi-k2.6');
+  actor.config.setDisplayName(opts.identity.name);
 }
 
-async function seedTargetBootstrap({ sql, vfs }: TestWorkspace) {
-  // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
-  // forkWorkspaceStorage should purge these before writing the real fork rows.
-  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
+async function seedTargetBootstrap({ sql, vfs }: TestWorkspace, targetId = 'T') {
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${targetId}, ${'target-bootstrap'}, ${200})`;
+  new WorkspaceActorDirectory(sql, { workspaceId: targetId, ownerUserId: '' }).createMain({ name: 'target-bootstrap' });
   await writeSoul(vfs, sql, 'default bootstrap purpose');
 }
 
@@ -57,7 +57,7 @@ describe('forkWorkspaceStorage', () => {
   test('1. preserves messages 0..N with identical PKs and parent_ids', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'TGT-ID');
     await seedSource(src, {
       identity: { id: 'SRC-ID', name: 'source-agent' },
       purpose: 'original purpose',
@@ -133,8 +133,9 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    void src.sql`INSERT INTO search_nodes (id, root_id, task, action, visits, value) VALUES (${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
-    void src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
+    void src.sql`INSERT INTO search_nodes (actor_id, id, root_id, task, action, visits, value) VALUES (${srcActor}, ${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
+    void src.sql`INSERT INTO evolution_events (actor_id, type, message) VALUES (${srcActor}, ${'reflection'}, ${'done'})`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
@@ -187,7 +188,7 @@ describe('forkWorkspaceStorage', () => {
   test('6. writes fork_lineage row with correct fields', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'TGT');
     await seedSource(src, {
       identity: { id: 'SRC-UUID-123', name: 'source-alpha' },
       purpose: 'p',
@@ -212,8 +213,8 @@ describe('forkWorkspaceStorage', () => {
     const a = fresh();
     const b = fresh();
     const c = fresh();
-    await seedTargetBootstrap(b);
-    await seedTargetBootstrap(c);
+    await seedTargetBootstrap(b, 'B-ID');
+    await seedTargetBootstrap(c, 'C-ID');
     await seedSource(a, {
       identity: { id: 'A-ID', name: 'agent-A' }, purpose: 'p',
       messages: [
@@ -224,11 +225,14 @@ describe('forkWorkspaceStorage', () => {
 
     // Fork A → B
     await forkWorkspaceStorage(a.sql, a.vfs, b.sql, b.vfs, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
-    // Add a turn in B to differentiate it
-    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-          VALUES (${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
-    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
-          VALUES (${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
+    // Add a turn in B to differentiate it, under B's OWN actor — the fork
+    // re-keyed the inherited chain to it, so a continuation written under any
+    // other actor would not be part of the tree B just received.
+    const bActor = openWorkspaceMainActor(b.sql).actorId;
+    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+          VALUES (${bActor}, ${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
+    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+          VALUES (${bActor}, ${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
     await forkWorkspaceStorage(b.sql, b.vfs, c.sql, c.vfs, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
@@ -307,7 +311,7 @@ describe('forkWorkspaceStorage', () => {
   test('10. workspace_identity rewritten with new UUID + name + fresh created_at', async () => {
     const src = fresh();
     const tgt = fresh();
-    await seedTargetBootstrap(tgt);
+    await seedTargetBootstrap(tgt, 'NEW-UUID');
     await seedSource(src, {
       identity: { id: 'SRC-UUID', name: 'src-name' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
@@ -352,11 +356,11 @@ describe('forkWorkspaceStorage', () => {
     expect(marker.content).toContain('forked from workspace');
     expect(marker.content).toContain('alpha');
     // The marker is the fork's leaf, so the whole inherited chain hangs off it.
-    expect(sessionTreeAncestry(tgt.sql, marker.id).map((n) => n.id))
+    expect(sessionTreeAncestry(tgt.sql, openWorkspaceMainActor(tgt.sql), marker.id).map((n) => n.id))
       .toEqual(['m1', 'm2', marker.id]);
   });
 
-  test('12. agent_config copied but display_name overwritten', async () => {
+  test('12. actor_config copied but display_name overwritten', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -368,7 +372,7 @@ describe('forkWorkspaceStorage', () => {
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked-display' });
 
     const cfg = tgt.sql<{ key: string; value: string }>`
-      SELECT key, value FROM agent_config ORDER BY key
+      SELECT key, value FROM actor_config ORDER BY key
     `;
     const map = new Map(cfg.map(r => [r.key, r.value]));
     expect(map.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
@@ -395,15 +399,16 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
     src.execRaw(SDK_SESSION_DDL);
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
     // Both messages land in the SAME second, which is all the SDK's
-    // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. The old cut compared
-    // `strftime('%s', created_at) * 1000` against the fork point and so could
-    // not tell m2 from m3; the ancestry can.
+    // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. A cut comparing
+    // `strftime('%s', created_at) * 1000` against the fork point cannot tell m2
+    // from m3; the ancestry can.
     for (const [id, parent, role, text] of [
       ['m1', null, 'user', 'hello'], ['m2', 'm1', 'assistant', 'hi'], ['m3', 'm2', 'user', 'after'],
     ] as const) {
-      void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${id}, ${''}, ${parent}, ${role},
+      void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${srcActor}, ${id}, ${''}, ${parent}, ${role},
                 ${JSON.stringify({ id, role, parts: [{ type: 'text', text }] })},
                 ${'1970-01-01 00:00:01'})`;
     }
@@ -456,8 +461,9 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
     src.execRaw(SDK_SESSION_DDL);
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'m1'}, ${''}, ${null}, ${'user'},
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${srcActor}, ${'m1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] })},
               ${'1970-01-01 00:00:01'})`;
 
@@ -481,10 +487,15 @@ describe('forkWorkspaceStorage', () => {
   });
 
   test('17. a fork that cannot copy assistant_messages FAILS instead of losing them', async () => {
-    // A target carrying an older Session schema (no session_id) rejects the
-    // insert. This used to be swallowed together with the CREATE that preceded
-    // it, so the fork reported success with an empty chat pane — the owner's
-    // messages silently gone. The copy must be all-or-nothing and loud.
+    // A target carrying an older Session schema — no `actor_id`, no
+    // `session_id` — cannot take the fork's pane write. Swallowing that failure
+    // together with the CREATE that precedes it makes the fork report success
+    // with an empty chat pane — the owner's messages silently gone. The copy
+    // must be all-or-nothing and loud.
+    //
+    // The SOURCE is production-shaped, deliberately: with a pre-actor table
+    // here the source's own ancestry read raised `no such column` first, and
+    // this test passed without the target write ever being attempted.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -492,12 +503,10 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    src.execRaw(`CREATE TABLE assistant_messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
-    )`);
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES ('m1', '', NULL, 'user', ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
+    src.execRaw(SDK_SESSION_DDL);
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${openWorkspaceMainActor(src.sql).actorId}, 'm1', '', NULL, 'user',
+              ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
     tgt.execRaw(`CREATE TABLE assistant_messages (
       id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
     )`);
@@ -530,7 +539,7 @@ describe('forkWorkspaceStorage', () => {
     })).rejects.toThrow(/memory_chunks/);
   });
 
-  test('19. a fork that cannot write agent_config FAILS instead of keeping the bootstrap name', async () => {
+  test('19. a fork that cannot write actor_config FAILS instead of keeping the bootstrap name', async () => {
     // display_name is written here. Swallowed, the fork kept the target's
     // bootstrap identity and the UI showed the wrong workspace name.
     const src = fresh();
@@ -540,34 +549,45 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    tgt.execRaw('DROP TABLE agent_config');
+    tgt.execRaw('DROP TABLE actor_config');
 
     await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
-    })).rejects.toThrow(/agent_config/);
+    })).rejects.toThrow(/actor_config/);
   });
 });
 
-/** Populate `assistant_messages` the way the SDK's session provider does,
- *  mirroring rows that already exist in `messages`: same id, same parent edge,
- *  and a serialized UIMessage whose text parts flatten to the plain row's
- *  content. That identity is what the CF turn mirror establishes, and it is what
- *  makes eliding the plain text lossless. */
-function seedPaneTranscript(
-  src: TestWorkspace,
-  rows: Array<{ id: string; role: string; content: string; parent_id: string | null }>,
-) {
-  src.execRaw(SDK_SESSION_DDL);
-  for (const r of rows) {
-    const ui = JSON.stringify({ id: r.id, role: r.role, parts: [{ type: 'text', text: r.content }] });
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${r.id}, ${''}, ${r.parent_id}, ${r.role}, ${ui}, ${'1970-01-01 00:00:01'})`;
-  }
+/**
+ * A source workspace whose default chat lives in the SDK's pane store, built by
+ * the production pane WRITE: a plain-seeded workspace forked into a
+ * pane-authority target, which is the one path in this tree that turns a
+ * flattened chain into serialized UI messages under whole-second pane stamps.
+ *
+ * Built that way rather than hand-inserted so the serialized row shape and the
+ * stamp format are spelled ONCE, in `identity/fork.ts`. Restated here they
+ * agreed with production by construction: nothing below reached
+ * `encodeUiMessage` at all (a pane-authority write copies an already-rich chain
+ * verbatim), so the encoding every assertion depends on was measured nowhere and
+ * a change to it read as a pass.
+ */
+async function paneSourceWorkspace(
+  rows: Array<{ id: string; role: string; content: string; parent_id: string | null; created_at: number }>,
+): Promise<TestWorkspace> {
+  const plain = fresh();
+  const pane = fresh();
+  await seedTargetBootstrap(pane, 'PANE-ID');
+  await seedSource(plain, { identity: { id: 'PLAIN-ID', name: 'plain-src' }, purpose: 'p', messages: rows });
+  const lastId = rows[rows.length - 1]!.id;
+  await writeForkSnapshot(
+    pane.sql, pane.vfs,
+    await snapshotWorkspaceForFork(plain.sql, plain.vfs, lastId),
+    { workspaceId: 'PANE-ID', workspaceName: 'pane-src', targetAuthority: 'pane' },
+  );
+  return pane;
 }
 
 describe('fork snapshot payload', () => {
   test('the transcript crosses once, not once per table, and still lands intact', async () => {
-    const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
     const TURNS = 200;
@@ -578,8 +598,7 @@ describe('fork snapshot payload', () => {
       parent_id: i === 0 ? null : `m${i - 1}`,
       created_at: 1000 + i,
     }));
-    await seedSource(src, { identity: { id: 'S', name: 'src' }, purpose: 'p', messages: rows });
-    seedPaneTranscript(src, rows);
+    const src = await paneSourceWorkspace(rows);
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, `m${TURNS - 1}`);
 
@@ -607,6 +626,16 @@ describe('fork snapshot payload', () => {
     expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
     const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
     expect(plainLanded).toBe(0);
+
+    // The WORDS, read back the way the pane reads them. Ids, counts and a
+    // zero-length plain chain are all satisfied by a store full of rows no
+    // reader can flatten — and that is exactly the state an elision leaves
+    // behind when the rich row it elided against does not carry the text after
+    // all. So the contract is asserted where it is observable: every inherited
+    // turn comes back out of the target verbatim.
+    expect(sessionTreeAncestry(tgt.sql, openWorkspaceMainActor(tgt.sql), `m${TURNS - 1}`)
+      .map((node) => node.content))
+      .toEqual(rows.map((r) => r.content));
   });
 
   test('a fork inherits preferences but never the shell-approval authority', async () => {
@@ -621,10 +650,8 @@ describe('fork snapshot payload', () => {
     // What the owner said "always" to in THIS workspace, and how much the gate
     // asks here. Both are read live by `ShellApprovalPolicy` before it decides
     // whether to put a command in front of the owner at all.
-    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
-      VALUES (${'shell_approval_mode'}, ${'allow_all'})`;
-    void src.sql`INSERT OR REPLACE INTO agent_config (key, value)
-      VALUES (${'shell_approval_grants'}, ${'rm -rf *@sandbox,curl *@sandbox'})`;
+    openWorkspaceMainActor(src.sql).config.setShellApprovalMode('allow_all');
+    openWorkspaceMainActor(src.sql).config.set('shell_approval_grants', 'rm -rf *@sandbox,curl *@sandbox');
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1');
 
@@ -634,7 +661,7 @@ describe('fork snapshot payload', () => {
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
     const landed = Object.fromEntries(
-      tgt.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`
+      tgt.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config`
         .map((row) => [row.key, row.value]),
     );
     // The child asks the owner from scratch, and the preference it may inherit
@@ -688,11 +715,10 @@ describe('fork snapshot payload', () => {
       .rejects.toThrow(/elided the text of message "m1"/);
   });
 
-  test('a snapshot over the former ceiling is read and landed instead of refused', async () => {
-    // The former shape refused this workspace outright: 40 MB of transcript is
-    // over the 16 MiB half-ceiling it measured against, and over the 32 MiB
-    // serialized-argument ceiling that half was derived from. Both are gone —
-    // the snapshot is simply more frames.
+  test('a 40 MB transcript snapshot is read and landed, not refused', async () => {
+    // No byte ceiling on the snapshot: 40 MB of transcript rides as more frames.
+    // A 16 MiB half-ceiling — half of the 32 MiB serialized-argument ceiling —
+    // refuses this workspace outright.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -706,10 +732,8 @@ describe('fork snapshot payload', () => {
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm39');
 
-    // 40 MB of transcript: over the 16 MiB half-ceiling the old shape measured
-    // against, and over the 32 MiB serialized-argument ceiling that half was
-    // derived from. Measured here so the test cannot pass on a workspace the
-    // old ceiling would have allowed.
+    // Measured here rather than assumed, so the test cannot pass on a workspace
+    // those ceilings would have allowed.
     const carried = snapshot.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0);
     expect(carried).toBeGreaterThan(32 * 1024 * 1024);
     expect(snapshot.messages.length).toBe(40);
@@ -721,9 +745,9 @@ describe('fork snapshot payload', () => {
     expect(rows[39]!.content).toBe(`39:${CHUNK}`);
   });
 
-  test('memory the former budget refused by path is read and landed', async () => {
-    // The exact workspace the file walk used to refuse: 16 MB of transcript,
-    // then a 1.5 MB memory file that put it over what the transcript left.
+  test('a memory file on top of a 16 MB transcript is read and landed', async () => {
+    // The exact workspace a per-path byte budget refuses: 16 MB of transcript,
+    // then a 1.5 MB memory file that puts it over what the transcript leaves.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);

@@ -16,9 +16,10 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { TestLanguageModelV2 } from './test-language-model';
-import { HeadJournal, initHeadsTables, initBackgroundJobsTable } from '@kinu.run/core';
+import { HeadJournal, defaultLoopOrigin, initHeadsTables, initBackgroundJobsTable } from '@kinu.run/core';
+import { initWorkspaceSchema } from '@kinu.run/core';
 import type { LLMProviderConfig } from '@kinu.run/core';
-import { createCLIRuntime } from '../src/runtime';
+import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { makeExecRaw, makeSql } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -60,32 +61,33 @@ const RATIONALE = 'four angles on the research question';
  *  exactly what `kinu stop` / the repair path writes, from another process,
  *  with nothing left to settle the heads. */
 function interruptedWorkspace() {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db, {
-    dbPath: scratchPath('local-session-fork-resume', 'agent.db'),
-    llm: DUMMY_LLM,
-  });
+  // A FILE, not `:memory:`: `createCLIRuntime` binds this actor by reading the
+  // database's own filename back, and refuses a runtime whose declared `dbPath`
+  // is not that one (actor-identity.ts `requireLocalDatabasePath`) — which an
+  // in-memory handle can never satisfy.
+  const db = new Database(scratchPath('local-session-fork-resume', 'agent.db'), { create: true });
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initBackgroundJobsTable(execRaw);
-  const journal = new HeadJournal(makeSql(db));
+  const journal = new HeadJournal(makeSql(db), rt.actor);
   const now = Date.now();
   journal.recordSplit(ROOT, RATIONALE, now);
   for (let i = 1; i <= HEADS; i++) {
     journal.insertSpawn({
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
       task: `angle ${i}`, rationale: 'why', mode: 'build',
-      inheritedContext: [], mergeStrategy: 'synthesize',
+      inheritedContext: [], mergeStrategy: 'synthesize', loop: defaultLoopOrigin('head'),
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
     });
   }
   db.exec(
-    `INSERT INTO background_jobs (id, kind, work_mode, status, error, settled_at, created_at)
-     VALUES ('bgjob-fork', 'agents', 'build', 'cancelled', 'cancelled by operator', ${now + 1000}, ${now})`,
+    `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, error, settled_at, created_at)
+     VALUES ('${rt.actor.actorId}', 'bgjob-fork', 'agents', 'build', 'cancelled', 'cancelled by operator', ${now + 1000}, ${now})`,
   );
   return { db, rt, journal };
 }
@@ -130,15 +132,12 @@ describe('resuming a workspace whose fork was interrupted', () => {
   });
 
   test('a clean workspace resumes silently', async () => {
-    const db = new Database(':memory:');
-    db.exec(`CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db, {
-      dbPath: scratchPath('local-session-fork-clean', 'agent.db'),
-      llm: DUMMY_LLM,
-    });
+    const db = new Database(scratchPath('local-session-fork-clean', 'agent.db'), { create: true });
+    // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({
       rt, db, model: fakeModel(), onEvent: (e) => events.push(e), noAutoEvolve: true,

@@ -14,7 +14,9 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterAll, describe, expect, test } from 'bun:test';
-import { RUN_TIMELINE_MAX } from '@kinu.run/core';
+import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
+import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import { agentDir } from '../src/config';
 import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
 
@@ -30,26 +32,27 @@ const DB_PATH = join(AGENT_DIR, 'agent.db');
 afterAll(() => rmSync(AGENT_DIR, { recursive: true, force: true }));
 
 /** Rebuild the agent's database with `rows` rows in each timeline spine and in
- *  the memory index, so a bound is observable as a row count. */
+ *  the memory index, so a bound is observable as a row count.
+ *
+ *  The schema is the SHIPPED one, and the rows belong to a REAL actor. Both
+ *  halves are load-bearing: `evolution_events` is keyed `(actor_id, id)` and
+ *  `listLocalTimeline` reads it `WHERE actor_id = ?` against the actor
+ *  `openWorkspaceMainActor` resolves — so a hand-rolled table without the
+ *  column, or rows written under no owner, contribute NOTHING to the fold and
+ *  the bound under test silently reads one spine instead of two. */
 function seed(rows: number): void {
   rmSync(AGENT_DIR, { recursive: true, force: true });
   mkdirSync(AGENT_DIR, { recursive: true });
   const db = new Database(DB_PATH);
-  db.exec(`
-    CREATE TABLE agent_log (id TEXT PRIMARY KEY, kind TEXT NOT NULL, turn_id TEXT,
-      step_idx INTEGER, payload TEXT NOT NULL, received_at INTEGER NOT NULL);
-    CREATE TABLE evolution_events (id TEXT PRIMARY KEY, type TEXT NOT NULL,
-      message TEXT NOT NULL, data TEXT, created_at INTEGER NOT NULL);
-    CREATE TABLE memory_chunks (id TEXT PRIMARY KEY, path TEXT NOT NULL,
-      start_line INTEGER, end_line INTEGER, text TEXT NOT NULL, updated_at INTEGER NOT NULL);
-  `);
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
   for (let i = 0; i < rows; i++) {
-    db.run('INSERT INTO agent_log (id, kind, payload, received_at) VALUES (?, ?, ?, ?)',
-      [`log-${i}`, 'step', '{}', 1000 + i]);
-    db.run('INSERT INTO evolution_events (id, type, message, created_at) VALUES (?, ?, ?, ?)',
-      [`ev-${i}`, 'note', `m${i}`, 1000 + i]);
-    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, text, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [`c-${i}`, `memory/n${i}.md`, 1, 2, `wrangler staging note ${i}`, 1000 + i]);
+    db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [actorId, `log-${i}`, 'step', `trace-${i}`, '{}', 1000 + i]);
+    db.run('INSERT INTO evolution_events (actor_id, id, type, message, created_at) VALUES (?, ?, ?, ?, ?)',
+      [actorId, `ev-${i}`, 'note', `m${i}`, 1000 + i]);
+    db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`, 1000 + i]);
   }
   db.close();
 }
@@ -57,8 +60,8 @@ function seed(rows: number): void {
 describe('listLocalTimeline closes the operator flag before it reaches SQL', () => {
   test('a negative limit reads one span, not two whole tables', () => {
     seed(30);
-    // Two failures at once before the fix: LIMIT -1 on agent_log and
-    // evolution_events read everything, and `slice(0, -1)` then dropped the LAST
+    // Two failures a raw -1 would cause at once: `LIMIT -1` on agent_log and
+    // evolution_events reads everything, and `slice(0, -1)` then drops the LAST
     // row of whatever survived.
     expect(listLocalTimeline(AGENT, -1).length).toBe(1);
   });

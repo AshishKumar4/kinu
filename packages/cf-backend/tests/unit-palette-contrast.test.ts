@@ -24,7 +24,8 @@ const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 
 /** Text roles, and the surfaces each is allowed to sit on. `--c-text-3` is
  *  the dim role and `--c-text-4` the micro-label role: both land anywhere,
- *  including inside dialogs, which is where they used to fail. */
+ *  dialogs included, so `--c-overlay` and `--c-elevated` are in scope for
+ *  them like every other surface. */
 const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
 const TEXT_ROLES = [
   '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent-fg',

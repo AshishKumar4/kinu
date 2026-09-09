@@ -11,7 +11,7 @@ blobs. A nonzero count is the last home. Delete branches. Keep tags.
 
 ## Tag inventory
 
-There are 203 lightweight tags under `refs/tags/archive/`. The first forty are
+There are 205 lightweight tags under `refs/tags/archive/`, counted on 2026-09-08. The first forty are
 inventoried below: nine predate the 2026-08-21 prune wave, which added thirty-one.
 Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
@@ -244,6 +244,16 @@ blobs no other ref reaches, the archive tags of this wave included.
 | `scratch/sc-byteplane-live` | `archive/sc-byteplane-live` | `02e4e122e` | 14 | 72 | 1 |
 
 The manifest with every deleted branch sits at `~/kinu-wip/prune-manifest-2026-09-05.json`.
+
+### Landing cleanup on 2026-09-08
+
+These tags retain the implementation commits whose changes shipped in `904c22cc4`. Both worktrees were clean before removal.
+Production deployment and browser receipts are retained in the machine-local release evidence archive. Novel and sole-copy blob counts were not measured.
+
+| Removed branch | Retained tag | Commit |
+|---|---|---|
+| `feat/landing-liveapps` | `archive/landing-liveapps-20260908` | `9b12fdf4ee` |
+| `fix/landing-composition` | `archive/landing-composition-20260908` | `1bec158c5` |
 
 ## Reproduce the test
 

@@ -166,7 +166,7 @@ trap cleanup EXIT INT TERM
 
 # Read one dotted JSON field from stdin. Prints nothing when the body is not
 # JSON — which is exactly what a smoke test needs, because "not JSON" is how a
-# missing asset used to present itself (the SPA shell under a JSON
+# missing asset presents itself (the SPA shell under a JSON
 # content-type).
 json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
@@ -184,8 +184,8 @@ fi
 # ── The gate queue ───────────────────────────────────────────────
 #
 # `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
-# waits. The gates used to run one after another for no reason: 400s of
-# declared cost on a 24-thread box that sat idle for all of it.
+# waits. Running them one after another buys nothing: 400s of declared cost on a
+# 24-thread box that sits idle for all of it.
 #
 # Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
 # names them with the reason. They get their own flush, which is what a barrier
@@ -245,15 +245,15 @@ declare -A GATE_DEADLINES=(
 #
 # WHERE A GATE'S VERDICT COMES FROM: `wait -n -p`, which hands back the pid that
 # terminated and its exit status together. That is the whole reaping story, and
-# it is deliberately not a status file. The earlier version published each gate's
-# status into `$dir/$i.status` and counted `jobs -rp | wc -l` between waits, so a
-# gate whose process died before it could write one — an OOM kill, a `kill -9`
-# from outside the gate's own tree — was detected only by probing `kill -0` on a
-# pid the shell had already reaped. A recycled pid answers that probe as somebody
-# else's process, and the loop then has nothing left to wait on: it spins at 100%
-# CPU and the deploy never ends. The kernel already knows every child's fate, so
-# asking it removes the status files, the atomic-rename dance, the liveness probe
-# and the poll in one move.
+# it is deliberately not a status file. A status file is written by the gate, so
+# a gate whose process dies before it can write one — an OOM kill, a `kill -9`
+# from outside the gate's own tree — leaves no verdict at all, and the only way
+# left to notice is probing `kill -0` on a pid the shell has already reaped. A
+# recycled pid answers that probe as somebody else's process, and a loop built
+# that way has nothing left to wait on: it spins at 100% CPU and the deploy
+# never ends. The kernel already knows every child's fate, so asking it removes
+# the status files, the atomic-rename dance, the liveness probe and the poll in
+# one move.
 #
 # A gate killed by a signal therefore settles as 128+signal, a gate past the
 # deadline as `timeout`'s 124, and a gate whose command does not exist as 127.
@@ -485,7 +485,7 @@ run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/capture-probe.test.ts scripts/capture-probe-live.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
 run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
@@ -502,7 +502,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
@@ -812,8 +812,8 @@ fi
 # parses these lines with `^run_required_gate`, so an indented one is invisible
 # to `deployGates`/`deployWaves` — the gate would run on staging while the
 # ladder, the CI-coverage assertion and the deploy contract all reported a tier
-# that does not exist. Measured: indenting it dropped the gate from the parse
-# and left `deploy.test.ts` green over a wave it could no longer see.
+# that does not exist. Measured: indenting it drops the gate from the parse and
+# leaves `deploy.test.ts` green over a wave it cannot see.
 if [ "$KINU_ENV" = "staging" ]; then
 run_required_gate "First-run tier" bun run gate:first-run
 fi

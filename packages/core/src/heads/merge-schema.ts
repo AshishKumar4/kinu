@@ -44,7 +44,7 @@ export const MergeOutputSchema = v.object({
   // reread. Over the next ~30 real merges that reached a model:
   //
   //   SELECT json_extract(payload, '$.blindSpots') AS spots
-  //   FROM run_events WHERE type = 'head_merge';
+  //   FROM run_events WHERE actor_id = ? AND type = 'head_merge';
   //
   // REVERT the field if more than a third of those rows are empty `[]`, restate
   // an entry already in that merge's unresolved_questions, or are generic enough

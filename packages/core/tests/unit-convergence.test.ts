@@ -23,10 +23,10 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, observation)
-        VALUES ('r', 'winner', 'test task', 0.85, 5, 'open', 'good result')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'loser', 'test task', 0.3, 3, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'winner', 'test task', 0.85, 5, 'open', 'good result')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'loser', 'test task', 0.3, 3, 'open')`;
 
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(true);
@@ -42,10 +42,10 @@ describe('Convergence', () => {
     const session = createMockSession();
 
     // All nodes have value < MIN_ACCEPTABLE_SCORE (0.3)
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'low1', 'test', 0.15, 3, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'low2', 'test', 0.1, 2, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'low1', 'test', 0.15, 3, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'low2', 'test', 0.1, 2, 'open')`;
 
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(false);
@@ -56,36 +56,38 @@ describe('Convergence', () => {
 
     // Failed search closes its open nodes so the next task starts fresh.
     const statuses = rt.storage.sql<{ id: string; status: string }>`
-        SELECT id, status FROM search_nodes ORDER BY id`;
+        SELECT id, status FROM search_nodes
+        WHERE actor_id = ${rt.actor.actorId} ORDER BY id`;
     expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
 
     // And the close fabricates nothing: a search with no acceptable candidate
     // has NO terminal row — a terminal node would report a winner the floor
     // refused, and every read model keys "did this run land an answer" on it.
     const terminals = rt.storage.sql<{ id: string }>`
-        SELECT id FROM search_nodes WHERE status = 'terminal'`;
+        SELECT id FROM search_nodes
+        WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
     expect(terminals).toHaveLength(0);
   });
 
   // With no value signal every node carries the same number, so `ORDER BY value
   // DESC` degenerates to row order: the "winner" is whichever row came back
-  // first, and it used to be handed over as a converged answer because the
-  // shared value cleared minAcceptableScore.
+  // first, and a shared value clearing minAcceptableScore is no reason to hand
+  // it over as a converged answer.
   test('two DISTINCT approaches scoring identically is not a convergence', async () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'a', 'r', 'test task', 0.6, 1, 'open', 1, 'approach A')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.6, 1, 'open', 1, 'approach A')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
 
     const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
-    // 0.6 clears minAcceptableScore — the old code shipped it as a winner.
+    // 0.6 clears minAcceptableScore, so the score alone would ship it as a winner.
     expect(result.winnerValue).toBeCloseTo(0.6, 10);
     expect(result.converged).toBe(false);
     expect(result.reason).toBe('undifferentiated');
@@ -93,7 +95,8 @@ describe('Convergence', () => {
 
     // Zero signal is also no acceptance: nothing terminal may be fabricated.
     const terminals = rt.storage.sql<{ id: string }>`
-        SELECT id FROM search_nodes WHERE status = 'terminal'`;
+        SELECT id FROM search_nodes
+        WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
     expect(terminals).toHaveLength(0);
   });
 
@@ -106,12 +109,12 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'a', 'r', 'test task', 0.61, 1, 'open', 1, 'approach A')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES ('r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.61, 1, 'open', 1, 'approach A')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B')`;
 
     const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
     expect(result.converged).toBe(true);
@@ -123,15 +126,17 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'best', 'test', 0.9, 10, 'open')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'other', 'test', 0.5, 5, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'best', 'test', 0.9, 10, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'other', 'test', 0.5, 5, 'open')`;
 
     await converge(rt, session, 'r');
 
-    const best = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'best'`[0]!;
-    const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'other'`[0]!;
+    const best = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'best'`[0]!;
+    const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'other'`[0]!;
     expect(best.status).toBe('terminal');
     expect(other.status).toBe('pruned');
   });
@@ -142,20 +147,21 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
-        VALUES ('r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
-        VALUES ('r', 'rival', 'test', 0.85, 6, 1, 'open', 'near-tied plan')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
-        VALUES ('r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'rival', 'test', 0.85, 6, 1, 'open', 'near-tied plan')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
 
     await converge(rt, session, 'r');
 
     // The set snapshots the choice the close erased: the rival is now pruned…
-    const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'rival'`[0]!;
+    const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'rival'`[0]!;
     expect(rival.status).toBe('pruned');
     // …but lives on as a comparable take next to the winner.
-    const set = latestAlternateTakeSet(rt.storage.sql);
+    const set = latestAlternateTakeSet(rt.storage.sql, rt.actor);
     if (!set) throw new Error('expected alternate-takes set');
     expect(set.winnerNodeId).toBe('best');
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['best', 'rival']);
@@ -182,18 +188,20 @@ describe('Convergence', () => {
     };
 
     // argmax winner: marginally higher value but its code FAILS the test.
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;', 'javascript')`;
     // near-tied rival (within takesEpsilon=0.1): lower value but its code PASSES.
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
 
     // The test-passer wins regardless of the marginal value gap.
     expect(result.winnerId).toBe('passer');
-    const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'passer'`[0]!;
-    const argmax = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'argmax'`[0]!;
+    const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'passer'`[0]!;
+    const argmax = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'argmax'`[0]!;
     expect(passer.status).toBe('terminal');
     expect(argmax.status).toBe('pruned');
   });
@@ -215,10 +223,10 @@ describe('Convergence', () => {
     };
 
     // Both pass; argmax has higher value → it stays the winner.
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
     expect(result.winnerId).toBe('argmax');
@@ -230,13 +238,13 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
-        VALUES ('r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
-        VALUES ('r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation)
+        VALUES (${rt.actor.actorId}, 'r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
 
     await converge(rt, session, 'r');
-    expect(listAlternateTakeSets(rt.storage.sql)).toHaveLength(0);
+    expect(listAlternateTakeSets(rt.storage.sql, rt.actor)).toHaveLength(0);
   });
 
   test('records the task outcome into task_history when the table exists', async () => {
@@ -245,12 +253,13 @@ describe('Convergence', () => {
     initScaffoldTables(rt.storage.execRaw);   // creates task_history
     const session = createMockSession();
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'w', 'ship the feature', 0.8, 4, 'open')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'w', 'ship the feature', 0.8, 4, 'open')`;
     await converge(rt, session, 'r');
 
     const rows = rt.storage.sql<{ task: string; outcome: string; score: number }>`
-        SELECT task, outcome, score FROM task_history`;
+        SELECT task, outcome, score FROM task_history
+        WHERE actor_id = ${rt.actor.actorId}`;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ task: 'ship the feature', outcome: 'success', score: 0.8 });
   });
@@ -281,18 +290,19 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     // Prose argmax winner (no code), two code rivals inside takesEpsilon.
     // The passing rival never ran against the winner — promoting it would be
     // a win on a suite the winner never saw.
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'prose', 'test', 0.85, 6, 1, 'open', 'prose plan', ${null}, ${null})`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'rival-fail', 'test', 0.84, 5, 1, 'open', 'code plan A', 'const x = FAIL_MARKER;', 'javascript')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'rival-pass', 'test', 0.83, 5, 1, 'open', 'code plan B', 'const ok = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'prose', 'test', 0.85, 6, 1, 'open', 'prose plan', ${null}, ${null})`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'rival-fail', 'test', 0.84, 5, 1, 'open', 'code plan A', 'const x = FAIL_MARKER;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'rival-pass', 'test', 0.83, 5, 1, 'open', 'code plan B', 'const ok = 1;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(true);
     expect(result.winnerId).toBe('prose');
     const statuses = rt.storage.sql<{ id: string; status: string }>`
-        SELECT id, status FROM search_nodes ORDER BY id`;
+        SELECT id, status FROM search_nodes
+        WHERE actor_id = ${rt.actor.actorId} ORDER BY id`;
     expect(statuses).toEqual([
       { id: 'prose', status: 'terminal' },
       { id: 'rival-fail', status: 'pruned' },
@@ -314,10 +324,10 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
       },
     };
 
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
-    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
-        VALUES ('r', 'rival', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES (${rt.actor.actorId}, 'r', 'rival', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
 
     // `diagnostics` has no injection seam this far inside core, so the
     // recorded fallback is read where it lands (console.error).

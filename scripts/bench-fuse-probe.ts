@@ -427,7 +427,7 @@ export interface TeardownHooks extends ReleaseHooks {
   destroyRuntime(): Promise<void>;
 }
 
-/** Compatibility-free wrapper over the shared two-route deletion policy. */
+/** The shared two-route deletion policy, under this probe's own name. */
 export function deleteWorkerBothRoutes(
   repoRoot: string,
   configPath: string,

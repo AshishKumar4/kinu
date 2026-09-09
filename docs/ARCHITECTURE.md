@@ -36,7 +36,7 @@ graph TB
     end
 
     Orch["orchestrator<br/>the workspace's default agent"] --> WS
-    Subs["subordinates · heads · swarm nodes · MCTS branches<br/>SubordinateAgent facets (subordinate-agent.ts), the seed decides the mode<br/>shared workspace file plane, actor-scoped shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
+    Subs["subordinates · heads · swarm nodes · MCTS branches<br/>logical actors hosted on the ONE workspace SQLite (core/src/state/actor-host.ts)<br/>shared workspace file plane, actor-scoped rows + shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -66,99 +66,109 @@ graph TB
     T["Think: @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
     O["OrchestratorAgent<br/>agents: swarm · hire · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
-    S["SubordinateAgent, one facet class, four modes<br/>subordinate: agents swarm · hire · ask/send · list/dismiss, report on parent-assigned turns<br/>head: the head tool surface · node: a swarm node's host · branch: one toolless model call"]
+    H["Hosted actors (no class)<br/>subordinate · ask temporary · head · node · branch<br/>logical rows in workspace_actors, one ActorHost"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> T --> AA
     AA --> O
-    AA --> S
+    O --> H
     AA -.->|composition| OMS
-    S -.->|composition, exploration modes| OMS
 ```
 
 `ActorAgent` (`cf-backend/src/actor-agent.ts`) owns once what every full-loop
 actor needs: the CF runtime assembly, the `BackendHost`, the shared
 `AgentOrchestrator`, `ExtensionHost` + compaction, the dynamic-context ledger,
 prompt/model/tool caches, and the Think hook bridge. A subclass supplies the
-abstract members (`getOwnerUserId`, `actorKind`, `workspaceBox`,
+abstract members (`getOwnerUserId`, `actorHandle`, `actorKind`, `workspaceBox`,
 `ensureSchema`, `actorToolDeps`, `engine`, `notifyOwner`, `delegationBudget`,
-`facetClass`, `facetHomes`, `ownMission`, `persistAutoTitle`,
-`promptIdentity`) plus three optional hooks (`workspaceName`,
+`ownMission`, `persistAutoTitle`, `actorHost`, `actorDirectoryStore`,
+`explorationSeams`) plus three optional hooks (`workspaceName`,
 `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 `persistAutoTitle` stores a core-decided workspace name wherever that backend
-keeps state. `facetClass` answers `SubordinateAgent` on both actors: it is the
-one class every facet of an actor runs as.
+keeps state. There is one subclass: the orchestrator. Every other actor is a
+logical row the orchestrator's host acquires, not a class.
 
 Tool gating is structural. No prompt decides it. The `agents` schema
 derives from the capabilities the profile wires (`actorAgentsActions`). Everyone
-can `swarm`. The search substrate is wired unconditionally. `hire`, `ask`,
-`send` and `list` need a roster or peer transport. `dismiss` needs the roster.
-`reply` needs peers, and only the orchestrator wires those. At the depth cap
+can `swarm`. The search substrate is wired unconditionally. `hire`, `msg` and
+`list` need a roster or peer transport. `dismiss` needs the roster. `msg`'s
+`event_id` target needs peers, and only the orchestrator wires those. At the
+depth cap
 `teamProfile()` returns nothing, so roster and hire rung vanish together.
 `report` exists only on a subordinate parent-assigned turn. Release ships as
 an orchestrator-only codemode provider omitted from Plan-mode construction.
 `submit_plan` exists only on an orchestrator Plan turn.
 
-`SubordinateAgent` hosts every facet mode, and the seed decides which one an
-instance is (`FacetKind`, read off its durable rows). A hire seed
-(`setSubordinateIdentity`) makes a subordinate, which runs the Think turn loop
-above. An `initHead` seed makes a branching head: the hand-built head surface
-(evidence, decisions, `execute_tools`, `run`, `file`, `web`, depth-budgeted
-subheads) over the canonical parent workspace. An `initNode` seed makes a
-swarm node's host: a serialisable `NodeRunSpec` arrives over RPC and
-`runAsNode` calls the same `runNodeLoop` an in-isolate node runs. No seed at
-all is an MCTS branch: `explore` and `generateReflection` make one bare model
-call each, with no tools and no runtime. The facet is a transport. Hosting buys
-a storage boundary and a teardown verb, not a second runtime. Heads and nodes
-share the workspace files, processes and ports. SQL journal, scaffold path,
-and `shellId` (`head:<id>`, `node:<id>`) stay private.
+Non-root actors are logical, not classes. A durable hire, a `lifetime:'task'`
+hire, a branching head, a swarm node and an MCTS branch are rows in
+`workspace_actors`, acquired from the workspace's one `ActorHost` as
+`HostedActor`s with their own runtime objects (session, stores, queue, abort,
+roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
+turns through the common head-inference runner with the confined tool surface
+(execute_tools, run, file, web) plus the report lane that settles the
+`agents.hire` that gave it the work. A head runs the same runner over the
+parent's promoted loop with
+the head tool surface (evidence, decisions, depth-budgeted subheads). A node
+runs a `NodeRunSpec` through the same loop. An MCTS branch makes one bare
+model call per `explore`/`generateReflection` through the seat's profile
+route, with no tools. There is no second object and no second database:
+hosting buys lifecycle (acquire, fence, retire), not a second storage
+boundary. Heads and nodes share the workspace files, processes and ports. No
+seed RPC crosses an object boundary — registration is a directory write and
+acquisition binds stores — so there is no boot surface to seal and no second
+surface to narrow: a head or node builds only the tools its kind admits,
+never the actor's `think`/`team`/`peers` tools, so recursion stays bounded by
+construction (`maxDepth` per spawn, refusing once exhausted).
 
-Containment rides the seed rather than a second base class. The constructor
-seals the boot RPC surface (`SUBORDINATE_AGENT_BOOT_SURFACE`,
-`cf-backend/src/rpc-surface.ts`), and the seed narrows the instance to its
-family's surface, so a head cannot resolve a subordinate seed across a stub
-and a subordinate cannot resolve a head's. A head or node builds only the
-surface its mode admits, never the actor's `think`/`team`/`peers` tools, so
-recursion stays bounded by construction: `split_subheads` decrements
-`maxDepth` per spawn and refuses once the budget is exhausted.
-
-Facet addresses keep the two families apart inside one class
-(`cf-backend/src/facet-spawn.ts`). A subordinate's facet key is its roster
+Actor addresses keep the two families apart inside one roster
+(`core/src/state/actor-key.ts`). A subordinate's storage key is its roster
 slug. A head, node or branch is registered under an `exp:`-prefixed key
-(`explorationFacetKey`), which a slug cannot carry, so a hire and a generated
+(`explorationActorKey`), which a slug cannot carry, so a hire and a generated
 worker id never collide. Journals and handles keep the plain id.
 
-Both actors reach the owner/provider/model/web substrate by composition through
-`OwnedModelServices` (`cf-backend/src/owned-model-services.ts`): provider
-registry, model spec, Workers-AI affinity key, web-search provider.
-`ActorAgent` constructs it with `ownerRequired: true`. `SubordinateAgent`
-builds a second one for its exploration modes with `ownerRequired: false`,
-taking the owner from the one-row `facet_identity` its parent seeds through
-`setOwner` and `setSharedParent`.
+None of them owns a database. Every logical actor of a workspace — the
+orchestrator, its hires, its ask-by-role temporaries, its heads, its swarm nodes
+and its MCTS branches — is bound by ONE `ActorHost`
+(`core/src/state/actor-host.ts`) over the workspace object's own SQLite, with
+`actor_id` leading the primary key of every table that holds an actor's state.
+So a SQL-only snapshot of the workspace object IS the workspace, for every
+actor rather than for its main one, and two actors that pick the same logical
+row key cannot read or overwrite each other's row. What stays per actor is
+everything mutable: its session, its store bundle bound to its own handle, its
+queue, its abort, its roles and its loop pointer.
+
+The single `OwnedModelServices` (`cf-backend/src/owned-model-services.ts`)
+serves every actor by composition: provider registry, model spec, Workers-AI
+affinity key, web-search provider. `ActorAgent` constructs it with
+`ownerRequired: true`; a hired child reads the workspace's owner through its
+parent rather than carrying credentials of its own.
 
 ## Subordinates
 
-`agents({action:'hire', ...})` calls `this.subAgent(facetClass(), name)`
-on the hiring actor (`cf-backend/src/actor-agent.ts`) and seeds the facet
-identity immediately. Any actor with a roster hires, so subordinate trees
-recurse down to the depth cap. Identity is single-row and immutable after
-seeding: re-seeding under a different name, parent workspace, or owner throws.
-The seeding RPC is denied to client sockets, so only a worker-held parent
-stub creates one.
+`agents({action:'hire', ...})` registers a subordinate row under the hiring
+actor and acquires it from the workspace's one `ActorHost`
+(`cf-backend/src/subordinate-hosting.ts`). Any actor with a roster hires, so
+subordinate trees recurse down to the depth cap. The row is the identity:
+re-registering the same creation under a different name or parent is refused
+by the directory. There is no seed RPC — registration is a directory write —
+so there is nothing for a client socket to reach; only the directory's own
+validation admits.
 
-A subordinate is a durable teammate: its own SQLite turn/history state, full
-loop, evolution engine, survives hibernation. Its runtime keys to the parent
-workspace name, so it uses the same authoritative Nimbus files, processes,
-ports, container, and device consent. Its `shellId` and scaffold path are
-private. Rendered identity comes from `subordinate_identity` rather than
-overwriting the workspace `SOUL.md`.
+A subordinate is a durable teammate: its own session, store bundle, queue and
+abort over the workspace's one SQLite, full loop, own evolution engine,
+surviving hibernation as rows rather than as an object. Its runtime keys to
+the parent workspace name, so it uses the same authoritative Nimbus files,
+processes, ports, container, and device consent. Its home (`.kinu/agents/…`),
+scaffold path and `shellId` (`subordinate:<key>`) are private, so nothing it
+writes lands where the workspace's own files live.
 
-Work arrives as `ingress: 'subordinate'` variant `subordinate_task`. Results
-return through `receiveSubordinateEvent` as `subordinate_report`. Reports broadcast to
-sockets and drain on the parent. An assigned turn finishing without `report`
-relays its answer automatically. Owner-driven subordinate chat is private and
-report-less. `dismiss` deletes the facet unless `keep_history` marks only the
-roster row dismissed.
+Work arrives as delegated tasks admitted against the child's session. Results
+return through the report lane as `subordinate_report`, decided from the turn
+ending by the closed map: a `task` child answers on every ending, a durable
+hire relays a completed turn worth relaying. Reports broadcast to sockets and
+drain on the parent. A delegated turn is never owner-driven and never
+cancelled by disconnect. `retire` with destroy drops the actor's bytes and
+its home; without it the rows (and the home) are retained with the workspace.
 
 Locally, `LocalAgentHost` (`cli-backend/src/agent-host/host.ts`) holds one
 `LocalAgentSession` per bound agent for the daemon whole life: every root it
@@ -179,9 +189,13 @@ workstream, keep the coordination and integration turn yourself.
 
 Every turn, cloud or local, flows through one `ExtensionHost`
 (`core/src/extension.ts`). The cloud bridges Think subclass hooks onto it.
-The CLI drives `runChat` through it from `LocalAgentSession`
-(`cli-backend/src/local-session.ts`). No private callback path parallels the
-plugin API.
+The CLI host `LocalAgentSession` delegates its conversational runner to core's
+`ActorSession`, bound to the runtime's issued actor handle. That owner holds
+working history, dynamic context, steering, the orchestrator and cancellation.
+The local host retains queue admission and durable/effect settlement. No private
+callback path parallels the plugin API; an in-memory turn lease is not a durable
+turn claim. Hosted Think state and durable program/context claims remain separate
+work, not capabilities implied by the local runner.
 
 Three agent kinds run turns here, on two bodies. `runChat` (`core/src/chat.ts`)
 serves CLI sessions and swarm nodes alike, since a node reaches it through
@@ -462,10 +476,9 @@ Changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
 graph TB
     subgraph pkgs["packages/"]
         Core["core/<br/>turn pipeline + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
-        Utils["agent-utils/<br/>MemoryStore (FTS5) · CraftStore (FTS5)<br/>VFS types · path addressing · abort helpers"]
+        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>hosted actors over one SQLite, UserDO, React UI"]
         Compact["compaction/<br/>vendored better-compact ladder + Kinu codec"]
-        Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · r2fs · overlay-cas · supervision · ports)"]
-        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent<br/>(one facet class, four modes), UserDO, React UI"]
+        Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
@@ -511,12 +524,9 @@ files and execution to Nimbus, and the turn driver to Think. Local binds them to
 | Memory | MemoryStore (FTS5 BM25) | MemoryStore (FTS5 BM25) |
 | Executor | codemode LOADER / `new Function()` fallback | Bun subprocess sandbox |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
-| Schedule | `agent.runFiber()` (durable) + DO `alarm()` | SQLite-backed fiber |
-| Identity | DO id + `SOUL.md` (VFS) | UUID + `~/.kinu/` + `SOUL.md` (VFS) |
-| Turn driver | `OrchestratorAgent` (Think hooks) | `LocalAgentSession` (`runChat`) |
-| Swarm nodes | `SubordinateAgent` facets in node mode (`spawnNodeFacet`) | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| MCTS branches | `SubordinateAgent` facets in branch mode (`spawnBranchFacet`) | `child_process.fork` |
-| Subordinates | `SubordinateAgent` facets in subordinate mode (`subAgent` + the hire seed) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
+| Swarm nodes | Hosted `node` actors acquired from the one `ActorHost`, seated per run | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
+| MCTS branches | Hosted `branch` actors: one model call per `explore`/`generateReflection` | `child_process.fork` |
+| Subordinates | Hosted `subordinate` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
 `ActorAgent`, `KinuExtension`) are in
@@ -582,11 +592,11 @@ event logs, Think session tables. Schema and boundaries:
 [STORAGE.md](./STORAGE.md). The vendored filesystem is in
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).
 
-Selected core algorithms are modeled in Lean 4 (`lean/`): 485 named declarations
+Selected core algorithms are modeled in Lean 4 (`lean/`): 366 named declarations
 cover abstract models of agent, evolution, execution, exploration, MCTS, safety,
-and storage properties. The traceability map enrolls 380 proved-in-abstract-model
-entries and 105 by-construction witnesses against 52 requirements, with no `sorry`
-(measured 2026-08-30 by `lean/check-traceability.mjs`). Axiom reports
+and storage properties. The traceability map enrolls 276 proved-in-abstract-model
+entries and 90 by-construction witnesses against 46 requirements, with no `sorry`
+(measured 2026-09-09 by `lean/check-traceability.mjs`). Axiom reports
 use only the Lean three kernel axioms. One separate SQLite FTS5 assumption is
 documented and enrolled. CI (`.github/workflows/lean-verify.yml`,
 `scripts/verify-lean.sh`) gates compilation, negative consistency, axiom

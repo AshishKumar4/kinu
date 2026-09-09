@@ -307,9 +307,9 @@ describe('POST /forward', () => {
   });
 
   test('refuses model management — an inference token cannot DELETE a model', async () => {
-    // `ai.proxy` buys inference spend. The target allowlist used to check only
-    // origin and path, so this exact request reached the provider with the
-    // owner's key attached and deleted their fine-tuned model.
+    // `ai.proxy` buys inference spend. A target allowlist that checks only
+    // origin and path lets this exact request reach the provider with the
+    // owner's key attached and delete their fine-tuned model.
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
 

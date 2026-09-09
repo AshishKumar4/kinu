@@ -61,7 +61,7 @@ export interface TurnContextInput {
   trigger: 'auto' | 'force';
   /** Exact pre-submission admission, when the resolved provider can answer
    *  what a request costs. Omitted = no provider counter, and the assembly
-   *  returns what it built, exactly as it did before admission existed. */
+   *  returns what it built with no admission check. */
   admission?: TurnAdmission;
 }
 
@@ -125,9 +125,9 @@ export interface MeasuredCompactionTrigger {
 /**
  * Read the turn's compaction trigger out of the durable state.
  *
- * Both backends derived this by hand, in the same three steps, with the same
- * twelve lines of comment explaining why — which is the shape a policy takes
- * just before the two copies stop agreeing. Three things it owns:
+ * One derivation, not one per backend: three steps and twelve lines of reason
+ * hand-copied into two places is the shape a policy takes just before the two
+ * copies stop agreeing. Three things it owns:
  *
  *  • the measurement is bound to `durableLength`, the history length at
  *    assembly time and BEFORE the turn-local tail is spliced on. A shorter

@@ -5,10 +5,9 @@
  *
  * {@link ACCESS_TOKEN_SCOPES} is the set the server accepts; the CLI does not
  * depend on the backend package, so it is restated here and nowhere else in this
- * package. It is stated at all because the prose used to name two of the three
- * and the missing one — `ai.proxy` — is the scope the eval runbook mints
- * (`docs/TESTING.md`), so a caller following the CLI's own hint could not get a
- * usable token.
+ * package. All THREE are named, `ai.proxy` included — it is the scope the eval
+ * runbook mints (`docs/TESTING.md`), so a hint that omits it hands the caller a
+ * token that cannot pay for inference.
  */
 import {
   createCliAccessToken,

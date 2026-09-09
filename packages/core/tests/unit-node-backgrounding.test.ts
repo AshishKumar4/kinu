@@ -43,6 +43,7 @@ import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
@@ -138,8 +139,8 @@ function detachThenReport(seen: string[][]): ReturnType<typeof scriptedTurnModel
   });
 }
 
-/** Answers in prose and never calls `report` — the outcome that used to be impossible
- *  to distinguish from a broken node. */
+/** Answers in prose and never calls `report` — the outcome a broken node is
+ *  otherwise indistinguishable from. */
 const PROSE_ONLY_MODEL = scriptedTurnModel({
   modelId: 'fake-prose',
   doGenerate: () => ({
@@ -184,9 +185,9 @@ function fixture(over: {
   readonly model: NodeAgentDeps['model'];
   readonly executeTool?: unknown;
 }): Fixture {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
-  const journal = new HeadJournal(rt.storage.sql);
+  const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',
@@ -199,8 +200,19 @@ function fixture(over: {
     settle: 'best',
     arbitrate: null,
   };
+  const seats = hostedSeatsOver({ rt, db });
+  /** The actor the node was seated as, captured as `runNodeAgent` acquires it.
+   *  A node is its OWN actor now, so the job it detaches is keyed to that id —
+   *  counting under `rt.actor` reads zero forever, which STALLS the wait below
+   *  instead of failing it, and a stall names no cause. */
+  let nodeActorId: string | null = null;
   const deps: NodeAgentDeps = {
-    rt, model: over.model, journal,
+    hostNode: async (node) => {
+      const seat = await seats.hostNode(node);
+      nodeActorId = seat.actor.handle.actorId;
+      return seat;
+    },
+    model: over.model, journal,
 
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
@@ -210,8 +222,10 @@ function fixture(over: {
   };
   if (over.executeTool !== undefined) deps.executeTool = over.executeTool;
   const detached = (): number => {
+    if (nodeActorId === null) return 0;
     const rows = rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
+      SELECT COUNT(*) AS n FROM background_jobs
+      WHERE actor_id = ${nodeActorId} AND status='running'`;
     return rows[0]?.n ?? 0;
   };
   return { input, deps, journal, detached };
@@ -354,9 +368,9 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
       expect(reason).not.toContain('not yet');
       expect(name).not.toBe('');
     }
-    // And the one whose reason was WRONG on the base of this change is named for what it
-    // actually is: `DELEGATION_MAX_DEPTH` governs the hire ladder, not a node's search
-    // depth, so recursion was never the argument.
+    // And the reason that must not drift back: `DELEGATION_MAX_DEPTH` governs the hire
+    // ladder, not a node's search depth, so recursion is not the argument for
+    // withholding `agents`.
     expect(NODE_WITHHELD_TOOLS.agents).toContain('search engine');
     expect(NODE_WITHHELD_TOOLS.agents).not.toContain('recursion');
   });

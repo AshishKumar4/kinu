@@ -13,6 +13,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { parseJsonValue } from '../utils/json';
 import type { ScaffoldStatus } from './shadow';
 
@@ -45,7 +46,10 @@ const VetoDataSchema = v.object({
  * Every scaffold version with its lineage + aggregated shadow-eval record,
  * newest first. The one queryable view of the variant archive.
  */
-export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchiveEntry[] {
+export function listScaffoldArchive(
+  sql: SqlExecutor, actor: ActorHandle, limit = 50,
+): ScaffoldArchiveEntry[] {
+  actor.assertCurrent();
   type Row = {
     version: number; parent_version: number | null; status: ScaffoldStatus;
     rationale: string; pathology: string | null; written_at: number;
@@ -58,7 +62,9 @@ export function listScaffoldArchive(sql: SqlExecutor, limit = 50): ScaffoldArchi
            SUM(CASE WHEN e.winner = 'current' THEN 1 ELSE 0 END) AS losses,
            SUM(CASE WHEN e.winner = 'tie' THEN 1 ELSE 0 END) AS ties
     FROM scaffold_versions v
-    LEFT JOIN scaffold_evaluations e ON e.pending_version = v.version
+    LEFT JOIN scaffold_evaluations e
+      ON e.actor_id = v.actor_id AND e.pending_version = v.version
+    WHERE v.actor_id = ${actor.actorId}
     GROUP BY v.version
     ORDER BY v.version DESC LIMIT ${limit}`;
   return rows.map((r) => {
@@ -113,13 +119,17 @@ export interface RejectedProposal {
  * the judge's stated reasons, so nothing could be mined. This is that join and
  * nothing more: a read model, no new table, no new status, no new write path.
  */
-export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedProposal[] {
+export function listRejectedProposals(
+  sql: SqlExecutor, actor: ActorHandle, limit = 50,
+): RejectedProposal[] {
+  actor.assertCurrent();
   const rejected: RejectedProposal[] = [];
 
-  for (const entry of listScaffoldArchive(sql, limit).filter((e) => e.status === 'rolled_back')) {
+  for (const entry of listScaffoldArchive(sql, actor, limit).filter((e) => e.status === 'rolled_back')) {
     const judgeRationales = sql<{ judge_rationale: string | null }>`
       SELECT judge_rationale FROM scaffold_evaluations
-      WHERE pending_version = ${entry.version} AND winner = 'current'
+      WHERE actor_id = ${actor.actorId} AND pending_version = ${entry.version}
+        AND winner = 'current'
       ORDER BY evaluated_at DESC LIMIT 3`
       .flatMap((r) => (r.judge_rationale ? [r.judge_rationale] : []));
     const decisive = entry.wins + entry.losses;
@@ -139,7 +149,8 @@ export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedPro
 
   const vetoes = sql<{ message: string; data: string | null; created_at: number }>`
     SELECT message, data, created_at FROM evolution_events
-    WHERE type = 'misevolution_veto' ORDER BY created_at DESC LIMIT ${limit}`;
+    WHERE actor_id = ${actor.actorId} AND type = 'misevolution_veto'
+    ORDER BY created_at DESC LIMIT ${limit}`;
   for (const veto of vetoes) {
     // `data` is written by recordMisevolutionVeto in this same package, so a
     // payload that will not parse is corruption in our own row, not a foreign
@@ -246,10 +257,10 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
  *
  * A version that named NO cell scores 0, not a shared-bucket bonus. That is
  * the honest reading — it claimed no niche, so it has no coverage to be thin
- * in — and it is also what makes the term backward-compatible: an archive with
- * no pathologies at all adds zero to every weight and reproduces the
- * pre-pathology policy exactly, term for term, the same way a lineage-free
- * archive reproduces the pre-clade one.
+ * in — and it is also what keeps the term INERT where it has nothing to say:
+ * an archive with no pathologies at all adds zero to every weight, so the
+ * policy is exactly the pathology-free one, term for term, the same way a
+ * lineage-free archive collapses the clade term.
  */
 function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<string, number> {
   const counts = new Map<string, number>();

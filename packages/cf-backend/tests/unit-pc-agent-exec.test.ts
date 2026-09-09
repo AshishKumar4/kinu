@@ -176,10 +176,10 @@ describe('pc-agent exec RPC', () => {
 /**
  * Cancellation, at the only layer that can prove it: real processes.
  *
- * A cancelled command used to mean a cancelled WAIT. The daemon had no method
- * to stop anything, kept no record of what it had started, and answered a
- * command's own exit by unref'ing the child — so a `sleep &` inside the command
- * kept running on the user's machine after Kinu reported the turn stopped.
+ * A cancelled command means a cancelled PROCESS, not a cancelled WAIT. A daemon
+ * with no method to stop anything, no record of what it had started, and a
+ * command's own exit answered by unref'ing the child leaves a `sleep &` inside
+ * the command running on the user's machine after Kinu reports the turn stopped.
  *
  * So each test below reads a real descendant's pid out of the command itself and
  * asks the kernel about it. The `alive before` assertion in the first test is
@@ -190,10 +190,27 @@ describe('pc-agent exec RPC', () => {
 /** A recording socket plus the frames the daemon has written to it. */
 function recorder() {
   const replies: DaemonReply[] = [];
+  const awaited = new Map<string, (reply: DaemonReply) => void>();
   return {
     replies,
-    socket: { send: (data: string) => { replies.push(v.parse(DaemonReplySchema, JSON.parse(data))); } },
+    socket: {
+      send: (data: string) => {
+        const reply = v.parse(DaemonReplySchema, JSON.parse(data));
+        replies.push(reply);
+        awaited.get(reply.id)?.(reply);
+      },
+    },
     of(id: string): DaemonReply[] { return replies.filter((reply) => reply.id === id); },
+    /** The daemon's answer to `id` as a promise: the same frame `of` returns,
+     *  awaitable before it has arrived. A wait on something a command produces
+     *  needs this to race, or it can only end by giving up. */
+    answerTo(id: string): Promise<DaemonReply> {
+      const arrived = replies.find((reply) => reply.id === id);
+      if (arrived) return Promise.resolve(arrived);
+      const { promise, resolve } = Promise.withResolvers<DaemonReply>();
+      awaited.set(id, resolve);
+      return promise;
+    },
   };
 }
 
@@ -275,20 +292,55 @@ function supervisorState(requestId: string): Promise<v.InferOutput<typeof Superv
   }, `the published supervisor state for ${requestId}`);
 }
 
-/** A command that leaves a descendant of its own behind, plus the file that
- *  descendant's pid is written to — the process a group kill has to reach. */
+/**
+ * A command that leaves a descendant of its own behind, plus the file that
+ * descendant's pid is written to — the process a group kill has to reach.
+ *
+ * The pid is PUBLISHED rather than written in place: the shell writes it beside
+ * the name and renames, which is the discipline the supervisor already uses for
+ * its own `state` and `result`. A watcher then cannot see the name appear
+ * before the pid is in it, so the file appearing IS the readiness signal and
+ * needs no second look to confirm.
+ */
 function commandWithDescendant(dir: string, name: string) {
   const pidFile = join(dir, `${name}.pid`);
   return {
-    command: `(sleep 30 & echo $! > ${pidFile}); sleep 30`,
-    async pidOf() {
-      // The command writes this file itself, so its absence means "not yet",
-      // not a read failure to be swallowed.
-      return settled(() => {
-        if (!existsSync(pidFile)) return undefined;
-        const pid = Number(readFileSync(pidFile, 'utf8').trim());
-        return Number.isInteger(pid) && pid > 0 ? pid : undefined;
-      }, `the descendant pid in ${pidFile}`);
+    command: `(sleep 30 & echo $! > ${pidFile}.part && mv ${pidFile}.part ${pidFile}); sleep 30`,
+    /**
+     * The descendant's pid, on the daemon's own file watch rather than on a
+     * clock. `waitForFile` is the synchronisation the daemon itself uses to
+     * learn that a supervisor has published, so this ends on the write.
+     *
+     * `answer` is the daemon's reply channel for this same command, and racing
+     * it is the load-bearing half. This pid file is written by a command that
+     * RAN; a command the daemon never started writes nothing, and a wait on
+     * that name alone can only end by giving up — which is how a supervisor
+     * that refused to start was reported for ten seconds as a missing
+     * descendant while the daemon's own error frame sat unread on the socket.
+     * These commands run `sleep 30` twice, so no honest result can arrive
+     * before the descendant does: an answer that wins this race is a refusal,
+     * and it is reported as the refusal it is.
+     */
+    async pidOf(answer: Promise<unknown>): Promise<number> {
+      const watching = new AbortController();
+      const refused = async (): Promise<never> => {
+        let answered: unknown;
+        try {
+          answered = await answer;
+        } catch (err) {
+          throw new Error(`the daemon refused the command: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+        }
+        throw new Error(`the daemon answered ${JSON.stringify(answered)} instead of running the command`);
+      };
+      try {
+        const published: Promise<unknown> = Promise.resolve(pcAgent.waitForFile(pidFile, watching.signal));
+        await Promise.race([published, refused()]);
+      } finally {
+        // A lost race leaves the watch open otherwise, and this is one inotify
+        // instance out of the 128 the kernel allows the whole user.
+        watching.abort();
+      }
+      return v.parse(PidSchema, Number(readFileSync(pidFile, 'utf8').trim()));
     },
   };
 }
@@ -327,7 +379,7 @@ describe('pc-agent command cancellation', () => {
     const cancelId = rpcId(202);
 
     handle({ id: runId, method: 'exec', params: [command] }, ws.socket);
-    const descendant = await pidOf();
+    const descendant = await pidOf(ws.answerTo(runId));
     expect(alive(descendant)).toBe(true);
     cancel(cancelId, runId, ws.socket);
 
@@ -393,7 +445,7 @@ describe('pc-agent command cancellation', () => {
     const ws = recorder();
     const runId = rpcId(230);
     handle({ id: runId, method: 'exec', params: [command] }, ws.socket);
-    const descendant = await pidOf();
+    const descendant = await pidOf(ws.answerTo(runId));
 
     const refusalId = rpcId(231);
     cancel(refusalId, runId, ws.socket, DEVICE_CANCEL_PROTOCOL + 1);
@@ -429,11 +481,11 @@ describe('pc-agent command cancellation', () => {
     // Built over the root while it is still empty, so it holds no entry for
     // the request below. That is the live window: the supervisor publishes
     // its state before `register` runs, and a socket dropping in between
-    // used to leave the command running with nothing left to name it.
+    // would leave the command running with nothing left to name it.
     const detached = v.parse(SupervisorRegistrySchema2, pcAgent.createInFlight(pcAgent.INFLIGHT_ROOT));
     const ws = recorder();
     handle({ id: rpcId(260), method: 'exec', params: [waiting.command] }, ws.socket);
-    const abandoned = await waiting.pidOf();
+    const abandoned = await waiting.pidOf(ws.answerTo(rpcId(260)));
     expect(alive(abandoned)).toBe(true);
     await supervisorState(rpcId(260));
 
@@ -450,7 +502,7 @@ describe('pc-agent command cancellation', () => {
     const waiting = commandWithDescendant(dir, 'waiting');
     const ws = recorder();
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
-    const abandoned = await waiting.pidOf();
+    const abandoned = await waiting.pidOf(ws.answerTo(rpcId(250)));
     expect(alive(abandoned)).toBe(true);
     // The supervisor has published its state, which is the fact the daemon
     // reconciles from: a socket that drops before this names no command yet.
@@ -641,7 +693,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     const controller = new AbortController();
 
     const pending = provider.tools.exec.execute(command, { signal: controller.signal });
-    const descendant = await pidOf();
+    const descendant = await pidOf(pending);
     expect(alive(descendant)).toBe(true);
 
     // The Stop button, `kinu stop`, a cancelled background job and the turn's
@@ -676,7 +728,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
       signal: controller.signal,
       onDeviceRequest: (requestId: string) => { issued.push(requestId); },
     });
-    const descendant = await pidOf();
+    const descendant = await pidOf(pending);
     const supervisor = await supervisorState(issued[0]);
 
     process.kill(supervisor.pid, 'SIGKILL');

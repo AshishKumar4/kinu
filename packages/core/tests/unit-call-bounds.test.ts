@@ -41,12 +41,11 @@ describe('the shared turn has no elapsed deadline', () => {
 /**
  * NO PER-TURN BOUND — asserted over the COMPOSED condition, not over one clause.
  *
- * This block used to assert `UNBOUNDED_STEPS({steps: []}) === false` and nothing
- * else. That is true of a capped system too: hosts compose stop conditions by
- * OR-ing an array, so a clause returning false is exactly what a clause sitting
- * next to `stepCountIs(10)` also returns. The assertion held while production
- * ran hard-capped at ten steps — the set the gate measured was one lambda, the
- * set it governed was the array that lambda ends up in.
+ * `UNBOUNDED_STEPS({steps: []}) === false` is true of a capped system too: hosts
+ * compose stop conditions by OR-ing an array, so a clause returning false is
+ * exactly what a clause sitting next to `stepCountIs(10)` also returns. Measure
+ * that one lambda and a hard cap of ten steps passes the gate, because the set
+ * the gate measures is not the set it governs.
  *
  * So these evaluate the array, at step counts past every bound anyone shipped.
  */

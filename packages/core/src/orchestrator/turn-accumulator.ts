@@ -2,10 +2,10 @@
 //
 // Both backends do the same bookkeeping inside the inference loop: collect the
 // turn's tool calls, count steps, accumulate the provider's usage report, and
-// flag errors. This was duplicated as `_turn*` fields + hook bodies on the
-// cf-backend OrchestratorAgent and inline in the CLI chat loop. Hoisted here so
-// there is ONE tested implementation; platform side-effects (activity log,
-// durable run-event recorder) inject as optional sinks.
+// flag errors. ONE tested implementation of it lives here rather than as
+// `_turn*` fields and hook bodies inside each backend's own loop; platform
+// side-effects (activity log, durable run-event recorder) inject as optional
+// sinks.
 //
 // Nothing here knows the AI SDK's usage dialect: a step arrives with its usage
 // already normalized (`normalizeUsage` at the seam that holds the SDK object),
@@ -196,12 +196,12 @@ export class TurnAccumulator {
   /** A tool call completed. Records the core ToolCallRecord + fires sinks. */
   recordToolCall(c: ToolResultLike): void {
     // ONE description of the failure for both the core record and the durable
-    // event. They used to disagree — `String(c.error)` here against
-    // `String(c.error ?? '')` at the sink — so the same nullish error read as
+    // event. Two expressions — `String(c.error)` here against
+    // `String(c.error ?? '')` at the sink — make the same nullish error read as
     // `"undefined"` in the evolution signal and as `""` in the ledger. Empty is
     // the expensive one: every reader's predicate is `error !== ''`, so a tool
-    // that reported failure without saying why was recorded as a CLEAN call,
-    // while `hadError` below knew it had failed.
+    // that reported failure without saying why is recorded as a CLEAN call,
+    // while `hadError` below knows it had failed.
     const failure = c.success === false
       ? describeToolFailure({ error: c.error })
       : null;

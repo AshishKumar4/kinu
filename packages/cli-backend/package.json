@@ -7,14 +7,14 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^3.0.10",
+    "@ai-sdk/provider": "3.0.12",
     "@cloudflare/codemode": "0.5.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/runtime-bash": "5.2.37",
     "@nimbus-sh/runtime-cpython": "3.13.14",
     "@kinu.run/core": "workspace:*",
     "@kinu.run/agent-utils": "workspace:*",
-    "ai": "^6.0.196",
+    "ai": "6.0.214",
     "@kinu.run/compaction": "workspace:*"
   },
   "scripts": {

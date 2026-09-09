@@ -350,7 +350,7 @@ assert.match(packageJson.scripts.lint, /^bun run test:anti-slop && NODE_OPTIONS=
 assert.match(packageJson.scripts.check, /^bun run lint && /u);
 assert.doesNotMatch(packageJson.scripts.lint, /--quiet|--allow|--fix|baseline/u);
 
-// The strict gate must provably run in CI. ci.yml no longer enumerates commands — it delegates to
+// The strict gate must provably run in CI. ci.yml does not enumerate commands — it delegates to
 // the ladder — so read the property through the ladder instead of grepping ci.yml for a literal.
 // Both halves are needed: CI runs the ci tier, and the ci tier claims `bun run check`.
 const ladder = readFileSync("scripts/ladder.ts", "utf8");

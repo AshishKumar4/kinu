@@ -219,8 +219,8 @@ function hostActor(): Actor {
 
 /**
  * An Env that answers only what it was told to, and names anything else. A
- * hosted workspace that reached for a session binding would previously have
- * found a fake and passed; here it finds a throw carrying the property name.
+ * hosted workspace that reaches for a session binding finds a throw carrying
+ * the property name, not a fake it could pass against.
  */
 function strictEnv(bindings: ActorBindings): Env {
   // The runtime catalogue binding is optional and read on every boot.

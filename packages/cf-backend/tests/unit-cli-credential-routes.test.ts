@@ -121,10 +121,10 @@ describe('CLI provider credentials', () => {
 
     expect(res?.status).toBe(201);
     expect(stored.get('openrouter.bearer')).toMatchObject({ kind: 'bearer' });
-    // THE FAN-OUT THE CLI PATH USED TO SKIP. The browser routes have always run
-    // it; connecting the same provider from a terminal left every running
-    // workspace holding a catalog that says the provider is absent, until some
-    // unrelated invalidation happened to land.
+    // THE FAN-OUT. Both the browser routes and this one run it: without it,
+    // connecting a provider from a terminal leaves every running workspace
+    // holding a catalog that says the provider is absent, until some unrelated
+    // invalidation happens to land.
     await settled();
     expect(notified).toEqual(['jarvis']);
   });

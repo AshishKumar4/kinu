@@ -81,11 +81,13 @@ export const EXTERNAL_TOOL_LINE = definePromptSection(
 /**
  * The turn's guidance, in independent layers.
  *
- * Permission (workMode) and provenance are separate facts and each renders on
- * its own: a background-job wake is a resume AND it is plan or build work.
- * Collapsing them into one value is what made the resume overlay unreachable —
- * see prompting/surface.ts. The role renders as its own section (ROLE_SECTION
- * below), never as a branch of this one.
+ * Permission (workMode) renders here because it is a BAR: a Plan turn is
+ * forbidden things, and a prohibition belongs at system placement. Provenance
+ * does not — it is an overlay and never a bar (prompting/surface.ts), so it
+ * rides the turn-local tail instead of buying a full prefix rewrite every
+ * time a background job lands mid-session (prompting/volatile-context.ts
+ * `BACKGROUND_RESUME_NOTICE`). The role renders as its own section
+ * (ROLE_SECTION below), never as a branch of this one.
  *
  * `build` (Auto) renders nothing here, on purpose: it is the absence of
  * constraint.
@@ -100,8 +102,7 @@ export const OPERATING_GUIDANCE = definePromptSection(
 - Kimi models work best with concrete and continuous tool use: preserve tool/result context and continue from each observation.
 - For long-horizon coding, save durable decisions with \`memory\`.{{/if}}{{#if gpt}}
 - GPT/Codex-style reasoning models do best with direct success criteria. State assumptions briefly, use tools for current facts, and keep final answers outcome-focused.
-- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{#if backgroundResume}}
-- Background-resume mode: fetch the referenced job result first, synthesize it, then continue or close the original work.{{/if}}{{#if planMode}}
+- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.{{/if}}{{#if planMode}}
 - Plan mode: {{#if planSubmission}}investigate, then submit a concrete Markdown plan with affected files, risks, and verification through \`submit_plan\`.{{else}}investigate and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.{{/if}}
 - Do not change project files, system resources, releases, or deployments. Use file read/list/stat/search for inspection. Research notes, task bookkeeping, and the plan itself remain allowed. After approval starts a Build turn, use mutating operations.
 - Run code only through a tool that explicitly supports Plan-safe analysis. Unrestricted shell/local native execution is unavailable in Plan; do not route around that refusal through another environment.
@@ -166,7 +167,7 @@ Connected external providers expose these tools for this turn. When their names/
  */
 export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   'executors/workspace',
-  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s own durable Nimbus workspace. It provides one filesystem and a real POSIX shell with node and local git history. It holds resident background processes and logs, and it exposes ports. Additional interpreter/toolchain support is listed in its live capabilities. Its shell runs inside a Worker isolate with ~{{memoryMb}} MB shared by everything in it. Use it for editing, small scripts and local git history only. Run repository clones and fetches, package installs and builds in `sandbox.*`.{{/if}}',
+  '- **workspace.*** / `runtime: "workspace"`: {{#if cliLocal}}your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.{{else}}the agent\'s durable Nimbus filesystem and POSIX shell, with local git history, resident processes and logs. Runtime support is listed in live capabilities; a registered node command does not imply this Worker can compile Node programs. The shell shares ~{{memoryMb}} MB with the Worker. Use a capable available environment for clones, package installs, builds and ordinary Node/Vite servers. Authored Worker slates use their own compile-and-preview operation when declared.{{/if}}',
 );
 
 export const SANDBOX_EXECUTOR_LINE = definePromptSection(
@@ -205,9 +206,8 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  *
  * No backend conditional on the separate-machines line: the workspace
  * filesystem is the same durable component everywhere, and every other runtime
- * is a different machine. That used to be untrue on cli-local, where the
- * workspace and laptop executors shared one host shell, and the prompt had to
- * carry the exception.
+ * is a different machine on every backend. So the line is unconditional and the
+ * prompt carries no per-backend exception.
  *
  * The file doctrine states the mount table: a live environment's files appear
  * in the agent's own plane under its mount point (`/pc`, `/sandbox` —
@@ -217,22 +217,22 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * stays a shell over workspace bytes only — commands do not see mount points,
  * and that limit is stated so the model routes commands by namespace.
  *
- * It is stated ONCE. Two paragraphs used to carry it — one gated on
- * `manyRuntimes`, one on `hasDevices` — and they restated the same three facts
- * (separate machines, commands through their own namespace, mounts showing
- * native paths) in different words, 724 chars for 600 chars of content. The
- * surviving gate is `hasDevices`, which is the WEAKER condition and therefore
- * loses no surface: `manyRuntimes` was `executors.length > 1`, and with two or
- * more executors at most one is `workspace`, so a device always remained —
- * manyRuntimes implied hasDevices. The reverse does not hold, so a lone
- * non-workspace executor (a sandbox with no workspace beside it) now reads the
- * doctrine it used to miss.
+ * It is stated ONCE, under ONE gate — `hasDevices`. Two paragraphs saying the
+ * same three facts (separate machines, commands through their own namespace,
+ * mounts showing native paths) in different words are free to disagree with
+ * each other, and cost tokens twice: the recorded comparison is 724 characters
+ * for 600 of content when the three facts are worded in separate paragraphs.
+ * `hasDevices` is deliberately the WEAKER condition: `executors.length > 1`
+ * implies it — with two or more executors at most one is `workspace`, so a
+ * device is always among them — and not the
+ * reverse, so gating on it loses no surface and a lone non-workspace executor
+ * (a sandbox with no workspace beside it) reads the doctrine too.
  *
- * The approvals doctrine is stated ONCE, and only on turns that have a shell. A
- * parked tool result used to repeat all of it on every call (222 tokens each);
- * it is a standing fact about this surface, so it lives here and the result is
- * now one line (safety/deferred-approval.ts). It names no executor: which ones
- * exist this turn is the list above.
+ * The approvals doctrine is stated ONCE, and only on turns that have a shell.
+ * It is a standing fact about this surface, so it lives here and the parked
+ * tool result is one line (safety/deferred-approval.ts) instead of 222 tokens
+ * of the same doctrine on every call. It names no executor: which ones exist
+ * this turn is the list above.
  */
 export const EXECUTORS_SECTION = definePromptSection(
   'executors/section',
@@ -247,11 +247,12 @@ Your own workspace is a durable POSIX filesystem at {{workspaceRoot}}, and the \
 The environments above are separate machines. Run each machine's commands through its own namespace ({{deviceNamespaces}}), in paths native to each machine. A live machine's files also appear in your own file plane under a mount point. The user's device sits at \`/pc\`. When several are live, each sits at \`/pc/<name>\`. A bound container sits at \`/sandbox\`. The \`file\` tool and \`workspace.*\` reach those files directly, and a native path appears whole. \`/pc/home/user/file\` is the device's own \`/home/user/file\`. To move a file between two machines, read it from one and write it to the other. Your workspace shell sees only your tree. It cannot see mount points.{{/if}}{{#if hasPreview}}
 
 ### Showing a running app
-For a user-visible web app, keep its files and server in one preview-capable environment. Start the server bound to 0.0.0.0 in the background and wait for it to bind, then call {{exposeCalls}} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is listening.{{/if}}
+{{#if workspacePreview}}A request for an interface — a dashboard, a form, a control panel, a live view over workspace data — is a Worker slate: author it in your workspace and preview it through the declared slate operation, which compiles and boots the Worker and needs none of the server workflow below. Reach for a standalone server only when the user asked for a shippable web application of its own.
+{{/if}}For a standalone Node/Vite application, keep its files and server in one capable preview environment. Start the server bound to 0.0.0.0 in the background and wait for it to bind, then call {{exposeCalls}} for that environment. If exposePort fails, inspect its server log and fix the cause.{{/if}}
 
 ### Approvals
-Commands that touch another machine, or reach outside it, need the owner's decision. A force-push, a publish, or reading the user's secrets are examples. Your own workspace and sandbox are not gated. Clean up, install and delete there freely.
-A parked command returns one line, \`NOT RUN — queued for owner approval (<id>)\`, with rules and executor named. Nothing ran, and re-issuing returns the same line. A decision wakes you either way. Carry on with independent work or end your turn.`,
+Follow the current work mode, grants and approval policy for every environment. Workspace ownership does not bypass Plan restrictions or an operation-specific approval.
+Read each command's declared result shape. For workspace.exec, a string is output; an object carries reason, error and optional execution.exitCode. Do not use String(result) or parse ordinary output as a failure. A queued approval means nothing ran. Wait for its decision rather than resubmitting; continue independent work or end the turn.`,
 );
 
 export const PERSISTENCE_SECTION = definePromptSection(
@@ -259,41 +260,27 @@ export const PERSISTENCE_SECTION = definePromptSection(
   `## Persistence
 You are not stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.
 The runtime automatically compacts your context window as it approaches its limit. Work each task through to completion and save durable progress to facts/memory as you go.
-Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line by line. Evolve freely and report honestly. Nothing you change about yourself is hidden or permanent.`,
+Scaffold versions and recorded self-changes can be inspected through the available tools. A stored version does not undo external effects. Keep changes within the current authority and report what actually changed.`,
 );
 
 /**
- * The scaffold self-provider ships on both backends since the shared-spine
- * parity, so `agent.*` needs no gate here.
+ * The scaffold self-provider ships on both backends, so `agent.*` needs no
+ * gate here.
  *
- * The six `agent.*` API bullets that used to be here are GONE, and this is the
- * SWARM_PRESET_DOCTRINE lesson applied a second time: prose describing a
- * declaration it cannot read is free to disagree with it, and did. Every one of
- * those symbols — proposeCurriculum, listCurriculum, acceptCurriculumTask,
- * proposeScaffold, scaffoldVersions, schedule, budget, jobResult,
- * backgroundJobs, compactNow — is declared WITH ITS DOC COMMENT in the
- * `agent.*` codemode type block (tools/agent-self.ts TYPES), and that block
- * ships to the model in the same request, inside the execute_tools description
- * (registry.ts renderExecuteToolsDescription). So this section was a second,
- * hand-maintained copy, 1,250 chars of it.
+ * This section does NOT enumerate the `agent.*` API: prose describing a
+ * declaration it cannot read is free to disagree with it. The codemode
+ * declarations own that documentation — every symbol with its doc comment in
+ * the `agent.*` type block (tools/agent-self.ts TYPES), shipped to the model
+ * in the same request inside the execute_tools description
+ * (registry.ts renderExecuteToolsDescription), including scaffold gates,
+ * export shape, host-bridge restriction and rationale floor — and are emitted
+ * only for wired providers. Both backends wire agent-self today (cf
+ * orchestrator.ts, cli local-session.ts). A duplicate bullet list here would
+ * add 1,250 hand-maintained characters outside that declaration gate.
  *
- * It was also the WEAKER copy, which is what makes deleting it a fix rather
- * than a saving: the bullet for `proposeScaffold` said it "must pass the
- * validation gates and win shadow evaluation", while the declaration it
- * shadowed also names the misevolution gate, the required
- * `async function* run(rt, task)` export, the host-bridge restriction and the
- * 50-char rationale floor — the parts a model actually gets wrong.
- *
- * And the copy was UNGATED where the declaration is not: these bullets
- * advertised `agent.*` on any surface holding execute_tools, while the type
- * block is assembled from the providers a backend really wired. Both backends
- * do wire agent-self unconditionally today (cf orchestrator.ts, cli
- * local-session.ts), so nothing is lost now, and a backend that stops wiring it
- * can no longer leave the prompt lying.
- *
- * What stays is the half no declaration carries: the two HABITS (look before
- * building, save what you built), and one pointer at the namespace so the model
- * knows where the contracts are.
+ * What this section states is the half no declaration carries: the two HABITS
+ * (look before building, save what you built), and one pointer at the namespace
+ * so the model knows where the contracts are.
  */
 export const CODE_EXECUTION_SECTION = definePromptSection(
   'state/code-execution',
@@ -312,7 +299,7 @@ export const CODE_EXECUTION_SECTION = definePromptSection(
 export const DELEGATION_SECTION = definePromptSection(
   'state/delegation',
   `## Delegation{{#if hasActions}}
-Helper agents are one tool: \`agents\`. Its schema says what each action does: {{#if hasSwarm}}\`swarm\` runs parallel nodes over this workspace and settles results back this turn, or as a wake when the search backgrounds on a live session; {{/if}}{{#if hasTemporaryAsk}}\`ask\` with \`role\` runs one temporary agent for one question; {{/if}}{{#if hasHire}}\`hire\` creates a persistent subordinate in this workspace. Subordinates share this workspace's files and sandbox.{{/if}}{{/if}}{{#if rungsInCode}}
+Helper agents are one tool: \`agents\`. Its schema says what each action does: {{#if hasSwarm}}\`swarm\` runs parallel nodes over this workspace and settles results back this turn, or as a wake when the search backgrounds on a live session; {{/if}}{{#if hasTemporaryAsk}}\`hire\` with \`lifetime:"task"\` runs one agent for one question and returns its answer here; {{/if}}{{#if hasHire}}\`hire\` creates a persistent subordinate in this workspace. Subordinates share this workspace's files and sandbox.{{/if}}{{/if}}{{#if rungsInCode}}
 The same actions are callable inside execute_tools as \`agents.<action>\`.{{/if}}{{#if hasReport}}
 You are a subordinate agent of this workspace: the workspace is your world, whoever hired you assigns your work, and \`report\` carries progress back to them.{{/if}}`,
 );
@@ -331,18 +318,22 @@ A background job needs nothing from you while it runs. Its full result wakes you
  * writing every row of it transposed; building an API to its own convenient
  * signature and self-grading it green against its own tests.
  *
- * Deliberately NOT here: a "check your work before calling it done" framing
- * sentence. The CompletionGate is that instruction as a mechanism — it shows the
- * harness's own reading of the working directory and asks for it to be checked
- * against the task — and a generic re-check prompt is the one Anthropic's Opus 5
- * guidance says to delete because it over-verifies. What survives is what the
- * gate does not say and cannot: the exact SHAPE the request named, and the
- * interface it will be called through.
+ * Deliberately NOT here: any instruction to re-read or re-check as such. The
+ * CompletionGate is that instruction as a mechanism — it shows the harness's
+ * own reading of the working directory and asks for it to be checked against
+ * the task — and an unconditional re-verification pass is the family
+ * Anthropic's Opus 5 guidance says to delete: removing it measured a third
+ * off cost per ticket with no accuracy change. The framing sentence went
+ * first; "Re-read the artifact itself against the request's own words" was
+ * the same instruction in narrower words and went with it. What survives is
+ * what the gate does not say and cannot: the exact SHAPE the request named,
+ * and the interface the work will be called through. Both name a specific
+ * thing to look at, neither asks for a second pass over the whole artifact.
  */
 export const VERIFICATION_SECTION = definePromptSection(
   'state/verification',
   `## Verification
-- Re-read the artifact itself against the request's own words. Check every deliverable it names, and the exact shape it names (column order, direction, units, filenames).
+- Check every deliverable the request names, and the exact shape it names (column order, direction, units, filenames).
 - Build to the interface the task states. Exercise your work the way the task says it will be called, with the signature, entry point, and arguments it specifies.{{#if hasShell}}
 - Run the real check and report what passed or failed. A result is something you executed.{{/if}}`,
 );

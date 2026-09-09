@@ -12,7 +12,6 @@ import {
   DynamicContextLedger,
   outputReserveTokens,
   stepContextLimit,
-  STEP_RECENT_TOOL_BUDGET_TOKENS,
   type ModelWindow,
 } from '../src/index';
 
@@ -113,9 +112,11 @@ describe('pruneStepToolOutputs', () => {
     for (const idx of [2, 4, 6]) {
       expect(outputText(resultPart(prunedN1[idx]))).toBe(outputText(resultPart(prunedN[idx])));
     }
-    // Growth is monotone: the new tail pushed exchange 3 (index 8) out of the
-    // recent budget — protected at step N, truncated at step N+1 — and no
-    // truncated part ever un-truncates.
+    // Growth is monotone. This 64k/20k fixture has a 44k allocation and an 11k
+    // batch, so one more 10k exchange is enough to cross a batch line and the
+    // boundary advances by one result here — the neighbouring test measures
+    // the steps that do NOT cross one. Whichever way it goes, no truncated
+    // part ever un-truncates.
     expect(prunedN[8]).toBe(stepN[8]);
     expect(outputText(resultPart(prunedN1[8]))).toContain('…[truncated:');
     expect(prunedN1.length).toBe(stepN1.length);
@@ -154,8 +155,67 @@ describe('pruneStepToolOutputs', () => {
     expect(outputText(part)).toContain('…[truncated:');
   });
 
-  test('the exported budget constant is what the pipeline advertises', () => {
-    expect(STEP_RECENT_TOOL_BUDGET_TOKENS).toBe(40_000);
+  // The measured cost defect this pins. The SDK rebuilds every step's array
+  // from the ORIGINAL history, so this pass never sees its own previous
+  // output: the total it measures grows for the whole turn and it re-decides
+  // the boundary on every step. Against a real Sonnet window (200k/64k →
+  // 136k) with 24k-char tool results the boundary used to move on every step
+  // from step 22 on — 18 of 40 steps rewrote 72-77% of the request rather
+  // than reading it from the provider's prefix cache, and a cache write is
+  // ~12x a cache read on Anthropic input rates. This module exists to stop
+  // exactly that: its own header cites a turn that billed 1.5M uncached input
+  // tokens across 33 steps.
+  //
+  // The contract is about BYTES, not about whether the pass ran: the pass has
+  // to run on every over-budget step (nothing carries its last answer
+  // forward), but its output must be byte-identical until a whole batch of
+  // new output has arrived.
+  test('the boundary moves once per batch, not once per step', () => {
+    const limits: ModelWindow = { contextWindow: 200_000, modelOutputLimit: 64_000 };
+    const STEPS = 40;
+    let turn: ModelMessage[] = [{ role: 'user', content: 'ship the feature' }];
+    let previous: string | null = null;
+    const moved: number[] = [];
+    for (let step = 0; step < STEPS; step++) {
+      turn = [...turn, ...toolExchange(step, 24_000)];
+      const request = JSON.stringify(pruneStepToolOutputs(turn, limits) ?? turn);
+      // A request whose predecessor is a literal prefix of it re-prefills
+      // nothing: the provider reads every shared byte from its cache. The
+      // closing bracket of the serialized array is the only byte that has to
+      // give way to the new tail.
+      if (previous !== null && !request.startsWith(previous.slice(0, previous.lastIndexOf(']')))) {
+        moved.push(step);
+      }
+      previous = request;
+    }
+    // ~6k tokens a step over 40 steps is ~240k against a 136k allocation, so
+    // the boundary has to move — but once per 34k batch (about every fifth
+    // step of this size), never on consecutive steps.
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved.length).toBeLessThanOrEqual(STEPS / 5);
+    for (let i = 1; i < moved.length; i++) {
+      expect(moved[i]).toBeGreaterThan(moved[i - 1] + 1);
+    }
+  });
+
+  test('a pass frees a share of the allocation, so a larger window frees more per pass', () => {
+    // Not a fixed token count: a pass has to free a share of the allocation
+    // it is protecting, or the same number is a no-op on a 1M window and
+    // clears everything on a 32k one. Observable as how many results the
+    // FIRST over-budget pass truncates: the overage is at most one result,
+    // so everything past it is the quantum.
+    const truncatedByFirstPass = (limits: ModelWindow): number => {
+      let turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
+      for (let step = 0; ; step++) {
+        turn = [...turn, ...toolExchange(step, 8_000)];
+        const pruned = pruneStepToolOutputs(turn, limits);
+        if (pruned !== undefined) return pruned.filter((message, i) => message !== turn[i]).length;
+      }
+    };
+    const sonnet = truncatedByFirstPass({ contextWindow: 200_000, modelOutputLimit: 64_000 });
+    const million = truncatedByFirstPass({ contextWindow: 1_000_000, modelOutputLimit: 128_000 });
+    expect(sonnet).toBeGreaterThan(1);
+    expect(million).toBeGreaterThan(sonnet);
   });
 });
 
@@ -244,10 +304,9 @@ describe('composePrepareStep with pruning', () => {
   });
 });
 
-// KINU-045. The admission used to keep a flat 0.7 share of the window
-// (STEP_CONTEXT_BUDGET_RATIO), a number nobody could point at a fact for.
-// It now reserves the resolved model's own answer allowance, bounded by the
-// only split the window can guarantee both claimants.
+// KINU-045. The admission reserves the resolved model's own answer allowance,
+// bounded by the only split the window can guarantee both claimants — never a
+// flat share of the window, a number nobody can point at a fact for.
 describe('outputReserveTokens', () => {
   // Pairs read from models.dev/api.json for the exact models this repo
   // resolves: the first two publish an allowance well under half their window,

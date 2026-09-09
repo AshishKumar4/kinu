@@ -2,13 +2,12 @@
  * The devbox benchmark fixture.
  *
  * Not part of any product deploy. It exists so a driver can raise a real
- * container with a real object store, run the same workload against both
- * durability strategies, and compare them. It runs two ways:
+ * container with a real object store and run the shipped durability strategy
+ * against it. It runs two ways:
  *
  *   `wrangler dev` — a local container, a local store, and NO container outbound
  *   interception. The snapshot chain measures its extraction path there and says
- *   so; r2fs cannot mount at all and refuses. That is enough for a smoke test
- *   and it is not a measurement.
+ *   so. That is enough for a smoke test and it is not a measurement.
  *
  *   `wrangler deploy` — an ephemeral Worker on a real account. The only place a
  *   number means anything: `wrangler dev --remote` refuses Durable Objects, so
@@ -42,8 +41,6 @@
  * outlives its run is inert rather than an open exec endpoint.
  */
 
-import { candidateStoreFacts } from './candidate-facts';
-import type { CandidateStrategy } from './candidate-facts';
 import { ContainerProxy } from '@cloudflare/sandbox';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -61,14 +58,6 @@ import {
   type DevboxStrategyName,
 } from '../src/index';
 import {
-  CANDIDATE_JOURNAL_BINARY,
-  CANDIDATE_JOURNAL_MOUNT,
-  CANDIDATE_JOURNAL_ROOT,
-  CANDIDATE_JOURNAL_SOCKET,
-  CANDIDATE_STORE_MOUNT,
-} from '../src/candidates/container';
-import { JOURNAL_READY_PROBE, JOURNAL_READY_PROBE_PATH, journalReadyRunCommand } from './journal-ready-probe';
-import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
   R2_CLASS_FREE_OPERATIONS as CLASS_FREE,
@@ -76,7 +65,7 @@ import {
   type R2OperationName as OpName,
   type R2OperationTally as OpTally,
 } from './r2-operations';
-import { bindingFor, storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
+import { storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
 import { runBenchSecurityCells, type SecurityCellsObservation } from './security-cells';
 import {
   armPublicationCut, finishPublicationCut, holdPublicationAcknowledgement,
@@ -87,15 +76,11 @@ import { publicationBucket } from './publication-bucket';
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
   SnapshotChainBox?: DurableObjectNamespace<SnapshotChainBox>;
-  R2fsBox?: DurableObjectNamespace<R2fsBox>;
-  OverlayCasBox?: DurableObjectNamespace<OverlayCasBox>;
-  BoundedLayersBox?: DurableObjectNamespace<BoundedLayersBox>;
-  MerklePackBox?: DurableObjectNamespace<MerklePackBox>;
   BenchOpCounter: DurableObjectNamespace<BenchOpCounter>;
   /** Supplied per run through `wrangler deploy --var`, never committed. An
    *  absent token makes every request 401. */
   BENCH_TOKEN?: string;
-  /** The arms whose bindings the generated fixture config declares. */
+  /** The arm whose bindings the generated fixture config declares. */
   BENCH_SELECTED_ARMS?: string;
   /** Immutable per deployment. Absent and zero leave object writes uninstrumented. */
   BENCH_PUBLICATION_CUT?: string;
@@ -106,37 +91,10 @@ interface BenchEnv {
   ALLOW_EXTRACTION?: string;
 }
 
-/**
- * Raw container evidence for one candidate attachment.
- *
- * Every `expected*` field is the path the candidate storage itself uses,
- * carried so the driver never restates it. `mounts` is the whole of
- * `/proc/mounts`: a fixture that pre-selected "the interesting line" would
- * decide which mount counts, and that decision belongs to the judge.
- */
-export interface CandidateContainerFacts {
-  readonly expectedWorkdirMount: string;
-  readonly expectedStoreMount: string;
-  readonly expectedJournalRoot: string;
-  readonly expectedJournalSocket: string;
-  readonly expectedJournalBinary: string;
-  readonly mounts: string;
-  readonly journalRootPresent: boolean;
-  readonly journalSocketPresent: boolean;
-  /** Did the control socket answer one read-only `stats` request, rather than
-   *  merely exist as a filesystem entry? */
-  readonly journalReady: boolean;
-  /** The daemon response when ready, or the exec/socket failure when not. */
-  readonly journalReadyDetail: string;
-  /** The journal daemon's own argv, space-joined, or '' when no such process
-   *  is alive in the container. */
-  readonly journalDaemonCommand: string;
-}
-
 // ── object-store op counting ────────────────────────────────────────────────
 //
-// The whole comparison turns on how many store operations each strategy costs,
-// so the count has to be complete. Two facts make it easy to get wrong, both
+// What the strategy costs turns on how many store operations it makes, so the
+// count has to be complete. Two facts make it easy to get wrong, both
 // measured the hard way on a deployed run:
 //
 //   The s3fs traffic does NOT go through the Durable Object's binding. It is
@@ -152,17 +110,17 @@ export interface CandidateContainerFacts {
 /** How many counted calls may accumulate before the tally is pushed.
  *
  *  A push is one Durable Object round trip, so pushing on every call would add
- *  that trip to every intercepted s3fs request and distort the r2fs numbers,
- *  whose whole cost model is per-request. Batching amortises it to roughly one
+ *  that trip to every intercepted s3fs request, and an intercepted request is
+ *  the unit a mounted store is billed in. Batching amortises it to roughly one
  *  trip per 64 calls. The push is AWAITED rather than held open with
  *  `waitUntil`, which has no effect here and would drop the write on eviction. */
 const FLUSH_EVERY = 64;
 
-/** What a `get` served, by what the key holds. A candidate control envelope
- *  is metadata; every other object in the store is payload. The snapshot
- *  chain keeps its control record in Durable Object storage, so its wake
- *  serves payload bytes alone. No other operation moves an object body into
- *  the box. */
+/** What a `get` served, by what the key holds. The snapshot chain keeps its
+ *  control record in Durable Object storage, so every object body the store
+ *  moves into the box is payload, and the metadata class carries the zero this
+ *  strategy measures. `RestoreWork` counts the two separately, so the tally
+ *  declares both rather than leaving one of them absent. */
 const BYTE_CLASSES = ['payload', 'metadata'] as const;
 type ByteClass = (typeof BYTE_CLASSES)[number];
 export type ByteTally = Partial<Record<ByteClass, number>>;
@@ -178,9 +136,8 @@ function countOp(name: OpName): void {
   pendingCount += 1;
 }
 
-function countBytes(key: string, served: number): void {
-  const cls: ByteClass = key.includes('/candidate-control/') ? 'metadata' : 'payload';
-  pendingBytes[cls] = (pendingBytes[cls] ?? 0) + served;
+function countBytes(served: number): void {
+  pendingBytes.payload = (pendingBytes.payload ?? 0) + served;
 }
 
 /** The bytes one `get` served: the range R2 answered when one was asked for,
@@ -275,7 +232,7 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
       const object = await bucket.get(key, options);
       // A conditional `get` whose condition failed answers an `R2Object` with
       // no body, so it served nothing.
-      if (object !== null && 'body' in object) countBytes(key, servedBytes(object));
+      if (object !== null && 'body' in object) countBytes(servedBytes(object));
       return object;
     },
     put: async (
@@ -487,12 +444,11 @@ const operationIdKey = (op: string): string => `${OPERATION_ID_PREFIX}${op}`;
 const OperationPayloadSchema = v.object({ token: v.string() });
 type BenchOperationPayload = v.InferOutput<typeof OperationPayloadSchema>;
 
-// ── the two boxes ───────────────────────────────────────────────────────────
+// ── the box ─────────────────────────────────────────────────────────────────
 //
-// Two Durable Object classes rather than one with a runtime switch, because a
-// box's strategy cannot change once it holds bytes: the two write different
-// things. A class per strategy makes that structural, and the driver picks an
-// arm by picking a namespace.
+// The strategy is fixed by the CLASS rather than by a runtime switch: a box's
+// storage layout cannot change once it holds bytes, and the class is what the
+// migration and the container binding name.
 
 class BenchBox extends Devbox<BenchEnv> {
   /**
@@ -519,8 +475,8 @@ class BenchBox extends Devbox<BenchEnv> {
    *
    * Called as RPC at the END of every instrumented operation, so it executes
    * where the counting happened rather than where the request was served. That
-   * is what makes the count independent of `FLUSH_EVERY`: the threshold stays as
-   * an optimisation WITHIN an operation, and correctness no longer depends on an
+   * is what makes the count independent of `FLUSH_EVERY`: the threshold stays an
+   * optimisation WITHIN an operation, and correctness does not depend on an
    * operation happening to issue 64 calls before it ends.
    */
   async flushOpTally(): Promise<void> {
@@ -545,11 +501,7 @@ class BenchBox extends Devbox<BenchEnv> {
    */
   async runSecurityCells(nonce: string): Promise<SecurityCellsObservation> {
     const strategy = this.strategy;
-    const id = this.ctx.id.toString();
-    const base = `boxes/${id}/`;
-    const boxPrefix = strategy === 'bounded-layers' || strategy === 'merkle-pack'
-      ? `${base}candidate/${strategy}/`
-      : base;
+    const boxPrefix = `boxes/${this.ctx.id.toString()}/`;
     // The F12 scan surface: the declared string env beside the token, named
     // one by one so no representation check decides what counts. BENCH_TOKEN
     // itself is the scanned secret, never a scanned surface.
@@ -568,54 +520,9 @@ class BenchBox extends Devbox<BenchEnv> {
       nonce,
       bucket: this.env.BACKUP_BUCKET,
       storage: this.ctx.storage,
-      boxId: id,
       fixtureSecret: this.env.BENCH_TOKEN ?? '',
       envValues,
     });
-  }
-
-  /**
-   * What the container itself shows about a candidate attachment, as RAW
-   * evidence.
-   *
-   * Read through the same `exec` a workload uses, so nothing reported here can
-   * see a mount the workload cannot. Nothing is judged: the whole of
-   * `/proc/mounts` travels rather than a boolean about it, and the paths the
-   * candidate storage actually uses travel beside it, so the driver compares
-   * observation against contract instead of trusting a verdict this fixture
-   * made about itself.
-   */
-  async candidateContainerFacts(): Promise<CandidateContainerFacts> {
-    const mounts = await this.exec('cat /proc/mounts');
-    const journalRoot = await this.exec(`test -d ${CANDIDATE_JOURNAL_ROOT} && echo yes || echo no`);
-    const journalSocket = await this.exec(`test -S ${CANDIDATE_JOURNAL_SOCKET} && echo yes || echo no`);
-    // Staged to a file first: interpolating the bytes into `bun -e` inside
-    // shell double-quotes mangles real newlines into literal backslash-n
-    // sequences that Bun's parser rejects.
-    await this.writeFile(JOURNAL_READY_PROBE_PATH, JOURNAL_READY_PROBE);
-    const journalProbe = await this.exec(journalReadyRunCommand(CANDIDATE_JOURNAL_SOCKET));
-    // The daemon's own argv, found by scanning /proc rather than by asking a
-    // process table tool the sandbox image may not carry. `grep -a` because a
-    // cmdline is NUL-separated and grep would otherwise call it binary.
-    const daemon = await this.exec(
-      `for f in /proc/*/cmdline; do if tr '\\0' ' ' < "$f" 2>/dev/null `
-      + `| grep -qa -- '${CANDIDATE_JOURNAL_BINARY}'; then tr '\\0' ' ' < "$f"; break; fi; done`,
-    );
-    return {
-      expectedWorkdirMount: CANDIDATE_JOURNAL_MOUNT,
-      expectedStoreMount: CANDIDATE_STORE_MOUNT,
-      expectedJournalRoot: CANDIDATE_JOURNAL_ROOT,
-      expectedJournalSocket: CANDIDATE_JOURNAL_SOCKET,
-      expectedJournalBinary: CANDIDATE_JOURNAL_BINARY,
-      mounts: mounts.stdout,
-      journalRootPresent: journalRoot.stdout.trim() === 'yes',
-      journalSocketPresent: journalSocket.stdout.trim() === 'yes',
-      journalReady: journalProbe.exitCode === 0,
-      journalReadyDetail: journalProbe.exitCode === 0
-        ? journalProbe.stdout.trim()
-        : journalProbe.stderr.trim() || journalProbe.stdout.trim() || `journal probe exited ${journalProbe.exitCode}`,
-      journalDaemonCommand: daemon.stdout.trim(),
-    };
   }
 
   /** Release the benchmark container without preserving state. The caller is
@@ -628,15 +535,14 @@ class BenchBox extends Devbox<BenchEnv> {
   /**
    * Arm one durable one-shot for a minute-scale operation, and answer its token.
    *
-   * WHY THE HTTP REQUEST MUST NOT BE THE OPERATION'S CLOCK. A candidate barrier
-   * publishes a whole generation through the journal daemon and the store mount,
-   * and the driver's own per-attempt deadline is 180 s. Both deployed decisive
-   * runs (20260831031426 and 20260831143544) lost `bounded-layers` and
-   * `merkle-pack` to that ceiling: the request timed out, the driver re-posted a
-   * checkpoint the fixture was still running, the checkpoint lane serialised the
-   * two, and the retry then ran a SECOND full publication against a box already
-   * saturated — which is what produced the container 502s in the same artifacts.
-   * Raising the deadline only moves the wall to the next tree size.
+   * WHY THE HTTP REQUEST MUST NOT BE THE OPERATION'S CLOCK. A quiesce publishes
+   * a whole generation, and the driver's own per-attempt deadline is 180 s. Both
+   * deployed decisive runs (20260831031426 and 20260831143544) lost arms to that
+   * ceiling: the request timed out, the driver re-posted a checkpoint the fixture
+   * was still running, the checkpoint lane serialised the two, and the retry then
+   * ran a SECOND full publication against a box already saturated — which is what
+   * produced the container 502s in the same artifacts. Raising the deadline only
+   * moves the wall to the next tree size.
    *
    * So the request arms a schedule row — the same seam the startup and heartbeat
    * rows already use, durable across eviction and holding no request open — and
@@ -744,11 +650,12 @@ class BenchBox extends Devbox<BenchEnv> {
    * replacement does.
    *
    * The witness instrument for a recovery replay, and the only way to reach it
-   * from outside: `quiesce` folds the journal, so after an ordinary stop nothing
-   * is pending for an attach to replay and the recovery path this box's restore
-   * claim is about never runs. A container the platform replaced left exactly
-   * this state — staged journal entries, no fold, no boot marker — and the next
-   * commit heals it, which is what makes the replay observable.
+   * from outside: `quiesce` takes the final checkpoint, so after an ordinary
+   * stop the store already holds the generation an attach would restore and the
+   * recovery path this box's restore claim is about never runs. A container the
+   * platform replaced left exactly this state — the last committed generation
+   * in the store, uncommitted work on a disk that is gone — and the next wake
+   * restores from it, which is what makes the replay observable.
    */
   async killWithoutQuiesce(): Promise<boolean> {
     if (this.ctx.container?.running !== true) return false;
@@ -797,11 +704,11 @@ class BenchBox extends Devbox<BenchEnv> {
       quietConfirmMs: 30_000,
       // 2s, not the shipped 5 minutes: the bench measures checkpoint COST,
       // not cadence, and every measured tick waits this interval out first.
-      // At 30s a three-arm run slept ~20 minutes doing nothing.
+      // At 30s a run slept ~20 minutes doing nothing.
       checkpointIntervalMs: 2_000,
       // A BUDGET IS A CEILING, NOT A DELAY.
       //
-      // MEASURED: at 25_000 the r2fs arm died with `Devbox.attach exceeded its
+      // MEASURED: at 25_000 an arm died with `Devbox.attach exceeded its
       // 25000ms budget and was abandoned` while attaching a 400 MiB workspace,
       // and that death is terminal — every later operation answers `no attached
       // work directory` and the armed retry never succeeds. So the arm lost every
@@ -835,38 +742,6 @@ export class SnapshotChainBox extends BenchBox {
   }
 }
 
-export class R2fsBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'r2fs';
-  }
-}
-
-export class OverlayCasBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'overlay-cas';
-  }
-}
-
-export class BoundedLayersBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'bounded-layers';
-  }
-
-  protected override get candidateRunnerPath(): string {
-    return '/opt/kinu/candidate-runner.bundle.mjs';
-  }
-}
-
-export class MerklePackBox extends BenchBox {
-  protected override get strategy(): DevboxStrategyName {
-    return 'merkle-pack';
-  }
-
-  protected override get candidateRunnerPath(): string {
-    return '/opt/kinu/candidate-runner.bundle.mjs';
-  }
-}
-
 // ── the driver API ──────────────────────────────────────────────────────────
 
 
@@ -894,42 +769,18 @@ function authorized(request: Request, expected: string | undefined): boolean {
   return diff === 0;
 }
 
-/** The stub for one box. Every namespace holds a `BenchBox` subclass, and the
- *  routes only ever call methods the base class declares, so one return type
- *  serves every arm. */
-type BenchStub =
-  | DurableObjectStub<SnapshotChainBox>
-  | DurableObjectStub<R2fsBox>
-  | DurableObjectStub<OverlayCasBox>
-  | DurableObjectStub<BoundedLayersBox>
-  | DurableObjectStub<MerklePackBox>;
+/** The stub for one box. The routes only ever call methods the box's own class
+ *  declares, so one named stub type serves every route. */
+type BenchStub = DurableObjectStub<SnapshotChainBox>;
 
 function boxOf(
   env: BenchEnv,
   strategy: DevboxStrategyName,
   name: string,
 ): BenchStub {
-  const binding = bindingFor(env, strategy);
+  const binding = env.SnapshotChainBox;
   if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
   return binding.get(binding.idFromName(`${strategy}:${name}`));
-}
-
-/**
- * The box prefix `candidateStorePaths` is rooted at, recovered from the arm's
- * own payload prefix.
- *
- * The durable-object id is derived in ONE place — `storePrefixOf` — and this
- * removes the suffix that function appends. A second `idFromName` call here
- * would be a second derivation of the same id, free to drift from the one the
- * mount actually uses and to address another box's envelopes.
- */
-function candidateBoxPrefix(env: BenchEnv, strategy: CandidateStrategy, name: string): string {
-  const payloadPrefix = storePrefixOf(env, strategy, name).replace(/\/$/, '');
-  const suffix = `/candidate/${strategy}`;
-  if (!payloadPrefix.endsWith(suffix)) {
-    throw new Error(`candidate payload prefix "${payloadPrefix}" does not end with "${suffix}"`);
-  }
-  return payloadPrefix.slice(0, -suffix.length);
 }
 
 /** Every field any route reads, all optional, parsed at the edge. One named
@@ -937,13 +788,7 @@ function candidateBoxPrefix(env: BenchEnv, strategy: CandidateStrategy, name: st
  *  declared, and a payload that disagrees is refused with its reason instead of
  *  producing a silent default. */
 const DriverBodySchema = v.object({
-  strategy: v.optional(v.picklist([
-    'snapshot-chain',
-    'r2fs',
-    'overlay-cas',
-    'bounded-layers',
-    'merkle-pack',
-  ])),
+  strategy: v.optional(v.picklist(['snapshot-chain'])),
   command: v.optional(v.string()),
   cwd: v.optional(v.string()),
   path: v.optional(v.string()),
@@ -1036,29 +881,7 @@ async function serveInstrumentRoutes(
     const security = await box.runSecurityCells(nonce);
     return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
   }
-  if (route !== 'GET /candidate') return null;
-  // FACTS ONLY, and only for an arm that has candidate control state.
-  // A chain or overlay arm is refused here rather than served the
-  // nearest-looking rows, because a driver that accepted those would be
-  // proving a candidate lifecycle against another strategy's evidence.
-  if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') {
-    return json({
-      ok: false,
-      strategy,
-      box: name,
-      error: `${strategy} publishes no candidate control envelope`,
-    }, 400);
-  }
-  const store = await candidateStoreFacts(
-    env.BACKUP_BUCKET,
-    strategy,
-    candidateBoxPrefix(env, strategy, name),
-  );
-  const container = await box.candidateContainerFacts();
-  // The raw control fact travels verbatim so a dump taken at publish
-  // and one taken at wake compare byte for byte.
-  const control = await box.candidateControlState();
-  return json({ ok: true, strategy, box: name, store, container, control, ms: Date.now() - started });
+  return null;
 }
 
 export default {
@@ -1080,7 +903,7 @@ export default {
     if (strategy === null) {
       return json({
         ok: false,
-        error: 'strategy is required: snapshot-chain, r2fs, overlay-cas, bounded-layers, or merkle-pack',
+        error: 'strategy is required: snapshot-chain',
       }, 400);
     }
 

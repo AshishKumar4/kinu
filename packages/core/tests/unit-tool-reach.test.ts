@@ -1,15 +1,15 @@
 /**
  * The reach axis — TOOL_REACH, and the two directions that keep it honest.
  *
- * How the model reaches a capability used to be emergent rather than declared:
- * native meant "whichever names buildBuiltinTools happened to emit", codemode
- * meant "whichever createXCodemodeProvider some backend actor class happened to
- * call", and the Tools panel guessed `nativeNames.has(name) ? 'native' :
- * 'codemode'` — a binary with no way to say "neither", which is why the one
- * deps-gated builtin (`report`) rendered as codemode-only on an orchestrator,
+ * How the model reaches a capability is DECLARED, not emergent. Left emergent,
+ * native means "whichever names buildBuiltinTools happened to emit", codemode
+ * means "whichever createXCodemodeProvider some backend actor class happened to
+ * call", and the Tools panel guesses `nativeNames.has(name) ? 'native' :
+ * 'codemode'` — a binary with no way to say "neither", which is how the one
+ * deps-gated builtin (`report`) renders as codemode-only on an orchestrator,
  * an actor that has it on no surface at all.
  *
- * Every codemode factory now takes its provider `name` straight from the table,
+ * Every codemode factory takes its provider `name` straight from the table,
  * so a namespace the table stops declaring fails to COMPILE. What a test still
  * has to catch is the reverse: a row added to the table with nothing built for
  * it — a capability declared reachable that the model can never call, which is
@@ -24,13 +24,15 @@ import {
   TOOL_REACH,
   createAgentsCodemodeProvider,
   createAgentSelfProvider,
+  createAppDataStore,
+  createDbCodemodeProvider,
   createMemoryCodemodeProvider,
   createReleaseCodemodeProvider,
   createReportCodemodeProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
-  createAgentConfigStore,
   MissionGovernor,
+  RunEventRecorder,
   TaskListStore,
   type AgentSelfHost,
   type CodemodeProvider,
@@ -39,11 +41,14 @@ import {
   type ReleaseChange,
   type AgentRuntime,
 } from '../src/index';
+import { refuseHostNode } from './helpers-actor-host';
 
 /** `createAgentSelfProvider` reads nothing off the host at construction — the
  *  host is consumed inside each member's execute, which unit-agent-self.test.ts
  *  covers. This exists only so the provider can be built here. */
-function agentSelfHost(storage: AgentRuntime['storage']): AgentSelfHost {
+function agentSelfHost(
+  storage: AgentRuntime['storage'], actor: AgentRuntime['actor'],
+): AgentSelfHost {
   return {
     proposeCurriculumTasks: async () => [],
     listCurriculumTasks: async () => [],
@@ -51,7 +56,7 @@ function agentSelfHost(storage: AgentRuntime['storage']): AgentSelfHost {
     proposeScaffold: async () => ({ ok: false, reason: 'not in this test' }),
     listScaffoldVersions: () => [],
     createTimerTrigger: async () => ({ id: 't1', kind: 'timer_oneshot', nextFireAt: null }),
-    budget: new MissionGovernor({ storage }),
+    budget: new MissionGovernor({ storage, actor }),
     cancelTrigger: () => ({ ok: true, changed: false }),
     jobResult: async () => null,
     listBackgroundJobs: async () => [],
@@ -108,12 +113,18 @@ describe('the reach declaration', () => {
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
         mode: 'build',
-        fork: { rt, model: new MockLanguageModelV3() },
+        // REFUSES to seat a node rather than answering with a stub: this case
+        // only builds each provider, so a node hosted here would be a node
+        // nothing asked for, running under a fabricated actor.
+        fork: {
+          rt, model: new MockLanguageModelV3(),
+          hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
+        },
       })),
-      memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql })),
+      memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor })),
       tasks: () => createTasksCodemodeProvider(
-        new TaskListStore(rt.storage.sql),
-        createAgentConfigStore(rt.storage.sql),
+        new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync),
+        rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({
         search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
@@ -121,7 +132,19 @@ describe('the reach declaration', () => {
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       release: () => createReleaseCodemodeProvider(() => releaseDeps),
-      agent: () => createAgentSelfProvider(agentSelfHost(rt.storage)),
+      agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),
+      // The agent-data namespace over a REAL store on this runtime's own
+      // database. `events` and `runId` are read per mutation, and this case
+      // performs none — but they are the actor's real recorder and a named run
+      // rather than throwing stubs, because a factory that cannot be built is
+      // indistinguishable here from a namespace nobody wired.
+      db: () => createDbCodemodeProvider(createAppDataStore({
+        sql: rt.storage.sql,
+        actor: rt.actor,
+        transactionSync: rt.storage.transactionSync,
+        events: () => new RunEventRecorder(rt.storage.sql, rt.actor),
+        runId: () => 'run-tool-reach',
+      })),
     } satisfies Record<string, () => CodemodeProvider>;
 
     const declared = Object.entries(TOOL_REACH)

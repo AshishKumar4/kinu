@@ -21,8 +21,8 @@
  *                     the catalog prices nothing) — the caller falls back to
  *                     the blended rate and RECORDS that it did.
  *
- * Both backends previously carried this whole block verbatim, differing only
- * in the lookup function (provider registry vs LocalModelResolver).
+ * One implementation for both backends — they differ only in the lookup
+ * function (provider registry vs LocalModelResolver).
  */
 
 import { contextWindowForModel } from '../context-window';

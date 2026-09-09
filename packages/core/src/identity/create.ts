@@ -24,6 +24,8 @@ import { nowMs } from '../utils/date';
 import { createVercelAILLM } from '../llm';
 import { buildRuntime } from '../runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
+import type { ActorHandle } from '../state/actor-handle';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../state/workspace-actors';
 
 export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 
@@ -49,30 +51,31 @@ function buildComponents(
   sql: SqlExecutor,
   execRaw: RawSqlExec,
   workspace: ReturnType<typeof createInlineWorkspace>,
-  config: { llm: LLMProviderConfig; agentId: string; agentName: string },
+  actor: ActorHandle,
+  config: { llm: LLMProviderConfig },
 ) {
   const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
   const llm = createVercelAILLM(config.llm);
-  const schedule = createInlineSchedule(sql);
+  const schedule = createInlineSchedule(sql, actor);
 
   return buildRuntime({
-    sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
-    agentId: config.agentId, agentName: config.agentName,
+    actor,
+    sql, execRaw, transactionSync: write => db.transaction(write)(), vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
     /**
      * This runtime does not implement branch spawning, and says so instead of
      * pretending to.
      *
-     * It used to return a handle whose `explore` answered the literal
-     * `'exploration result'` and whose `generateReflection` answered
-     * `'no reflection available'`. No consumer can tell either from a real
-     * result, so every MCTS-shaped measurement taken on this runtime scored a
-     * fabricated string — and two full behavioural eval runs did exactly that
-     * before anyone noticed, because a plausible fake corrupts silently while an
-     * absent implementation is found in seconds.
+     * A handle whose `explore` answers the literal `'exploration result'` and
+     * whose `generateReflection` answers `'no reflection available'` is
+     * indistinguishable from a real result to every consumer, so every
+     * MCTS-shaped measurement taken on this runtime would score a fabricated
+     * string — two full behavioural eval runs did exactly that before anyone
+     * noticed, because a plausible fake corrupts silently while an absent
+     * implementation is found in seconds.
      *
      * `createWorkspace` exists to BIRTH a workspace (cli/src/agent-create.ts
      * calls it once and closes the database); every running surface opens through
@@ -88,11 +91,7 @@ function buildComponents(
         + 'indistinguishable from a real exploration to every consumer.',
       );
     },
-    // No branch can exist on this runtime, since spawning throws. These stay
-    // no-ops rather than throwing because they return nothing and so fabricate
-    // nothing, and an unconditional teardown path must stay safe to call.
     abortBranch: async () => {},
-    releaseBranch: async () => {},
   });
 }
 
@@ -114,6 +113,8 @@ export async function createWorkspace(
 
   const workspaceId = nanoid();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
+  initWorkspaceActorTable(execRaw);
+  const actor = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name: config.name });
 
   // The two documents a model reads open under the name a PERSON uses, and
   // under the product's name while the workspace has none. `config.name` heads
@@ -129,14 +130,15 @@ export async function createWorkspace(
   // from birth, and agent.js is only its rebuildable view.
   const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
   await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
-  void sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
+  void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
+    VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
   await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents(db, sql, execRaw, workspace, {
-    llm: config.llm, agentId: workspaceId, agentName: config.name,
+  const runtime = buildComponents(db, sql, execRaw, workspace, actor, {
+    llm: config.llm,
   });
   await resetWorkspaceBaseline(runtime);
   return runtime;

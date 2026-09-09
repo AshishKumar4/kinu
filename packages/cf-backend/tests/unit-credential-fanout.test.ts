@@ -1,6 +1,6 @@
 // Credential mutations must notify the user's active agents so each drops
-// its cached provider/model state (orchestrator.onCredentialsChanged) —
-// previously the hook existed but nothing ever invoked it.
+// its cached provider/model state (orchestrator.onCredentialsChanged) — a
+// hook nothing invokes leaves every live agent on a stale catalog.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest } from '../src/user/routes';

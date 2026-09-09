@@ -26,7 +26,7 @@ import {
 import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
 import { runGepa } from './engine';
 import type {
-  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM,
+  EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM, GepaProgressHooks,
 } from './types';
 
 /** Maximum scaffold source size — keeps candidate explosion bounded.
@@ -34,7 +34,7 @@ import type {
  *  scaffolds serve similar "loaded every turn" cost profiles). */
 const SCAFFOLD_MAX_BYTES = 15 * 1024;
 
-export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
+export interface RunScaffoldGepaOpts<I = unknown, E = unknown> extends GepaProgressHooks {
   rt: AgentRuntime;
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
   /** Reflection-minibatch source (the outcome-labeled negatives to fix).
@@ -47,7 +47,6 @@ export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
   budget?: GepaConfig<I, E>['budget'];
   parentSelection?: GepaConfig<I, E>['parentSelection'];
   random?: () => number;
-  onIteration?: GepaConfig<I, E>['onIteration'];
   /**
    * If provided, override the rationale string passed to `modifyScaffold`.
    * Default: `"GEPA-optimised scaffold (aggregate ${score})"`.
@@ -91,6 +90,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
     parentSelection: opts.parentSelection,
     random: opts.random,
     onIteration: opts.onIteration,
+    onCandidate: opts.onCandidate,
     constraints: {
       maxSizeBytes: SCAFFOLD_MAX_BYTES,
       requiredPattern: SCAFFOLD_REQUIRED_SIGNATURE,

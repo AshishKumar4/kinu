@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import {
   buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
   createTasksCodemodeProvider, TaskListStore, initAgentConfigTable,
-  buildSystemPromptSync, createAgentConfigStore,
+  buildSystemPromptSync,
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
   type AgentRuntime, type CodemodeProvider, type JsonValue, type ProfileCatalogEnvelope,
 } from '../src/index';
@@ -108,10 +108,9 @@ describe('tasks tool', () => {
     await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
     await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('tasks.update requires `status` — one of open, active, done, dropped');
     await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
-    // This assertion used to pin `unknown tasks action 'sort'` — a refusal that
-    // named nothing the model could use next. The gate existed and asserted the
-    // defect. It now names the vocabulary AND echoes what arrived, which is the
-    // one wording every native dispatcher shares (registry.unknownActionError).
+    // The refusal names the vocabulary AND echoes what arrived, which is the one
+    // wording every native dispatcher shares (registry.unknownActionError). A bare
+    // `unknown tasks action 'sort'` would name nothing the model could use next.
     await expect(tasks({ action: 'sort' })).rejects.toThrow('tasks requires `action` — one of add, update, list, mode; got "sort"');
   });
 
@@ -195,8 +194,8 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
-    const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
+    const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
 
     const added = v.parse(
       AddedSchema,
@@ -220,8 +219,8 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     initTaskListTable(testSql.execRaw);
-    const taskList = new TaskListStore(rt.storage.sql);
-    const provider = createTasksCodemodeProvider(taskList, createAgentConfigStore(rt.storage.sql));
+    const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
+    const provider = createTasksCodemodeProvider(taskList, rt.actor.config);
     await codemodeExecute(provider, 'add')(['Parent task']);
     await codemodeExecute(provider, 'add')(['Child task'], 't1');
     await codemodeExecute(provider, 'update')('t2', 'dropped');
@@ -239,7 +238,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     initAllTables(testSql.execRaw, rt.storage.sql);
     initTaskListTable(testSql.execRaw);
     initAgentConfigTable(testSql.execRaw);
-    return { tasks: nativeTasks(rt), rt, config: createAgentConfigStore(rt.storage.sql) };
+    return { tasks: nativeTasks(rt), rt, config: rt.actor.config };
   }
 
   function roleSection(roleId: keyof typeof BUILTIN_ROLE_DEFINITIONS) {

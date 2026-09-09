@@ -168,10 +168,21 @@ describe('fetchServedVersion is fail-soft', () => {
     expect(await fetchServedVersion('https://x.test', boom)).toBeNull();
   });
 
-  test('returns null rather than hanging when the origin stalls', async () => {
+  test('a caller-set bound aborts the probe; no bound leaves nothing that can', async () => {
     const stall = (_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_res, rej) => {
       init?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
     });
     expect(await fetchServedVersion('https://x.test', stall, 10)).toBeNull();
+
+    // `kinu update` and `kinu doctor` ask for the real answer. Their probe
+    // carries no signal at all, so no clock here can turn a slow origin into
+    // "unreachable".
+    let carried: AbortSignal | null | undefined = null;
+    const record = async (_input: string | URL | Request, init?: RequestInit) => {
+      carried = init?.signal;
+      return new Response(JSON.stringify({ version: '0.1.0+abc' }), { headers: { 'content-type': 'application/json' } });
+    };
+    expect(await fetchServedVersion('https://x.test', record)).toEqual({ version: '0.1.0+abc' });
+    expect(carried).toBeUndefined();
   });
 });

@@ -167,27 +167,40 @@ export const FENCES: readonly Fence[] = [
       + 'spurious replacement',
   },
   {
-    name: 'cf/orchestrator#explorationFacetLedgerStatus:terminal-classification',
-    file: 'packages/cf-backend/src/orchestrator.ts',
-    // The terminal/resumable split over the head journal. The pre-fix leak was
-    // the INVERSE reading — `errored` and `budget_exceeded` classified
-    // `resumable`, so a head that threw kept its facet forever, and because a
-    // facet id is never reused that storage is abandoned inside the root DO
-    // for the life of the workspace. Reverting the split to the shipped
-    // two-of-four shape is the mutation, and the owning test pins it through
-    // real journal rows under real facet ids.
-    snippet: `    if (headStatusUnsettled(head.status)) return 'resumable';
-    return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';`,
-    mutation: `    if (headStatusUnsettled(head.status) || head.status === 'errored'
-      || head.status === 'budget_exceeded') return 'resumable';
-    return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';`,
+    name: 'core/heads/types#HEAD_UNSETTLED_STATUSES:terminal-classification',
+    file: 'packages/core/src/heads/types.ts',
+    // The terminal/resumable split over the head journal. The leak it fences is
+    // the INVERSE reading — `errored` and `budget_exceeded` classified as work
+    // that could still continue, so a head that threw or blew its budget is
+    // never read as finished: the exploration sweep keeps its storage for the
+    // life of the workspace, and the cold branch settle owes a report that is
+    // never coming.
+    //
+    // NOT FENCED ON `cf/orchestrator#explorationFacetLedgerStatus` in
+    // `packages/cf-backend/src/orchestrator.ts`: that method has NO CALLER
+    // anywhere in the tree, so its mutation cannot turn any test red however the
+    // owner is pointed — measured 2026-09-08, replacing the surviving sweep's
+    // whole classification with `settled = true` (retire every exploration actor
+    // unconditionally) left all 2,936 cf-backend tests reporting exactly as
+    // before.
+    //
+    // This tuple pair is the one place the four statuses are named,
+    // `HEAD_REPORT_STATUSES`'s own docstring records the sweep defect as the
+    // reason it is a LIST rather than a union, and every reader asks here — the
+    // exploration reclaim, the cold branch settle, the fork tree. So the strip is
+    // the inverse reading applied at the source: the two terminal statuses
+    // re-join the ones a head is still executing under, and the owner pins it
+    // through real journal rows written by a real branch run.
+    snippet: `const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;`,
+    mutation: `const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted', 'errored', 'budget_exceeded'] as const;`,
     owner: {
-      suite: 'packages/cf-backend/tests/unit-facet-reconciliation.test.ts',
-      grep: 'every terminal head loses its facet; only the executing ones keep theirs',
+      suite: 'packages/core/tests/unit-steer-branch.test.ts',
+      grep: 'a reported head comes back under its OWN status, not flattened to errored',
     },
-    why: 'a misclassified facet is either deleted while its run is still resumable '
-      + '(data loss) or retained forever after its head settled terminally (a leak '
-      + 'into the root DO\'s 65,536-facet lifetime quota)',
+    why: 'a head that threw or blew its budget reads as still executing: its branch is '
+      + 'owed forever instead of settling under the status it reported, the exploration '
+      + 'sweep retains storage for a run that will never report again, and the tree draws '
+      + 'a dead node as live work',
   },
 ] as const;
 

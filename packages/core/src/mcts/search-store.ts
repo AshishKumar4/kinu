@@ -1,4 +1,5 @@
-// Durable MCTS search checkpoint — the resume record that survives DO eviction.
+// Durable MCTS search checkpoint — the resume record that survives DO eviction,
+// PRIVATE to the actor that started the search.
 //
 // The search TREE (search_nodes) is already durable SQL; the only volatile state
 // is the loop's progress (iteration + remaining budget) and the resolved config.
@@ -8,6 +9,17 @@
 // from a dead process is fenced (agent-core SPEC §5.3): every checkpoint/converge
 // write is stamped with the epoch and rejected when stale.
 //
+// PRIVATE, because the reclaim is keyed on TASK TEXT and nothing else: both
+// `findResumable` and `findRunningSwarms` match `status='running' AND task=?`,
+// so two actors given the same instruction present the same key. Without the
+// owner predicate one actor's re-drive would take over the other's tree, expand
+// it under the other's root id, and settle a run its owner is still executing.
+// The TREE reaches its owner through this row: `search_nodes` is keyed by the
+// minted `root_id` this ledger owns, so a node is unreachable except through an
+// actor-filtered row here. `alternate_takes` and `exploration_records` stay
+// workspace-shared on purpose — they are keyed by settlement and objective, not
+// by run, and that is a catalogue rather than a hole.
+//
 // The engine's fiber snapshot (cf_agents_runs) is per-fiber and deleted once the
 // SDK's recovery hook returns, so it can't drive a cross-activation resume; this
 // store is the source of truth when injected, keyed by the search's root id.
@@ -15,6 +27,7 @@
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { MCTSConfig } from '../types/mcts';
 import type { WorkMode } from '../prompting/surface';
 import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../profiles';
@@ -168,7 +181,8 @@ export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
 
 export function initMctsSearchTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS mcts_search_runs (
-    root_id      TEXT PRIMARY KEY,
+    actor_id     TEXT NOT NULL,
+    root_id      TEXT NOT NULL,
     task         TEXT NOT NULL,
     engine       TEXT NOT NULL DEFAULT 'mcts',
     root_msg_id  TEXT NOT NULL,
@@ -179,9 +193,11 @@ export function initMctsSearchTable(execRaw: RawSqlExec): void {
     epoch        INTEGER NOT NULL DEFAULT 0,
     judge_samples_realised INTEGER,
     created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, root_id)
   )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_mcts_search_status_task ON mcts_search_runs(status, task, updated_at)`);
+  // The resume reads are `owner + status + task`, in that order of selectivity.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_mcts_search_status_task ON mcts_search_runs(actor_id, status, task, updated_at)`);
 }
 
 /** Retain settled search rows for a day, then prune — enough for post-hoc
@@ -189,7 +205,13 @@ export function initMctsSearchTable(execRaw: RawSqlExec): void {
 const SETTLED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 export class MctsSearchStore {
-  constructor(private readonly sql: SqlExecutor) {}
+  private readonly actorId: string;
+
+  /** Bind the ledger to ONE actor. `actorId` is captured from the handle once
+   *  and `assertCurrent()` runs before every statement. */
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   /**
    * Record a fresh search run (status='running', epoch 0). Also prunes old settled
@@ -207,12 +229,14 @@ export class MctsSearchStore {
     rootId: string; task: string; engine: SearchEngine; rootMsgId: string | null;
     config: PersistedSearchKnobs; budget: number; now: number;
   }): void {
+    this.actor.assertCurrent();
     void this.sql`DELETE FROM mcts_search_runs
-      WHERE status != 'running' AND updated_at < ${opts.now - SETTLED_RETENTION_MS}`;
+      WHERE actor_id = ${this.actorId} AND status != 'running'
+        AND updated_at < ${opts.now - SETTLED_RETENTION_MS}`;
     void this.sql`INSERT INTO mcts_search_runs
-      (root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
+      (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
        judge_samples_realised, created_at, updated_at)
-      VALUES (${opts.rootId}, ${opts.task}, ${opts.engine}, ${opts.rootMsgId ?? ''},
+      VALUES (${this.actorId}, ${opts.rootId}, ${opts.task}, ${opts.engine}, ${opts.rootMsgId ?? ''},
               ${JSON.stringify(opts.config)},
               0, ${opts.budget}, 'running', 0, NULL, ${opts.now}, ${opts.now})`;
   }
@@ -230,9 +254,10 @@ export class MctsSearchStore {
    * before judging does not reach.
    */
   observeJudgeEnsemble(rootId: string, realised: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs
       SET judge_samples_realised = MIN(COALESCE(judge_samples_realised, ${realised}), ${realised})
-      WHERE root_id = ${rootId}`;
+      WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`;
   }
   /** Persist the MCTS loop's progress — its iteration count and remaining budget.
    *  Fenced: a stale epoch (a zombie executor after a reclaim) is a no-op.
@@ -240,8 +265,9 @@ export class MctsSearchStore {
    *  A swarm does NOT call this: its progress is derived from its tree
    *  ({@link ResumableSwarm}), so its only live-row write is {@link touch}. */
   checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
-      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** Refresh a SWARM run's heartbeat — `updated_at` alone, fenced on epoch like every
@@ -249,8 +275,9 @@ export class MctsSearchStore {
    *  freshness still answers "is this search hung or working" for every reader that
    *  keys on recency. */
   touch(rootId: string, epoch: number, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET updated_at=${now}
-      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** A swarm run's initial expansion budget, read off the config its `begin` froze.
@@ -276,15 +303,16 @@ export class MctsSearchStore {
   private childrenOf(rootId: string): number {
     return this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
-      WHERE root_id = ${rootId} AND parent_id IS NOT NULL`[0]?.n ?? 0;
+      WHERE actor_id = ${this.actorId} AND root_id = ${rootId}
+        AND parent_id IS NOT NULL`[0]?.n ?? 0;
   }
 
   /**
    * The most recently-updated still-running MCTS search for a task — the resume
    * source when an evicted tree search is re-driven.
    *
-   * Scoped to this engine's own rows. The swarm has a resume of its own now
-   * ({@link findRunningSwarms}), so the scoping is no longer about which engine can be
+   * Scoped to this engine's own rows. The swarm has a resume of its own
+   * ({@link findRunningSwarms}), so the scoping is not about which engine can be
    * resumed at all: it is that neither loop can execute the other's tree faithfully. A
    * swarm's is scored against an objective this loop has no seam for, so re-entering one
    * here would grow it with judged branches and report the result under the swarm's own
@@ -292,8 +320,10 @@ export class MctsSearchStore {
    * downstream would notice.
    */
   findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
-      FROM mcts_search_runs WHERE status='running' AND task=${task} AND engine='mcts'
+      FROM mcts_search_runs
+      WHERE actor_id=${this.actorId} AND status='running' AND task=${task} AND engine='mcts'
       ORDER BY updated_at DESC`;
     for (const row of rows) {
       // `begin` wrote this column with JSON.stringify, so a row that will not
@@ -353,13 +383,15 @@ export class MctsSearchStore {
    * happen. Every write the rule needs is {@link supersede} and {@link reclaim}.
    */
   findRunningSwarms(task: string): readonly ResumableSwarm[] {
+    this.actor.assertCurrent();
     const rows = this.sql<{ root_id: string; config_json: string; epoch: number; children: number }>`
       SELECT r.root_id, r.config_json, r.epoch,
         (SELECT COUNT(*) FROM search_nodes s
-         WHERE s.root_id = r.root_id AND s.parent_id IS NOT NULL) AS children
+         WHERE s.actor_id = r.actor_id AND s.root_id = r.root_id
+           AND s.parent_id IS NOT NULL) AS children
       FROM mcts_search_runs r
-      WHERE status='running' AND task=${task} AND engine='swarm'
-      ORDER BY updated_at DESC, created_at DESC, root_id DESC`;
+      WHERE r.actor_id=${this.actorId} AND r.status='running' AND r.task=${task} AND r.engine='swarm'
+      ORDER BY r.updated_at DESC, r.created_at DESC, r.root_id DESC`;
     return rows.map((row) => ({
       rootId: row.root_id,
       iteration: row.children,
@@ -372,7 +404,8 @@ export class MctsSearchStore {
     rootId: string,
   ): v.InferOutput<typeof StoredSwarmConfigSchema> | null {
     const row = this.sql<{ config_json: string }>`
-      SELECT config_json FROM mcts_search_runs WHERE root_id = ${rootId} LIMIT 1`[0];
+      SELECT config_json FROM mcts_search_runs
+      WHERE actor_id = ${this.actorId} AND root_id = ${rootId} LIMIT 1`[0];
     if (!row) return null;
     let raw: unknown;
     try {
@@ -405,15 +438,29 @@ export class MctsSearchStore {
    *  `unit:'thought'` search journals no heads, so the journal read alone
    *  cannot see it. */
   hasRunningSwarms(): boolean {
+    this.actor.assertCurrent();
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM mcts_search_runs
-      WHERE status='running' AND engine='swarm' LIMIT 1`.length > 0;
+      WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' LIMIT 1`.length > 0;
+  }
+
+  /** Whether ANY search of THIS actor still claims a live executor, whichever
+   *  engine wrote it. Broader than {@link hasRunningSwarms} on purpose: the
+   *  containment question "is exploration still live here" is answered by an
+   *  unsettled MCTS row exactly as it is by an unsettled swarm row, and a
+   *  swarm-only read would let a live tree search be treated as finished. */
+  hasRunningSearches(): boolean {
+    this.actor.assertCurrent();
+    return this.sql<{ present: number }>`
+      SELECT 1 AS present FROM mcts_search_runs
+      WHERE actor_id=${this.actorId} AND status='running' LIMIT 1`.length > 0;
   }
 
   runningSwarmRoots(createdBefore: number): readonly string[] {
+    this.actor.assertCurrent();
     return this.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
-      WHERE status='running' AND engine='swarm' AND created_at < ${createdBefore}
+      WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' AND created_at < ${createdBefore}
       ORDER BY created_at ASC`.map((row) => row.root_id);
   }
 
@@ -437,17 +484,18 @@ export class MctsSearchStore {
    * it. `failed`, not superseded: nothing took the work over; the work died.
    */
   closeUnclaimed(exceptRoots: ReadonlySet<string>, now: number): readonly string[] {
+    this.actor.assertCurrent();
     // `now` is the ACTIVATION CUTOFF as well as the close timestamp: a running
     // row created after it belongs to a live request of this activation, and
     // the reconciliation that calls this must not fail live work.
     const candidates = this.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
-      WHERE status='running' AND engine='swarm' AND created_at < ${now}`
+      WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' AND created_at < ${now}`
       .map((row) => row.root_id)
       .filter((rootId) => !exceptRoots.has(rootId));
     for (const rootId of candidates) {
       void this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
-        WHERE root_id=${rootId} AND status='running' AND engine='swarm'`;
+        WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND engine='swarm'`;
     }
     return candidates;
   }
@@ -459,44 +507,53 @@ export class MctsSearchStore {
    *  Unfenced on purpose — the executor that held this row is gone by construction,
    *  which is why it is being superseded. */
   supersede(rootId: string, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET status='superseded', updated_at=${now}
-      WHERE root_id=${rootId} AND status='running'`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running'`;
   }
 
   /** Claim a still-running search for a resume: bump the lease epoch (fencing
-   *  any executor still holding the old one) and return it. Null if not running. */
+   *  any executor still holding the old one) and return it. Null if not running —
+   *  which is also the answer for a root this actor does not own. */
   reclaim(rootId: string): number | null {
-    void this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1 WHERE root_id=${rootId} AND status='running'`;
+    this.actor.assertCurrent();
+    void this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running'`;
     const rows = this.sql<{ epoch: number; status: string }>`
-      SELECT epoch, status FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;
+      SELECT epoch, status FROM mcts_search_runs
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} LIMIT 1`;
     const row = rows[0];
     return row && row.status === 'running' ? row.epoch : null;
   }
 
   /** Mark a search converged (fenced on epoch). */
   converge(rootId: string, epoch: number, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET status='converged', updated_at=${now}
-      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** Settle a search that finished without an acceptable answer (fenced on
    *  epoch). This is distinct from `failed` (the search broke) and `converged`
    *  (a candidate cleared the floor). */
   noAcceptableCandidate(rootId: string, epoch: number, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET status='no_acceptable_candidate', updated_at=${now}
-      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** Mark a search failed (fenced on epoch). */
   fail(rootId: string, epoch: number, now: number): void {
+    this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
-      WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
+      WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   get(rootId: string): { status: SearchStatus; iteration: number; budget: number; epoch: number } | null {
+    this.actor.assertCurrent();
     const rows = this.sql<Row & { engine: string }>`
       SELECT root_id, task, root_msg_id, config_json, engine, iteration, budget, status, epoch
-      FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;
+      FROM mcts_search_runs WHERE actor_id=${this.actorId} AND root_id=${rootId} LIMIT 1`;
     const r = rows[0];
     if (!r) return null;
     if (r.engine === 'swarm') {
@@ -512,15 +569,19 @@ export class MctsSearchStore {
   }
 
 
-  /** Recent search runs, newest-updated first — the run-level ledger a
-   *  debugging surface needs to tell "how many searches has this workspace
-   *  run, and which root_id does the latest one own" without touching
-   *  search_nodes at all. */
+  /** Recent search runs THIS ACTOR has, newest-updated first — the run-level
+   *  ledger a debugging surface needs to tell "how many searches have I run, and
+   *  which root_id does the latest one own" without touching search_nodes at
+   *  all. Scoped like every other read here: a run belongs to the actor that
+   *  started it, and an operator asking about a specific actor opens that
+   *  actor's ledger rather than reading a merged list nothing can attribute. */
   list(limit = 20): MctsSearchRunSummary[] {
+    this.actor.assertCurrent();
     const rows = this.sql<Row & { engine: string; created_at: number; updated_at: number }>`
       SELECT root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
              created_at, updated_at
-      FROM mcts_search_runs ORDER BY updated_at DESC LIMIT ${limit}`;
+      FROM mcts_search_runs WHERE actor_id=${this.actorId}
+      ORDER BY updated_at DESC LIMIT ${limit}`;
     return rows.map((r) => {
       const swarm = r.engine === 'swarm';
       const children = swarm ? this.childrenOf(r.root_id) : null;

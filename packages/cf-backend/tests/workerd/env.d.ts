@@ -12,16 +12,16 @@ import type { EvictionProbeDO, WitnessDO } from './eviction-probe';
 import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 import type { SpendProbeDO } from './spend-probe';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
+import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
-import type { SlateProcessProbeDO, SlateDepthProbe } from './slate-process-probe';
+import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
-
 interface RetainedFacetRpc extends Rpc.DurableObjectBranded {
   exercise(operation: string): Promise<object>;
 }
@@ -29,10 +29,16 @@ interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
+interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
+  exercise(): Promise<{
+    hops: Record<string, { ok: boolean; error: string | null }>;
+    published: string[];
+  }>;
+}
 interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
-  legacyThenCurrent(): Promise<{ legacy: string; current: string; reused: string }>;
+  unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }>;
 }
 declare global {
   namespace Cloudflare {
@@ -51,6 +57,7 @@ declare global {
       UNBOUNDED_TURN_PROBE: DurableObjectNamespace<UnboundedTurnProbeDO>;
       SPEND_PROBE: DurableObjectNamespace<SpendProbeDO>;
       TERMINAL_EFFECT_PROBE: DurableObjectNamespace<TerminalEffectProbeDO>;
+      DB_CAPABILITY_PROBE: DurableObjectNamespace<DbCapabilityProbeDO>;
       FIBER_RECOVERY_PROBE: DurableObjectNamespace<FiberRecoveryProbeAgent>;
       FORK_SOURCE: DurableObjectNamespace<ForkSourceProbeDO>;
       FORK_TARGET: DurableObjectNamespace<ForkTargetProbeDO>;
@@ -63,6 +70,7 @@ declare global {
       SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
       RETAINED_FACET_SDK: DurableObjectNamespace<RetainedFacetRpc>;
       RETAINED_FACET_ACTOR: DurableObjectNamespace<RetainedFacetRpc>;
+      PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
@@ -72,7 +80,7 @@ declare global {
       mainModule: {
         SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
-        SlateDepthProbe: typeof SlateDepthProbe;
+        SlateChainProbe: typeof SlateChainProbe;
       };
     }
   }

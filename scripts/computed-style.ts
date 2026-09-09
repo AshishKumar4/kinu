@@ -46,8 +46,8 @@
  * renders as Kumo's uncustomised brand colour. Auditing one theme and calling
  * the stylesheet clean measures half of what it governs. Each pass reads
  * `data-mode` back off the document and fails if the page is not on the theme
- * the pass claims, since a pin nobody reads back is not a pin. (The former
- * palette axis retired with the champagne cutover; see index.css.)
+ * the pass claims, since a pin nobody reads back is not a pin. (There is no
+ * palette axis: the stylesheet declares one family; see index.css.)
  *
  *   bun scripts/computed-style.ts                     # every frame, both themes
  *   bun scripts/computed-style.ts chat forks          # named frames only

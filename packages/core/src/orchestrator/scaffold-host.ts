@@ -1,8 +1,7 @@
 /**
  * The scaffold's host bridges — how an evolved scaffold reaches the model, the
  * agent's tool surface, and its own conversation from inside the codemode
- * sandbox. One implementation for both backends (each previously carried its
- * own copy):
+ * sandbox. One implementation for both backends:
  *
  *   createScaffoldLLMStream   host.llmStream — tool NAMES cross the sandbox
  *                             boundary; the host resolves them against the
@@ -12,22 +11,24 @@
  *                             buildHostProvider guarantees).
  *   createScaffoldHistory     host.history — a read-only, budgeted view of the
  *                             conversation the scaffold is the inference loop
- *                             for. Until this existed a scaffold received one
- *                             string (`task`) and a prepared default stream: it
- *                             could not see, let alone navigate, the context it
- *                             was supposed to be managing.
+ *                             for. Without it a scaffold has one string
+ *                             (`task`) and a prepared default stream, and
+ *                             cannot see, let alone navigate, the context it
+ *                             is supposed to be managing.
  */
 
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
-import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import { UNBOUNDED_STEPS } from '../chat';
+import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import { runChat, type ChatOptions } from '../chat';
+import { ExtensionHost, type KinuExtension } from '../extension';
 import { evidenceWindow } from '../prompts/evidence-window';
 import { beginModelOperation, type ModelCallSpend } from '../events/model-call';
-import { normalizeUsage } from '../usage';
+import { addUsage, type Usage } from '../usage';
 import { decodeJsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 import { nanoid } from '../utils/nanoid';
-import { renderThrownChain } from '../obs/index';
+import { renderThrownChain, KinuError } from '../obs/index';
+import { assertScaffoldActive, type ScaffoldRunControl, type ScaffoldToolOutput } from '../scaffold/executor';
 import type {
   ScaffoldHistoryEntry,
   ScaffoldHistoryPage,
@@ -43,14 +44,12 @@ export type {
   ScaffoldHistoryReader,
 } from '../scaffold/executor';
 
-export interface ScaffoldBridgeOpts {
+export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   model: LanguageModel;
   /** The live tool surface, resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  /** Provider options for the scaffold's calls (cf spreads
-   *  effortFor('scaffold_mutation')). `{}` when the backend adds none — safe
-   *  to spread unconditionally. */
-  streamOptions?: Pick<Parameters<typeof streamText>[0], 'providerOptions'>;
+  /** Shared chat options and the existing pre-step extension hook. */
+  streamOptions?: Pick<ChatOptions, 'providerOptions' | 'onStep' | 'stopWhen'> & Pick<KinuExtension, 'prepareStep'>;
   /** Where this loop reports what it cost, and as whose spend — `scaffold` for a
    *  live or candidate scaffold driving its own inference. One field, both
    *  halves, like every other seam that hands its result to more than one kind of
@@ -61,46 +60,53 @@ export interface ScaffoldBridgeOpts {
 
 export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOptions['llmStream'] {
   return async function* (call) {
+    assertScaffoldActive(opts);
     const all = opts.tools();
-    const toolSet: ToolSet = (call.tools && call.tools.length > 0)
-      ? Object.fromEntries(call.tools.filter((n) => all[n]).map((n) => [n, all[n]]))
+    const toolSet: ToolSet = call.tools && call.tools.length > 0
+      ? Object.fromEntries(call.tools.filter(name => all[name]).map(name => [name, all[name]]))
       : all;
     const spend = opts.spend;
-    // Opened before the request. A scaffold's loop is the longest-running direct
-    // operation in the system, so it is the one most likely to be interrupted —
-    // and the start row is what names it afterwards.
     const operation = beginModelOperation(spend, 'stream');
-    let result;
+    let usage: Usage = {};
+    let modelId: string | undefined;
+    const outputs = new Map<string, ScaffoldToolOutput>();
+    const extensions = new ExtensionHost().register({ name: 'kinu.scaffold-lifetime',
+      prepareStep: async ctx => {
+        assertScaffoldActive(opts);
+        return opts.streamOptions?.prepareStep?.(ctx);
+      },
+    });
     try {
-      result = streamText({
-        model: opts.model,
-        system: call.system,
-        messages: call.messages,
-        tools: toolSet,
-        // NO STEP CAP here either: a scaffold's loop runs until its model stops
-        // calling tools, exactly like the live turn it may replace (owner ruling,
-        // 2026-08-21). Spend is governed by the mission ledger at the spend seam,
-        // not by a step count.
-        stopWhen: UNBOUNDED_STEPS,
-        ...opts.streamOptions,
-      });
-      for await (const chunk of result.textStream) yield chunk;
-    } catch (err) {
-      operation.failed({ cause: err });
-      throw err;
+      for await (const event of runChat({
+        model: opts.model, system: call.system, history: call.messages, tools: toolSet,
+        signal: opts.signal, extensions,
+        providerOptions: opts.streamOptions?.providerOptions,
+        stopWhen: opts.streamOptions?.stopWhen,
+        onToolOutput: part => {
+          outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
+            output: part.output, preliminary: part.preliminary });
+        },
+        onStep: async step => {
+          modelId = step.response.modelId;
+          await opts.streamOptions?.onStep?.(step);
+        },
+      })) {
+        if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
+        if (event.type === 'tool-result') {
+          const output = event.success ? outputs.get(event.toolCallId)
+            : { type: 'tool-output-error', toolCallId: event.toolCallId, errorText: event.error ?? event.result } satisfies ScaffoldToolOutput;
+          if (output === undefined) throw new KinuError('missing', 'the SDK tool output was not observed');
+          outputs.delete(event.toolCallId);
+          yield { type: 'native-tool-output', output };
+        }
+        yield event;
+      }
+    } catch (cause) {
+      operation.failed({ cause });
+      throw cause;
     }
-    // After the drain, because that is when usage exists — and `totalUsage`
-    // rather than `usage`, because this is a genuine multi-step loop and the
-    // last step's report would omit every step before it. A caller that
-    // abandons the generator mid-loop reports nothing, which is honest: this
-    // seam never learns what an unfinished stream cost, and the operation's
-    // open start row is what says the loop was entered.
-    const usage = normalizeUsage(await result.totalUsage);
-    const modelId = (await result.response).modelId;
     operation.completed({ usage, modelId });
-    if (spend) {
-      spend.report({ source: spend.source, usage, modelId });
-    }
+    spend?.report({ source: spend.source, usage, modelId });
   };
 }
 
@@ -222,6 +228,8 @@ export function createScaffoldCallTool(
    * mis-dedupe.
    */
   callScope?: string,
+  signal?: AbortSignal,
+  assertActive?: () => void,
 ): NonNullable<ScaffoldRunOptions['callTool']> {
   let seq = 0;
   // Scope-less rollouts have no durable identity to re-drive them, so their
@@ -231,20 +239,20 @@ export function createScaffoldCallTool(
   // keeps two calls on one wrapper apart; the nonce keeps two wrappers
   // apart. Scoped ids stay `<scope>#<seq>` so a re-drive still dedupes.
   const nonce = nanoid();
+  const control = { signal, assertActive };
   return async (name, args) => {
+    assertScaffoldActive(control);
     const t = tools()[name];
-    if (!t?.execute) return { error: `tool not found: ${name}` };
-    try {
-      const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-        messages: [],
-        toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
-      };
-      const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
-      if (!input.success) return { error: input.error.message };
-      const result = await t.execute(input.value, options);
-      return result === undefined ? undefined : decodeJsonValue({ value: result });
-    } catch (err) {
-      return { error: renderThrownChain({ cause: err }) };
-    }
+    if (!t?.execute) throw new KinuError('missing', `tool not found: ${name}`);
+    const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
+      messages: [],
+      toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
+    };
+    if (signal !== undefined) options.abortSignal = signal;
+    const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
+    if (!input.success) throw new KinuError('bad_input', 'invalid scaffold tool arguments', { cause: input.error });
+    assertScaffoldActive(control);
+    const result = await t.execute(input.value, options);
+    return result === undefined ? undefined : decodeJsonValue({ value: result });
   };
 }

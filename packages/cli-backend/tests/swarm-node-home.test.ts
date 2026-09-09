@@ -2,12 +2,17 @@
  * THE WIRING, OBSERVED ON A SHIPPED CALL: a swarm node in a real `agents.swarm`
  * run gets a private home.
  *
- * `agentHomeNodeProvisioner` was proved against the real substrate long before
+ * `facetHomeProvisioner` was proved against the real substrate long before
  * anything called it (`cf-backend/tests/unit-node-home-wiring.test.ts`), and that
  * is exactly the shape of defect this file exists to close: a seam with a proof
  * and no caller. So nothing here asserts what the provisioner DOES — it asserts
  * that a shipped dispatch reaches it, which is a different claim and was the
  * false one.
+ *
+ * The home is keyed on the node ACTOR's immutable storage key, never on the raw
+ * node id: a rename must not move an actor's home, and two nodes that briefly
+ * share a name across a retirement must not share a directory. The wrapper that
+ * keyed on `node.nodeId` is gone for exactly that reason.
  *
  * It is driven from `createCLIRuntime`, not a fixture, because the thing under
  * test is a backend's ability to hand over three host-owned members. The local
@@ -30,17 +35,21 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   AGENT_UID_FLOOR,
-  agentHomeNodeProvisioner,
+  facetHomeProvisioner,
   agentIdentity,
   nodeAgentName,
   createAgentsTool,
+  initWorkspaceSchema,
+  explorationActorKey,
   type AgentsForkDeps,
   type AgentsToolInput,
   type JsonValue,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import { scriptedTurnModel, scratchPath, toolExecute } from '@kinu.run/test-utils';
-import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
+import { openLocalActor, registerLocalNode } from '../src/actor-identity';
+import { nodeSeatFactory } from './actor-fixture';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -75,12 +84,19 @@ function answeringModel() {
 }
 
 /** The production runtime, with no host plane: a search must never be able to
- *  write into the developer's own repository. */
+ *  write into the developer's own repository.
+ *
+ *  `initWorkspaceSchema` runs first, exactly where `openWorkspaceCLI` runs it:
+ *  a node is an actor, and an actor's claim ledger and working-revision history
+ *  are workspace tables. `createCLIRuntime` on a root path provisions only the
+ *  identity and the actor directory, so a fixture that stops there gives every
+ *  node a seat whose first turn cannot find `actor_working_revisions`. */
 function cliRuntime(label: string): CLIRuntime {
-  const database = new Database(':memory:');
+  const database = new Database(scratchPath(label, 'agent.db'));
   databases.push(database);
+  initWorkspaceSchema(makeWorkspaceSchemaSql(database));
   return createCLIRuntime(database, {
-    dbPath: scratchPath(label, 'agent.db'),
+    dbPath: database.filename,
     llm: DUMMY_LLM,
     hostRoot: null,
   });
@@ -95,7 +111,28 @@ function cliRuntime(label: string): CLIRuntime {
 function nodeHomeWiring(rt: CLIRuntime) {
   const nodeHome = rt.nodeHome;
   if (!nodeHome) throw new Error('createCLIRuntime must supply a node home host');
-  return { nodeHome, provisionNodeHome: () => agentHomeNodeProvisioner(nodeHome()) };
+  return {
+    nodeHome,
+    provisionNodeHome: () => async (node: { readonly nodeId: string; readonly rootId: string; readonly depth: number }) => {
+      const actor = registerLocalNode(rt.actor, node);
+      return facetHomeProvisioner(nodeHome())(nodeAgentName(actor.storageKey));
+    },
+  };
+}
+
+/**
+ * The home directory name one settled node's own actor owns.
+ *
+ * Read back through the production directory — `resolve`, never a second
+ * `register` — because the mapping from a node id to the key its home is named
+ * for is the directory's to state, and resolving it also asserts the row is
+ * still there and still active. Naming the home from `nodeAgentName(nodeId)`
+ * instead would assert a rule this workspace does not hold: a rename would
+ * move an actor's home, and two nodes sharing a name across a retirement would
+ * share a directory.
+ */
+function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
+  return nodeAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
 }
 
 /** `diagnostics` writes one JSON line per event to console.error and has no
@@ -160,20 +197,20 @@ async function runShippedSwarm(fork: AgentsForkDeps): Promise<SettledNode[]> {
 
 describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('a local node keeps its home and private scratch through runtime reset', async () => {
-    const database = new Database(':memory:');
+    const database = new Database(scratchPath('node-reset', 'agent.db'));
     databases.push(database);
-    const config = { dbPath: scratchPath('node-reset', 'agent.db'), llm: DUMMY_LLM, hostRoot: null };
+    const config = { dbPath: database.filename, llm: DUMMY_LLM, hostRoot: null };
     const first = createCLIRuntime(database, config);
     const provision = nodeHomeWiring(first).provisionNodeHome();
     const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });
     if (home.isolation !== 'private-home' || !first.nodeRuntime) throw new Error('node plane missing');
-    const before = await first.nodeRuntime(home);
+    const before = await first.nodeRuntime(home, registerLocalNode(first.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), first);
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
     await first.storage.vfs.writeFile('/home/user/shared', 'shared');
     const second = createCLIRuntime(database, config);
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
-    const after = await second.nodeRuntime(home);
+    const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
     if (!after.shell) throw new Error('reset node shell missing');
     expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
@@ -184,7 +221,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-private');
     const { provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
@@ -195,7 +232,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-inodes');
     const { nodeHome, provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     // Read through `rt.storage.vfs` — the ORIGIN's own view, the one the `file`
@@ -204,17 +241,21 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     // ownership is what keeps a node's read window open, and a home the origin
     // could not see would be the second tree this design exists to refuse.
     const homes = await rt.storage.vfs.readdir('/home');
-    for (const { node } of settled) {
-      expect(homes).toContain(nodeAgentName(node));
-      expect(await rt.storage.vfs.stat(`/home/${nodeAgentName(node)}`))
-        .toMatchObject({ isDir: true });
+    const owned = settled.map(({ node }) => nodeHomeName(rt, node));
+    for (const home of owned) {
+      expect(homes).toContain(home);
+      expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ isDir: true });
     }
+    // NOT the node ids: a home named for one would move with a rename, and
+    // every id below is absent from `/home` precisely because the storage keys
+    // above are what own it.
+    for (const { node } of settled) expect(homes).not.toContain(nodeAgentName(node));
 
     // The uid each home was chown'ed to, read back through the production
     // accessor: it is idempotent by design, so reading it here is also what
     // proves the allocation is a durable row rather than closure state.
     const { sql } = await nodeHome();
-    const uids = new Set(settled.map(({ node }) => agentIdentity(sql, nodeAgentName(node)).uid));
+    const uids = new Set(owned.map((home) => agentIdentity(sql, home).uid));
     for (const uid of uids) expect(uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
     // One uid each: two nodes sharing a uid is two nodes sharing a home.
     expect(uids.size).toBe(IDEATE_BRANCHES);
@@ -225,7 +266,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     // what this engine always says rather than what the wiring made it say.
     const rt = cliRuntime('swarm-node-home-absent');
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel() });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt) });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))

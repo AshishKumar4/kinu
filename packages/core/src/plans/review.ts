@@ -1,9 +1,12 @@
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { JsonArraySchema, isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
+import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
+import { boundedInt } from '../utils/bounds';
 
 // One plan_reviews row holds content plus annotations_json. The platform
 // caps that row at do.sqlite.row_bytes. Both caps below fit inside it
@@ -48,6 +51,22 @@ export interface PlanReviewAnnotation {
   readonly mathTargets?: readonly PlanAnnotationMathTarget[];
 }
 
+const PlanReviewStatusSchema = v.picklist([
+  'pending', 'changes_requested', 'approved', 'superseded',
+]);
+
+export const PlanReviewSchema = v.object({
+  id: v.string(), sessionId: v.string(), revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  content: v.string(), status: PlanReviewStatusSchema,
+  annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly PlanReviewAnnotation[] => {
+    const admitted = admitPlanReviewAnnotations(dataset.value);
+    if (!admitted.ok) { addIssue({ message: admitted.error }); return NEVER; }
+    return admitted.annotations;
+  })),
+  feedback: v.nullable(v.string()), handoffAccepted: v.boolean(),
+  createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
+});
+
 export interface PlanReview {
   readonly id: string;
   readonly sessionId: string;
@@ -89,9 +108,6 @@ interface PlanReviewRow {
   decided_at: number | null;
 }
 
-const PlanReviewStatusSchema = v.picklist([
-  'pending', 'changes_requested', 'approved', 'superseded',
-]);
 const PLAN_ANNOTATION_FIELDS = new Set([
   'id', 'blockId', 'startOffset', 'endOffset', 'type', 'text', 'originalText',
   'createdA', 'author', 'startMeta', 'endMeta', 'mathTargets',
@@ -226,6 +242,7 @@ function toPlanReview(row: PlanReviewRow): PlanReview {
 
 export function initPlanReviewTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS plan_reviews (
+    actor_id         TEXT NOT NULL,
     id               TEXT NOT NULL,
     session_id       TEXT NOT NULL,
     revision         INTEGER NOT NULL,
@@ -238,10 +255,10 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
     decided_at       INTEGER,
-    PRIMARY KEY (id, revision)
+    PRIMARY KEY (actor_id, id, revision)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_plan_reviews_session_current
-    ON plan_reviews(session_id, created_at DESC)`);
+    ON plan_reviews(actor_id, session_id, created_at DESC)`);
 }
 
 /** Validate edits against the revision the model saw. Line coordinates are
@@ -318,23 +335,47 @@ export interface PlanReviewStoreOptions {
 export class PlanReviewStore {
   private readonly newId: () => string;
   private readonly now: () => number;
+  private readonly actorId: string;
 
-  constructor(private readonly sql: SqlExecutor, options: PlanReviewStoreOptions = {}) {
+  /** Bind the review stream to ONE actor. A plan is written by an actor working
+   *  in plan mode and approved for THAT actor to execute: a subordinate planning
+   *  its own delegated task shares a session id with nobody, and an approval is
+   *  not transferable between actors. */
+  constructor(
+    private readonly sql: SqlExecutor,
+    private readonly actor: ActorHandle,
+    options: PlanReviewStoreOptions = {},
+  ) {
     this.newId = options.newId ?? (() => `plan-${nanoid(12)}`);
     this.now = options.now ?? Date.now;
+    this.actorId = actor.actorId;
+  }
+
+  listPage(sessionId: string, request: PageRequest = {}): Page<PlanReview> {
+    this.actor.assertCurrent();
+    const limit = boundedInt(request.limit, 20, 1, 50);
+    const after = request.cursor?.after;
+    const anchor = after === undefined ? null : this.sql<{ rowid: number }>`SELECT rowid FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND id || ':' || revision=${after}`[0];
+    if (after !== undefined && !anchor) throw new StaleCursorError('plan history', after);
+    const rows = anchor
+      ? this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND rowid<${anchor.rowid} ORDER BY rowid DESC LIMIT ${limit + 1}`
+      : this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} ORDER BY rowid DESC LIMIT ${limit + 1}`;
+    return seekPage(rows.map(toPlanReview), limit, plan => plan.id + ':' + plan.revision);
   }
 
   get(id: string, revision: number): PlanReview | null {
+    this.actor.assertCurrent();
     const rows = this.sql<PlanReviewRow>`SELECT * FROM plan_reviews
-      WHERE id=${id} AND revision=${revision} LIMIT 1`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
     return rows[0] ? toPlanReview(rows[0]) : null;
   }
 
   /** The latest non-superseded revision, including an approved revision so a
    * reload can keep rendering the plan the owner accepted. */
   getActive(sessionId: string): PlanReview | null {
+    this.actor.assertCurrent();
     const rows = this.sql<PlanReviewRow>`SELECT * FROM plan_reviews
-      WHERE session_id=${sessionId} AND status != 'superseded'
+      WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND status != 'superseded'
       ORDER BY created_at DESC, rowid DESC LIMIT 1`;
     return rows[0] ? toPlanReview(rows[0]) : null;
   }
@@ -362,15 +403,16 @@ export class PlanReviewStore {
     const revision = revising ? revising.revision + 1 : 1;
     const now = this.now();
     void this.sql`INSERT INTO plan_reviews (
-      id, session_id, revision, content, status, annotations_json, feedback, handoff_accepted,
-      handoff_attempt, created_at, updated_at, decided_at
+      actor_id, id, session_id, revision, content, status, annotations_json, feedback,
+      handoff_accepted, handoff_attempt, created_at, updated_at, decided_at
     ) VALUES (
-      ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL, 0,
-      0, ${now}, ${now}, NULL
+      ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL,
+      0, 0, ${now}, ${now}, NULL
     )`;
     if (revising) {
       void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
-        WHERE id=${revising.id} AND revision=${revising.revision} AND status='changes_requested'`;
+        WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
+          AND status='changes_requested'`;
     }
     return { ok: true, plan: this.get(id, revision)! };
   }
@@ -403,7 +445,7 @@ export class PlanReviewStore {
 
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
-      WHERE id=${id} AND revision=${revision} AND status='pending'`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
     return { ok: true, plan: this.get(id, revision)! };
   }
 
@@ -435,7 +477,7 @@ export class PlanReviewStore {
     const now = this.now();
     void this.sql`UPDATE plan_reviews
       SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}, decided_at=${now}
-      WHERE id=${id} AND revision=${revision} AND status='pending'`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
     return { ok: true, plan: this.get(id, revision)! };
   }
 
@@ -452,7 +494,7 @@ export class PlanReviewStore {
     if (!current.handoffAccepted) {
       const now = this.now();
       void this.sql`UPDATE plan_reviews SET handoff_accepted=1, updated_at=${now}
-        WHERE id=${id} AND revision=${revision} AND handoff_accepted=0`;
+        WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_accepted=0`;
     }
     return { ok: true, plan: this.get(id, revision)! };
   }
@@ -463,19 +505,21 @@ export class PlanReviewStore {
       throw new Error(`plan revision ${id}/${revision} has no decided handoff`);
     }
     const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
-      WHERE id=${id} AND revision=${revision} LIMIT 1`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
     const attempt = rows[0]?.handoff_attempt ?? 0;
     if (attempt > 0) return attempt;
     void this.sql`UPDATE plan_reviews SET handoff_attempt=1
-      WHERE id=${id} AND revision=${revision} AND handoff_attempt=0`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
     return 1;
   }
 
   advanceHandoffAttempt(id: string, revision: number, expected: number): number {
+    this.actor.assertCurrent();
     void this.sql`UPDATE plan_reviews SET handoff_attempt=handoff_attempt + 1
-      WHERE id=${id} AND revision=${revision} AND handoff_attempt=${expected} AND handoff_accepted=0`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision}
+        AND handoff_attempt=${expected} AND handoff_accepted=0`;
     const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
-      WHERE id=${id} AND revision=${revision} LIMIT 1`;
+      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
     const attempt = rows[0]?.handoff_attempt;
     if (attempt === undefined || attempt <= expected) {
       throw new Error(`could not advance plan handoff attempt for ${id}/${revision}`);

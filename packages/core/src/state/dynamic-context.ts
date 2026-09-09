@@ -78,7 +78,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
   return agentDynamicContext({
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
-    recoveryFindings: listRecoveryFindings(rt.storage.sql),
+    recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
     executors: rt.executionRouter?.listExecutors() ?? [],
     // The fleet, off the transport's cached snapshot: sync, cheap, and the
     // same read the executor row is derived from, so the two cannot disagree.

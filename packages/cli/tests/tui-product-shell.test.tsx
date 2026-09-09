@@ -26,7 +26,7 @@ import {
 const ROOT = canonicalProjectRoot();
 const FRAME_DIR = process.env.TUI_FRAME_DIR ?? '/tmp/grouped-tui-frames';
 
-/** Two virtual workspaces in this directory, one legacy agent, and a cloud
+/** Two virtual workspaces in this directory, one unplaced agent, and a cloud
  *  roster that reuses the name `audit` — the duplicate the grouping must keep
  *  apart. */
 const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
@@ -207,7 +207,7 @@ describe('grouped workspace navigator', () => {
       expect(at('docs · 1')).toBeLessThan(at('other · 1'));
       expect(at('other · 1')).toBeLessThan(at('faraway'));
 
-      // Unplaced legacy agents, then the collapsed cloud section, then paging.
+      // Unplaced agents, then the collapsed cloud section, then paging.
       expect(at('faraway')).toBeLessThan(at('Unplaced · 1'));
       expect(at('Unplaced · 1')).toBeLessThan(at('▸ Cloud · 2'));
       expect(frame).not.toContain('Jarvis');
@@ -218,7 +218,7 @@ describe('grouped workspace navigator', () => {
     }
   });
 
-  test('a legacy agent placed by no ref groups under Unplaced, never under the current project', async () => {
+  test('an agent no ref places groups under Unplaced, never under the current project', async () => {
     const probe = await mountProbe({
       width: 160,
       page: pageOf([{ name: 'oldbot', label: 'oldbot', mode: 'local' }]),

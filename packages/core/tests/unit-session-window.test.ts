@@ -1,14 +1,17 @@
 // SessionWindow — the durable evolution window + pending outcome review.
 import { describe, test, expect } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { SqlExecutor } from '../src/types/primitives';
+import type { ActorHandle } from '../src/state/actor-handle';
 
+/** The window is ONE actor's: `completed_turns` is keyed by actor, and a turn
+ *  a subordinate completed is not a turn in the root's evolution window. */
 function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
-  return createCompletedTurnStore(sql);
+  return createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
 }
 
 const aTurn = (i: number, extra: Partial<CompletedTurn> = {}): CompletedTurn => ({
@@ -144,14 +147,16 @@ describe('SessionWindow — the pending outcome review', () => {
   test('a settled turn is dropped — the table holds the window plus one pending review', () => {
     const { sql, execRaw } = createTestSql();
     initCompletedTurnTable(execRaw);
-    const win = createCompletedTurnStore(sql);
+    const actor = createTestActors(sql, execRaw).main;
+    const win = createCompletedTurnStore(sql, actor);
     for (let i = 0; i < 4; i++) {
       win.append(aTurn(i), { awaitsFollowup: true, now: i });
       win.claim()!.settle();
       const p = win.claimPendingReview();
       if (p) win.settleReview(p.rowId);
     }
-    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n).toBe(0);
+    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
+      WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(0);
   });
 });
 
@@ -161,13 +166,15 @@ describe('SessionWindow — durability past the row', () => {
   function open() {
     const { sql, execRaw } = createTestSql();
     initCompletedTurnTable(execRaw);
-    return { sql, win: createCompletedTurnStore(sql) };
+    const actor = createTestActors(sql, execRaw).main;
+    return { sql, actor, win: createCompletedTurnStore(sql, actor) };
   }
-  const rowCount = (sql: SqlExecutor): number =>
-    sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
+  const rowCount = (sql: SqlExecutor, actor: ActorHandle): number =>
+    sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
+      WHERE actor_id = ${actor.actorId}`[0]?.n ?? 0;
 
   test('a keyed append replayed after its row was SWEPT does not resurrect the turn', () => {
-    const { sql, win } = open();
+    const { sql, actor, win } = open();
     expect(win.append(aTurn(0), { awaitsFollowup: false, id: 'settle:msg-1', now: 1000 }))
       .toBe('settle:msg-1');
     win.claim()!.settle();
@@ -177,11 +184,11 @@ describe('SessionWindow — durability past the row', () => {
     win.settleReview(taken.reviews[0]!.id);
     // Both lifetimes over: the row the append wrote is gone, so `ON CONFLICT(id)`
     // has nothing left to conflict with.
-    expect(rowCount(sql)).toBe(0);
+    expect(rowCount(sql, actor)).toBe(0);
 
     expect(win.append(aTurn(0), { awaitsFollowup: false, id: 'settle:msg-1', now: 9000 }))
       .toBe('settle:msg-1');
-    expect(rowCount(sql)).toBe(0);
+    expect(rowCount(sql, actor)).toBe(0);
     expect(win.size()).toBe(0);
     expect(win.countQueuedReviews()).toBe(0);
   });

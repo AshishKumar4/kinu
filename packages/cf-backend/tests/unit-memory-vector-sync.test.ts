@@ -5,10 +5,10 @@
 // real MemoryStore (bun:sqlite) and a fake VectorStore that records calls.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
+import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
-  createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
+  createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
   type Embedder, type VectorizeIndex, type VectorStore, type IndexedChunk,
 } from '@kinu.run/core';
 import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
@@ -18,8 +18,7 @@ function createStore() {
   const sql = makeSql(database);
   const store = new MemoryStore(createWorkspaceBundle(database).vfs, sql);
   store.ensureSchema();
-  void sql`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
-  const config = createAgentConfigStore(sql);
+  const config = createTestActor(sql, makeExecRaw(database), crypto.randomUUID(), 'memory-test').config;
   return { sql, store, config };
 }
 
@@ -173,8 +172,8 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     const all = store.allChunksAfter('', 10000);
     expect(all.length).toBeGreaterThanOrEqual(3);
 
-    // The real store over a Vectorize index that is down — the shape that used
-    // to advance the cursor and set the marker over chunks it never embedded.
+    // The real store over a Vectorize index that is down — it must not advance
+    // the cursor or set the marker over chunks it never embedded.
     let down = true;
     const index: VectorizeIndex = {
       async insert() { return {}; },

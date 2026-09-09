@@ -23,6 +23,7 @@ import {
   type ForkSnapshot, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
 } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
+import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
 
 const OWNER: ForkWriteTarget = { workspaceId: 'FORK-ID', workspaceName: 'my-fork', now: 4242 };
 
@@ -58,6 +59,7 @@ type FrameBody = UnsealedForkFrame extends infer Frame
 async function source(opts: { files?: Array<{ path: string; content: string }> } = {}) {
   const src = fresh();
   void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
+  const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
   await writeSoul(src.vfs, src.sql, 'help with testing');
   const chain = [
     { id: 'm1', parent: null, role: 'user', text: 'first' },
@@ -65,14 +67,14 @@ async function source(opts: { files?: Array<{ path: string; content: string }> }
     { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
   ] as const;
   for (const [i, m] of chain.entries()) {
-    void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
+    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
   }
   void src.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
     VALUES (${'helper'}, ${'utility'}, ${null}, ${'async (x) => x'}, ${'local'}, ${500}, ${500})`;
   void src.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
     VALUES (${'c1'}, ${'memory/MEMORY.md'}, ${1}, ${2}, ${'h'}, ${'key insight'}, ${700})`;
-  void src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'m'})`;
+  actor.config.setModel('m');
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
   for (const f of opts.files ?? []) await src.vfs.writeFile(f.path, f.content);
@@ -200,7 +202,7 @@ function receiverFor(tgt: TestWorkspace, opts: Partial<ForkWriteTarget> = {}) {
 function isFork(tgt: TestWorkspace): boolean {
   const lineage = readForkLineage(tgt.sql);
   const named = tgt.sql<{ value: string }>`
-    SELECT value FROM agent_config WHERE key = 'display_name'`[0]?.value;
+    SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value;
   return lineage !== null || named === OWNER.workspaceName;
 }
 
@@ -230,7 +232,7 @@ describe('fork transfer receiver', () => {
         SELECT id, parent_id, content FROM messages ORDER BY created_at, id`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
       chunks: ws.sql<{ id: string; text: string }>`SELECT id, text FROM memory_chunks ORDER BY id`,
-      config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM agent_config ORDER BY key`,
+      config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
       lineage: readForkLineage(ws.sql),
     });
     expect(rowsOf(streamed)).toEqual(rowsOf(direct));
@@ -499,8 +501,9 @@ describe('fork transfer receiver', () => {
 
     const src = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
-    void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
+    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
+    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${bigActor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
     const tgt = fresh();
     const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
     const receiver = new ForkTransferReceiver(writer, sink);
@@ -523,7 +526,7 @@ describe('fork transfer receiver', () => {
       peakRetainedHeapDelta = Math.max(peakRetainedHeapDelta, retainedBytesNow() - baselineRetained);
     };
     for await (const frame of forkTransferFrames({
-      sql: src.sql, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
+      sql: src.sql, actor: bigActor, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
       targetAuthority: 'plain', frameBytes: HUGE_FRAME,
     })) {
       if (frame.kind === 'file') {
@@ -865,11 +868,13 @@ describe('fork transfer receiver', () => {
   test('a 100 MiB transcript and a large file keep target staging bounded to one file', async () => {
     const src = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
+    const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
     await writeSoul(src.vfs, src.sql, 'p');
     const megabyte = 'x'.repeat(1024 * 1024);
     for (let i = 0; i < 100; i += 1) {
-      void src.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'}, ${megabyte}, ${1000 + i})`;
+      void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${bigActor.actorId}, ${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'},
+                ${megabyte}, ${1000 + i})`;
     }
     await src.vfs.mkdir('memory', { recursive: true });
     await src.vfs.writeFile('memory/large.md', 'f'.repeat(8 * 1024 * 1024));
@@ -879,7 +884,7 @@ describe('fork transfer receiver', () => {
     let peak = 0;
     let frames = 0;
     for await (const frame of forkTransferFrames({
-      sql: src.sql, vfs: src.vfs, untilMessageId: 'm99', transferId: 'tx-100m',
+      sql: src.sql, actor: bigActor, vfs: src.vfs, untilMessageId: 'm99', transferId: 'tx-100m',
       targetAuthority: 'plain', frameBytes: 1024 * 1024,
     })) {
       await receiver.accept(frame);

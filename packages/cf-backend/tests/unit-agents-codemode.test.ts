@@ -43,6 +43,7 @@ const codemodeHandoff: SubordinateHandoff = {
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from '../../core/tests/helpers-actor-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -137,8 +138,12 @@ function expandingModel() {
 }
 
 function searchOnlyDeps(): AgentsToolDeps {
-  const { rt } = createTestRuntime();
-  return { mode: 'build', fork: { rt, model: expandingModel() } };
+  const { rt, testSql } = createTestRuntime();
+  // A search's nodes are hosted actors over this fixture's ONE database — not a
+  // bare runtime value — because the seat factory is where a wave would
+  // otherwise give every node one claim ledger and one loop pointer.
+  const seats = hostedSeatsOver({ rt, db: testSql.db });
+  return { mode: 'build', fork: { rt, hostNode: seats.hostNode, model: expandingModel() } };
 }
 
 function fullDeps(): AgentsToolDeps {
@@ -151,19 +156,13 @@ function fullDeps(): AgentsToolDeps {
       create: async () => ({
         name: 'n',
         displayName: 'N',
-        subordinate: {
-          name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 'n', displayName: 'N', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 'n',
         displayName: 'N',
-        subordinate: {
-          name: 'n', displayName: 'N', role: 'researcher', createdBy: 'user', status: 'idle',
-          currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: 'n', displayName: 'N', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async () => ({ ok: true as const, name: 'n', displayName: 'N', applied: true }),
       spawn: async () => ({ name: 'n', displayName: 'N' }),
@@ -184,13 +183,13 @@ function fullDeps(): AgentsToolDeps {
 }
 
 // ── The execute_tools docstring itself ──────────────────────────────────────
-// This tool's description used to be @cloudflare/codemode's DEFAULT_DESCRIPTION:
-// the cf construction passed none, so the model received "Execute code to
-// achieve a goal." and NOTHING from BUILTIN_TOOL_SPECS.execute_tools — no
-// Use-when, no Avoid-when, no workspace doctrine, no Returns — plus a worked
-// example calling `codemode.searchWeb(...)`, a member no sandbox here binds.
-// Both halves are asserted here because both were absent from any test: the
-// registry's doctrine, and the namespace declarations it wraps.
+// The description the model receives is the REGISTRY's, not
+// @cloudflare/codemode's DEFAULT_DESCRIPTION. Passing none leaves the model with
+// "Execute code to achieve a goal." and NOTHING from
+// BUILTIN_TOOL_SPECS.execute_tools — no Use-when, no Avoid-when, no workspace
+// doctrine, no Returns — plus a worked example calling `codemode.searchWeb(...)`,
+// a member no sandbox here binds. Both halves are asserted: the registry's
+// doctrine, and the namespace declarations it wraps.
 
 describe('the execute_tools docstring the model receives', () => {
   test('carries the registry doctrine, not the vendor default', () => {
@@ -237,7 +236,7 @@ describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
     const description = executeToolsDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
-    for (const member of ['swarm(input', 'hire(input', 'ask(input', 'send(input', 'reply(input', 'list(input', 'dismiss(input']) {
+    for (const member of ['swarm(input', 'hire(input', 'msg(input', 'list(input', 'dismiss(input']) {
       expect(description).toContain(member);
     }
     // Its neighbours are untouched — this is one more namespace, not a rewrite.

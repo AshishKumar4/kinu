@@ -21,14 +21,13 @@
  *     agent-utils    0
  *     TOTAL        650   across 86 files
  *
- * `packages/core/src` holds 55, not the ~1,180 this comment previously claimed;
- * that figure was never counted. The shape the diagnostics settled on is
- * `console.warn('[kinu] <prose>', someValue)`: no event name a query could key
- * on, and a second argument that is frequently an object nobody looked inside.
- * Both rules are mechanical, so both are types here.
+ * The shape the diagnostics settled on is `console.warn('[kinu] <prose>',
+ * someValue)`: no event name a query could key on, and a second argument that
+ * is frequently an object nobody looked inside. Both rules are mechanical, so
+ * both are types here.
  *
- * The 479 in `packages/cli/src` are NOT diagnostics and are not migrated — see
- * the boundary stated on `diagnostics` below.
+ * The 479 in `packages/cli/src` are NOT diagnostics and sit outside this
+ * logger's boundary — see the boundary stated on `diagnostics` below.
  *
  * ## How the ban works, and why it is not decoration
  *

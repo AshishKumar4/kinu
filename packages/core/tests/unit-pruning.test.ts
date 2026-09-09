@@ -1,11 +1,10 @@
 /**
  * Unit tests: MCTS pruning (WP-A2).
  *
- * The regression this guards: pruning used to be handed only the freshly-
- * expanded children (visits === 1) yet gated on a hardcoded `visits >= 2`, so
- * it could NEVER fire. Pruning now scans the full open population and honors
- * the `minVisitsForPrune` config, so a settled low-value node actually reaches
- * status='pruned' mid-search.
+ * The regression this guards: pruning handed only the freshly-expanded children
+ * (visits === 1) yet gated on a hardcoded `visits >= 2` can NEVER fire. Pruning
+ * scans the full open population and honors the `minVisitsForPrune` config, so
+ * a settled low-value node actually reaches status='pruned' mid-search.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -31,8 +30,8 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     const { sql, rt, aborted } = setup();
     // Mid-search state: this node was re-selected and backpropagated enough for
     // its running-mean value to settle below threshold (visits >= 2).
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES ('r', 'doomed', 't', 0.1, 3, 'open', 'agent-doomed')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
+        VALUES (${rt.actor.actorId}, 'r', 'doomed', 't', 0.1, 3, 'open', 'agent-doomed')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
     const row = sql<{ status: string; branch_agent_key: string | null }>`
       SELECT status, branch_agent_key FROM search_nodes WHERE id = 'doomed'`[0]!;
@@ -43,8 +42,8 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
 
   test('a fresh single-visit node is protected by minVisitsForPrune', async () => {
     const { sql, rt, aborted } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'fresh', 't', 0.05, 1, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'fresh', 't', 0.05, 1, 'open')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'fresh'`[0]!.status).toBe('open');
     expect(aborted).toHaveLength(0);
@@ -52,26 +51,26 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
 
   test('honors the minVisitsForPrune argument (was hardcoded 2)', async () => {
     const { sql, rt } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'n', 't', 0.05, 1, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'n', 't', 0.05, 1, 'open')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 1); // config says one visit is enough
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'n'`[0]!.status).toBe('pruned');
   });
 
   test('a healthy above-threshold node is never pruned, however many visits', async () => {
     const { sql, rt } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'good', 't', 0.9, 50, 'open')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'good', 't', 0.9, 50, 'open')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'good'`[0]!.status).toBe('open');
   });
 
   test('never touches already-pruned or failed nodes', async () => {
     const { sql, rt } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'already', 't', 0.01, 9, 'pruned')`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
-        VALUES ('r', 'failed', 't', 0.01, 9, 'failed')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'already', 't', 0.01, 9, 'pruned')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+        VALUES (${rt.actor.actorId}, 'r', 'failed', 't', 0.01, 9, 'failed')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'already'`[0]!.status).toBe('pruned');
     expect(sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'failed'`[0]!.status).toBe('failed');
@@ -81,10 +80,10 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
 describe('pruneLowValueBranches — one abort failure never ends the sweep', () => {
   test('a throwing abortBranch is recorded per node and the rest still prune', async () => {
     const { sql, rt, aborted } = setup();
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES ('r', 'first', 't', 0.1, 3, 'open', 'agent-first')`;
-    void sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, branch_agent_key)
-        VALUES ('r', 'second', 't', 0.1, 3, 'open', 'agent-second')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
+        VALUES (${rt.actor.actorId}, 'r', 'first', 't', 0.1, 3, 'open', 'agent-first')`;
+    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
+        VALUES (${rt.actor.actorId}, 'r', 'second', 't', 0.1, 3, 'open', 'agent-second')`;
     const failing: AgentRuntime = {
       ...rt,
       abortBranch: async (key: string, reason?: string) => {

@@ -65,6 +65,7 @@ import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { WorkMode } from '../prompting/surface';
 import type { TurnContinuity } from './agent-orchestrator';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -163,9 +164,9 @@ export const TERMINAL_EFFECT_NAMES = [
   // confirming turn it enqueues has already been enqueued.
   'completion_gate',
   // The settle spine, as five separately claimed boundaries rather than one
-  // compound effect. It used to be a single row, so a crash after the extension
-  // turn-end but before the window append lost the remaining suffix and nothing
-  // could tell which half had happened. Each of these is keyed on the turn's own
+  // compound effect. One row for all five loses the remaining suffix to a crash
+  // after the extension turn-end but before the window append, with nothing able
+  // to tell which half had happened. Each of these is keyed on the turn's own
   // durable identity and is idempotent at its own boundary.
   //
   // `overflow_retry` and `output_continuation` are the two follow-up turns a
@@ -174,7 +175,7 @@ export const TERMINAL_EFFECT_NAMES = [
   // turn that COMPLETED at the provider's output limit with more to say.
   'turn_end_extensions', 'overflow_retry', 'output_continuation',
   'turn_record', 'event_drain', 'improvement_lanes',
-  // Separate from the improvement lanes it used to sit inside: a queue that is
+  // Its own row rather than a part of the improvement lanes: a queue that is
   // full is a legitimate refusal, and the lanes' own model calls must not be
   // held behind it — nor repeated when it is retried.
   'shadow_trial',
@@ -364,6 +365,7 @@ export type TerminalEffectFault = (
  */
 export function initTerminalEffectTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS terminal_effects (
+    actor_id        TEXT NOT NULL,
     sequence_id     TEXT NOT NULL,
     effect_key      TEXT NOT NULL,
     effect_name     TEXT NOT NULL,
@@ -377,14 +379,14 @@ export function initTerminalEffectTable(execRaw: RawSqlExec): void {
     next_attempt_at INTEGER NOT NULL DEFAULT 0,
     claimed_at      INTEGER NOT NULL,
     settled_at      INTEGER,
-    PRIMARY KEY (sequence_id, effect_key)
+    PRIMARY KEY (actor_id, sequence_id, effect_key)
   )`);
   // Covers every owed read there is: one sequence's suffix, the set of sequences
   // still owing anything, and the earliest instant any of them is next due. One
   // index because those three questions differ only in how much of the same
   // ordering they consume.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_terminal_effects_owed
-    ON terminal_effects (sequence_id, status, seq, next_attempt_at)`);
+    ON terminal_effects (actor_id, sequence_id, status, seq, next_attempt_at)`);
 }
 
 /** The versioned identity of one effect within one sequence. */
@@ -473,8 +475,21 @@ export interface TerminalSequenceRun {
  * decide none of that.
  */
 export class TerminalEffectLedger {
+  private readonly actorId: string;
+
   constructor(private readonly deps: {
     readonly sql: SqlExecutor;
+    /**
+     * The actor whose turn owes these effects.
+     *
+     * A sequence id is a turn id and a scope is that turn's own, so two actors
+     * of one workspace present colliding rows — and `pendingSequences`,
+     * `nextRetryAt` and `prune` are all sweeps, which over a shared table would
+     * make one actor's recovery run a sibling's owed reply. `assertCurrent()`
+     * runs before every statement so a retired actor stops claiming here at the
+     * instant it stops being an actor.
+     */
+    readonly actor: ActorHandle;
     readonly effects: TerminalEffectTable;
     /** The clock every disposition is stamped with. A dep so a test can freeze
      *  it and read back the row it wrote by value. */
@@ -496,7 +511,9 @@ export class TerminalEffectLedger {
      * platform allows.
      */
     readonly scheduleRetry: (atMs: number) => Promise<void>;
-  }) {}
+  }) {
+    this.actorId = deps.actor.actorId;
+  }
 
   /**
    * Claim a whole sequence, then run it in order.
@@ -541,6 +558,7 @@ export class TerminalEffectLedger {
    * boundary because the caller knows what else belongs inside it.
    */
   claim(sequenceId: string, owed: readonly OwedEffect[]): PendingRow[] {
+    this.deps.actor.assertCurrent();
     const claimed: PendingRow[] = [];
     const now = this.deps.now();
     owed.forEach((effect, index) => {
@@ -555,7 +573,8 @@ export class TerminalEffectLedger {
         status: string; attempts: number; next_attempt_at: number;
       }>`
         SELECT effect_key, input_json, lane, status, attempts, next_attempt_at FROM terminal_effects
-        WHERE sequence_id = ${sequenceId} AND effect_name = ${effect.name} AND scope = ${effect.scope}
+        WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+          AND effect_name = ${effect.name} AND scope = ${effect.scope}
         LIMIT 1`[0];
       if (existing !== undefined) {
         if (existing.status === 'completed') return;
@@ -574,10 +593,10 @@ export class TerminalEffectLedger {
       }
       const encoded = JSON.stringify(effect.input);
       void this.deps.sql`INSERT INTO terminal_effects
-        (sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome,
+        (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome,
          attempts, next_attempt_at, claimed_at, settled_at)
-        VALUES (${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index}, ${encoded},
-                ${effect.lane}, 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
+        VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
+                ${encoded}, ${effect.lane}, 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
       claimed.push({
         key, rawName: effect.name, scope: effect.scope, seq: index, input: encoded,
         status: 'pending', attempts: 0, nextAttemptAt: now, preExisting: false,
@@ -590,10 +609,10 @@ export class TerminalEffectLedger {
   /** Run a claimed roster: arm, inline pass, then the detached tail. */
   async drive(sequenceId: string, claimed: readonly PendingRow[]): Promise<TerminalSequenceRun> {
     // ARMED HERE, before the first attempt. The rows now exist, so a recovery
-    // for them must exist too: an eviction inside the inline pass used to leave
-    // a claimed suffix with no wake and no fiber behind it, and a subordinate —
-    // whose activation runs no reconcile of its own — could owe its parent
-    // report indefinitely. One early wake that finds nothing to do is the
+    // for them must exist too: an eviction inside the inline pass would otherwise
+    // leave a claimed suffix with no wake and no fiber behind it, and a
+    // subordinate — whose activation runs no reconcile of its own — could owe its
+    // parent report indefinitely. One early wake that finds nothing to do is the
     // harmless failure; a suffix nothing retries is not.
     await this.armWake();
     for (const row of claimed) {
@@ -662,8 +681,10 @@ export class TerminalEffectLedger {
    *  sweep's one question on a cold activation, asked without knowing which
    *  sequences exist. */
   pendingSequences(): readonly string[] {
+    this.deps.actor.assertCurrent();
     return this.deps.sql<{ sequence_id: string }>`
-      SELECT sequence_id FROM terminal_effects WHERE status != 'completed'
+      SELECT sequence_id FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND status != 'completed'
       GROUP BY sequence_id ORDER BY MIN(next_attempt_at), sequence_id`
       .map((row) => row.sequence_id);
   }
@@ -680,9 +701,10 @@ export class TerminalEffectLedger {
      *  wake behind it is one nothing comes back for. */
     inFlight: ReadonlySet<string> = new Set(),
   ): number | null {
+    this.deps.actor.assertCurrent();
     const rows = this.deps.sql<{ sequence_id: string; at: number | null }>`
       SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
-      WHERE status != 'completed' GROUP BY sequence_id`;
+      WHERE actor_id = ${this.actorId} AND status != 'completed' GROUP BY sequence_id`;
     const deferred = this.deps.now() + TERMINAL_EFFECT_RETRY_CEILING_MS;
     let earliest: number | null = null;
     for (const row of rows) {
@@ -701,16 +723,18 @@ export class TerminalEffectLedger {
    * the only trace of something a turn was supposed to do.
    */
   prune(sequenceId: string): void {
+    this.deps.actor.assertCurrent();
     void this.deps.sql`DELETE FROM terminal_effects
-      WHERE sequence_id = ${sequenceId} AND status = 'completed'`;
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status = 'completed'`;
   }
 
   /** Every non-terminal row of one sequence, with its dispatch decision made. */
   private pending(sequenceId: string): PendingRow[] {
+    this.deps.actor.assertCurrent();
     return this.deps.sql<OwedEffectRow>`
       SELECT effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at
       FROM terminal_effects
-      WHERE sequence_id = ${sequenceId} AND status != 'completed'
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status != 'completed'
       ORDER BY seq, effect_key`
       .map((row) => ({
         key: row.effect_key,
@@ -767,10 +791,10 @@ export class TerminalEffectLedger {
    * One attempt at one effect — the whole of the exactly-once boundary.
    *
    * The try/catch spans exactly this effect and nothing else. A sequence-wide
-   * catch is what made the old failures unattributable: one throw ended every
-   * effect after it, and the marker said only that the turn had not finished.
-   * Here a failure leaves THIS row owed with its classified reason, and the
-   * effects beside it are untouched.
+   * catch makes failures unattributable: one throw ends every effect after it,
+   * and the marker says only that the turn has not finished. Here a failure
+   * leaves THIS row owed with its classified reason, and the effects beside it
+   * are untouched.
    */
   private async attempt(sequenceId: string, row: PendingRow): Promise<void> {
     // A resumed row is governed by the schedule its last failure armed, however
@@ -779,6 +803,7 @@ export class TerminalEffectLedger {
     // deliberately deferred. Only a claim written by this pass is due by
     // construction, which is what `preExisting` says and what keeps that
     // invariant here instead of in the insert's choice of instant.
+    this.deps.actor.assertCurrent();
     if (row.preExisting && row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
     // Armed BEFORE the side effect, not after it. An eviction mid-effect never
@@ -786,7 +811,8 @@ export class TerminalEffectLedger {
     // an eviction loop retrying with no backoff at all.
     void this.deps.sql`UPDATE terminal_effects
       SET attempts = ${attempts}, next_attempt_at = ${this.deps.now() + terminalEffectBackoffMs(attempts)}
-      WHERE sequence_id = ${sequenceId} AND effect_key = ${row.key} AND status != 'completed'`;
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${row.key} AND status != 'completed'`;
     if (row.target.kind === 'blocked') {
       this.record(sequenceId, row.key, 'blocked', row.target.reason);
       diagnostics.failure('turn.terminal_effect_blocked', toKinuError({
@@ -821,7 +847,8 @@ export class TerminalEffectLedger {
     }
     void this.deps.sql`UPDATE terminal_effects
       SET status = 'completed', outcome = ${outcome.detail ?? null}, settled_at = ${this.deps.now()}
-      WHERE sequence_id = ${sequenceId} AND effect_key = ${row.key} AND status != 'completed'`;
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${row.key} AND status != 'completed'`;
   }
 
   /** Write a non-terminal disposition. Guarded on the row not being completed:
@@ -831,9 +858,11 @@ export class TerminalEffectLedger {
   private record(
     sequenceId: string, key: string, status: 'pending' | 'blocked', outcome: string,
   ): void {
+    this.deps.actor.assertCurrent();
     void this.deps.sql`UPDATE terminal_effects
       SET status = ${status}, outcome = ${outcome}
-      WHERE sequence_id = ${sequenceId} AND effect_key = ${key} AND status != 'completed'`;
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${key} AND status != 'completed'`;
   }
 
   /** Arm the durable wake for the earliest owed row, if anything is still owed. */

@@ -219,9 +219,9 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
   });
 
   test('ordinary config vars are checked, per environment, against that environment', () => {
-    // They used to be skipped outright: the loop `continue`d on every
-    // `config-var` entry while its own comment said they were checked against
-    // `vars`. Nothing checked them at all, in any environment.
+    // A `config-var` entry is checked against the environment it belongs to.
+    // `continue`ing the loop on every `config-var` entry would leave nothing
+    // checking them at all, in any environment.
     const listed = { state: 'present', detail: 'fixture', names: [] } as const;
     const verdictOf = (environment: InfraEnvironment, name: string): string | undefined =>
       supplyRows(environment, listed).find((entry) => entry.name === name)?.verdict;
@@ -371,7 +371,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
 
   test('destinations are normalized, and a private one is neither coverage nor overreach', () => {
     expect(accessDestinations({
-      domain: 'https://legacy.kinu.run/control*',
+      domain: 'https://domain-only.kinu.run/control*',
       destinations: [
         { type: 'public', uri: 'https://kinu.run/control*' },
         { type: 'public', hostname: 'kinu.run/api/control*' },
@@ -380,7 +380,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
         { type: 'private', uri: '10.0.0.0/8' },
         { type: 'public', uri: '' },
       ],
-    })).toEqual(['kinu.run/control*', 'kinu.run/api/control*', 'legacy.kinu.run/control*']);
+    })).toEqual(['kinu.run/control*', 'kinu.run/api/control*', 'domain-only.kinu.run/control*']);
     expect(accessDestinations({})).toEqual([]);
   });
 
@@ -631,9 +631,9 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
  * THE PHASE SPLIT, which is the difference between a deploy that can bootstrap
  * what it declares and a deploy that refuses itself.
  *
- * The red case is real and is this repository's: `ControlPlaneDO` was added to
- * `migrations`, staging's 55 source gates passed, and the pre-deploy
- * infrastructure gate then refused the only command that could have created the
+ * The red case is real and is this repository's: with `ControlPlaneDO` in
+ * `migrations` and staging's 55 source gates green, the pre-deploy
+ * infrastructure gate refuses the only command that could create the
  * namespace — no wrangler verb creates one, and provisioning is forbidden from
  * trying. The tolerance that answers it has to be narrow in three directions at
  * once, so each is a case below: narrow by OWNERSHIP (a secret or a bucket is
@@ -646,7 +646,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
   ];
   /** Staging's Worker EXISTS. That is what makes this the red case rather than
-   *  the first-deploy case the `full` phase already tolerated: the Worker has
+   *  the first-deploy case the `full` phase already tolerates: the Worker has
    *  been deployed for months and the namespace is new. */
   const deployedWorker = row('worker.kinu-staging', 'present', true, 'wrangler-deploy');
   const absentNamespace = row(
@@ -861,10 +861,10 @@ describe('teardown refuses by default and never takes a shared resource', () => 
 
   test('every resource lands in exactly one fate, and the storage is in the loud one', () => {
     // Totality is the property the confirmation prompt rests on: a resource in
-    // no group is a loss nobody was warned about. The first draft put five
-    // Durable Object namespaces — every UserDO profile, every agent's state —
-    // under a heading that said they OUTLIVE the teardown, which is the exact
-    // opposite of what `wrangler delete` does to them.
+    // no group is a loss nobody was warned about. Filing the five Durable Object
+    // namespaces — every UserDO profile, every agent's state — under a heading
+    // that says they OUTLIVE the teardown is the exact opposite of what
+    // `wrangler delete` does to them, so they belong in the swept group.
     const mine = exclusiveTo(infrastructure, 'production');
     const fate = partition(mine);
     const covered = [...fate.deleted, ...fate.swept, ...fate.outlives].map((resource) => resource.id);

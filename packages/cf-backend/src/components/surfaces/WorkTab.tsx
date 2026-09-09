@@ -28,7 +28,8 @@ import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
   RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
 } from "@phosphor-icons/react";
-import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind } from "@kinu.run/core";
+import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind, PlanReview } from "@kinu.run/core";
+import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import type { BackgroundJob, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -39,6 +40,7 @@ import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
 import type { SurfaceKind } from "./WorkSurface";
 import { renderThrownChain } from "@kinu.run/core/obs";
+import { WorkPlans } from "./WorkPlans";
 
 /** Which filter a journal row answers to. `All` is not a filter, it is no
  *  filter — the chips are filters over one list. */
@@ -83,6 +85,12 @@ const PENDING_ICON = {
 } satisfies Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon>;
 
 export interface WorkTabProps {
+  plan: PlanReview | null;
+  planRpc: Rpc;
+  planOwner?: string;
+  workspacePlanArrival?: WorkspacePlanArrival | null;
+  activePlanActors?: readonly string[];
+  onReviewActor?: (name: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
@@ -100,11 +108,13 @@ export interface WorkTabProps {
 }
 
 export function WorkTab({
-  pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
+  plan, planRpc, planOwner, workspacePlanArrival, activePlanActors, onReviewActor, pendingActions, backgroundJobs, onRefreshJobs, onOpenSurface, onChangelogSeen, onRefreshQueue, isStreaming, rpc,
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
+  const [hasPlans, setHasPlans] = useState(plan !== null);
+  const onNewPlan = useCallback(() => onOpenSurface("Work"), [onOpenSurface]);
 
-  const loadTasks = useCallback(() => rpc<AgentTaskTree[]>("listAgentTasks", []), [rpc]);
+  const loadTasks = useCallback(() => planRpc<AgentTaskTree[]>("listAgentTasks", []), [planRpc]);
   // The agent writes its plan mid-turn and the server never pushes it, so the
   // tab revalidates while anything is still open and stands down once
   // everything has settled.
@@ -143,15 +153,16 @@ export function WorkTab({
     && runningJobs.length === 0 && journal.length === 0
     && tasks !== null && changelog !== null;
 
-  if (nothingAtAll) {
+  if (nothingAtAll && !hasPlans && !plan) {
     return (
-      <EmptyState title="Nothing has happened yet"
-        hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." />
+      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><EmptyState title="Nothing has happened yet"
+        hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." /></div>
     );
   }
 
   return (
     <div className="space-y-6 animate-fade-in">
+      <WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} />
       {pendingActions.length > 0 && (
         <div className="rounded-lg border border-[rgba(224,164,88,.32)] bg-[rgba(224,164,88,.06)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
           <Section id="work-needs-you" title="Needs you"
@@ -312,9 +323,9 @@ export interface ParkedQueueSnapshot {
  * provable without a browser: nothing it records re-selects what was just
  * decided, and a recorded decision always re-reads the queue.
  *
- * The defect this locks: `decide` used to reset the selection to null — and
- * null means everything — so approving re-ticked every box the instant the
- * call landed, and nothing re-read the queue to make the decided rows leave.
+ * The defect this locks: `decide` resetting the selection to null — and null
+ * means everything — re-ticks every box the instant the call lands, and a
+ * `decide` that does not re-read the queue leaves the decided rows on screen.
  */
 export class ParkedDecisionFlow {
   #snapshot: ParkedQueueSnapshot = { selected: null, busy: false, error: null, decided: null };
@@ -417,8 +428,8 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             <span className="min-w-0 flex-1">
               <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
               {/* Which machine, before you authorise it. The read model puts it
-                  in the title precisely because it is half the decision, and
-                  this card used to drop the title on the floor. */}
+                  in the title precisely because it is half the decision, so
+                  this card never drops the title on the floor. */}
               <span className="block text-[10px] p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>
@@ -495,9 +506,9 @@ type JournalRow =
 /**
  * One reverse-chronological feed out of three ledgers.
  *
- * Exported for its test: the ordering IS the feature — three sources that each
- * used to be its own tab have to read as one stream, or the merge has bought
- * nothing but a longer page.
+ * Exported for its test: the ordering IS the feature — three separate ledgers
+ * have to read as one stream, or the merge has bought nothing but a longer
+ * page.
  */
 export function buildJournal(
   jobs: readonly BackgroundJob[],

@@ -52,6 +52,20 @@ import type { Floor, Objective, ObjectiveIdentity, VectorObjective } from '../sr
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
+import type { ActorHandle } from '../src/state/actor-handle';
+import { createTestActors } from '@kinu.run/test-utils';
+import { refuseHostNode } from './helpers-actor-host';
+
+/**
+ * The `hostNode` seam every run below is given, and why it REFUSES.
+ *
+ * Every search in this file is `unit:{kind:'thought'}` (see `treeConfig`), and a
+ * thought node is one toolless model call that acquires no tools, no journal row
+ * and no shell — so it never asks for a seat. A stub seat here would let a suite
+ * that quietly grew an agent node run it under a fabricated actor and still pass;
+ * the refusal turns that into a failure that names the fixture.
+ */
+const NO_NODE = refuseHostNode('the depth suite runs thought nodes only');
 
 /* ── The arbiter, against the theorems ────────────────────────────────────── */
 
@@ -247,6 +261,12 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
 
 interface Tree {
   readonly sql: SqlExecutor;
+  /** The RUN's actor — the one that opened this search. Every row of this tree,
+   *  and every read of it, is scoped to it: `search_nodes` is keyed
+   *  `(actor_id, id)` now, so a seed and a select under different handles would
+   *  come back empty and read as "nothing selectable at this depth" rather than
+   *  as a scoping mistake. */
+  readonly actor: ActorHandle;
   readonly rootId: string;
   /** Record a child of `parentId`, at the depth the ENGINE derives, and give it its
    *  own reward. Returns the child's id. */
@@ -260,32 +280,36 @@ interface Tree {
 function tree(): Tree {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initSearchTables(makeExecRaw(db));
+  const execRaw = makeExecRaw(db);
+  initSearchTables(execRaw);
+  const actor = createTestActors(sql, execRaw).main;
   const rootId = 'root';
   let minted = 0;
-  insertSearchNode(sql, {
+  insertSearchNode(sql, actor, {
     nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
     task: 't', action: '', observation: 'as found', codeUsed: null, depth: 0, msgId: null,
   });
   const depthOf = (nodeId: string): number =>
-    sql<{ depth: number }>`SELECT depth FROM search_nodes WHERE id = ${nodeId}`[0]?.depth ?? -1;
+    sql<{ depth: number }>`SELECT depth FROM search_nodes
+                             WHERE actor_id = ${actor.actorId} AND id = ${nodeId}`[0]?.depth ?? -1;
   return {
     sql,
+    actor,
     rootId,
     depthOf,
     child(parentId, reward) {
       minted += 1;
       const id = `n${String(minted)}`;
-      insertSearchNode(sql, {
+      insertSearchNode(sql, actor, {
         nodeId: id, parentNodeId: parentId, parentMsgId: null, rootId,
         task: 't', action: '', observation: `answer ${id}`, codeUsed: null,
         depth: depthOf(parentId) + 1, msgId: null,
       });
-      if (reward !== null) backpropagate(sql, id, reward);
+      if (reward !== null) backpropagate(sql, actor, id, reward);
       return id;
     },
     select(policy, maxDepth) {
-      return selectFrontierNode(sql, { rootId, policy, maxDepth, explorationWeight: 1.4 });
+      return selectFrontierNode(sql, actor, { rootId, policy, maxDepth, explorationWeight: 1.4 });
     },
   };
 }
@@ -581,19 +605,20 @@ async function run(input: {
   const logger = createRecordingLogger();
   const prompts: string[] = [];
   const result = await runSwarm(
-    { rt, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
+    { rt, hostNode: NO_NODE, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
     resolved(input.depth, input.branches, input.config, input.floor, input.key),
   );
   const nodes = rt.storage.sql<SearchNode>`
-    SELECT * FROM search_nodes ORDER BY depth ASC, created_at ASC`;
+    SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
+    ORDER BY depth ASC, created_at ASC`;
   return { logger, nodes, result, prompts };
 }
 
 describe('a swarm at depth 2 expands, and its tree is measured', () => {
   test('depth 2 is REACHED, every node is derived from its parent, and the cap holds', async () => {
     const { nodes, result, logger } = await run({ depth: 2, branches: 2, proposeWidth: null });
-    // Not a refusal any more. This is the whole ticket: the same call was
-    // `unsupported` because no engine here scored nodes against the caller's metric.
+    // Not a refusal. This is the whole ticket: nothing answers `unsupported`
+    // here, because an engine scores nodes against the caller's metric.
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
 
@@ -894,7 +919,7 @@ describe('the records store: what one run reached, the next one starts from', ()
 
     // The row is REALLY there, read back the way a consumer reads it: scoped by the
     // identity and the floor, never by the objective id alone.
-    const persisted = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    const persisted = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(persisted.length).toBeGreaterThan(0);
     expect(persisted[0]?.value).toBe(first.result.best?.measured?.value ?? -1);
     expect(persisted[0]?.rootId).toBe(first.nodes[0]?.id ?? '');
@@ -937,7 +962,7 @@ describe('the records store: what one run reached, the next one starts from', ()
       depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'elites' } },
     });
     expect('reason' in first.result).toBe(false);
-    const before = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    const before = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
 
     const second = await run({
       depth: 1, branches: 1, proposeWidth: null, rt, config: { carry: { kind: 'elites' } },
@@ -947,7 +972,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(second.result.report.records?.notBetter).toBeGreaterThan(0);
     expect(second.result.report.records?.written).toBe(0);
 
-    const after = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    const after = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(after).toHaveLength(before.length);
     expect(after[0]?.value).toBe(before[0]?.value ?? -1);
   }, 120_000);
@@ -994,7 +1019,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     // barrier ADMITS every candidate under `carry:'none'` — the seal is not that value's
     // business — so the whole shape is asserted rather than the two fields that would
     // still hold if the writer read that verdict and only the monotone rule stopped it.
-    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR }).length)
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR }).length)
       .toBeGreaterThan(0);
     expect(isolated.logger.emitted.filter((line) => line.event === 'swarm.carry_admitted').length)
       .toBeGreaterThan(0);
@@ -1020,7 +1045,7 @@ describe('the records store: what one run reached, the next one starts from', ()
 
     expect(breached.result.publication.state.kind).toBe('sealed');
     expect(breached.result.report.records).toMatchObject({ written: 0 });
-    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
     // And the run says the carry was voided, with the cell count that tells the next run
     // what the seal cost it.
     expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
@@ -1035,13 +1060,12 @@ describe('the records store: what one run reached, the next one starts from', ()
 // the median. These prove the swarm path REACHES it, and that the ensemble validity
 // admitted is the ensemble that runs.
 //
-// THESE THREE USED TO PIN THE OPPOSITE. They asserted `{requested: 20, realised: 3}` and
-// a `swarm.judge_ensemble_clamped` event, because the judged path handed the evaluator
+// THE POOL IS DERIVED FROM THE REQUEST (`judgeCallPool`), never from
 // `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for that
-// engine's own `judgeSamples: 3`. So a judged tree was admitted at the marginalisation
-// floor of 20 and executed at 3, disclosed and non-functional. The pool is now derived
-// from the request (`judgeCallPool`), the floor is untouched, and the clamp event is
-// gone because it can no longer bind.
+// engine's own `judgeSamples: 3`. Handing the evaluator that dial admits a judged tree
+// at the marginalisation floor of 20 and executes it at 3: disclosed and
+// non-functional, `{requested: 20, realised: 3}` with a clamp event to announce it.
+// The floor is untouched and nothing can bind a clamp.
 describe("score:'judge' reaches the ensemble the tree already owns", () => {
   test('A JUDGED TREE RUNS at the ensemble it was admitted at', async () => {
     const { result } = await run({
@@ -1064,12 +1088,12 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('the realised ensemble is PERSISTED, so a reader can state it once the call has returned', async () => {
-    // The figure was computed, disclosed in the settle report, and written nowhere — so
-    // no surface could show it however well rendered, which is the accepted-and-ignored
-    // shape *Accepted and ignored* refuses: a measurement taken and dropped. It is
-    // folded onto the run's own ledger row as the smallest ensemble any candidate
-    // reached, and it is worth keeping now that it equals the request: the row is the
-    // evidence that the pool held, not a record of a downgrade.
+    // A figure computed, disclosed in the settle report and written nowhere is one no
+    // surface can show however well rendered — the accepted-and-ignored shape
+    // *Accepted and ignored* refuses: a measurement taken and dropped. It is folded
+    // onto the run's own ledger row as the smallest ensemble any candidate reached,
+    // and it is worth keeping when it equals the request: the row is the evidence that
+    // the pool held, not a record of a downgrade.
     const { rt } = createTestRuntime();
     const { result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
@@ -1079,11 +1103,11 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     if ('reason' in result) return;
     expect(result.report.judgeEnsemble).toEqual({ requested: 20, realised: 20 });
 
-    const page = readExplorationCanvas(rt.storage.sql);
+    const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0]!;
-    // The knobs this run ran under, from a ledger row the swarm path used to write not at
-    // all: `readForkRunParams` answered a swarm with the transcript half alone.
+    // The knobs this run ran under, from the ledger row the swarm path writes: without
+    // it, `readForkRunParams` answers a swarm with the transcript half alone.
     expect(entry.params?.search).toMatchObject({
       budget: 2, branches: 2, maxDepth: 1, mode: 'build',
       judgeSamplesRequested: 20, judgeSamplesRealised: 20,
@@ -1103,10 +1127,9 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('no clamp is disclosed, because none can bind', async () => {
-    // The inverse of the assertion this replaces. `swarm.judge_ensemble_clamped` was
-    // emitted once per distinct realised size below the request; with the pool sized
-    // from the request there is no such size, and a shortfall is now an instrument
-    // fault that fails the run rather than an event on the way past.
+    // The pool is sized from the requested ensemble, so the run emits no
+    // `swarm.judge_ensemble_clamped` event. An ensemble shortfall is an instrument
+    // fault that fails the run, not a disclosed downgrade.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
@@ -1117,11 +1140,11 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
-    // `swarmValidity` already refused this and `runSwarm` did not route through it, so an
-    // in-process caller could run a scorer the measurement says is not worth building —
-    // 28.5% unmarginalised against 30.0% marginalised at fixed node expansions. The
-    // composition is built through the real resolver and past validity deliberately,
-    // because what is under test is the runner's own gate.
+    // `swarmValidity` refuses this and `runSwarm` does not route through it, so without
+    // the runner's own gate an in-process caller runs a scorer the measurement says is
+    // not worth building — 28.5% unmarginalised against 30.0% marginalised at fixed
+    // node expansions. The composition is built through the real resolver and past
+    // validity deliberately, because what is under test is the runner's own gate.
     const call = resolveSwarm({
       preset: 'custom',
       label: 'depth-suite',
@@ -1137,7 +1160,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(swarmValidity(call)?.error).toContain('samples ≥ 20');
 
     const { rt } = createTestRuntime();
-    const refusal = await runSwarm({ rt, model: answering(null), mode: 'build' }, call);
+    const refusal = await runSwarm({ rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
     expect('reason' in refusal).toBe(true);
     if (!('reason' in refusal)) return;
     expect(refusal.reason).toBe('bad_input');
@@ -1163,7 +1186,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(swarmValidity(call)).toBeNull();
 
     const { rt } = createTestRuntime();
-    const result = await runSwarm({ rt, model: answering(null), mode: 'build' }, call);
+    const result = await runSwarm({ rt, hostNode: NO_NODE, model: answering(null), mode: 'build' }, call);
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
     expect(result.report.judgeEnsemble).toEqual({ requested: 1, realised: 1 });
@@ -1184,7 +1207,7 @@ describe('merge-back at the settle barrier', () => {
     const logger = createRecordingLogger();
 
     const result = await runSwarm(
-      { rt, model: answering(null), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
       resolved(1, 2),
     );
     expect('reason' in result).toBe(false);
@@ -1212,15 +1235,15 @@ describe('merge-back at the settle barrier', () => {
 
   // THE SIZE BOUND, LIVE. The padding is a comment, so the candidate still verifies and
   // still measures the optimal operation count — the only thing that changes is that it no
-  // longer fits one host transaction. Before this wiring the settle write was handed
-  // straight to the substrate at any size.
+  // longer fits one host transaction. The settle write is bounded — nothing hands a
+  // blob to the substrate at any size.
   test('an oversized winner is refused at settle with the bound named', async () => {
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
 
     const result = await runSwarm(
-      { rt, model: answering(null, [padded]), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
       resolved(1, 1),
     );
     expect('reason' in result).toBe(false);
@@ -1298,7 +1321,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const result = await runSwarm(
-      { rt, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
       resolved(3, 3, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1347,7 +1370,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
     const result = await runSwarm(
-      { rt, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
       resolved(3, 3, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1382,7 +1405,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       // One answer, so every candidate is byte-identical: two members that wrote the same
       // bytes have not conflicted, and spawning a graded node to reconcile them with
       // themselves would spend a model call to decide nothing.
-      { rt, model: answering(null), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
       resolved(2, 2, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1408,6 +1431,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       // it — a parent with a last good state, which is the case the decision is about.
       {
         rt,
+        hostNode: NO_NODE,
         model: scripted([variant('same'), variant('same'), variant('odd'), REFERENCE]),
         mode: 'build',
         logger,
@@ -1436,7 +1460,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const result = await runSwarm(
       // One candidate the instrument cannot measure. It has no answer to aggregate, so it
       // gets no edge — and a level with one consumable parent left is not a fan-in.
-      { rt, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
       resolved(2, 2, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1453,7 +1477,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const logger = createRecordingLogger();
     const padded = `${OPTIMAL}\n// ${'x'.repeat(MAX_TX_BLOB_BYTES + 1)}\n`;
     const result = await runSwarm(
-      { rt, model: answering(null, [padded]), mode: 'build', logger },
+      { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
       resolved(2, 2, { expand: 'aggregate' }),
     );
     expect('reason' in result).toBe(false);
@@ -1484,12 +1508,12 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
   test('a composition where a fan-in could never happen is refused, naming what makes it impossible', async () => {
     const { rt } = createTestRuntime();
     const refusal = await runSwarm(
-      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       resolved(1, 3, { expand: 'aggregate' }),
     );
-    // Depth 1 runs one wave off the root, whose level is the root alone. The old refusal
-    // said `aggregate` was unsupported, which is no longer true of anything; this one says
-    // what THIS composition lacks and names the one move that fixes it.
+    // Depth 1 runs one wave off the root, whose level is the root alone. The refusal
+    // names what THIS composition lacks and the one move that fixes it — a blanket
+    // "`aggregate` is unsupported" would be false of every other composition.
     expect('reason' in refusal).toBe(true);
     if (!('reason' in refusal)) return;
     expect(refusal.reason).toBe('bad_input');
@@ -1550,10 +1574,10 @@ const ARCHIVE: Partial<SwarmConfig> = {
 
 describe("advance:'archive' bins a wave into cells, and the next run starts from them", () => {
   test('A REAL RUN FILLS THE CELLS ITS INSTRUMENT WITNESSED, one elite each', async () => {
-    // THE WHOLE TICKET. This composition was `unsupported` — "reports a front or an
-    // archive, and both need a store this run has no writer for" — and the store it named
-    // is the one it now writes: a row per cell, keyed by the descriptor the MEASUREMENT
-    // carried rather than by anything a node said about itself.
+    // THE WHOLE TICKET. This composition is SERVED, not refused with "reports a front
+    // or an archive, and both need a store this run has no writer for" — it WRITES that
+    // store: a row per cell, keyed by the descriptor the MEASUREMENT carried rather
+    // than by anything a node said about itself.
     const { rt } = createTestRuntime();
     const { result, logger } = await run({
       depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
@@ -1568,12 +1592,12 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     expect(result.report.records?.tooClose).toBe(0);
 
     // TWO CELLS, and each holds the answer whose measurement put it there.
-    const rows = recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR });
+    const rows = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(rows.map((row) => row.descriptor).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
-    expect(bestInCell(rt.storage.sql, {
+    expect(bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     })?.value).toBe(N - 1);
-    expect(bestInCell(rt.storage.sql, {
+    expect(bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: THOROUGH_CELL,
     })?.value).toBe(N - 1 + N);
 
@@ -1625,7 +1649,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
       answers: [OPTIMAL], config: ARCHIVE,
     });
     expect('reason' in first.result).toBe(false);
-    const occupant = bestInCell(rt.storage.sql, {
+    const occupant = bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     });
     // As PLACED, which is the answer read back out of the fence rather than the string the
@@ -1649,7 +1673,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     expect(Number(refused?.fields.distance)).toBeLessThan(0.4);
     expect(Number(refused?.fields.distance)).toBeGreaterThan(0);
     // The cell still holds ONE answer, and it is the one that got there first.
-    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: SUITE_FLOOR }))
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR }))
       .toHaveLength(1);
   }, 180_000);
 
@@ -1675,7 +1699,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     // monotone rule that answers and never the admission test.
     expect(second.result.report.records).toMatchObject({ written: 0, notBetter: 1, tooClose: 0 });
 
-    const cell = bestInCell(rt.storage.sql, {
+    const cell = bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     });
     expect(cell?.value).toBe(N - 1);
@@ -1702,7 +1726,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 
     expect(breached.result.publication.state.kind).toBe('sealed');
     expect(breached.result.report.records).toMatchObject({ written: 0, tooClose: 0 });
-    expect(recordsFor(rt.storage.sql, { identity: identityOf(), floor: REFUTED_FLOOR }))
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR }))
       .toHaveLength(0);
     expect(breached.result.report.carrySuppressed).toMatchObject({
       carry: 'elites', suppressedCells: 2,
@@ -1713,7 +1737,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
   }, 120_000);
 });
 
-describe("the archive's own region, and the refusal `pareto` now carries alone", () => {
+describe("the archive's own region, and the refusal `pareto` carries alone", () => {
   /** A composition expected to be illegal, through the real resolver and the real
    *  predicate. Returns the refusal's text, or '' when it was legal — which fails an
    *  assertion rather than passing on a string that happens to contain nothing. */
@@ -1813,7 +1837,7 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     expect(swarmValidity(call)).toBeNull();
     const { rt } = createTestRuntime();
     const result = await runSwarm(
-      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
     expect('reason' in result).toBe(false);
@@ -1848,7 +1872,7 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
     const { rt } = createTestRuntime();
     const result = await runSwarm(
-      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
     expect('reason' in result).toBe(false);
@@ -1864,10 +1888,10 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     // `verify` — so only a caller that skips it can arrive here, and this test is
     // that caller.
     //
-    // What it used to get: `pareto` is prepared only for a MEASURING run, so the
-    // selection arm read `pareto === null ? null : select(...)` inside the branch
-    // it had already tested, returned no node on the first iteration, and the run
-    // settled with zero candidates, zero spend and no sentence anywhere in it
+    // THE SETTLEMENT THIS REFUSES: `pareto` is prepared only for a MEASURING run, so a
+    // selection arm reading `pareto === null ? null : select(...)` inside the branch
+    // it has already tested returns no node on the first iteration, and the run
+    // settles with zero candidates, zero spend and no sentence anywhere in it
     // saying the scheduler could not exist.
     const call = resolveSwarm({
       preset: 'custom',
@@ -1889,7 +1913,7 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
 
     const { rt } = createTestRuntime();
     const result = await runSwarm(
-      { rt, model: answering(null), mode: 'build', logger: createRecordingLogger() },
+      { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       call,
     );
     if (!('reason' in result)) throw new Error('an unmeasured pareto run must refuse, not settle');
@@ -2003,7 +2027,7 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
 
     const { rt } = createTestRuntime();
     const result = await runSwarm(
-      { rt: { ...rt, judgeModel }, model, mode: 'build', logger: createRecordingLogger() },
+      { rt: { ...rt, judgeModel }, hostNode: NO_NODE, model, mode: 'build', logger: createRecordingLogger() },
       call,
     );
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);

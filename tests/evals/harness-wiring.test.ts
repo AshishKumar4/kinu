@@ -39,11 +39,13 @@ import {
 } from '../../packages/core/src/index';
 import { DIGEST_LIMIT, JsonObjectSchema, JsonValueSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
+import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
   formatAdoptedSpend, infraBoundary,
+  createTestActorsOver,
   liveModelSpend, openEvalProgress, recordLiveModelEpisode, resetLiveModelSpend,
   hardTaskCases, toolExecute, type EvalArmState, type EvalObservation,
 } from '@kinu.run/test-utils';
@@ -168,8 +170,8 @@ const opened: Database[] = [];
 // real episode against a SCRIPTED model, and `bun test ./tests/` shares one
 // process — and therefore one meter — with the live suites. Left in place, these
 // fake tokens would be claimed by whichever live suite reported next and would
-// land in the tier's published cost. Measured before this line existed: the
-// skipped `Delegation Evals` teardown printed this file's `42 model call(s),
+// land in the tier's published cost. Without this clear, the skipped
+// `Delegation Evals` teardown prints this file's `42 model call(s),
 // 210 in / 294 out`.
 afterAll(() => {
   resetLiveModelSpend();
@@ -298,9 +300,9 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     // in sandbox-contract.ts — for native and crafted tools alike.
     expect(await execute({ code: 'return await tools.doubleIt(21);' }))
       .toEqual({ result: 42 });
-    // And there is no second one. The alias that used to be declared and refuse
-    // calls is gone, so a call written against it reaches nothing at all: this
-    // is what goes red if a second namespace is ever bound again.
+    // And there is no second one. `codemode.<name>` is bound to nothing, so a
+    // call written against it reaches nothing at all: this is what goes red if a
+    // second namespace is ever bound.
     await expect(execute({ code: 'return await codemode.doubleIt(21);' })).rejects.toThrow();
     expect(await execute({ code: 'return await tools.increment(41);' }))
       .toEqual({ result: 42 });
@@ -309,7 +311,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
 
 /**
  * EVAL/PRODUCTION SET EQUALITY — the gate PRD §9.3 and §9.5 turn on, and the
- * reason the two suites that drive `generateText` directly can no longer be
+ * reason the two suites that drive `generateText` directly cannot be
  * quietly better- or worse-equipped than the product.
  *
  * Judged against `BACKEND_CONFORMANCE`, the repository's existing declaration of
@@ -340,10 +342,10 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
  * flash runs came to blame a corpus for `craft_reuse eligible 0`.
  */
 
-/** The six actions whose manifest row is observed from the hosted path. A
+/** The four actions whose manifest row is observed from the hosted path. A
  *  capability leaves this list only by being wired here for real. */
 const HOST_INSTALLED_ACTIONS: readonly AgentsToolAction[] =
-  ['hire', 'ask', 'send', 'reply', 'list', 'dismiss'];
+  ['hire', 'msg', 'list', 'dismiss'];
 
 describe('the eval agent surface is set-equal to the production cli root', () => {
   test('its tools are exactly what the manifest declares, and its actions match the deps it carries', async () => {
@@ -557,6 +559,30 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     expect(spill.detail).toContain(`${String(spill.eligible)} readable spills`);
   }, 0);
 
+  test('output_cap: the arm reports whether the provider cut the answer, per episode', async () => {
+    const scores = await run('wiring-cap', [
+      { tool: 'file', input: { action: 'write', path: 'capped.txt', content: 'done' } },
+    ]);
+
+    // The row LANDS. Dropping it from the arm's array is the plausible bug this
+    // guards: nothing else in the record would go missing, and the tier would
+    // quietly stop reporting the share of attempts an output limit ended — the
+    // one statistic that says whether the cap costs anything.
+    const cap = scoreOf(scores, 'output_cap');
+
+    // UNMEASURED under a scripted provider, and that is the honest verdict
+    // rather than a gap in this test: the fixture supplies the PROVIDER-level
+    // finish shape, so nothing reaches the accumulator's `lastFinishReason` and
+    // the episode closes no step with a reason to read (target-seam.test.ts says
+    // the same about the same field). A `1` here would be the failure the
+    // asymmetry exists to prevent — a clean cap verdict over an episode nobody
+    // measured — so the assertion is that it declines to score, not that it
+    // passes.
+    expect(cap.eligible).toBe(0);
+    expect(cap.rate).toBeNull();
+    expect(cap.detail).toContain('UNMEASURED');
+  }, 0);
+
   test('the harness REFUSES a runtime with no executor surface, before spending anything', async () => {
     // The positive direction is covered by the three tests above: they all run,
     // which means the real harness path satisfies the precondition. What this
@@ -588,9 +614,10 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
  * A live run left `scratch-add/{add.js,add.test.js}` in a worktree ROOT and two
  * committed stray files (`report.txt`, `todos.txt`) in the repo root, and
  * `gate:typecheck-coverage` refused the commit that swept them up. The cause is
- * not the corpus: `createCLIRuntime` registered a `laptop` ExecutorProvider
- * rooted at `process.cwd()` (cli-backend/src/runtime.ts:380 before this change),
- * so every episode the harness opened could write anywhere the developer can.
+ * not the corpus: `createCLIRuntime` registers a `laptop` ExecutorProvider
+ * rooted at `process.cwd()` unless told otherwise (cli-backend/src/runtime.ts),
+ * so every episode opened without `hostRoot: null` can write anywhere the
+ * developer can.
  *
  * WHY THE PLANE HAS TO BE ABSENT RATHER THAN RE-ROOTED. `laptop.writeFile`
  * resolves its argument with `resolve(cwd, path)`, which passes an ABSOLUTE path
@@ -638,8 +665,8 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     await createWorkspace(db, { name: 'unsandboxed', purpose: 'host plane probe', llm: LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-    // The default — what every interactive CLI surface wants and what the
-    // harness used to get by omission. `listExecutors` is the read that carries
+    // The default — what every interactive CLI surface wants, and what omitting
+    // `hostRoot` gives. `listExecutors` is the read that carries
     // `kind`; the codemode surface drops it (execution/router.ts:38-52).
     const hosted = await openWorkspaceCLI(db, dbPath, { llm: LLM });
     expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toContain('laptop');
@@ -672,7 +699,8 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
  * `tool_call_start`, the type every earlier counter read, is emitted by nothing.
  */
 function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }>[] {
-  const recorder = new RunEventRecorder(makeSql(db));
+  const sql = makeSql(db);
+  const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
   // A walk, for the same reason readLedgerTotals walks: an episode's rows are
   // the whole assertion, and a window over them would make a missing `args`
   // indistinguishable from a row the read never reached.
@@ -813,9 +841,9 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     expect(outcome.detail).toContain('1.00x');
 
     // The raw counts must survive as STRUCTURE, not only inside the sentence.
-    // `toScoreJson` dropped `measured` originally, so the first live pilot's
-    // numbers had to be recovered by parsing English out of `detail`. A ratio
-    // whose baseline does not survive beside it cannot be re-derived.
+    // `toScoreJson` carries `measured`, so the numbers behind a ratio never have
+    // to be recovered by parsing English out of `detail`. A ratio whose baseline
+    // does not survive beside it cannot be re-derived.
     expect(outcome.measured).toMatchObject({
       refOps: expect.any(Number),
       candOps: expect.any(Number),
@@ -849,18 +877,18 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
 /**
  * WHAT THE EPISODE COST, proven on a scripted model so the proof itself is free.
  *
- * The behavioural tier used to report `0 model call(s), unreported in / unreported
- * out tokens` for runs that spent hundreds of thousands of neurons — one measured
- * live run cost ~584,751 and had to be recomputed by hand out of `turn_end.usage`
- * in the retained stores. The cause was structural rather than arithmetic:
- * `recordLiveModelSpend` is fed by the five suites that call `generateText`
- * themselves and hold the SDK result, and this tier drives a `LocalAgentSession`
- * instead, so nothing ever reached the meter and `calls` was pinned at 0 by
- * construction.
+ * A behavioural tier that reports `0 model call(s), unreported in / unreported
+ * out tokens` for a run that spent hundreds of thousands of neurons is a
+ * structural failure rather than an arithmetic one — one measured live run cost
+ * ~584,751 and had to be recomputed by hand out of `turn_end.usage` in the
+ * retained stores. `recordLiveModelSpend` is fed by the five suites that call
+ * `generateText` themselves and hold the SDK result, and this tier drives a
+ * `LocalAgentSession` instead, so nothing reaches the meter through that path
+ * and `calls` would be pinned at 0 by construction.
  *
- * These assert the two halves that make that unrepeatable: an episode's spend
- * arrives in the meter from the store the session wrote, and a zero can no longer
- * be produced by silence. Both run on `scripted()`, whose steps report a fixed
+ * These assert the two halves that keep that impossible: an episode's spend
+ * arrives in the meter from the store the session wrote, and a zero cannot be
+ * produced by silence. Both run on `scripted()`, whose steps report a fixed
  * usage, so the numbers below are arithmetic on a known input rather than a live
  * bill — the whole point being that discovering this from a live run costs a live
  * run.
@@ -910,7 +938,10 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     const empty = new Database(join(dir, 'unaccounted.db'));
     opened.push(empty);
     initWorkspaceSchema(makeWorkspaceSchemaSql(empty));
-    recordLiveModelEpisode(makeSql(empty));
+    // `initWorkspaceSchema` creates the actor tables but issues nobody, and an
+    // unmeasured episode still belongs to an actor. This is that workspace's
+    // real main actor, over the same file.
+    recordLiveModelEpisode(makeSql(empty), createTestActorsOver(empty).main);
     const spent = liveModelSpend();
 
     // The episode did NOT silently add a zero to the call count...
@@ -924,8 +955,8 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
    * THE SURFACE THE OWNER READS: the meter -> the JSONL line a suite teardown
    * appends -> the rendered tier cost. Run LAST in this block on purpose, so it
    * renders the accumulation of the measured episode above PLUS the unaccounted
-   * one — the mixed state a live run actually arrives in, and the state whose
-   * rendering was previously a bare `0`.
+   * one — the mixed state a live run actually arrives in, and the state a bare
+   * `0` cannot render.
    *
    * Rendered from the in-memory meter rather than by calling
    * `reportLiveModelSpend` and reading its file: that would publish this file's
@@ -1214,9 +1245,9 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
   });
 
   test('a PRODUCT defect that killed the turn is never the environment', () => {
-    // THE RED DIRECTION, and the one the first version of this rule had backwards.
+    // THE RED DIRECTION: a product defect must come back NULL, never labelled.
     // `classifyTurnFailure` returns `transient` as its FALL-THROUGH, so labelling
-    // everything-but-`context_length` as infrastructure stamped INFRA on any
+    // everything-but-`context_length` as infrastructure stamps INFRA on any
     // internal throw sealed into a `run_end` — and a regression that kills turns
     // then reads as an outage in the tier's report, which is the gate-blindness
     // direction of the same defect.
@@ -1298,10 +1329,10 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
   test('a failure raised at a declared boundary is the environment\'s, whichever plane raised it', async () => {
     // The public plane has no DegenerateRunError for a socket that died
     // mid-turn: `infraBoundary` labels the failure where it happens, and the
-    // ratchet already counts that label as infrastructure. The record used to
-    // file the same failure as `errored` — the harness's fault, settled, never
-    // retried — so one outage was two different failures depending on which
-    // reader you asked.
+    // ratchet already counts that label as infrastructure. Filing the same
+    // failure as `errored` — the harness's fault, settled, never retried —
+    // makes one outage two different failures depending on which reader you
+    // asked.
     let boundary: Error | null = null;
     try {
       await infraBoundary('turn on staging/eval-ws', () =>

@@ -24,17 +24,14 @@
  * {@link FileCheckpointListing} exists for: an empty list is ambiguous and was
  * being read to the operator as a statement about his turn.
  *
- * The gap is not a property of the workspace filesystem. This file used to say
- * the workspace plane "stores current state only (no history/content-
- * addressing)", which was true of the hand-rolled `SqliteFS` that was deleted on
- * 2026-08-12 and is false of what replaced it: Nimbus's VFS is content-addressed
- * (`inodes(path, content_id)` over `file_chunks(content_id, chunk_id, data)`,
- * with a `content_lifecycle` GC table), so a snapshot of that plane is a copy of
- * the small inode index and no blob copies at all. What it needs is content
- * pinning — Nimbus reclaims content no *inode* references, so checkpoint rows
- * alone would not keep blobs alive — and that is a Nimbus-side change, not an
- * absence of structure. Sandbox files are a third machine's and need the sandbox
- * to snapshot.
+ * The gap is not a property of the workspace filesystem. Nimbus's VFS is
+ * content-addressed (`inodes(path, content_id)` over
+ * `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
+ * table), so a snapshot of that plane is a copy of the small inode index and no
+ * blob copies at all. What it needs is content pinning — Nimbus reclaims
+ * content no *inode* references, so checkpoint rows alone would not keep blobs
+ * alive — and that is a Nimbus-side change, not an absence of structure.
+ * Sandbox files are a third machine's and need the sandbox to snapshot.
  */
 
 /** Bounded retention: checkpoints kept per working directory. One knob. */

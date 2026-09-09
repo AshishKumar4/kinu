@@ -226,12 +226,12 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
  * The tier's LIVENESS VERDICT — the exit code, not the prose.
  *
  * The block above proves the report can describe a hole. It does not prove
- * anything ACTS on it, and for the whole life of this tier nothing did:
- * `bun scripts/eval-spend.ts` printed `TOTAL: 0 model call(s)` over a run of six
- * live suites and exited 0, so `run_required_gate "Behavioural evals"` in
- * scripts/deploy.sh passed a deploy over a tier that had called no model. These
- * tests are the red proof of the exit code: each `unproven` case here is a case
- * that used to be a green deploy.
+ * anything ACTS on it: `bun scripts/eval-spend.ts` printing
+ * `TOTAL: 0 model call(s)` over a run of six live suites and exiting 0 lets
+ * `run_required_gate "Behavioural evals"` in scripts/deploy.sh pass a deploy
+ * over a tier that called no model. These tests are the red proof of the exit
+ * code: each `unproven` case here is a case that would otherwise be a green
+ * deploy.
  *
  * The conditional is load-bearing and gets its own case. Refusing every zero
  * would break the credential-free path the tier deliberately supports, so the

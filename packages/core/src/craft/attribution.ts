@@ -9,15 +9,15 @@
  * under-counts, and the same crafted tool then earns a different fitness
  * depending on which backend ran it.
  *
- * Which is what happened. CF wrapped every injected body so a throw carried
- * its tool's name; the CLI compiled the stored source bare and rethrew
- * unstamped. Both wrappers belong here, beside the marker they apply, because
- * the ONE thing that must not vary between them is the format.
+ * The divergence is one line of carelessness apart: wrap each injected body and
+ * a throw carries its tool's name, compile the stored source bare and it
+ * rethrows unstamped. The wrapper belongs here, beside the marker it
+ * applies, because the ONE thing that must not vary between backends is the
+ * format.
  *
- * One form: {@link attributeCraftedFailure} wraps a compiled function. The CF
- * path used to splice source text into a preamble the workerd loader compiled,
- * which needed its own text wrapper; the module-per-tool rebuild removed that
- * path, so every backend holds a callable and one wrapper is the whole story.
+ * One form: {@link attributeCraftedFailure} wraps the callable for each
+ * crafted tool and applies the shared failure marker. Keeping the wrapper
+ * beside the marker gives every backend the same attribution format.
  */
 
 import { craftInvocationError } from './in-episode';

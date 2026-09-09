@@ -318,8 +318,8 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
       // The same mutation path the browser routes run: the authoritative write
       // is done, so the workspaces holding caches of the OLD state are told to
-      // drop them. The CLI-only gap left a newly connected provider invisible
-      // to every live workspace until some unrelated invalidation landed.
+      // drop them. Skipping it here leaves a newly connected provider invisible
+      // to every live workspace until some unrelated invalidation lands.
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
       return json({ ok: true }, { status: 201 });
     }

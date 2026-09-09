@@ -97,10 +97,10 @@ export type JobResumer = (
  * What a job has already produced, for a job that will not be driven again.
  *
  * PARTIAL CANDIDATES ARE RESULTS, and that is the whole reason this seam exists. The
- * bounded-out and force-fail paths used to settle with an eviction string, so the
- * incident's job reported nothing while its search held two completed candidates with
- * real content. A harvester answers "what does this work have RIGHT NOW", read out of
- * the durable rows the work already wrote.
+ * bounded-out and force-fail paths have no result of their own to report, and settling
+ * them with a bare eviction string makes a job report nothing while its search holds
+ * two completed candidates with real content. A harvester answers "what does this work
+ * have RIGHT NOW", read out of the durable rows the work already wrote.
  *
  * Null when the kind has nothing partial to give, which is the honest answer for a
  * side-effecting call: `run` and `execute_tools` either happened or did not.
@@ -183,16 +183,16 @@ export interface BackgroundJobRunnerDeps {
    *  REFUSE the cancel, which leaves the job running and retryable. */
   onCancelled?(jobId: string): Promise<void> | void;
   /** Re-drive an evicted job from its durable checkpoint. When absent, an evicted
-   *  running job is failed (legacy behavior); when present, the runner reclaims
-   *  the job under a fresh lease epoch and re-drives it in a new durable fiber. */
+   *  running job is failed; when present, the runner reclaims the job under a fresh
+   *  lease epoch and re-drives it in a new durable fiber. */
   resume?: JobResumer;
   /** What a job that will not be driven again has already produced, for the two
    *  terminals that reach settle-with-what-you-have: a kind that cannot be
    *  re-driven, and the no-resumer case.
    *
-   * Absent means "settle with nothing", which is what every one of those paths used
-   * to do unconditionally. Present, the job settles `completed` carrying the partial
-   * result, because a search that measured two of five answers measured two answers.
+   * Absent means those terminals settle with nothing. Present, the job settles
+   * `completed` carrying the partial result, because a search that measured two of
+   * five answers measured two answers.
    * Never throws into the fiber: a harvester that fails leaves the job settling the
    * way it would have without one.
    */
@@ -408,10 +408,10 @@ export class BackgroundJobRunner {
    * deferral), and their rows are therefore always counted.
    */
   private liveDetachedCount(): number {
-    const owed = this.deps.store.resumeOwedIds(Date.now());
+    const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
     let idle = 0;
     for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
-    return this.deps.store.countRunning() - idle;
+    return this.deps.store.countRunningInWorkspace() - idle;
   }
 
   /**
@@ -945,12 +945,25 @@ export class BackgroundJobRunner {
    * same six lines in both, which is the twin this repository's own gate refuses:
    * the decision "is an attempt owed" belongs to the thing that owes it.
    *
-   * Nothing re-arms here. A sweep that finds a job still waiting arms its own
-   * next wake through {@link BackgroundJobRunnerDeps.scheduleResume}.
+   * A DUE attempt is re-driven by the sweep. A NOT-YET-DUE one is re-armed here
+   * and nowhere else, and that is the whole reason this branch is not a bare
+   * return. The instant and the schedule row are written by different steps —
+   * `deferResume` records the wait, `deferRecovery` arms the wake — and the row
+   * is the half that can be lost: an isolate evicted between them leaves a
+   * durable instant with nothing to fire at it. `deferRecovery` sits BEHIND this
+   * check, so a bare return meant the only thing that could re-arm a pending
+   * attempt was a sweep that already required the attempt to be due. Nothing
+   * woke at the due instant, so nothing ever did, and the job sat `running`
+   * until an unrelated ingress happened to wake the workspace. The MIN is
+   * already in hand: arming it costs no second read and no registry walk.
    */
   async recoverDueResumes(): Promise<void> {
-    const next = this.deps.store.nextResumeAt();
-    if (next === null || next > Date.now()) return;
+    const next = this.deps.store.nextResumeAtInWorkspace();
+    if (next === null) return;
+    if (next > Date.now()) {
+      await this.deps.scheduleResume?.(next);
+      return;
+    }
     await this.recoverOrphans();
   }
 
@@ -1032,10 +1045,10 @@ export class BackgroundJobRunner {
    * that can notice. Arming is soonest-wins on both backends, so repeating it is
    * free.
    *
-   * The deferral is ANNOUNCED, because the give-up this replaced was the only
-   * thing that ever told anyone the job had been interrupted. Silence is what
-   * made the incident unreadable: the owner watched a job sit `running` with
-   * nothing able to say why.
+   * The deferral is ANNOUNCED, because a silent one leaves nothing that tells
+   * anyone the job was interrupted. Silence is what made the incident
+   * unreadable: the owner watched a job sit `running` with nothing able to say
+   * why.
    */
   private async deferRecovery(job: BackgroundJob, at: number): Promise<JobRecoveryOutcome> {
     const delayMs = at - Date.now();

@@ -31,7 +31,7 @@ describe('an interrupted case is incomplete, never pass or fail', () => {
   });
 
   /**
-   * The other half of the same rule, and the one that used to be missing.
+   * The other half of the same rule.
    *
    * A case the run never REACHED is reported as `incomplete` too, so a corpus
    * whose repetitions were cut short cannot publish over the shorter
@@ -92,10 +92,20 @@ describe('the eval runners do not terminate cases on elapsed wall time', () => {
    * subject under test IS the runner's own wall clock. A fake timer would
    * advance the clock this test is trying to outlive, so it would prove that
    * the mock works and nothing about the runner.
+   *
+   * THE ELAPSED BOUND IS THE ASSERTION, for that exact reason. Awaiting the
+   * timer and asserting nothing is a case that passes in two states: the one
+   * where the runner let us outlive its default wall, and the one where
+   * `setTimeout` returned immediately — which is what a preload installing fake
+   * timers would do, and this tree preloads. Measuring the elapsed wall tells
+   * those apart, so a green here means five seconds really passed inside a case
+   * the runner did not kill.
    */
   test('Bun timeout zero survives past the default five-second wall', async () => {
+    const started = performance.now();
     const { promise, resolve } = Promise.withResolvers<void>();
     setTimeout(resolve, 5_100);
     await promise;
+    expect(performance.now() - started).toBeGreaterThan(5_000);
   }, 0);
 });

@@ -14,9 +14,9 @@ import { nanoid, type SqlExec } from '@kinu.run/core';
 import { sha256Hex } from '../lib/crypto';
 import * as v from 'valibot';
 
-// Scopes renamed from agent.read/agent.exec with no back-compat migration by
-// design — pre-production, tokens are reissued on redeploy (owner decision
-// 2026-06-13).
+// The scope vocabulary carries no back-compat aliases by design — pre-production,
+// tokens are reissued on redeploy, so a name this list drops is reminted rather
+// than translated (owner decision 2026-06-13).
 //
 // `ai.proxy` means "spend the owner's inference credentials", and that is now
 // ALL of them: the Cloudflare-pinned /api/user/ai/v1 proxy and the general

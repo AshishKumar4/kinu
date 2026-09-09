@@ -187,7 +187,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
         </div>
       </div>
       {/* The strongest tier is never the highlighted button on a card about ONE
-          command. "Always" on an exec used to record full filesystem and shell
+          command. "Always" on an exec would record full filesystem and shell
           access forever, from every ingress the workspace consumes, in answer
           to a question about a single `printf`. For an exec the card offers
           once or deny, and the standing decision lives in Account settings. */}
@@ -208,9 +208,9 @@ export function DeviceConsentCard({ consent, onResolve }: {
  * produced no visible answer.
  *
  * The retry RE-RUNS that turn rather than asking the same thing again: the
- * label says so, because the button used to append a duplicate user message
- * on every press and three attempts left three identical turns in the
- * transcript. The error body is shown verbatim; the hook clears the card on
+ * label says so, because a button that appends a duplicate user message on
+ * every press leaves three identical turns in the transcript after three
+ * attempts. The error body is shown verbatim; the hook clears the card on
  * the next send.
  *
  * A REPLAYED failure is not the same claim and does not get the same words.
@@ -388,6 +388,7 @@ function ForkModal({
 interface SubordinatePlanContext {
   name: string;
   plan: PlanReview | null;
+  focus: string | null;
   rpc: Rpc;
 }
 
@@ -413,9 +414,9 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
   useEffect(() => {
-    onPlanContext({ name: subName, plan: state.activePlan, rpc: state.rpc });
+    onPlanContext({ name: subName, plan: state.activePlan, focus: state.planFocus, rpc: state.rpc });
     return () => onPlanContext(null);
-  }, [onPlanContext, state.activePlan, state.rpc, subName]);
+  }, [onPlanContext, state.activePlan, state.planFocus, state.rpc, subName]);
 
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
@@ -672,7 +673,7 @@ export default function WorkspacePage() {
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
   }, []);
-  // Output still takes over the moment there is something running to look at.
+  // Plan decisions use the selected actor; previews remain workspace-scoped.
   const subordinateReview = subName !== undefined
     && subordinatePlanContext?.name === subName
     ? subordinatePlanContext
@@ -683,7 +684,6 @@ export default function WorkspacePage() {
   // orchestrator's — and survive tab switches and revisits without leaking
   // into any additional agent's composer.
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
-  const chatMode = ui.mode;
   const setChatMode = ui.setMode;
   const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
   const effectiveChatMode = planGate.mode;
@@ -739,8 +739,8 @@ export default function WorkspacePage() {
     e.preventDefault();
     setDragOver(false);
     // Handed straight over: the hook owns the conversion task through
-    // settlement and returns nothing to await, so the transition this used to
-    // be wrapped in resolved on an already-finished value and deferred nothing.
+    // settlement and returns nothing to await, so a transition wrapped around
+    // this would resolve on an already-finished value and defer nothing.
     attachments.add(files);
   }, [attachments]);
 
@@ -796,35 +796,6 @@ export default function WorkspacePage() {
     };
   }, [agentId]);
 
-  // New ports can bring Output forward from Work, but must not replace a
-  // selected surface. In particular, booting a slate must leave its live
-  // source-refresh owner mounted.
-  const prevPortCountRef = useRef(0);
-  useEffect(() => {
-    const n = state.pinnedPorts.length;
-    const planOwnsOutput = chatMode === "plan"
-      || visiblePlan?.status === "pending"
-      || visiblePlan?.status === "changes_requested";
-    if (n > prevPortCountRef.current && !planOwnsOutput) {
-      setSurface((selected) => selected === "Work" ? "Output" : selected);
-    }
-    prevPortCountRef.current = n;
-  }, [chatMode, state.pinnedPorts.length, visiblePlan?.status]);
-
-  // A new durable revision owns focus once. Annotation saves update the same
-  // revision and must not keep dragging the owner back after they navigate.
-  const previousPlanRef = useRef<string | null>(null);
-  useEffect(() => {
-    const key = visiblePlan
-      ? `${subName ?? "main"}/${visiblePlan.id}/${visiblePlan.revision}`
-      : null;
-    if (key && key !== previousPlanRef.current) setSurface("Output");
-    previousPlanRef.current = key;
-  }, [
-    subName,
-    visiblePlan?.id,
-    visiblePlan?.revision,
-  ]);
 
   // `sendChat` owns admission — one synchronous latch inside `useKinu`, so a
   // reactive `state.isStreaming` pre-check here is exactly what let two presses
@@ -846,9 +817,10 @@ export default function WorkspacePage() {
     const t = chatInput.trim();
     if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
     setBranchNotice(null);
-    // The composer is cleared only once the branch was actually accepted — a
-    // refused or failed branch used to destroy what the user had typed. The
-    // identity check leaves anything typed while the RPC was in flight alone.
+    // The composer is cleared only once the branch was actually accepted —
+    // clearing sooner destroys what the user typed when a branch is refused or
+    // fails. The identity check leaves anything typed while the RPC was in
+    // flight alone.
     startTransition(async () => {
       try {
         const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
@@ -1319,6 +1291,12 @@ export default function WorkspacePage() {
         >
           <WorkSurface
             surface={surface}
+            previewFocus={state.previewFocus}
+            planFocus={subName === undefined ? state.planFocus : subordinateReview?.focus}
+            planOwner={subName ?? "main"}
+            workspacePlanArrival={state.workspacePlanArrival}
+            activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
+            onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
@@ -1406,9 +1384,9 @@ export default function WorkspacePage() {
   );
 }
 
-/** The device-file restore confirm. Shows the same plan the native confirm()
- *  used to cram into a browser dialog — this overwrites files on the user's
- *  real machine, so it gets the app's own destructive-action treatment. */
+/** The device-file restore confirm. Shows the whole plan in the app's own
+ *  destructive-action treatment rather than crammed into a native `confirm()`
+ *  dialog — this overwrites files on the user's real machine. */
 interface RestorePlan {
   entries: FileCheckpointEntry[];
   dirs: string[];

@@ -2,9 +2,9 @@
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
 import { describe, test, expect, afterAll } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import * as v from 'valibot';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
@@ -16,6 +16,7 @@ import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, par
 import { BENCH_SUITES, benchPatchFiles, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
+import { workspacePackages } from '../packages/test-utils/src/workspace-resolution';
 import {
   VALIDATION_DIAGNOSTICS_FILE, loadValidationDiagnostics, runValidation,
 } from './bench-validation';
@@ -604,18 +605,66 @@ describe('createAttemptSandbox', () => {
   // Existence is not the property that matters: a workspace link that still
   // RESOLVES to the pristine repo makes every cross-package import read the
   // source tree instead of the copy, so a solver's edits — and a task's defect —
-  // are invisible to any test that imports through '@kinu.run/*'. This caught
-  // facts-confidence-default-zero validating as "breaks nothing".
-  test('workspace links resolve inside the copy, not back into the real repo', () => {
+  // are invisible to any test that imports through a workspace specifier. This
+  // caught facts-confidence-default-zero validating as "breaks nothing".
+  //
+  // EVERY package the tree declares, from the same enumeration the resolution
+  // guard uses — never a written-down scope. Spelling '@kinu.run/*' here is how
+  // this test passed for months while `@agent-core/core` resolved into the donor
+  // checkout: it certified two links out of ten and reported on the sandbox.
+  test('every workspace link resolves inside the copy, not back into the real repo', () => {
     const runRoot = tempDir('bench-ws-');
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', prepare });
-    // Bun hoists workspace links to the ROOT node_modules — the per-package
-    // paths this used to check have not existed for some time, so it ENOENTed
-    // instead of catching the leak it was written to catch.
-    for (const link of ['node_modules/@kinu.run/core', 'node_modules/@kinu.run/test-utils']) {
-      const resolved = realpathSync(join(sandbox.dir, link));
-      expect(resolved.startsWith(realpathSync(sandbox.dir))).toBe(true);
+    const packages = workspacePackages(REPO_ROOT);
+    expect(packages.size).toBeGreaterThan(1);
+    for (const [name, packageDir] of packages) {
+      // Bun hoists workspace links to the ROOT node_modules, so a per-package
+      // path ENOENTs instead of catching the leak this is written to catch.
+      const resolved = realpathSync(join(sandbox.dir, 'node_modules', name));
+      // The copy's OWN directory, by equality: `startsWith` alone would accept a
+      // link into some other package of the same sandbox.
+      expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(REPO_ROOT, packageDir)));
     }
+    sandbox.dispose();
+  });
+
+  // The general property, on a tree whose scopes this repo does not supply: two
+  // of them, so a sandbox that re-points "the" workspace scope leaves the second
+  // one resolving into the donor. That is the shape the real defect had — the
+  // vendored `@agent-core` scope is invisible to `sources.ts:workspaceScope()`,
+  // which is singular by construction — and a fixture keeps it caught even if
+  // this repo is back to one scope by then.
+  test('a tree with two workspace scopes has BOTH re-pointed, third-party still shared', () => {
+    const donor = tempDir('bench-two-scopes-');
+    const manifest = (name: string) => JSON.stringify({ name, main: 'index.js' });
+    for (const [dir, name] of [['alpha', '@alpha/core'], ['vendored', '@beta/core']]) {
+      mkdirSync(join(donor, 'packages', dir), { recursive: true });
+      writeFileSync(join(donor, 'packages', dir, 'package.json'), manifest(name));
+      writeFileSync(join(donor, 'packages', dir, 'index.js'), 'export const from = "' + dir + '";\n');
+    }
+    writeFileSync(join(donor, 'package.json'), JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }));
+    mkdirSync(join(donor, 'node_modules', 'third-party'), { recursive: true });
+    writeFileSync(join(donor, 'node_modules', 'third-party', 'package.json'), manifest('third-party'));
+    // Hoisted exactly as bun installs them: relative to the DONOR's own root, so
+    // an absolute link to the scope directory resolves back into the donor.
+    mkdirSync(join(donor, 'node_modules', '@alpha'), { recursive: true });
+    mkdirSync(join(donor, 'node_modules', '@beta'), { recursive: true });
+    symlinkSync('../../packages/alpha', join(donor, 'node_modules', '@alpha', 'core'));
+    symlinkSync('../../packages/vendored', join(donor, 'node_modules', '@beta', 'core'));
+
+    const sandbox = createAttemptSandbox({
+      repoRoot: donor, runRoot: tempDir('bench-two-scopes-run-'), attemptId: 'two-scopes',
+      prepare: () => { /* nothing to inject: the copy itself is under test */ },
+    });
+    const root = realpathSync(sandbox.dir);
+    expect(realpathSync(join(sandbox.dir, 'node_modules', '@alpha', 'core')))
+      .toBe(join(root, 'packages', 'alpha'));
+    expect(realpathSync(join(sandbox.dir, 'node_modules', '@beta', 'core')))
+      .toBe(join(root, 'packages', 'vendored'));
+    // Still shared read-only rather than copied: that is what keeps a sandbox
+    // off the multi-gigabyte path, and it must survive the scope rebuild.
+    expect(realpathSync(join(sandbox.dir, 'node_modules', 'third-party')))
+      .toBe(join(realpathSync(donor), 'node_modules', 'third-party'));
     sandbox.dispose();
   });
 

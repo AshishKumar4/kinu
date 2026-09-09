@@ -18,9 +18,22 @@ const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).li
 import type { JsonValue } from '../src/utils/json';
 import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
+import { createTestActorsOver } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 
-function makeSql(): SqlExec {
-  return makeSqlExec(new Database(':memory:'));
+/** One hub database and the ONE actor whose rows it holds.
+ *
+ *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
+ *  than of the reader: a log bound to a fabricated id publishes rows no
+ *  production reader resolves. Bound through the production directory. */
+interface Hub {
+  readonly sql: SqlExec;
+  readonly actor: ActorHandle;
+}
+
+function makeSql(): Hub {
+  const db = new Database(':memory:');
+  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
 function chatDescriptor(text: string): IngressDescriptor {
@@ -43,9 +56,9 @@ function webhookDescriptor(deliveryId: string, body: JsonValue): IngressDescript
 describe('EventLog.publish + dedupe', () => {
 
   test('first publish admits; second publish with same dedupe key is idempotent', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1000 });
     expect(r1.admitted).toBe(true);
     const r2 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1500 });
@@ -54,9 +67,9 @@ describe('EventLog.publish + dedupe', () => {
   });
 
   test('different bodies → different keys → both admit', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1000 });
     const r2 = log.publish({ descriptor: webhookDescriptor('d2', { x: 2 }), now: 1001 });
     expect(r1.admitted).toBe(true);
@@ -65,9 +78,9 @@ describe('EventLog.publish + dedupe', () => {
   });
 
   test('chat events are NOT deduped (null dedupe_key)', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: chatDescriptor('hi'), now: 1 });
     const r2 = log.publish({ descriptor: chatDescriptor('hi'), now: 2 });
     expect(r1.admitted).toBe(true);
@@ -78,9 +91,9 @@ describe('EventLog.publish + dedupe', () => {
 
 describe('EventLog.pending', () => {
   test('returns events unbound to a turn, ordered by priority desc', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     log.publish({ descriptor: webhookDescriptor('w1', { x: 1 }), now: 1 });  // background (external? no — authenticated → normal)
     log.publish({ descriptor: chatDescriptor('urgent!'), now: 2 });          // owner chat → urgent
     const pending = log.pending();
@@ -90,9 +103,9 @@ describe('EventLog.pending', () => {
   });
 
   test('binding an event removes it from pending', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('hi'), now: 1 });
     expect(log.pending()).toHaveLength(1);
     log.markConsumed(id, 'turn-1', 0);
@@ -100,9 +113,9 @@ describe('EventLog.pending', () => {
   });
 
   test('startup reconciliation re-pends only stale unfinished drain leases', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const stale = log.publish({ descriptor: chatDescriptor('stale'), now: 1 }).id;
     const completed = log.publish({ descriptor: chatDescriptor('completed'), now: 2 }).id;
     const fresh = log.publish({ descriptor: chatDescriptor('fresh'), now: 3 }).id;
@@ -119,9 +132,9 @@ describe('EventLog.pending', () => {
   });
 
   test('startup reconciliation atomically re-pends every qualifying lease', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const first = log.publish({ descriptor: chatDescriptor('first'), now: 1 }).id;
     const second = log.publish({ descriptor: chatDescriptor('second'), now: 2 }).id;
     log.markConsumed(first, 'evt-first', 0, 1_000);
@@ -132,9 +145,9 @@ describe('EventLog.pending', () => {
   });
 
   test('protected cross-owner peer payloads retain delegated Plan mode', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     log.publish({
       descriptor: {
         ingress: 'peer_async',
@@ -161,9 +174,9 @@ describe('EventLog.pending', () => {
 
 describe('EventLog.defer + dismiss', () => {
   test('defer puts event into deferred pool, surfaced when condition met', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('later'), now: 1 });
     log.defer(id, { kind: 'after_phase', phase: 'idle' });
     expect(log.pending()).toHaveLength(0);  // not in normal pending
@@ -173,9 +186,9 @@ describe('EventLog.defer + dismiss', () => {
   });
 
   test('dismiss removes the event from pending permanently', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('drop'), now: 1 });
     log.dismiss(id, 'no longer relevant', 'tool');
     expect(log.pending()).toHaveLength(0);
@@ -185,9 +198,9 @@ describe('EventLog.defer + dismiss', () => {
 
 describe('EventLog audit + non-event rows', () => {
   test('appendNonEventRow writes step/tool_call/etc. rows', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const id = log.appendNonEventRow({
       kind: 'step',
       turn_id: 'turn-1', step_idx: 0, parent_id: null, trace_id: 'trace-1',
@@ -201,9 +214,9 @@ describe('EventLog audit + non-event rows', () => {
   });
 
   test('currentPhase reads the latest phase row for a turn', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     log.appendNonEventRow({
       kind: 'phase', turn_id: 't1', step_idx: null, parent_id: null, trace_id: 't1',
       payload: { phase: 'linear' }, now: 100,
@@ -218,9 +231,9 @@ describe('EventLog audit + non-event rows', () => {
 
 describe('EventLog.traceEventCount', () => {
   test('counts events on a trace', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1 });
     log.publish({ descriptor: webhookDescriptor('d2', { x: 2 }), now: 2, caused_by: r1.id });
     expect(log.traceEventCount(r1.id)).toBeGreaterThanOrEqual(1);
@@ -231,7 +244,7 @@ describe('EventLog.traceEventCount', () => {
 // `?? 100`, which catches null and undefined and nothing else, so a caller's
 // `-1` reached SQLite as `LIMIT -1` — no limit at all.
 //
-// Measured against this file's own storage before the fix, 700 rows seeded and
+// Measured against this file's own storage with no bound, 700 rows seeded and
 // a default page of 100: `query({ limit: -1 })` returned 700, `pending({ limit:
 // -1 })` returned 700, raw `LIMIT -1` returned 700, `LIMIT 0` returned 0, and
 // `LIMIT NaN` threw 'datatype mismatch'.
@@ -245,9 +258,9 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
   /** A log holding `count` chat events, which do not dedupe, so every one
    *  lands. */
   function seededLog(count: number): EventLog {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     for (let i = 0; i < count; i++) {
       log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
     }
@@ -310,9 +323,9 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
 
 describe('EventLog.pending admits only a finite positive integer limit', () => {
   function seededPending(count: number): EventLog {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     for (let i = 0; i < count; i++) {
       log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
     }
@@ -371,16 +384,16 @@ describe('boundEventQuery is the one policy the boundary applies', () => {
 
 describe('EventLog skips corrupt payload rows', () => {
   test('one unreadable payload is reported with its row id and the rest is returned', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const bad = log.publish({ descriptor: chatDescriptor('bad'), now: 1 }).id;
     const good = log.publish({ descriptor: chatDescriptor('good'), now: 2 }).id;
     sql.exec(`UPDATE agent_log SET payload = ? WHERE id = ?`, 'not-json{{{', bad);
     const rec = createRecordingLogger();
     const restore = setDiagnosticsSink(rec);
     try {
-      // Either read alone used to throw the whole drain away with it.
+      // Both reads, because either one throwing takes the whole drain with it.
       expect(log.pending().map((event) => event.id)).toEqual([good]);
       expect(log.query({}).map((event) => event.id)).toEqual([good]);
     } finally {
@@ -393,9 +406,9 @@ describe('EventLog skips corrupt payload rows', () => {
   });
 
   test('an aborted decode propagates instead of reading as an empty drain', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeSql();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     log.publish({ descriptor: chatDescriptor('good'), now: 1 });
     const realParse = JSON.parse;
     JSON.parse = function parseAbort(): never {

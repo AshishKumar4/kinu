@@ -87,7 +87,7 @@ import {
 } from './sources';
 import {
   classMembers, collapsePath, declaredName, importBindings, IMPORT_CANDIDATES, isFunctionLike,
-  literalText, moduleSpecifiers, parse, stringArguments, type SyntaxNode, walk,
+  literalText, moduleSpecifiers, parse, stringArguments, superClassName, type SyntaxNode, walk,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -263,7 +263,7 @@ const TEST_MODIFIERS: ReadonlySet<string> = new Set([
  * in, which is the ratchet's unit.
  *
  * A test must be handed a BODY. `test.each(TABLE)` is a factory whose call
- * carries the table and no function, and counting it as a test reported every
+ * carries the table and no function, and counting it as a test reports every
  * table-driven suite in cf-backend as assertion-free. `test.todo('name')` is the
  * one bodyless form that is really a test, and it is a finding by definition.
  */
@@ -336,12 +336,12 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
  * The repository file a path literal names, or `undefined` when it names none.
  *
  * RESOLVED, NEVER PATTERN-MATCHED, and that is a set-equality rule rather than
- * a preference. This used to be a private regex — `(^|\/)(src|scripts)\/…` —
- * which is exactly the shape `gate:set-equality` refuses: a second spelling of
- * "a source file" beside the one in `sources.ts`, free to drift narrower than
- * the set it reports on. Only a path the ENUMERATION holds counts now, and what
- * counts as source is asked of the named predicates — so a path that is not in
- * the tree can no longer be reported as read, which the pattern could.
+ * a preference. A private regex — `(^|\/)(src|scripts)\/…` — is exactly the
+ * shape `gate:set-equality` refuses: a second spelling of "a source file"
+ * beside the one in `sources.ts`, free to drift narrower than the set it
+ * reports on. Only a path the ENUMERATION holds counts, and what counts as
+ * source is asked of the named predicates — so a path that is not in the tree
+ * cannot be reported as read, which a pattern match would allow.
  *
  * EVERY ANCESTOR, because the literal is rarely the whole path. The two live
  * shapes are `join(import.meta.dir, '..', 'src/user/user-do.ts')` and
@@ -349,7 +349,7 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
  * root rather than to the suite's own directory, and `join(repositoryRoot,
  * path)`, where it is repo-relative. Resolving against the suite's directory
  * alone lost 20 real findings across six cf-backend suites — measured
- * 2026-09-01 — so the climb is what keeps this as wide as the pattern was.
+ * 2026-09-01 — so the climb is what keeps this as wide as a pattern match.
  *
  * `isParseable` OR `isStylesheet`, AND NOT `isTestFile`, rather than
  * `isProductSource`: this census's own gate reads `scripts/ladder.ts`, and a
@@ -427,12 +427,12 @@ function functionName(node: SyntaxNode): string | undefined {
 /**
  * Which of a file's own functions assert, and which return source text.
  *
- * Both are transitive closures over local calls, and both exist because the
- * first draft of this census got them wrong in the same way: it looked for the
- * SHAPE at the call site instead of following the file's own helper. 167
- * assertion-free tests became 15, and the source-text signal moved from "a
- * string that also occurs in src" (a majority-false-positive heuristic) to "the
- * asserted value came out of a file read".
+ * Both are transitive closures over local calls, because looking for the SHAPE
+ * at the call site instead of following the file's own helper gets both wrong in
+ * the same way: it counts 167 assertion-free tests where the closure finds 15,
+ * and it reduces the source-text signal to "a string that also occurs in src" (a
+ * majority-false-positive heuristic) rather than "the asserted value came out of
+ * a file read".
  */
 function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFacts {
   interface Fn { readonly direct: boolean; readonly reads: boolean; readonly calls: Set<string> }
@@ -868,6 +868,53 @@ export function nonPublicMembers(sources: ReadonlyMap<string, string>): Map<stri
   return owners;
 }
 
+/**
+ * The same declarations, keyed by the CLASS that makes them, plus each class's
+ * base — so "non-public" can be asked of one inheritance chain instead of the
+ * whole tree.
+ *
+ * {@link nonPublicMembers} is keyed by member name alone, which is right for a
+ * bracket reach (`x['settleTurn']` names no class) and wrong for a harness
+ * bridge, which knows exactly which class it extends. Measured: eight ratchet
+ * keys said `harnessDrivingUserMessage() -> messages` crossed a boundary. It
+ * does not. `this.messages` on `HarnessOrchestratorAgent` is `AIChatAgent`'s
+ * PUBLIC field, declared in `node_modules/agents` and not in product source at
+ * all; the name was marked non-public because an unrelated core class,
+ * `orchestrator/actor-session.ts`'s `ActorSession`, declares
+ * `private readonly messages`. One name, two classes, and the census reported
+ * the wrong one — the same collision shape `gate:wired`'s parameter table had.
+ */
+export interface ClassMembers {
+  /** `Class#member` production declares non-public -> the file declaring it. */
+  readonly nonPublic: ReadonlyMap<string, string>;
+  /** `Class -> the class it extends`, for walking a helper's chain. */
+  readonly base: ReadonlyMap<string, string>;
+}
+
+export function classNonPublicMembers(sources: ReadonlyMap<string, string>): ClassMembers {
+  const nonPublic = new Map<string, string>();
+  const base = new Map<string, string>();
+  for (const [file, text] of sources) {
+    const parsed = parseFile(file, text);
+    walk(parsed.tree, (node) => {
+      if (node.raw.type !== 'ClassDeclaration' && node.raw.type !== 'ClassExpression') return;
+      const owner = declaredName(node);
+      if (owner === undefined) return;
+      const parent = superClassName(node);
+      if (parent !== undefined) base.set(owner, parent);
+      for (const member of classMembers(node)) {
+        const r = member.raw;
+        const accessibility = 'accessibility' in r ? r.accessibility : undefined;
+        const isPrivateName = 'key' in r && r.key !== null && r.key.type === 'PrivateIdentifier';
+        if (accessibility !== 'private' && accessibility !== 'protected' && !isPrivateName) continue;
+        const name = declaredName(member);
+        if (name !== undefined) nonPublic.set(`${owner}#${name}`, file);
+      }
+    });
+  }
+  return { nonPublic, base };
+}
+
 /** Bracket access to a member production declares non-public, `as any`,
  *  `as unknown as`, and `Reflect.get`. The first reads a private field without
  *  the compiler objecting; the others call a protected method. */
@@ -926,7 +973,7 @@ export interface Bridge {
   readonly nonPublic: readonly string[];
 }
 
-function bridgesOf(parsed: ParsedFile, nonPublic: ReadonlyMap<string, string>): Bridge[] {
+function bridgesOf(parsed: ParsedFile, classes: ClassMembers): Bridge[] {
   const found: Bridge[] = [];
   walk(parsed.tree, (node) => {
     if (node.raw.type !== 'MethodDefinition') return;
@@ -944,6 +991,24 @@ function bridgesOf(parsed: ParsedFile, nonPublic: ReadonlyMap<string, string>): 
         if (memberName !== undefined) own.add(memberName);
       }
     }
+    // The helper's OWN chain, so `this.x` is judged against the class that
+    // really declares it: see {@link classNonPublicMembers}. A chain that
+    // leaves product source (an `agents` base) contributes nothing, which is
+    // correct — a member declared in a dependency is that dependency's public
+    // surface as far as this tree can tell.
+    const chain: string[] = [];
+    let up = cls === undefined ? undefined : superClassName(cls);
+    for (let hop = 0; up !== undefined && hop < 16; hop += 1) {
+      chain.push(up);
+      up = classes.base.get(up);
+    }
+    const declaredNonPublic = (member: string): string | undefined => {
+      for (const owner of chain) {
+        const declaring = classes.nonPublic.get(`${owner}#${member}`);
+        if (declaring !== undefined) return declaring;
+      }
+      return undefined;
+    };
     const forwards = new Set<string>();
     walk(fn, (inner) => {
       const r = inner.raw;
@@ -958,7 +1023,7 @@ function bridgesOf(parsed: ParsedFile, nonPublic: ReadonlyMap<string, string>): 
       file: parsed.file,
       line: parsed.lineAt(node.start),
       forwards: [...forwards].sort(),
-      nonPublic: [...forwards].filter((member) => nonPublic.has(member)).sort(),
+      nonPublic: [...forwards].filter((member) => declaredNonPublic(member) !== undefined).sort(),
     });
   });
   return found;
@@ -1068,11 +1133,11 @@ function mocks(
  * that reads its own `config.json`, which was 59 findings and no truth.
  *
  * The destination is read from EVERY literal in the file rather than from the
- * `writeFileSync` argument, because the argument is usually a variable:
- * `scripts/prompt-golden.ts` builds its target with `join(here, '..',
- * 'packages', 'core', 'tests', 'fixtures', 'prompt-golden.json')` and passes the
- * binding, so an argument-only reader found nothing and reported zero goldens on
- * a tree that has one.
+ * `writeFileSync` argument, because the argument is usually a variable: a
+ * generator that builds its target with `join(here, '..', 'packages', '<pkg>',
+ * 'tests', 'fixtures', '<name>.json')` and passes the binding is invisible to an
+ * argument-only reader, which is how this reported zero goldens on a tree that
+ * had one.
  */
 export function fixtureGenerators(tracked: readonly string[]): Map<string, string> {
   const generators = new Map<string, string>();
@@ -1661,10 +1726,11 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
 export function censusInputs(tracked: readonly string[]): CensusInputs {
   const sources = readSources();
   const nonPublic = nonPublicMembers(sources);
+  const classes = classNonPublicMembers(sources);
   const bridges = new Map<string, Bridge>();
   for (const file of tracked.filter(isCensusFile)) {
     const parsed = parseFile(file, readRepositoryFile(root, file));
-    for (const bridge of bridgesOf(parsed, nonPublic)) bridges.set(bridge.name, bridge);
+    for (const bridge of bridgesOf(parsed, classes)) bridges.set(bridge.name, bridge);
   }
   return {
     sources,

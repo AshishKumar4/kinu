@@ -197,7 +197,7 @@ try {
     assert.equal(
       firedIn(greenReport.diagnostics, entry).length,
       0,
-      `typescript/${entry.rule} fires on ${entry.file}'s corrected form, so the cutover has no green state to reach`,
+      `typescript/${entry.rule} fires on ${entry.file}'s corrected form, so there is no green state to reach`,
     );
   }
 

@@ -23,6 +23,7 @@ import {
   type RunEvent,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
+import { openWorkspaceMainActor } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
@@ -103,17 +104,18 @@ async function ensembleHarness() {
   // model services, which under bun have no provider to resolve. Everything
   // downstream of resolution — the LLM construction, both sinks — is the
   // real production path.
-  Object.assign(harness.agent, {
-    providerRegistry: (): AgentProviderRegistry => judgeRegistry([
-      ['fake-a/m1', judgeModel()],
-      ['fake-b/m1', judgeModel()],
-    ]),
-  });
+  harness.agent.overrideProviderRegistry(judgeRegistry([
+    ['fake-a/m1', judgeModel()],
+    ['fake-b/m1', judgeModel()],
+  ]));
 
-  // A hand-labeled ledger: what the panel stands in for.
+  // A hand-labeled ledger: what the panel stands in for. The records belong to
+  // the workspace's own actor: outcome rows are actor-scoped precisely so one
+  // actor's grading cannot read or exhaust another's.
   const sql = sqlOver(harness.db);
+  const actor = openWorkspaceMainActor(sql);
   for (let i = 0; i < 3; i++) {
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: `turn-${i}`,
       outcome: 'accepted',
       confidence: 0.8,
@@ -125,8 +127,9 @@ async function ensembleHarness() {
       now: 1_700_000_000_000 + i * 60_000,
     });
   }
-  const ids = sql<{ id: string }>`SELECT id FROM turn_outcomes ORDER BY created_at`;
-  recordOutcomeLabels(sql, {
+  const ids = sql<{ id: string }>`SELECT id FROM turn_outcomes WHERE actor_id = ${actor.actorId} ORDER BY created_at`;
+  expect(ids.length).toBe(3);
+  recordOutcomeLabels(sql, actor, {
     labeler: 'owner',
     labels: ids.map((row) => ({ outcomeId: row.id, label: 'accepted' })),
     now: 1_700_100_000_000,
@@ -147,7 +150,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     expect(result.run?.judged.map((j) => j.stored)).toEqual([3, 3]);
     expect(result.gap).toBeNull();
 
-    const recorder = new RunEventRecorder(sql);
+    const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
     const operations = operationsOf(recorder);
     expect(operations).toHaveLength(12); // 6 calls × (start + end)
 
@@ -223,16 +226,17 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     // `fast` routes to `tiny`, and the effort is the tier's own.
     expect(resolved).toEqual([{ spec: TINY_MODEL, effort: TINY_EFFORT }]);
 
-    const operations = operationsOf(new RunEventRecorder(sqlOver(harness.db)));
+    const ensembleSql = sqlOver(harness.db);
+    const operations = operationsOf(new RunEventRecorder(ensembleSql, openWorkspaceMainActor(ensembleSql)));
     expect(operations.map((e) => e.phase)).toEqual(['start', 'end']);
     expect(operations[0]!.operationId).toBe(operations[1]!.operationId);
     expect(operations.every((e) => e.source === 'fast' && e.op === 'complete')).toBe(true);
     expect(operations[1]!.outcome).toBe('ok');
     expect(operations[1]!.usage).toEqual({ input: 41, output: 7 });
-    // The spec is KNOWN now, and that is the fix: the route resolved it from the
-    // profile, so it is the same string the model was built from. It used to be
-    // absent because the seam resolved a model behind a cache and could not say
-    // which one — leaving the one row that prices the call unpriceable.
+    // The spec is KNOWN: the route resolved it from the profile, so it is the
+    // same string the model was built from. A seam that resolves a model behind
+    // a cache cannot say which one, which leaves the one row that prices the
+    // call unpriceable.
     expect(operations.every((e) => e.spec === TINY_MODEL)).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * A file read must not require a shell, executed under the runtime that
- * forbids the shell it used to need.
+ * forbids running one.
  *
  * WHY THE WORKERD POOL. The defect is `readNimbusOriginRange`
  * (core/src/execution/nimbus.ts:36-49): it reads the origin session's byte

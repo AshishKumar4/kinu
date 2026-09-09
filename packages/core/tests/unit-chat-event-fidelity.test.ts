@@ -1,10 +1,11 @@
-// The ChatEvent seam is a projection of what the ai-SDK stream hands runChat.
-// It used to drop the tool success/error discriminator (poisoning the CLI's
-// evolution signal — hadError, outcome review) and cached-prefix tokens (cache
-// telemetry read 0 on the CLI path). It then flattened usage into three numbers
-// gated on `> 0`, which turned a provider-reported zero into "unreported" and
-// made a cold prefix indistinguishable from a provider that says nothing. These
-// tests pin all of it through the public runChat interface.
+// The ChatEvent seam is a projection of what the ai-SDK stream hands runChat,
+// and every field it drops is a signal nothing downstream can rebuild: the tool
+// success/error discriminator feeds the CLI's evolution signal (hadError,
+// outcome review), cached-prefix tokens are the whole of its cache telemetry,
+// and a usage flattened into three numbers gated on `> 0` turns a
+// provider-reported zero into "unreported" — which makes a cold prefix
+// indistinguishable from a provider that says nothing. These tests pin all of
+// it through the public runChat interface.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -15,6 +16,7 @@ import { synthesizeToolFallback } from '../src/prompts/evidence-window';
 import { isFailingToolResult } from '../src/orchestrator/turn-steering';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
 
@@ -122,8 +124,14 @@ describe('ChatEvent tool success/error fidelity', () => {
     { stage: 'validity', input: { action: 'swarm', preset: 'ideate', task: 'inspect', depth: 2 }, reason: 'bad_input', detail: 'depth' },
     { stage: 'runtime', input: { action: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
   ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
-    const { rt } = createTestRuntime();
-    const deps = { mode: 'build', fork: { rt, model: new MockLanguageModelV3() } } satisfies Parameters<typeof createAgentsTool>[0];
+    const { rt, db } = createTestRuntime();
+    // A real seat per node: each refusal below is raised BEFORE any node runs,
+    // but the seam has to be the production one or the refusal would be the
+    // fixture's rather than the run's.
+    const deps = {
+      mode: 'build',
+      fork: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3() },
+    } satisfies Parameters<typeof createAgentsTool>[0];
     const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });
     const namespace = createAgentsCodemodeProvider(() => deps);

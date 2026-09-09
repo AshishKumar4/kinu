@@ -28,8 +28,9 @@ export async function evolveCommand(name: string, opts: {
   name = local.name;
   const dbPath = local.dbPath;
 
-  // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). The CLI
-  // used to half them silently — a weaker search than every other caller ran.
+  // Use core's `DEFAULT_CONFIG.mcts` defaults unless the operator overrides
+  // them. Halving those defaults locally runs a weaker search than other
+  // callers, so this command reads the engine's values directly.
   const budget = opts.budget !== undefined ? parsePositiveInt(opts.budget, 'budget') : DEFAULT_CONFIG.mcts.budget;
   const branches = opts.branches !== undefined ? parsePositiveInt(opts.branches, 'branches') : DEFAULT_CONFIG.mcts.branches;
   const maxCostUSD = opts.maxCost !== undefined ? parsePositiveNumber(opts.maxCost, 'max-cost') : DEFAULT_CONFIG.mcts.maxCostUSD;
@@ -75,7 +76,8 @@ export async function evolveCommand(name: string, opts: {
     });
     spinner.stop('Exploration complete');
 
-    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
+    const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes
+      WHERE actor_id = ${rt.actor.actorId} ORDER BY depth, created_at`;
     printSearchTree(nodes);
 
     if (result.converged) {
@@ -161,12 +163,13 @@ function iterationTag(current: number, total: number): string {
 
 function createEvolveSession(rt: AgentRuntime): SessionWriter {
   const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
+  const { actorId } = rt.actor;
   return {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       const content = msg.parts.map(p => p.text).join('');
       messages.push({ id: msg.id, parentId, role: msg.role, content });
-      void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-                          VALUES (${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
+      void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+                          VALUES (${actorId}, ${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
     },
     getHistory(leafId?: string | null) {
       if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));

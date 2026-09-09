@@ -9,8 +9,8 @@
  *   /gallery.html?frame=chatempty → a workspace before its first turn: the
  *                                  mission it was created for, not a message
  *   /gallery.html?frame=chatloading → a workspace WITH a history, before the
- *                                  transcript has arrived — the state that used
- *                                  to render as `chatempty` and lie
+ *                                  transcript has arrived — must read as
+ *                                  loading; rendering it as `chatempty` lies
  *   /gallery.html?frame=composer → the composer alone: at rest, mid-turn
  *                                  (Stop/Branch/Steer), and with a status row
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
@@ -70,7 +70,7 @@
  *                                  a refusal naming its cause, never an empty tree
  *   /gallery.html?frame=forkstopped → a run whose lease outlived it: two nodes
  *                                  reported, five stopped, none at work — the
- *                                  state that used to read `running`
+ *                                  state that must never read `running`
  *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
  *   /gallery.html?frame=forkswarmfull → the fan-in swarm, full-screen
  *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
@@ -105,6 +105,7 @@ import { Composer, type ChatMode, type ComposerNotice } from "@/components/Compo
 import { WorkspaceBar, InlineRenameTitle } from "@/components/WorkspaceBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { BranchRunChip } from "@/components/AlternateTakes";
+import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
@@ -141,7 +142,8 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
-  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries,
+  missingSubordinateHistory,
+  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
@@ -187,9 +189,9 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
       { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
       // THE FIRST-RUN ROW. A workspace is titled by its first prompt, so the
-      // one every new account starts with has no title and only its slug. The
-      // sidebar used to render that slug as the workspace's name; this row is
-      // what a capture of that state looks like.
+      // one every new account starts with has no title and only its slug. This
+      // row is what the sidebar has to render without passing that slug off as
+      // the workspace's name.
       { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
     ],
     total: 5,
@@ -403,7 +405,14 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (answer !== null) return Promise.resolve(answer);
   }
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
-    return rosterAuthorityHold.promise;
+    // CLONED PER CALL. A `Response` body can be read once, and the provider
+    // has more than one read in flight against this route (mount plus its
+    // re-run), so handing every caller the same object made the second read
+    // fail on a consumed body — and a released list that nobody can parse
+    // cannot overwrite anything. The case watching for that overwrite then
+    // could not fail whatever the roster did, which is the opposite of a
+    // fixture's job.
+    return rosterAuthorityHold.promise.then((held) => held.clone());
   }
   const response = STUB.get(path);
   if (response !== undefined && (!init?.method || init.method === "GET")) {
@@ -438,8 +447,8 @@ window.fetch = galleryFetch;
 /**
  * A real MCTS tree, at the size the tree view has to survive: 106 nodes over
  * seven depths, one deep winning line, and the losing majority the engine
- * pruned on the way. The five-node mock this frame used to carry is exactly
- * why nobody ever saw that the labels collide.
+ * pruned on the way. A five-node mock is exactly how nobody ever sees that the
+ * labels collide.
  *
  * Rows, not a tree: the mock enters the app through `buildTree`, the same
  * fold the socket payload goes through, so the frame cannot photograph a
@@ -699,7 +708,8 @@ const MESSAGES: UIMessage[] = [
       // returned it as a normal result — the shape every built-in uses
       // (tools/builtins.ts `{error: "…"}`). The migration file moved on since
       // the read above, so the edit's old_text no longer matches uniquely.
-      // This is the case that used to make a whole 5-call group read as clean.
+      // This is the case that makes a whole 5-call group read as clean if the
+      // quiet failure is not surfaced.
       { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
       { type: "tool-file", toolCallId: "t7", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
@@ -726,8 +736,8 @@ const MESSAGES: UIMessage[] = [
     metadata: { kinuEvent: "fork_interrupted", runs: ["6xrijuf933p0jclpctw59"], heads: 23 },
     parts: [{ type: "text", text: "23 head(s) across 6 fork run(s) were still marked running from an activation that has ended, so nothing is executing them and no report will arrive. They have been released; re-run the ones you still need." }],
   }),
-  // The same class, written the new way: the seam stamped the author, so the
-  // event name is no longer load-bearing for the decision.
+  // The same class, stamped by the seam with its author, so the event name is
+  // not load-bearing for the decision.
   msg({
     id: "programmatic:completion-gate-1", role: "user",
     metadata: { kinuEvent: "completion_gate", kinuAuthor: "harness" },
@@ -739,7 +749,7 @@ const MESSAGES: UIMessage[] = [
       { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
       // A real multi-line command, kept as its OWN row (a lone text part on
       // either side stops it folding into a 3+ run) so its expanded state is
-      // inspectable — the case that used to render as escaped-JSON instead
+      // inspectable — the case that otherwise renders as escaped-JSON instead
       // of a readable script.
       {
         type: "tool-run", toolCallId: "t9", state: "output-available",
@@ -773,7 +783,25 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
+function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]) {
+  const request = v.parse(SubordinateInspectionRequestSchema, input);
+  if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
+  if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+  if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
+  // The exact read a plan-arrival hint is resolved through. It answers the ONE
+  // reference it was asked for or nothing at all: a reference to a revision this
+  // fixture never issued is `missing`, the same refusal the real existing-only
+  // inspection returns, so a stale hint cannot paint a neighbouring plan.
+  if (request.view === 'plan') {
+    const plan = plans.find(item => item.id === request.id && item.revision === request.revision);
+    return plan
+      ? { view: 'plan', path: request.path, plan }
+      : missingSubordinateHistory(request.path);
+  }
+  throw new Error('Unexpected gallery plan inspection');
+}
+const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === 'inspectSubordinate') return rpcResult(galleryPlanInspection(args?.[0], [])).json<T>();
   // A read whose answer is a RECORD, where the blanket `[]` below is not a
   // smaller version of the right answer but a shape the caller dereferences.
   // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
@@ -904,6 +932,7 @@ let galleryAgentPlan: PlanReview = {
 };
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
     const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
@@ -955,10 +984,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
     return rpcResult({ ok: true, name, historyKept: true }).json<T>();
   }
-  if (method === "getSubordinateSnapshot") {
-    // The facet's own view. Identity mirrors the roster; the mission stays
+  if (method === "getActorSnapshot") {
+    // The hosted actor's own view, answered by the ROOT now rather than by a
+    // facet over a stub. Identity mirrors the roster; the mission stays
     // internal — the header renders the ROSTER title, never this field.
-    const latest = GALLERY_SUBS.at(-1);
+    const [name] = v.parse(v.tuple([v.string()]), args);
+    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
@@ -1191,8 +1222,8 @@ const SWARM_RUN: HeadRunView = {
  * A search that STARTED and reached nothing: the root was written, the first wave
  * errored, and the ledger recorded the run as failed.
  *
- * The state this frame exists for. It used to draw as a one-dot canvas under a
- * settled-looking label, which reads as "the search found nothing" — a claim about
+ * The state this frame exists for. Drawn as a one-dot canvas under a
+ * settled-looking label it reads as "the search found nothing" — a claim about
  * the world rather than about this run. A refusal names its cause instead, and the
  * cause is the branch's own message.
  *
@@ -1333,8 +1364,8 @@ const RUNNING_RUN: HeadRunView = {
 /**
  * Every run the Exploration frames list, and the stores behind them.
  *
- * Every state the surface has to draw is in ONE list on purpose: a legacy judged
- * search (whose ensemble was clamped), two swarm searches — one under a named
+ * Every state the surface has to draw is in ONE list on purpose: a judged
+ * search whose ensemble was clamped, two swarm searches — one under a named
  * preset, one a `custom` composition that fans in — a search that started and
  * reached nothing, and two journalled runs with no search tree. That is the set,
  * and the frames below focus one of them each.
@@ -1481,8 +1512,9 @@ const MERGED_RUN: HeadRunView = {
     {
       // CLOSED BY THE SETTLE, not left running. `HeadJournal.cacheMerge`
       // terminalizes every head still in flight in the same transition that
-      // writes the synthesis, so a settled run cannot also be at work — the
-      // `settled · 1 running · 3 reported` this row used to photograph.
+      // writes the synthesis, so a settled run cannot also be at work — never
+      // the `settled · 1 running · 3 reported` this row would otherwise
+      // photograph.
       id: "root-merge-1-h4", parentId: null, depth: 1, task: "packages/api/src/coupon-routes.ts", rationale: "the public surface",
       status: "aborted", summary: null,
       errorMessage: "no report at the synthesis: the run merged what had arrived, and this head "
@@ -1502,9 +1534,9 @@ const MERGED_RUN: HeadRunView = {
  * rest stopped … still it says 'running'?"*.
  *
  * Two nodes reported, five stopped, nothing synthesised, and no node at work.
- * `read-models/fork-runs.ts` reports this as `partial` now that the TREE decides
- * whether a search can still be entered; before that the run's ledger row still
- * said `running` and the row said so too, over a tally in which nothing was.
+ * `read-models/fork-runs.ts` reports this as `partial` because the TREE decides
+ * whether a search can still be entered, not the run's ledger row — which still
+ * says `running`, over a tally in which nothing is.
  */
 const STOPPED_RUN: HeadRunView = {
   rootId: "root-merge-0",
@@ -1549,11 +1581,11 @@ const STOPPED_RUN: HeadRunView = {
 /**
  * The six things a node panel can be showing, as `getNodeTranscript` answers.
  *
- * Five are here because they used to be ONE blank pane, and the frame is where
- * the claim that they now read differently is checked: a head that worked and
- * reported, a head still working with a partial trace, a head that died having
- * recorded nothing, a rollout that has no trace by construction, and a node
- * neither store holds (the `null` below).
+ * Five are here because the frame is where the claim that they read differently
+ * is checked, ONE blank pane for all of them being the failure it catches: a
+ * head that worked and reported, a head still working with a partial trace, a
+ * head that died having recorded nothing, a rollout that has no trace by
+ * construction, and a node neither store holds (the `null` below).
  *
  * The sixth is a mid-turn branch, keyed by the head id `branchHeadId` derives
  * from a run id — the chat chip's view of the same read, and one head deep, so
@@ -2071,11 +2103,10 @@ const runningSwarmRpc = focusRun("lv000");
 
 /**
  * The run whose lease outlived it: two nodes reported, five stopped, none at
- * work. What the surface has to say about it is *stopped*, and what it used to
- * say was `running` — over a tally in which nothing was running, which is the
- * contradiction the report named. The read model settles the word
- * (`read-models/fork-runs.ts`); this frame is where the row, the dot and the
- * node list are read together.
+ * work. What the surface has to say about it is *stopped*, never `running` over
+ * a tally in which nothing is running — that contradiction is the one the report
+ * named. The read model settles the word (`read-models/fork-runs.ts`); this
+ * frame is where the row, the dot and the node list are read together.
  */
 const stoppedRunRpc = focusRun("root-merge-0");
 
@@ -2128,9 +2159,10 @@ function liveRun(stage: number): ForkRunSummary {
 }
 
 /** The canvas row for `stage`: the run, its parameters, and the prefix of its
- *  tree that has landed so far. Stage 0 has NO ROW AT ALL — a search the ledger
- *  has not written yet is the state the surface used to sit in for fifteen
- *  seconds while its nodes were already working. */
+ *  tree that has landed so far. Stage 0 has no ledger row and exercises
+ *  liveness before the first canvas row arrives. It covers the fifteen-second
+ *  missing-row failure case; working nodes must not be presented as absent
+ *  work during that interval. */
 function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
   if (stage <= 0) return [];
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
@@ -2170,6 +2202,17 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
       ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
       : stubRpc<T>(method, args);
   };
+}
+
+/**
+ * The beat `?stage=N` pins, clamped to the stages that exist. A query with no
+ * `stage` — or one that is not a number — pins nothing, and `ForkLiveFrame`
+ * then advances itself; see it for why liveness needs both.
+ */
+function pinnedLiveStage(search: string): number | null {
+  const asked = new URLSearchParams(search).get("stage");
+  const wanted = asked === null ? Number.NaN : Number(asked);
+  return Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null;
 }
 
 /**
@@ -2307,7 +2350,7 @@ function Shell(
     headActivity?: ReadonlyMap<string, number>;
     /** Detached work. EMPTY is the state that matters for liveness: with no
      *  running job and no streaming turn the fork list drops to its idle
-     *  cadence, which is the condition a new search used to be invisible under. */
+     *  cadence, which is the condition a new search would be invisible under. */
     backgroundJobs?: BackgroundJob[];
     /**
      * The composer's status rows. EMPTY by default, and that is the rule
@@ -2520,9 +2563,9 @@ function ChatEmptyFrame() {
 
 /* What EVERY workspace with a history opens on, for as long as the wake and the
    transfer take — 0.8-3.8 seconds against production, measured 2026-08-20.
-   Photographed beside ChatEmptyFrame on purpose: the two used to be the same
-   picture, and that is the defect. One says "there is nothing here", the other
-   says "not yet", and only one of them is true of a workspace with messages. */
+   Photographed beside ChatEmptyFrame on purpose: ONE picture for both is the
+   defect. One says "there is nothing here", the other says "not yet", and only
+   one of them is true of a workspace with messages. */
 function ChatLoadingFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
@@ -3099,8 +3142,7 @@ UPDATE coupons SET kind = CASE WHEN value <= 100 AND code LIKE '%PCT%' THEN 'per
 bun test packages/checkout --reporter=verbose && bunx wrangler deploy --env staging --var COUPON_STRICT:1
 \`\`\`
 
-\`\`\`
-plain fence, no language — this is the one that used to render as an unstyled grey slab
+plain fence, no language: code-block styling still applies even when there are no language-specific tokens to highlight
 \`\`\`
 
 | Coupon | Kind | Value | Status |
@@ -3111,7 +3153,7 @@ plain fence, no language — this is the one that used to render as an unstyled 
 1. Patch the migration
 2. Add the regression test
    - one for \`percent\`
-   - one for the \`null\` legacy row
+   - one for the \`null\` row
 3. Re-run the suite
 
 > The backfill ran before the enum existed, which is why nothing failed in CI.
@@ -3184,11 +3226,11 @@ const SURFACE_STEPS = [
   ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
-/** Role names only. These lines used to carry a `dark / light` contrast ratio
- *  each, measured once against one palette — so on any other palette the plate
- *  captioned numbers that were not true of what it was showing. The ratios are
- *  asserted per theme by `unit-palette-contrast`, which is where a number can
- *  fail rather than merely be read. */
+/** Role names only. A `dark / light` contrast ratio on each line could only be
+ *  measured against one palette, so on any other palette the plate would caption
+ *  numbers that are not true of what it is showing. The ratios are asserted per
+ *  theme by `unit-palette-contrast`, which is where a number can fail rather
+ *  than merely be read. */
 const TEXT_STEPS = [
   ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;
@@ -3248,12 +3290,11 @@ function Palette() {
 
 /* ── The signed-out pages, as the worker actually serves them ──────────
 
-   Not a sketch of the landing page in app tokens — that is what used to be
-   here, and a sketch is a second design that drifts. These frames write the
-   REAL document text into this window, so the browser computes the real
-   cascade: the computed-style gate audits the public stylesheet, the
-   screenshot pass photographs the shipped page, and the growth of the hero
-   tree is the shipped script running. */
+   Not a sketch of the landing page in app tokens — a sketch is a second design
+   that drifts. These frames write the REAL document text into this window, so
+   the browser computes the real cascade: the computed-style gate audits the
+   public stylesheet, the screenshot pass photographs the shipped page, and the
+   growth of the hero tree is the shipped script running. */
 
 /** The public documents, by frame name. The install command is the production
  *  one rather than this dev server's, so the frame photographs the copy a
@@ -3388,7 +3429,7 @@ function MarksFrame() {
    because it IS the sandbox. `wired` is the second, separate fact: whether this
    agent has the capability at all. `report` is photographed at wired:false
    because that is what an orchestrator looks like — it IS the report sink — and
-   that state is exactly what used to render as the false label "code mode". */
+   that state is exactly the one a false label "code mode" would misreport. */
 function galleryTool(info: ToolInfo): ToolInfo { return info; }
 
 const BRAIN_TOOLS: ToolInfo[] = [
@@ -3500,7 +3541,7 @@ function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: Executor
 // The agent's own plan, at the shape it actually reaches: several steps, one
 // item active, one task broken into subtasks, one dropped. Photographed inside
 // Column C's chrome, beside the jobs and self-changes it now shares a surface
-// with — the split that used to put each of those three in a room of its own.
+// with, rather than each of those three in a room of its own.
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
@@ -3566,8 +3607,8 @@ const CHANGELOG = {
   ],
 };
 
-/** The queue that closes the badge gap: a release approval used to light
- *  nothing at all while a running job — which needs nobody — carried a digit. */
+/** The queue that closes the badge gap: without it a release approval lights
+ *  nothing at all while a running job — which needs nobody — carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [
   // A parked command — the ONE kind decided in the queue itself, and the one
   // this frame never held, so its Approve/Always/Deny controls had never been
@@ -4113,7 +4154,7 @@ const AGENT_TOKENS: Usage = {
 
 /** The same window as Workers AI reports it. `neurons` is Cloudflare's own
  *  billing unit and comes back on every call — 0.120 per token, captured live —
- *  and it is the figure the Cost block used to measure and then discard. */
+ *  and it is the figure the Cost block has to carry rather than discard. */
 const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
 
 /**
@@ -4387,6 +4428,17 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   }),
 ];
 
+/**
+ * A long run carrying the three shapes the fold has to tell apart: fifty
+ * observations, three consequential changes, and one call that put a running
+ * app on screen.
+ *
+ * The preview call is an `observe`-shaped port exposure sitting between the
+ * scan and the changes, deliberately: an effect classification has no reason
+ * to keep it, and it is neither the first row nor the last. So it is the row
+ * that proves the preview rule rather than the mutation rule or an accident
+ * of position.
+ */
 const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
   id: "tc-large-run", role: "assistant",
   parts: [
@@ -4398,6 +4450,7 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
       input: { action: "read", path: `packages/checkout/src/generated/module-${String(index)}.ts` },
       output: "…",
     })),
+    { type: "tool-run", toolCallId: "large-preview", state: "output-available", input: { runtime: "sandbox", command: "kinu expose 8789" }, output: { url: SLATE_GALLERY_URL, port: 8789 } },
     { type: "tool-file", toolCallId: "large-edit", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
     { type: "tool-file", toolCallId: "large-write", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
     { type: "tool-tasks", toolCallId: "large-task", state: "output-available", input: { action: "update", id: "t4", status: "done" }, output: "ok" },
@@ -4585,8 +4638,8 @@ const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/a
 /** The failure the owner reported, as the sources actually hold it: ONE dropped
  *  connection, every read of the actor failing on it in the same instant. The
  *  banner text below is produced by the shipped formatter rather than typed
- *  here, so this frame photographs the product's own sentence — and the line it
- *  used to print, which said "Network connection lost." twice. */
+ *  here, so this frame photographs the product's own sentence rather than a
+ *  line that says "Network connection lost." twice. */
 const LOST = "Network connection lost.";
 const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
 
@@ -4651,7 +4704,7 @@ function AgentFrame() {
 /**
  * The node transcript, in every state it has.
  *
- * Five panels because five different facts used to render as one blank pane:
+ * Five panels because five different facts must not render as one blank pane:
  * a branch that worked and reported, one still working, one that died having
  * recorded nothing, a rollout with no trace by construction, and a node the
  * store does not hold. If any two of these photograph the same, that is the
@@ -5181,14 +5234,7 @@ async function mount() {
   else if (frame === "forkrunning") {
     node = <Shell surface="Exploration" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
-  else if (frame === "forklive") {
-    // `?stage=N` pins the beat. Absent, the frame advances itself — see
-    // ForkLiveFrame for why liveness needs both.
-    const asked = new URLSearchParams(location.search).get("stage");
-    const wanted = asked === null ? Number.NaN : Number(asked);
-    node = <ForkLiveFrame
-      pinned={Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null} />;
-  }
+  else if (frame === "forklive") node = <ForkLiveFrame pinned={pinnedLiveStage(location.search)} />;
   else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
     // The one dynamic import in this dispatch, and it stays one: the page pulls d3
     // and the whole tree renderer, so every frame that does not open it must not
@@ -5303,6 +5349,10 @@ async function mount() {
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
+  // Owns a real root connection for the plan-arrival hint, so its reads need a
+  // server; the surfaces themselves still read the frame's own fixture props.
+  else if (frame === "previewtabs") { serveGalleryRpc(stubRpc); node = <PreviewTabsGallery />; }
+  else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "planreview") node = <PlanReviewFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;

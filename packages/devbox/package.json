@@ -9,7 +9,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./durability/contracts": "./src/durability/contracts.ts",
-    "./candidates/restore-receipt": "./src/candidates/restore-receipt.ts",
     "./incidents": "./src/incidents.ts"
   },
   "dependencies": {
@@ -25,6 +24,6 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^4.20260414.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

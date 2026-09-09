@@ -24,27 +24,42 @@
  */
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { nowMs } from '../utils/date';
 
 export function initEffectTombstoneTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS effect_tombstones (
+    actor_id    TEXT NOT NULL,
     scope       TEXT NOT NULL,
     key         TEXT NOT NULL,
     recorded_at INTEGER NOT NULL,
-    PRIMARY KEY (scope, key)
+    PRIMARY KEY (actor_id, scope, key)
   )`);
 }
 
-/** True when this scope+key has been recorded. */
-export function effectAlreadyDone(sql: SqlExecutor, scope: string, key: string): boolean {
+/** True when this actor has recorded this scope+key.
+ *
+ *  The OWNER is part of the identity, not a filter over a shared one: every key
+ *  here is minted per actor — a turn id, a queued-trial id, a review row id — so
+ *  two actors of one workspace really do present the same scope+key, and a
+ *  workspace-wide tombstone would tell the second one its work had already
+ *  happened when nothing of its own had run. */
+export function effectAlreadyDone(
+  sql: SqlExecutor, actor: ActorHandle, scope: string, key: string,
+): boolean {
+  actor.assertCurrent();
   return sql<{ n: number }>`
-    SELECT 1 AS n FROM effect_tombstones WHERE scope = ${scope} AND key = ${key} LIMIT 1`.length > 0;
+    SELECT 1 AS n FROM effect_tombstones
+    WHERE actor_id = ${actor.actorId} AND scope = ${scope} AND key = ${key} LIMIT 1`.length > 0;
 }
 
 /** Idempotent. Records that it happened. A second call keeps the FIRST
  *  timestamp: that is when the work actually ran. */
-export function recordEffectDone(sql: SqlExecutor, scope: string, key: string, now?: number): void {
-  void sql`INSERT INTO effect_tombstones (scope, key, recorded_at)
-      VALUES (${scope}, ${key}, ${now ?? nowMs()})
-      ON CONFLICT(scope, key) DO NOTHING`;
+export function recordEffectDone(
+  sql: SqlExecutor, actor: ActorHandle, scope: string, key: string, now?: number,
+): void {
+  actor.assertCurrent();
+  void sql`INSERT INTO effect_tombstones (actor_id, scope, key, recorded_at)
+      VALUES (${actor.actorId}, ${scope}, ${key}, ${now ?? nowMs()})
+      ON CONFLICT(actor_id, scope, key) DO NOTHING`;
 }

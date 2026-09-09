@@ -6,28 +6,34 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import type { TurnOutcome } from '../src/evolution/outcomes';
 import {
   alignmentConvergence, renderAlignmentConvergence,
 } from '../src/evolution/alignment';
+import type { ActorHandle } from '../src/state/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
+/** The ledger and the actor it belongs to: `turn_outcomes` is keyed by
+ *  `actor_id`, so a seed and a read under different handles would come back
+ *  empty and read as "no graded turns" rather than as a scoping fault. */
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  initTurnOutcomeTables(makeExecRaw(db));
-  return { sql };
+  const execRaw = makeExecRaw(db);
+  initTurnOutcomeTables(execRaw);
+  return { sql, actor: createTestActors(sql, execRaw).main };
 }
 
 /** Record `negatives` corrected turns and `turns - negatives` accepted ones
  *  for one scaffold version, timestamped in the order versions ran. */
-function seed(sql: SqlExecutor, opts: {
+function seed(sql: SqlExecutor, actor: ActorHandle, opts: {
   scaffoldVersion: number | null; turns: number; negatives: number; startAt: number;
   abandoned?: number;
 }): void {
   const write = (outcome: TurnOutcome, i: number): void => {
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome, confidence: 1, source: 'classifier',
       userMessage: 'q', assistantResponse: 'a',
       scaffoldVersion: opts.scaffoldVersion,
@@ -40,7 +46,8 @@ function seed(sql: SqlExecutor, opts: {
 
 describe('alignmentConvergence', () => {
   test('an empty ledger is undefined, not zero', () => {
-    const k = alignmentConvergence(setup().sql);
+    const { sql, actor } = setup();
+    const k = alignmentConvergence(sql, actor);
     expect(k.segments).toEqual([]);
     expect(k.overall.turns).toBe(0);
     expect(k.trend).toBe('insufficient');
@@ -49,17 +56,22 @@ describe('alignmentConvergence', () => {
   });
 
   test('a missing ledger reads as empty rather than throwing', () => {
-    const k = alignmentConvergence(makeSql(new Database(':memory:')));
+    // The actor is issued over the SAME bare database, so `turn_outcomes` is
+    // genuinely absent: `createTestActors` writes the identity and actor
+    // tables and nothing else.
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const k = alignmentConvergence(sql, createTestActors(sql, makeExecRaw(db)).main);
     expect(k.segments).toEqual([]);
     expect(k.trend).toBe('insufficient');
   });
 
   test('segments by scaffold version, oldest first, with the rate per 100 graded turns', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 60, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 60, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.segments.map((s) => s.scaffoldVersion)).toEqual([1, 2]);
     expect(k.segments[0].rate.per100).toBeCloseTo(30, 10);
     expect(k.segments[1].rate.per100).toBeCloseTo(10, 10);
@@ -69,10 +81,10 @@ describe('alignmentConvergence', () => {
   });
 
   test('abandoned turns are counted but kept out of the rate (they carry no verdict)', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 3, turns: 100, negatives: 25, startAt: 1_000, abandoned: 50 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 3, turns: 100, negatives: 25, startAt: 1_000, abandoned: 50 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.segments[0].turns).toBe(100);
     expect(k.segments[0].abandoned).toBe(50);
     expect(k.segments[0].rate.per100).toBeCloseTo(25, 10);
@@ -80,11 +92,11 @@ describe('alignmentConvergence', () => {
   });
 
   test('an improving trend: the later interval clears the earlier one', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.trend).toBe('improving');
     expect(k.deltaPer100).toBeCloseTo(-30, 10);
     expect(k.comparedVersions).toEqual({ from: 1, to: 2 });
@@ -92,31 +104,31 @@ describe('alignmentConvergence', () => {
   });
 
   test('a worsening trend is named just as plainly', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 20, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 200, negatives: 80, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 20, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 200, negatives: 80, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.trend).toBe('worsening');
     expect(k.deltaPer100).toBeCloseTo(30, 10);
   });
 
   test('a flat trend says the change is undetectable, not absent', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 40, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 200, negatives: 44, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 40, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 200, negatives: 44, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.trend).toBe('flat');
     expect(k.note).toContain('not evidence of no change');
   });
 
   test('a handful of turns reports its own unreliability instead of a rate', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 6, negatives: 3, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 6, negatives: 0, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 6, negatives: 3, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 6, negatives: 0, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     // 3/6 looks like a 50% → 0% collapse. It is nothing.
     expect(k.segments[0].rate.per100).toBeCloseTo(50, 10);
     expect(k.segments[1].rate.per100).toBe(0);
@@ -127,32 +139,32 @@ describe('alignmentConvergence', () => {
   });
 
   test('one well-measured version alone is not a trend', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 20, startAt: 1_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 20, startAt: 1_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.segments[0].rate.reliable).toBe(true);
     expect(k.trend).toBe('insufficient');
     expect(k.note).toContain('no before/after');
   });
 
   test('too-imprecise segments are skipped by the comparison, not allowed to block it', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 3, negatives: 3, startAt: 5_000 });
-    seed(sql, { scaffoldVersion: 3, turns: 200, negatives: 20, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 3, negatives: 3, startAt: 5_000 });
+    seed(sql, actor, { scaffoldVersion: 3, turns: 200, negatives: 20, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.trend).toBe('improving');
     expect(k.comparedVersions).toEqual({ from: 1, to: 3 });
   });
 
   test('turns recorded before versions were attributed still form a segment', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: null, turns: 200, negatives: 80, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 4, turns: 200, negatives: 20, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: null, turns: 200, negatives: 80, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 4, turns: 200, negatives: 20, startAt: 9_000 });
 
-    const k = alignmentConvergence(sql);
+    const k = alignmentConvergence(sql, actor);
     expect(k.segments.map((s) => s.scaffoldVersion)).toEqual([null, 4]);
     expect(k.trend).toBe('improving');
     expect(k.comparedVersions).toEqual({ from: null, to: 4 });
@@ -161,11 +173,11 @@ describe('alignmentConvergence', () => {
 
 describe('renderAlignmentConvergence', () => {
   test('shows the rate, its interval, the trend, and every segment', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
-    seed(sql, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 200, negatives: 80, startAt: 1_000 });
+    seed(sql, actor, { scaffoldVersion: 2, turns: 200, negatives: 20, startAt: 9_000 });
 
-    const text = renderAlignmentConvergence(alignmentConvergence(sql));
+    const text = renderAlignmentConvergence(alignmentConvergence(sql, actor));
     expect(text).toContain('Overall: 25.0 per 100 turns (95% CI');
     expect(text).toContain('over 400 user-graded turns');
     expect(text).toContain('Trend: improving (-30.0 per 100 turns, v1 → v2)');
@@ -174,10 +186,10 @@ describe('renderAlignmentConvergence', () => {
   });
 
   test('marks an interval that is too wide to read', () => {
-    const { sql } = setup();
-    seed(sql, { scaffoldVersion: 1, turns: 4, negatives: 2, startAt: 1_000 });
+    const { sql, actor } = setup();
+    seed(sql, actor, { scaffoldVersion: 1, turns: 4, negatives: 2, startAt: 1_000 });
 
-    const text = renderAlignmentConvergence(alignmentConvergence(sql));
+    const text = renderAlignmentConvergence(alignmentConvergence(sql, actor));
     expect(text).toContain('too wide to read');
     expect(text).toContain('Trend: insufficient');
   });

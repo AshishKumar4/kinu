@@ -31,16 +31,15 @@ import { defineConfig } from 'vitest/config';
  * ignore pattern somebody has to maintain in step. That also keeps the existing
  * bun eval suites under `tests/evals/` exactly where they are.
  *
- * IT IS NOT INVISIBLE TO THE LADDER, and the note that said it was cost four
- * suites their coverage. This file used to claim `ladder.ts`'s `TEST_FILE` was
- * `/\.test\.(ts|tsx|js)$/` and therefore blind to `*.eval.ts`. `ladder.ts` holds
- * no pattern of its own any more: its denominator is `isRunnableSuite`, one arm
- * of the anti-slop rule's `TEST_SUFFIX`, which matches `.eval.` deliberately —
- * so these files ARE in the ladder's denominator, and a `claims()` that swept a
- * directory prefix credited `bun test ./tests/` with all four of them. Four live
- * eval suites read as covered by a ci-tier bun gate that cannot select any of
- * them. `claims()` now narrows by `isBunDiscoverableSuite`, `bun run test:eval`
- * claims this tier's files, and `scripts/ladder.test.ts` pins both halves of the
+ * IT IS NOT INVISIBLE TO THE LADDER, and believing otherwise costs four suites
+ * their coverage. `ladder.ts` holds no test-file pattern of its own: its
+ * denominator is `isRunnableSuite`, one arm of the anti-slop rule's
+ * `TEST_SUFFIX`, which matches `.eval.` deliberately — so these files ARE in
+ * the ladder's denominator, and a `claims()` that swept a directory prefix
+ * would credit `bun test ./tests/` with all four of them. Four live eval suites
+ * would read as covered by a ci-tier bun gate that cannot select any of them.
+ * `claims()` narrows by `isBunDiscoverableSuite`, `bun run test:eval` claims
+ * this tier's files, and `scripts/ladder.test.ts` pins both halves of the
  * partition by equality.
  *
  * NO REPLAY. `VITEST_EVALS_REPLAY_MODE` defaults to `auto`, which RECORDS when no

@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { ReactNode } from 'react';
 
+import { createCLIRuntime } from '@kinu.run/cli-backend';
 import { commandsForClient } from '../src/slash-commands';
 import {
   ChangelogOverlay,
@@ -874,7 +875,7 @@ describe('CLI TUI layout', () => {
       expect(observed.afterArrowDown).toBe(observed.listed[1]);
       expect(observed.finalAction).toEqual({ type: 'exit' });
       // The home header renders the one VERSION, which is why the version test
-      // no longer greps home-app.tsx for the literal.
+      // asserts this header instead of grepping home-app.tsx for the literal.
       expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
     } finally {
       rmSync(run.home, { recursive: true, force: true });
@@ -1302,8 +1303,7 @@ function runHomeScreen(options: {
     // directory name — that name is the address `kinu chat <name>` takes.
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
     try {
-      db.exec('CREATE TABLE agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
-      db.query('INSERT INTO agent_config (key, value) VALUES (?, ?)').run('display_name', workspaceTitle(name));
+      createCLIRuntime(db, { dbPath: db.filename, llm: null, hostRoot: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
     } finally {
       db.close();
     }

@@ -10,7 +10,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { scriptedTurnModel, createTestActorsOver } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from './helpers-actor-host';
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
@@ -39,6 +40,9 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
   return new MissionGovernor({
     storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
+    // A mission cap is one actor's ledger, so the governor is bound to a real
+    // owner over the same database its rows land in.
+    actor: createTestActorsOver(db).main,
     onExhausted,
   });
 }
@@ -91,12 +95,16 @@ function searchableDeps(opts: {
   usage?: 'reported' | 'silent';
   spawns?: string[];
 }): AgentsToolDeps {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   const spawns = opts.spawns ?? [];
   return {
     mode: 'build',
     fork: {
       rt,
+      // One actor per node, over the caller's own database: the spend these
+      // seams cap is charged per node, and a shared handle would bill a wave
+      // of nodes to one ledger.
+      hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model: expandingModel(opts.usage),
     },
     team: {
@@ -106,17 +114,11 @@ function searchableDeps(opts: {
       create: async (input) => ({
         name: input.name ?? 'helper',
         displayName: 'Helper',
-        subordinate: {
-          name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => ({
         ok: true, name: input.name, displayName: input.displayName,
-        subordinate: {
-          name: input.name, displayName: input.displayName, role: 'general',
-          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
-        },
+        subordinate: { name: input.name, displayName: input.displayName, role: 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
       spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
@@ -199,11 +201,11 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     for (const [member, input] of [
       ['swarm', { task: 'x', ...TWO_BRANCHES }],
       ['hire', { role: 'r', mission: 'm' }],
-      ['ask', { agent: 'helper', message: 'm' }],
-      // Both ask TARGETS spend, and the guard runs before either is resolved:
-      // an exhausted label must not be able to mint a temporary agent either.
-      ['ask', { role: 'auditor', message: 'm' }],
-      ['send', { agent: 'helper', message: 'm' }],
+      ['hire', { agent: 'helper', message: 'm' }],
+      // Both hire TARGETS spend, and both lifetimes: an exhausted label must
+      // not be able to mint a task-lifetime agent either.
+      ['hire', { lifetime: 'task', role: 'auditor', mission: 'm' }],
+      ['msg', { agent: 'helper', message: 'm' }],
     ] as const) {
       const refusal = v.parse(BudgetRefusalSchema, await ns[member]!(input));
       expect(refusal.error).toBe('budget_exhausted');
@@ -393,6 +395,7 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     const db = new Database(':memory:');
     const governor = new MissionGovernor({
       storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
+      actor: createTestActorsOver(db).main,
       pricing: () => ({ input: 3, output: 15, cacheRead: 0.3 }),
     });
     governor.declare('nightly', {});

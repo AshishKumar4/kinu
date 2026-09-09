@@ -35,7 +35,7 @@ function score(name: string, eligible: number, passed: number): EvalScoreRow {
 
 /**
  * A trajectory that behaved: turns closed, tools called, and — since a run that
- * never checked whether the task was solved is no longer evidence — a measured
+ * never checked whether the task was solved is not evidence — a measured
  * `task_outcome`. A caller that supplies its own outcome row keeps it, so a test
  * can still say "this task was solved" or "this one was not".
  */
@@ -457,10 +457,10 @@ describe('compareRuns — ragged and ungradable observations', () => {
 
 describe('compareRuns — the binary headline is the OUTCOME', () => {
   /**
-   * These two cases used to vary `toolCalls: 0` to move the headline, because
-   * under `turns > 0 && toolCalls > 0` that was the only thing that COULD move
-   * it — an admissible trajectory passed by construction. They now vary whether
-   * the task was solved, which is the thing the headline is supposed to be about.
+   * These two cases vary whether the TASK WAS SOLVED, which is the thing the
+   * headline is supposed to be about. Varying `toolCalls: 0` instead only
+   * exercises `turns > 0 && toolCalls > 0`, the predicate every admissible
+   * trajectory passes by construction, so it could never move an outcome.
    */
   const solvedRun = (id: string, solvedCount: number) =>
     run(id, Array.from({ length: 8 }, (_, i) =>
@@ -487,10 +487,10 @@ describe('compareRuns — the binary headline is the OUTCOME', () => {
     expect(headline.significant).toBe(true);
   });
 
-  test('activity alone no longer moves the headline — a busy run that solved nothing scores 0', () => {
-    // The retired predicate's exact defect, pinned so it cannot come back: both
-    // runs closed turns and called tools, so the OLD headline scored them 1.000
-    // against 1.000. Under the outcome they are 1.000 against 0.000.
+  test('activity alone does not move the headline — a busy run that solved nothing scores 0', () => {
+    // The defect pinned so it cannot come back: both runs closed turns and
+    // called tools, so an activity predicate scores them 1.000 against 1.000.
+    // Under the outcome they are 1.000 against 0.000.
     const baseline = solvedRun('base', 8);
     const candidate = solvedRun('cand', 0);
     const { headline } = attributable(compareRuns(baseline, candidate, OPTS));

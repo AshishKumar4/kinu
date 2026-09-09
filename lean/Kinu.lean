@@ -1,9 +1,8 @@
 /-
   Kinu — Formal specification of the self-evolving agent architecture.
 
-  29 modules across 8 categories, plus `Kinu.Axioms` and the one module it
-  reaches on its own (Storage/DurableRoot.lean). 0 sorry. No Float axioms —
-  the backprop model is exact scaled-integer arithmetic (see
+  28 modules across 8 categories, plus `Kinu.Axioms`. 0 sorry. No Float
+  axioms — the backprop model is exact scaled-integer arithmetic (see
   MCTS/Backpropagation.lean); the only remaining axiom is the FTS5 trusted
   assumption (Storage/FTS5Search.lean).
 
@@ -12,7 +11,7 @@
   MCTS: StorageIsolation, Backpropagation
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
-  Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain, OverlayCas
+  Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain
   Execution: Capabilities (subsumption chain + router correctness), ToolSystem (5-tool model)
   Exploration: Objective, Publication (S7/S6/S4/S1 as reachability over traces),
     Settle (settleOf's fibres), Archive (S5), Records (S2 scalar + the Pareto
@@ -47,7 +46,6 @@ import Kinu.Storage.FTS5Search
 import Kinu.Storage.SqliteFSCorrectness
 import Kinu.Storage.CostModel
 import Kinu.Storage.SnapshotChain
-import Kinu.Storage.OverlayCas
 
 -- Execution layer proofs (5-tool architecture + capability routing)
 import Kinu.Execution.Capabilities

@@ -10,7 +10,6 @@
  *   • a search               (`mcts`, minted by core's SEARCH_FIBER_NAME)
  *   • the evolution lane     (`evolution:settle`, started by settleEvolutionInBackground)
  *   • the advisor lane       (`advisor:review`, started by reviewTurnInBackground)
- *   • a facet's outbox drain (`model-operation-forward`, started by an exploration mode)
  *
  * That activation needs NO client and NO request: with nothing connected, the
  * persisted keepAlive alarm fires on its own and the SDK's housekeeping runs the
@@ -54,6 +53,7 @@ import {
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SignalOutcome,
 } from '@kinu.run/core';
+import type { ActorHandle } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
 /**
@@ -278,11 +278,6 @@ export const TERMINAL_LANE_FIBER = 'terminal:effects';
  *  makes the replay collide with a delivery that already landed. */
 const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 
-/** A facet's model-operation outbox drain, the one lane an exploration mode of
- *  the facet class runs. Its checkpoint is the outbox row itself, so its
- *  recovery re-drives nothing — see {@link recoverModelOperationLane}. */
-export const MODEL_OPERATION_LANE_FIBER = 'model-operation-forward';
-
 /** The transports one actor supplies to its lanes' recovery. Every member is
  *  something an activation re-resolves for itself — a stub call, a fresh model
  *  route, its own storage — which is exactly why they are parameters and the
@@ -302,8 +297,13 @@ export interface FiberLaneTransports {
   readonly reviewAdvisorSnapshot: (
     snapshot: AdvisorRecoverySnapshot,
   ) => Promise<AdvisorDisposition | null>;
-  /** This actor's own SQLite — where the interrupted-search notice is filed. */
+  /** The workspace's one SQLite — where the interrupted-search notice is filed. */
   readonly sql: SqlExecutor;
+  /** WHOSE row that notice is. One database holds every actor's evolution
+   *  stream, so which database was opened does not imply the actor: an
+   *  unstamped row fails NOT NULL, and a row stamped with the wrong actor shows
+   *  one actor's recovery in every sibling's stream. */
+  readonly actor: ActorHandle;
   /** The agent's own memory surface — what tells it about the lost turn. */
   readonly appendMemory: (path: string, text: string) => Promise<void>;
   /** Arm the durable wake the terminal ledger already owns, and replay nothing:
@@ -363,7 +363,6 @@ export function classifyRecoveredFiber(
     if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
     if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
-    if (ctx.name === MODEL_OPERATION_LANE_FIBER) return recoverModelOperationLane();
     if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
     if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
     return unrecognisedLane(ctx);
@@ -622,20 +621,6 @@ function recoverMcpWarmLane(): FiberRecoveryResult {
 }
 
 /**
- * A facet's model-operation drain, which has its own durable carrier already.
- *
- * Every operation frame the drain forwards sits in `facet_model_operation_outbox`
- * until the root acknowledges it, and the facet's activation restarts the drain
- * whenever a row is pending (`SubordinateAgent.ensureFacetTables`). The fiber
- * row therefore carries nothing the outbox does not, and a re-drive here would
- * race the one the activation starts. Classified, like the MCP warm lane, so an
- * interrupted drain files no unrecognised-lane failure.
- */
-function recoverModelOperationLane(): FiberRecoveryResult {
-  return { status: 'completed', snapshot: { lane: MODEL_OPERATION_LANE_FIBER, redrive: 'outbox' } };
-}
-
-/**
  * A search interrupted mid-iteration. Its tree is durable (the search store)
  * and, when the call had been detached, its job row is what re-drives it —
  * so this branch does not re-drive anything. What it owns is TELLING the
@@ -652,8 +637,12 @@ function recordInterruptedSearch(
   ctx: FiberRecoveryContext,
 ): FiberRecoveryResult {
   const snapshot = fiberSnapshot(ctx);
-  void transports.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-    VALUES (${nanoid()}, 'fiber_recovered',
+  // The recovering ACTOR's row, not the workspace's: an interrupted search
+  // belongs to the actor that started it, and a row without the column both
+  // fails NOT NULL and — if it did not — would show one actor's recovery in
+  // every sibling's evolution stream.
+  void transports.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
+    VALUES (${transports.actor.actorId}, ${nanoid()}, 'fiber_recovered',
             ${`Fiber "${ctx.name}" recovered after interruption`},
             ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
             ${Date.now()})`;

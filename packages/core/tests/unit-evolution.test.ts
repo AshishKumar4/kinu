@@ -9,6 +9,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
+import { createTestActors } from '@kinu.run/test-utils';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { EvolutionEvent, CompletedTurn, CompletedSession } from '../src/evolution/types';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
@@ -61,16 +62,16 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     await engine.reviewTurn(turn, 'No — that rotates production keys. I said STAGING.');
 
     expect(turn.feedback).toBe('negative'); // the hardcoded null is dead
-    const rows = listTurnOutcomes(rt.storage.sql);
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0].outcome).toBe('corrected');
     expect(rows[0].source).toBe('classifier');
     expect(rows[0].turnId).toBe('msg-1');
     expect(events.some(e => e.type === 'reflection')).toBe(true);
     // Real negative outcome ⇒ the lesson is corroborated and durable.
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' })).toHaveLength(1);
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })).toHaveLength(1);
     // …and durable through the DERIVED view, not a MEMORY.md copy.
-    expect(renderRecentLessons(rt.storage.sql)).not.toBe('');
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).not.toBe('');
     const reflectionPrompt = prompts.find((prompt) => prompt.includes('In one sentence')) ?? '';
     expect(reflectionPrompt).toContain(
       'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
@@ -102,7 +103,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(turn.feedback).toBe('positive');
     expect(events.filter(e => e.type === 'reflection')).toHaveLength(0);
     expect(events.some(e => e.type === 'craft_discovered')).toBe(true);
-    expect(listTurnOutcomes(rt.storage.sql)[0].outcome).toBe('accepted');
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)[0].outcome).toBe('accepted');
   });
 
   test('craft EMA moves on outcomes: corrected pushes a tool score down, accepted up', async () => {
@@ -159,7 +160,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     await engine.reviewTurn(makeTurn({ userMessage: 'thanks!', assistantResponse: 'You are welcome!' }), 'now another thing');
     expect(llmCalls).toBe(0);
-    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toHaveLength(0);
     expect(events).toHaveLength(0);
   });
 
@@ -174,7 +175,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(clean.feedback).toBeNull();
     // No follow-up AND no tool work: the user said nothing and the environment
     // ruled on nothing, so nothing is recorded on no evidence.
-    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toHaveLength(0);
     expect(events.filter(e => e.type === 'reflection')).toHaveLength(0);
     // The ungraded turn is still VISIBLE — recorded as ungraded, not as a win.
     const complete = events.filter(e => e.type === 'turn_complete');
@@ -195,18 +196,18 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     });
     await engine.reviewTurn(turn, null);
 
-    const [row] = listTurnOutcomes(rt.storage.sql);
+    const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(row!.outcome).toBe('accepted');
     expect(row!.source).toBe('execution');
     expect(row!.followup).toBeNull();
-    // A headless turn can finally earn a positive — the asymmetry is gone.
+    // A headless turn earns a positive from the environment, not only a negative.
     expect(turn.feedback).toBe('positive');
   });
 
   test('a headless turn that errored is graded corrected — but does NOT corroborate lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    recordLesson(rt.storage.sql, {
+    recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['exec-2'], text: 'earlier provisional lesson',
       source: 'turn_reflection', status: 'provisional',
     });
@@ -216,15 +217,15 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
     }), null);
 
-    const [row] = listTurnOutcomes(rt.storage.sql);
+    const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(row!.outcome).toBe('corrected');
     expect(row!.source).toBe('execution');
     // The corroboration gate is a USER-verdict gate: a machine verdict still
     // earns a reflection, but nothing is promoted into the corroborated view
     // by it.
-    const lessons = listLessons(rt.storage.sql);
+    const lessons = listLessons(rt.storage.sql, rt.actor);
     expect(lessons.every(l => l.status === 'provisional')).toBe(true);
-    expect(renderRecentLessons(rt.storage.sql)).toBe('');
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).toBe('');
   });
 
   test('K_align stays a USER-correction rate — execution rows are counted apart', async () => {
@@ -235,7 +236,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       toolCalls: [{ name: 'run', args: {}, result: { error: 'boom' } }],
     }), null);
 
-    const k = alignmentConvergence(rt.storage.sql);
+    const k = alignmentConvergence(rt.storage.sql, rt.actor);
     expect(k.overall.turns).toBe(0);            // no user graded anything
     expect(k.overall.negatives).toBe(0);
     expect(k.overall.executionGraded).toBe(1);  // and the row is not lost either
@@ -245,10 +246,10 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
 
     await engine.reviewTurn(makeTurn({ hadError: true, turnId: 'err-turn' }), null);
-    const lessons = listLessons(rt.storage.sql);
+    const lessons = listLessons(rt.storage.sql, rt.actor);
     expect(lessons).toHaveLength(1);
     expect(lessons[0].status).toBe('provisional');
-    expect(renderRecentLessons(rt.storage.sql)).toBe('');
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).toBe('');
   });
 
   test('classifier failure records nothing rather than guessing', async () => {
@@ -257,25 +258,98 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'hmm, interesting');
     expect(turn.feedback).toBeNull();
-    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toHaveLength(0);
   });
 
   test('explicit thumbs beat the classifier (no LLM call) and ride the same ledger', async () => {
     let llmCalls = 0;
     const { rt } = createTestRuntime();
     rt.llm.complete = async () => { llmCalls++; return 'unused'; };
-    rt.storage.execRaw(`CREATE TABLE turn_feedback (
-      message_id TEXT PRIMARY KEY, feedback TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-    void rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at) VALUES ('msg-1', 'positive', 1)`;
+    // Copied VERBATIM from the cf-backend DDL that owns this table
+    // (orchestrator.ts) — CHECK constraint and composite key included. The
+    // copy is the point: a fixture whose spelling drifts from the production
+    // table certifies a shape no workspace has, and this table's own defect
+    // was exactly that drift — `message_id TEXT PRIMARY KEY` while a message
+    // id is minted per actor, so a sibling's thumbs overwrote this actor's
+    // through an ON CONFLICT and then re-scored its crafted tools.
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
+      actor_id   TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, message_id)
+    )`);
+    void rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
+      VALUES (${rt.actor.actorId}, 'msg-1', 'positive', 1)`;
     const engine = new EvolutionEngine(rt);
 
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'whatever text — the thumbs already decided');
     expect(turn.feedback).toBe('positive');
-    const rows = listTurnOutcomes(rt.storage.sql);
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows[0].outcome).toBe('accepted');
     expect(rows[0].source).toBe('explicit');
     expect(llmCalls).toBe(0);
+  });
+
+  /**
+   * A SIBLING's thumbs must not grade this actor's turn.
+   *
+   * The defect this exists for: a message id is minted PER ACTOR — `messages`
+   * is `PRIMARY KEY (actor_id, id)` precisely because two actors of one
+   * workspace really do hold the same id — so a `turn_feedback` keyed
+   * `message_id TEXT PRIMARY KEY`, written with `ON CONFLICT(message_id) DO
+   * UPDATE`, lets one actor's thumbs silently OVERWRITE its sibling's, and the
+   * read that decides a turn's outcome takes whichever row `LIMIT 1` happens
+   * to reach — then re-scores that actor's crafted tools from it.
+   *
+   * Both rows live under the SAME message id on purpose: that collision is the
+   * designed case, not a hypothetical, and it is the only shape that can
+   * falsify the scoping. The sibling's row is written FIRST so an unscoped
+   * read reaches it rather than this actor's — a fixture that seeded them the
+   * other way round would pass with no predicate at all.
+   */
+  test('a sibling actor\'s thumbs-down does not decide this actor\'s turn', async () => {
+    let llmCalls = 0;
+    const { rt } = createTestRuntime();
+    // Counted rather than thrown, so a read that reaches the WRONG row fails
+    // on the verdict it produced — `expected "positive", received "negative"`
+    // names the defect, where a throw would only name this fixture.
+    rt.llm.complete = async () => { llmCalls++; return 'unused'; };
+    // A REAL second actor of the same workspace, issued by the production
+    // directory: a fabricated id could not collide the way two issued actors
+    // genuinely do.
+    const sibling = createTestActors(rt.storage.sql, rt.storage.execRaw, { name: rt.actor.name })
+      .sibling('thumbs-sibling');
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
+      actor_id   TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      feedback   TEXT NOT NULL CHECK (feedback IN ('positive','negative')),
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (actor_id, message_id)
+    )`);
+    void rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
+      VALUES (${sibling.actorId}, 'msg-1', 'negative', 1)`;
+    void rt.storage.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
+      VALUES (${rt.actor.actorId}, 'msg-1', 'positive', 2)`;
+
+    const turn = makeTurn();
+    await new EvolutionEngine(rt).reviewTurn(turn, 'whatever text — the thumbs already decided');
+
+    // This actor's own verdict, and the ledger row derived from it.
+    expect(turn.feedback).toBe('positive');
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
+    expect(rows[0].outcome).toBe('accepted');
+    expect(rows[0].source).toBe('explicit');
+    // A thumbs-up is decided by the thumb alone, so no classifier ran. This is
+    // the second, independent witness: reading the sibling's thumbs-down would
+    // make the turn `corrected` and send the engine on to reflect.
+    expect(llmCalls).toBe(0);
+    // And the sibling's row is untouched — the composite key kept it a
+    // different row instead of letting one thumb replace the other.
+    expect(rt.storage.sql<{ feedback: string }>`SELECT feedback FROM turn_feedback
+      WHERE actor_id = ${sibling.actorId} AND message_id = 'msg-1'`[0]?.feedback)
+      .toBe('negative');
   });
 
   test('an Alternate Takes pick beats the classifier and its ledger row survives the review', async () => {
@@ -285,13 +359,13 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     rt.llm.complete = async () => { llmCalls++; return 'unused'; };
     // recordTakePick already wrote the turn's explicit preference row.
     void rt.storage.sql`INSERT INTO turn_outcomes
-        (id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
-      VALUES ('outc-pick', 'msg-1', 'default', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
+        (actor_id, id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
+      VALUES (${rt.actor.actorId}, 'outc-pick', 'msg-1', 'default', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
 
     const turn = makeTurn();
     await engine.reviewTurn(turn, 'follow-up that would have classified as accepted');
     expect(turn.feedback).toBe('negative');
-    const rows = listTurnOutcomes(rt.storage.sql);
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: 'outc-pick', source: 'take_pick', outcome: 'corrected' });
     expect(llmCalls).toBe(1); // the corrected outcome still warrants the reflection call
@@ -304,7 +378,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     engine.onEvent(e => events.push(e));
 
     await engine.reviewTurn(makeTurn({ origin: 'programmatic' }), null);
-    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toHaveLength(0);
     expect(events.filter(e => e.type === 'reflection')).toHaveLength(0);
     expect(events.filter(e => e.type === 'turn_complete')).toHaveLength(1); // visibility only
   });
@@ -312,35 +386,37 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('a later negative outcome corroborates a provisional lesson into the derived view', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('frustrated') });
     const engine = new EvolutionEngine(rt);
-    recordLesson(rt.storage.sql, {
+    recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['msg-1'], text: 'verify cluster names before acting',
       source: 'turn_reflection', status: 'provisional',
     });
 
     await engine.reviewTurn(makeTurn(), 'this is useless, you keep breaking staging');
-    expect(listLessons(rt.storage.sql, { status: 'provisional' })).toHaveLength(0);
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'provisional' })).toHaveLength(0);
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .some(l => l.text.includes('verify cluster names before acting'))).toBe(true);
     // The corroboration is a row-status change only: MEMORY.md is untouched.
     expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
-    expect(renderRecentLessons(rt.storage.sql)).toContain('verify cluster names before acting');
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).toContain('verify cluster names before acting');
   });
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u1', 'default', 'user', 'the task')`;
-    void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('a1', 'default', 'u1', 'assistant', 'the answer')`;
-    recordLesson(rt.storage.sql, {
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+      VALUES (${rt.actor.actorId}, 'u1', 'default', 'user', 'the task')`;
+    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+      VALUES (${rt.actor.actorId}, 'a1', 'default', 'u1', 'assistant', 'the answer')`;
+    recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['a1'], text: 'late-corroborated lesson', source: 'turn_reflection', status: 'provisional',
     });
 
     await engine.applyExplicitFeedback('a1', 'negative');
-    const rows = listTurnOutcomes(rt.storage.sql);
+    const rows = listTurnOutcomes(rt.storage.sql, rt.actor);
     expect(rows[0]).toMatchObject({ turnId: 'a1', outcome: 'corrected', source: 'explicit', userMessage: 'the task' });
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .some(l => l.text.includes('late-corroborated lesson'))).toBe(true);
     expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
-    expect(renderRecentLessons(rt.storage.sql)).toContain('late-corroborated lesson');
+    expect(renderRecentLessons(rt.storage.sql, rt.actor)).toContain('late-corroborated lesson');
   });
   test('respects enabled=false config', async () => {
     const { rt } = createTestRuntime();
@@ -350,7 +426,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     await engine.reviewTurn(makeTurn({ hadError: true }), 'this is broken');
     expect(events).toHaveLength(0);
-    expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
+    expect(listTurnOutcomes(rt.storage.sql, rt.actor)).toHaveLength(0);
   });
 });
 
@@ -362,7 +438,7 @@ describe('EvolutionEngine — Session-level', () => {
   test('reflects on a ≥3-turn window carrying negative signal (a corroborated session lesson)', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    recordLesson(rt.storage.sql, {
+    recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['w1'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
     });
@@ -373,7 +449,7 @@ describe('EvolutionEngine — Session-level', () => {
 
     await engine.onSessionComplete(session([makeTurn({ turnId: 'w1' }), graded, makeTurn({ turnId: 'w3' })]));
 
-    expect(listLessons(rt.storage.sql, { status: 'corroborated' })
+    expect(listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })
       .some(l => l.source === 'session_reflection')).toBe(true);
     // Nothing was copied into MEMORY.md — the derived view carries it.
     expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
@@ -387,13 +463,13 @@ describe('EvolutionEngine — Session-level', () => {
     for (const t of turns) await engine.reviewTurn(t, 'perfect, moving on to the next piece of work');
 
     await engine.onSessionComplete(session(turns));
-    expect(listLessons(rt.storage.sql, { source: 'session_reflection' })).toHaveLength(0);
+    expect(listLessons(rt.storage.sql, rt.actor, { source: 'session_reflection' })).toHaveLength(0);
   });
 
   test('an errored window still reflects, but the self-scored lesson stays provisional', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
-    recordLesson(rt.storage.sql, {
+    recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['seed'], text: 'Previous lesson content',
       source: 'turn_reflection', status: 'corroborated',
     });
@@ -405,7 +481,7 @@ describe('EvolutionEngine — Session-level', () => {
     // The self-scored reflection never reaches MEMORY.md; it waits in the
     // ledger as provisional until a user verdict corroborates it.
     expect(await rt.memory.read('memory/MEMORY.md')).toBeNull();
-    const provisional = listLessons(rt.storage.sql, { status: 'provisional' });
+    const provisional = listLessons(rt.storage.sql, rt.actor, { status: 'provisional' });
     expect(provisional.some(l => l.source === 'session_reflection' && l.turnIds.includes('e1'))).toBe(true);
   });
 
@@ -467,8 +543,8 @@ describe('the turn-reflection prompt', () => {
     );
     return {
       prompt: prompts.find((text) => text.includes('In one sentence')) ?? '',
-      lesson: listLessons(rt.storage.sql, { status: 'corroborated' })[0]?.text ?? '',
-      view: renderRecentLessons(rt.storage.sql),
+      lesson: listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })[0]?.text ?? '',
+      view: renderRecentLessons(rt.storage.sql, rt.actor),
     };
   }
 

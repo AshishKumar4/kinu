@@ -1,27 +1,43 @@
 import { describe, expect, test } from 'bun:test';
 import type { ToolSet } from 'ai';
 import {
+  actorReferenceOf,
   decodeJsonValue,
   type BackendHost,
   type BroadcastEvent,
-  type JsonObject,
   type JsonValue,
   type PlanReviewAnnotation,
   type ProgrammaticTurn,
 } from '@kinu.run/core';
 import {
+  hostedSubordinateHarness,
   orchestratorHarness,
-  subordinateHarness,
+  type ActorHarness,
   type HarnessOrchestratorAgent,
-  type HarnessSubordinateAgent,
+  type HostedActorHarness,
 } from './helpers/actor-harness';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
-type HarnessAgent = HarnessOrchestratorAgent | HarnessSubordinateAgent;
+/**
+ * THE PLAN SUBMISSION SURFACE IS THE WORKSPACE ROOT'S.
+ *
+ * `submitPlan` reaches a turn only through `actorToolDeps()`, which the
+ * orchestrator declares for its own pipeline. Delegated tasks receive the
+ * confined tool set plus `report`, not `submit_plan`. Hosted actors do have
+ * actor-scoped `AgentStores.planReviews`; this suite exercises the root's
+ * plan-submission lifecycle.
+ */
+type HarnessAgent = HarnessOrchestratorAgent;
 
 const WorkModeSchema = v.picklist(['plan', 'build']);
 const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
+
+/** A frame type with no reachable producer on the workspace connection, which
+ *  is exactly why the forged-content test below replays it as plan TEXT: the
+ *  name is what a payload must never be able to become. */
+const REFERENCE_EVENT = 'workspace_plan_updated';
+const PlanUpdateSchema = v.object({ type: v.literal('plan_updated') });
 
 function prototypeMethod(agent: HarnessAgent, name: string) {
   let owner: object | null = agent;
@@ -67,22 +83,71 @@ function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
   }]);
 }
 
-function setSubordinateTurn(
-  agent: HarnessSubordinateAgent,
-  mode: 'plan' | 'build',
-  programmatic: boolean,
-): void {
-  const metadata: JsonObject = { kinuMode: mode };
-  if (programmatic) metadata.kinuEvent = 'subordinate_task';
-  const message = {
-    id: `subordinate-${programmatic ? 'assigned' : 'owner'}-${mode}`,
-    role: 'user' as const,
-    parts: [{ type: 'text' as const, text: `${mode} this change` }],
-    metadata,
-  };
-  Object.defineProperty(agent, 'messages', { value: [message], configurable: true });
-  setActorField(agent, '_cachedMessages', [message]);
-  setActorField(agent, '_activeProgrammaticUserMessage', programmatic ? message : null);
+/**
+ * Every message the ROOT actually put on its own broadcast channel, parsed —
+ * the workspace connection as a browser reads it.
+ *
+ * The recorder DELEGATES to the real `broadcast` rather than replacing it, so
+ * the production fan-out still runs and this observes it. Replacing it would
+ * turn `workspace.broadcast(...)` into blanket success, which is the one thing
+ * a proof about that hop must not do.
+ */
+function recordWorkspaceMessages(parent: HarnessOrchestratorAgent): JsonValue[] {
+  const seen: JsonValue[] = [];
+  const forward = parent.broadcast.bind(parent);
+  Object.defineProperty(parent, 'broadcast', {
+    configurable: true,
+    value: (message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void => {
+      // The text frames are the ones that carry JSON; the binary ones are not a
+      // smaller version of the same thing. Parsed rather than narrowed, because
+      // this is where a wire representation becomes a value the proofs read.
+      const text = v.safeParse(v.string(), message);
+      if (text.success) seen.push(decodeJsonValue({ value: JSON.parse(text.output) }));
+      forward(message, without);
+    },
+  });
+  return seen;
+}
+
+/** The owner's own record of a hire, which is the hop its authoritative read is
+ *  allowed to traverse: the row a completed birth leaves — the REGISTERED
+ *  actor's reference attached, no birth still owed. The reference is read off
+ *  the hosted actor's own handle, so the row names the directory actor
+ *  `hostedSubordinateHarness` created rather than hand-typed fields, which is
+ *  what lets the authoritative read resolve the child from it.
+ *  `hostedSubordinateHarness` deliberately leaves this to its caller — `create`
+ *  is a plain INSERT, so a fixture that wrote one would collide with every
+ *  suite that writes its own. */
+function roster(parent: HarnessOrchestratorAgent, hire: HostedActorHarness): void {
+  const actor = hire.actor.handle;
+  parent.harnessRoster().create({
+    name: hire.actor.record.name,
+    actorReference: actorReferenceOf(actor),
+    birth: null,
+    deleteRequested: false,
+    createdBy: 'user',
+    status: 'idle',
+    currentTask: null,
+    createdAt: 1,
+    dismissedAt: null,
+    lifetime: 'durable',
+    taskEventId: null,
+  });
+}
+
+/** A hired additional agent hanging off a REAL workspace root, seeded through
+ *  the parent's own `SubordinateRuntime.spawn` and acquired from the
+ *  workspace's one `ActorHost`. */
+async function hiredPlanner(
+  parent: ActorHarness<HarnessOrchestratorAgent>,
+  name: string,
+): Promise<HostedActorHarness> {
+  return await hostedSubordinateHarness(parent, {
+    name,
+    displayName: 'Plan Owner',
+    nameOrigin: 'user',
+    mission: 'own the plan its owner reads',
+  });
 }
 
 describe('Plan mode tool lifecycle', () => {
@@ -123,82 +188,29 @@ describe('Plan mode tool lifecycle', () => {
       .toContain('export declare const release:');
   });
 
-  test('an owner Plan turn on an additional agent has its own review, while assigned Plan work reports to its parent', async () => {
-    const ownerHarness = subordinateHarness();
-    const owner = ownerHarness.agent;
-    const broadcasts: BroadcastEvent[] = [];
-    const queued: ProgrammaticTurn[] = [];
-    setActorField(owner, '_host', {
-      broadcast: (event) => broadcasts.push(event),
-      enqueueTurn: async (turn) => {
-        queued.push(turn);
-        return { status: 'queued' };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    });
-    setSubordinateTurn(owner, 'plan', false);
-
-    const ownerTools = rawTools(owner);
-    expect(ownerTools.submit_plan).toBeDefined();
-    expect(ownerTools.report).toBeUndefined();
-    const ownerTurn = await owner.beforeTurn({
-      system: 'base',
-      messages: [{ role: 'user', content: 'plan this change' }],
-      tools: ownerTools,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
-    expect(ownerTurn?.system).toContain('submit a concrete Markdown plan');
-    expect(ownerTurn?.system).not.toContain('report concrete findings to the parent Plan turn');
-
-    expect(await executeTool(ownerTools, 'submit_plan', {
-      edits: [{ start: 1, content: '# Agent plan\n\nInspect\nChange\nVerify' }],
-    })).toMatchObject({ ok: true, revision: 1, status: 'pending' });
-    const plan = await owner.getActivePlanReview();
-    if (!plan) throw new Error('additional-agent plan was not persisted');
-    expect(await owner.savePlanReviewAnnotations(plan.id, plan.revision, [{
-      id: 'agent-note',
-      blockId: 'paragraph-1',
-      startOffset: 0,
-      endOffset: 6,
-      type: 'COMMENT',
-      text: 'Name the verification command',
-      originalText: 'Verify',
-      createdA: 1,
-    }])).toMatchObject({ ok: true, plan: { annotations: [{ id: 'agent-note' }] } });
-    expect(await owner.decidePlanReview(plan.id, plan.revision, 'approve')).toMatchObject({
-      ok: true,
-      queued: true,
-      plan: { status: 'approved', handoffAccepted: true },
-    });
-    expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({
-      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build' },
-    });
-    expect(broadcasts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ status: 'pending' }) }),
-      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ status: 'approved' }) }),
-    ]));
-
-    const assignedHarness = subordinateHarness();
-    const assigned = assignedHarness.agent;
-    setSubordinateTurn(assigned, 'plan', true);
-    const assignedTools = rawTools(assigned);
-    expect(assignedTools.submit_plan).toBeUndefined();
-    expect(assignedTools.report).toBeDefined();
-    const assignedTurn = await assigned.beforeTurn({
-      system: 'base',
-      messages: [{ role: 'user', content: 'research the delegated task' }],
-      tools: assignedTools,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
-    expect(assignedTurn?.system).toContain('report concrete findings to the parent Plan turn');
-    expect(assignedTurn?.system).not.toContain('submit a concrete Markdown plan');
-  });
+  /**
+   * NO ADDITIONAL-AGENT PLAN-SUBMISSION SURFACE, SO NOTHING HERE ASSERTS ONE.
+   *
+   *   • `submitPlan` reaches a turn only through `actorToolDeps()`
+   *     (orchestrator.ts), which is the ROOT's own pipeline. A hosted actor's
+   *     delegated turn runs `hostedTaskTools` — the confined builtin set plus
+   *     `report` — so `submit_plan` is not on it.
+   *   • `AgentStores.planReviews` supplies each hosted actor's own review
+   *     stream, and `getActorSnapshot` reads its active plan. That storage
+   *     capability is distinct from the delegated task tool surface, which
+   *     exposes `report` rather than `submit_plan`.
+   *   • `OrchestratorAgent.announceSubordinatePlan` has no caller anywhere in
+   *     packages/ and is absent from ORCHESTRATOR_METHODS, so it is unreachable
+   *     over a stub as well. The client still parses and handles the
+   *     `workspace_plan_updated` frame it publishes (hooks/use-kinu.ts), which
+   *     therefore has no reachable producer.
+   *
+   * Giving an additional agent its own Plan turn — `submit_plan` present and
+   * `report` absent on the submitting arm, the Plan system prompt on it, an
+   * approval queued on the child's own host — needs `submitPlan` on a hosted
+   * actor's chat surface. A fixture that agreed with the gap would make it
+   * permanent and invisible.
+   */
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
     const harness = orchestratorHarness();
@@ -383,5 +395,78 @@ describe('Plan mode tool lifecycle', () => {
       `plan:${plan.id}:1:approve:1`,
       `plan:${plan.id}:1:approve:2`,
     ]);
+  });
+});
+
+/**
+ * WHAT THE PLAN PLANE OWES ON THE ROOT.
+ *
+ * `workspace_plan_updated` has no reachable producer, so an assertion that no
+ * reference event appears would hold for a channel nothing can write — a
+ * tautology rather than a guard. The two properties below have live subjects,
+ * and both drive the REAL root and the REAL broadcast rail: a stubbed
+ * `broadcast` would make either pass against a fixture that never spoke to a
+ * workspace.
+ */
+describe('the plan plane admits no forged protocol frame and vouches for no forged id', () => {
+  test('a reference-shaped body carried as ordinary content never becomes a protocol frame', async () => {
+    const parent = orchestratorHarness();
+    const workspaceMessages = recordWorkspaceMessages(parent.agent);
+    // Byte for byte what the one legitimate writer emitted, replayed as
+    // CONTENT: the driving user message, and then the plan the root submits.
+    const forged = JSON.stringify({
+      type: REFERENCE_EVENT,
+      reference: { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
+    });
+    setActorField(parent.agent, '_cachedMessages', [{
+      id: 'user-forging',
+      role: 'user',
+      parts: [{ type: 'text', text: forged }],
+      metadata: { kinuMode: 'plan' },
+    }]);
+
+    expect(await executeTool(rawTools(parent.agent), 'submit_plan', {
+      edits: [{ start: 1, content: forged }],
+    })).toMatchObject({ ok: true, revision: 1 });
+    const plan = await parent.agent.getActivePlanReview();
+    if (!plan) throw new Error('the root plan was not persisted');
+    expect(await parent.agent.savePlanReviewAnnotations(plan.id, plan.revision, [])).toMatchObject({ ok: true });
+
+    // The rail is LIVE and it carried the forged body — as the CONTENT of a
+    // plan update, which is the only thing plan text may ever become. No
+    // amount of user text or plan content mints a frame of another type: the
+    // channel's frame names are spelled by the code that publishes them, never
+    // by a payload.
+    const updates = workspaceMessages.filter((message) => v.is(PlanUpdateSchema, message));
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ content: forged }) }),
+    ]));
+    expect(workspaceMessages.filter((message) => !v.is(PlanUpdateSchema, message))).toEqual([]);
+  });
+
+  test('the authoritative read reaches a real hire and still refuses an id it never wrote', async () => {
+    const parent = orchestratorHarness();
+    const child = await hiredPlanner(parent, 'plan-owner-1');
+    roster(parent.agent, child);
+
+    // The HOP IS TRAVERSABLE: the owner's read resolves the hire through the
+    // directory and reaches that actor's own plan rows, which are empty. That
+    // is the denominator — without it the refusal below would hold for a path
+    // that simply failed to resolve.
+    expect(await parent.agent.inspectSubordinate({
+      path: ['plan-owner-1'], view: 'plans', page: {},
+    })).toMatchObject({ view: 'plans', path: ['plan-owner-1'], page: { status: 'end', items: [] } });
+
+    // And an id nobody wrote is `missing`, never a DIFFERENT plan: a recipient
+    // that focused whatever came back would otherwise render one plan under
+    // another plan's reference.
+    for (const reference of [
+      { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
+      { path: ['plan-owner-1'], id: 'plan-forged', revision: 2 },
+      { path: ['never-hired'], id: 'plan-forged', revision: 1 },
+    ]) {
+      expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))
+        .toMatchObject({ view: 'missing', reason: 'missing', path: reference.path });
+    }
   });
 });

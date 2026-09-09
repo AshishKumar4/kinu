@@ -1,15 +1,15 @@
+import type { ChatEvent } from '../src/chat';
 /**
- * Shadow context parity — a context-dependent task no longer auto-loses in
- * the shadow eval.
+ * Shadow context parity — a context-dependent task does not auto-lose in the
+ * shadow eval.
  *
- * The live answer is produced with the full conversational context; before
- * the parity fix the shadow's pending got (a) a task-text-only
- * host.defaultInference reconstruction and (b) its ui_chunk output dropped
- * from the judged text — a delegating pending was structurally tie-prone or
- * worse. The orchestrator now replays the live turn's prepared streamText
- * opts into the shadow's defaultInference; these tests pin the core side of
- * that contract: the delegating pending's full-context output reaches the
- * judge verbatim.
+ * The live answer is produced with the full conversational context. Give the
+ * shadow's pending (a) a task-text-only host.defaultInference reconstruction
+ * and (b) its ui_chunk output dropped from the judged text, and a delegating
+ * pending is structurally tie-prone or worse. The orchestrator replays the live
+ * turn's prepared streamText opts into the shadow's defaultInference; these
+ * tests pin the core side of that contract: the delegating pending's
+ * full-context output reaches the judge verbatim.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -38,10 +38,10 @@ async function setup(): Promise<AgentRuntime> {
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
-  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
-    VALUES (1, ${Date.now()}, 'delegating pending', 'pending')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
+  void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+    VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'delegating pending', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', DELEGATING_PENDING);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }');
   return rt;
@@ -75,16 +75,16 @@ function uiStream(answer: string): () => AsyncIterable<ScaffoldDefaultInferenceC
 }
 
 describe('shadow context parity', () => {
-  test('a delegating pending with the live context no longer auto-loses on a context-dependent task', async () => {
+  test('a delegating pending with the live context does not auto-lose on a context-dependent task', async () => {
     const rt = await setup();
     const result = await runAutoShadowEval({
       rt,
       task: TASK,
       currentOutput: CONTEXT_AWARE_ANSWER, // the live answer, produced with full context
       judge: contextJudge,
-      llmStream: async function* () { yield ''; },
-      // The orchestrator now replays the live turn's full streamText opts —
-      // so defaultInference yields the context-aware answer.
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
+      // The orchestrator replays the live turn's full streamText opts — so
+      // defaultInference yields the context-aware answer.
       defaultInference: uiStream(CONTEXT_AWARE_ANSWER),
       random: () => 0,
     });
@@ -95,7 +95,8 @@ describe('shadow context parity', () => {
     // The judged pending output is the delegated full-context answer — the
     // ui_chunk text reached the eval row verbatim.
     const row = rt.storage.sql<{ pending_output: string; winner: string }>`
-      SELECT pending_output, winner FROM scaffold_evaluations`[0]!;
+      SELECT pending_output, winner FROM scaffold_evaluations
+      WHERE actor_id = ${rt.actor.actorId}`[0]!;
     expect(row.pending_output).toBe(CONTEXT_AWARE_ANSWER);
     expect(row.winner).toBe('tie');
   });
@@ -109,7 +110,7 @@ describe('shadow context parity', () => {
       // Old behavior: a task-text-only reconstruction can't know the codename.
       defaultInference: uiStream(CONTEXT_FREE_ANSWER),
       judge: contextJudge,
-      llmStream: async function* () { yield ''; },
+      llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       random: () => 0,
     });
     expect(result.skipped).toBe(false);

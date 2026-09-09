@@ -1,15 +1,15 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
+  AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
   canonicalConversationId, setReasoningEffort,
 } from '../src/index';
 import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActor } from './helpers';
 
 function setup() {
   const { sql, execRaw } = createTestSql();
-  initAgentConfigTable(execRaw);
-  return createAgentConfigStore(sql);
+  return createTestActor(sql, execRaw, crypto.randomUUID(), 'config-test').config;
 }
 
 describe('AgentConfigStore — generic get/set/delete', () => {
@@ -44,7 +44,7 @@ describe('AgentConfigStore — lastActiveExecutor', () => {
   test('rejects values that are not plausible executor namespaces', () => {
     const c = setup();
     c.setLastActiveExecutor('sandbox');
-    c.setLastActiveExecutor('; DROP TABLE agent_config; --');
+    c.setLastActiveExecutor('; DROP TABLE actor_config; --');
     c.setLastActiveExecutor('');
     c.setLastActiveExecutor('a'.repeat(40));
     expect(c.getLastActiveExecutor()).toBe('sandbox'); // unchanged by the bad writes
@@ -319,10 +319,9 @@ describe('AgentConfigStore — GEPA eval budget', () => {
 /**
  * The lifetime counters, on a store nobody has written to yet.
  *
- * `countClosedTurnWindow` used to open its read with a one-time copy out of a
- * retired key, which nothing has written for long enough that only a pre-public
- * workspace could still hold one. That copy is gone: the counter now touches
- * exactly the one key it names, and this pins that.
+ * `countClosedTurnWindow` touches exactly the one key it names: no read-through
+ * to another key and no write of one, which is what makes a fresh store's first
+ * count both 1 and its only row.
  */
 describe('AgentConfigStore — lifetime counters', () => {
   test('a fresh store counts from one and writes only its own key', () => {

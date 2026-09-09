@@ -1,6 +1,6 @@
 /**
- * One cursored-page contract for every read that used to answer with a bare
- * array under a `LIMIT`.
+ * One cursored-page contract, shared by every read that would otherwise answer
+ * with a bare array under a `LIMIT`.
  *
  * ── What this generalises ────────────────────────────────────────────────────
  * `readWorkspaceArchivePage` (identity/archive.ts) already got this right and
@@ -84,9 +84,9 @@ export const SeekCursorSchema: v.GenericSchema<SeekCursor> = v.object({
 });
 
 /** The wire schema for `Page<Item>`, for the client side of an RPC. */
-export function pageSchema<Item>(
-  item: v.GenericSchema<Item>,
-): v.GenericSchema<Page<Item>> {
+export function pageSchema<Input, Item = Input>(
+  item: v.GenericSchema<Input, Item>,
+): v.GenericSchema<Page<Input>, Page<Item>> {
   return v.variant('status', [
     v.object({ status: v.literal('more'), items: v.array(item), next: SeekCursorSchema }),
     v.object({ status: v.literal('end'), items: v.array(item) }),

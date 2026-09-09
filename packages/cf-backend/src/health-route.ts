@@ -23,9 +23,9 @@ export async function handleHealthRequest(request: Request, env: Env): Promise<R
     build,
     // Counted, not declared: each figure is read out of a registry the
     // compiler already holds to its own declaration (BUILTIN_TOOLS cannot name
-    // a tool the reach table does not call native), so a feature that dies
-    // leaves this list in the same commit that deletes it. The hand list this
-    // replaces survived the D1 removal by a day.
+    // a tool the reach table does not call native), so a deleted feature
+    // cannot remain advertised. The concrete drift case is a hand-maintained
+    // list advertising D1 for one day beyond its removal.
     features: {
       builtinTools: BUILTIN_TOOLS.length,
       swarmPresets: SWARM_PRESETS.length,

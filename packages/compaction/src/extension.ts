@@ -242,8 +242,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       transcript: plan.transcript.content || formatTranscript(prefixTurns, kinuCodec),
       latestUserAsk: latestUserAsk(ctx.messages),
       previousSummary: previous,
-      // The agents-SDK budget rule the old path used: 20% of the compacted
-      // content, floored at 100 tokens.
+      // The agents-SDK budget rule: 20% of the compacted content, floored at
+      // 100 tokens.
       budgetTokens: Math.max(100, Math.floor(kinuCodec.estimateTurns(prefixTurns) * 0.2)),
     });
     let body: string;

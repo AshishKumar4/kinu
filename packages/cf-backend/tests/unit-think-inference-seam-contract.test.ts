@@ -17,7 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { stepCountIs, type StepResult, type ToolSet } from 'ai';
 import { UNBOUNDED_MAX_STEPS } from '@kinu.run/core';
-import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const thinkBundle = readFileSync(Bun.resolveSync('@cloudflare/think', import.meta.dir), 'utf8');
 
@@ -145,30 +145,8 @@ describe('the turn loop this actor hands Think carries no step cap the caller ca
     }
   });
 
-  test('every actor kind inherits the override — a subordinate is not capped either', () => {
-    expect(subordinateHarness().agent.maxSteps).toBe(UNBOUNDED_MAX_STEPS);
+  test('the workspace root inherits the override — hosted actors have no Think instance to cap', () => {
+    expect(orchestratorHarness().agent.maxSteps).toBe(UNBOUNDED_MAX_STEPS);
   });
 });
 
-describe('Kinu holds up its end of the seam', () => {
-  const actorAgent = readFileSync(new URL('../src/actor-agent.ts', import.meta.url), 'utf8');
-  const orchestrator = readFileSync(new URL('../src/orchestrator.ts', import.meta.url), 'utf8');
-  const subordinate = readFileSync(new URL('../src/subordinate-agent.ts', import.meta.url), 'utf8');
-
-  test('the override is declared and routes through the shared transform', () => {
-    expect(actorAgent).toContain('protected _transformInferenceResult(result: StreamableResult): StreamableResult');
-    expect(actorAgent).toContain('return scaffoldInferenceTransform({');
-  });
-
-  // The seam sits on the shared base precisely so subordinates run the
-  // scaffold they evolve. While it lived on OrchestratorAgent alone, a
-  // subordinate could propose, shadow-evaluate and promote an evolved
-  // scaffold that never became its inference loop — evolution machinery
-  // that was live at every step except the one that matters.
-  test('every actor inherits the seam, so a subordinate runs the scaffold it evolves', () => {
-    expect(orchestrator).toContain('extends ActorAgent');
-    expect(subordinate).toContain('extends ActorAgent');
-    expect(orchestrator).not.toContain('_transformInferenceResult(result: StreamableResult)');
-    expect(subordinate).not.toContain('_transformInferenceResult(result: StreamableResult)');
-  });
-});

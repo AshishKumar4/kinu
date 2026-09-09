@@ -1,24 +1,21 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-// ── the guards in front of the candidate-facts route ────────────────────────
+// ── the guard in front of every instrumented route ──────────────────────────
 //
-// `GET /candidate` reads one arm's control envelopes and payload closure out of
-// the run's shared bucket, so it is the one route whose reply describes another
-// arm's prefix if it is reached for the wrong arm. Every guard that stands in
-// front of it is asserted here against the real Worker.
+// Every route execs commands inside a container and resolves a box prefix from
+// the arm it is asked for, so an arm this run did not deploy must be refused
+// BEFORE a prefix is derived — otherwise the reply describes a box the run never
+// created. `BENCH_SELECTED_ARMS` in `vitest.config.ts` deliberately names an arm
+// that is not the shipped one, so the refusal below is the live path rather than
+// a branch nothing reaches.
 //
-// The facts it returns are JUDGED by the driver, and that judgement — the
-// journal FUSE mount, the control envelope and the payload closure, none of
-// which a chain or extraction check can stand in for — is proved in
-// `scripts/bench-devbox-decision.test.ts`, where it runs against hand-built
-// facts with no deployment. This module cannot import the fixture itself: the
-// Worker's module graph reaches `bun:ffi` through the candidate runner it
-// bundles for the container, and this project deliberately carries workerd
-// types only.
+// The instrument's own judgement of what a run measured is proved in
+// `scripts/bench-devbox-decision.test.ts`, against hand-built facts with no
+// deployment.
 
 describe('the selected-arm route guard', () => {
-  it('classifies a snapshot-chain state request against a candidates-only fixture', async () => {
+  it('refuses a state request for an arm this run did not deploy', async () => {
     const response = await SELF.fetch('https://bench.test/state?strategy=snapshot-chain', {
       headers: { authorization: 'Bearer test-token' },
     });
@@ -31,47 +28,34 @@ describe('the selected-arm route guard', () => {
     });
   });
 
-  it('holds the candidate-facts route behind that same guard', async () => {
-    // A route added after the guard was written is exactly the shape that
-    // escapes it. An unselected arm reaching this one would resolve a prefix
-    // belonging to a box this run never deployed.
-    const response = await SELF.fetch('https://bench.test/candidate?strategy=snapshot-chain', {
-      headers: { authorization: 'Bearer test-token' },
-    });
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      ok: false,
-      strategy: 'snapshot-chain',
-      error: 'strategy not deployed in this run',
-    });
-  });
-
-  it('refuses an unauthenticated candidate-facts request', async () => {
-    const response = await SELF.fetch('https://bench.test/candidate?strategy=bounded-layers');
+  it('refuses an unauthenticated request before it reads an arm at all', async () => {
+    const response = await SELF.fetch('https://bench.test/state?strategy=snapshot-chain');
 
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
   });
 
-  it('refuses a candidate-facts request that names no arm at all', async () => {
-    const response = await SELF.fetch('https://bench.test/candidate', {
+  it('refuses a request that names no arm at all', async () => {
+    const response = await SELF.fetch('https://bench.test/state', {
       headers: { authorization: 'Bearer test-token' },
     });
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       ok: false,
-      error: 'strategy is required: snapshot-chain, r2fs, overlay-cas, bounded-layers, or merkle-pack',
+      error: 'strategy is required: snapshot-chain',
     });
   });
 
-  it('refuses an unknown arm name rather than defaulting to one', async () => {
-    const response = await SELF.fetch('https://bench.test/candidate?strategy=bounded-layer', {
+  it('refuses an unknown arm name rather than defaulting to the shipped one', async () => {
+    const response = await SELF.fetch('https://bench.test/state?strategy=snapshot-chai', {
       headers: { authorization: 'Bearer test-token' },
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ ok: false });
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: 'strategy is required: snapshot-chain',
+    });
   });
 });

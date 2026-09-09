@@ -3,10 +3,10 @@
  *
  * Three surfaces ask the same question — Account settings → Devices, the
  * Environment tab's offline laptop, and the connect panel waiting for a
- * machine to arrive — and each used to own a `listDevices()` call: two
- * hand-rolled `setInterval` loops and one mount-time fetch that never refreshed
- * and swallowed its rejection. One read model, on the app's own
- * `useAsyncResource`, so a failed poll keeps the last roster AND says it
+ * machine to arrive — and one read model answers all three. A `listDevices()`
+ * call per surface means hand-rolled `setInterval` loops and a mount-time fetch
+ * that never refreshes and swallows its rejection. On the app's own
+ * `useAsyncResource`, a failed poll keeps the last roster AND says it
  * failed, which a swallowed catch cannot.
  */
 import type { Revalidate, AsyncResourceControl } from "./use-async-resource";

@@ -1,20 +1,22 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { workspaceOwner } from '../workspace-box-rpc';
+import { workspaceOwner } from '../workspace-owner-rpc';
 import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
-/** One hop of an actor's root-relative facet path, as the SDK records it. */
+/** One hop of an actor's root-relative path, as the workspace directory records
+ *  it: a registered actor NAME under the workspace root. A class name is not an
+ *  identity — every actor is hosted by the one root object, so what
+ *  distinguishes two callers is which actor they are, which is exactly the name
+ *  the directory holds. */
 export interface SlateCallerHop {
-  readonly className: string;
   readonly name: string;
 }
 
 /**
- * The actor a slate acts FOR: its facet path under the workspace root (empty
- * for the root itself) and the credential its own file plane runs as. Both are
- * stamped by actor code on the Durable Object stub transport — the same trust
- * hop `workspaceBoxOp` uses for `NimbusExecOptions.cred` — never by a browser,
- * a CLI client, or the process that holds a binding.
+ * The actor a slate acts FOR: its actor path under the workspace root (empty
+ * for the main actor itself) and the credential its own file plane runs as. Both
+ * are stamped by actor code on the Durable Object stub transport — never by a
+ * browser, a CLI client, or the process that holds a binding.
  */
 export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];
@@ -49,8 +51,8 @@ interface SlateBindingEnv {
 
 /** All four capability planes return through the owner's one route decision, as the caller. */
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
-  call(member: string, args: JsonValue[], depth: number): Promise<SlateCallResult> {
+  call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
-    return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, depth });
+    return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation });
   }
 }

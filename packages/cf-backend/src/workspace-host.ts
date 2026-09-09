@@ -148,9 +148,9 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
 
 /**
  * The URL an exposed port is reachable at, or why this deployment cannot mint
- * one for this workspace. The reason is written for the Ports surface: a
- * port that is listening and has no URL used to vanish from it, and the one
- * message the surface had blamed a missing preview host whatever the cause.
+ * one for this workspace. The reason is written for the Ports surface: without
+ * one, a port that is listening and has no URL vanishes from that surface, and
+ * a single fixed message blames a missing preview host whatever the cause.
  */
 export type WorkspacePreviewUrl =
   | { readonly url: string; readonly unavailable?: undefined }
@@ -168,6 +168,9 @@ export interface HostedWorkspaceDeps {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   onFilesChanged?(paths: readonly string[]): void;
   refreshPreview?(port: number): Promise<void>;
+  /** Mint the app invocation a preview request runs under, so a slate cannot
+   *  keep its bindings and replay them as an unnamed root lineage. */
+  slateInvocation?(port: number): { readonly value: string; release: () => void } | null;
 }
 
 export interface HostedWorkspace {
@@ -278,12 +281,11 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // both are real here.
         const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
-        // The guard that used to refuse the network `git` subcommands and the
-        // fetching `npm` subcommands here is gone. `git clone` and friends now
-        // reach their dynamic-worker facets through the composed fabric, and
-        // `npm install` streams in process — one tarball entry at a time,
-        // never a buffered whole — so neither exhausts this isolate the way
-        // the guard's refusal claimed they would.
+        // Nothing here refuses the network `git` subcommands or the fetching
+        // `npm` subcommands. `git clone` and friends reach their dynamic-worker
+        // facets through the composed fabric, and `npm install` streams in
+        // process — one tarball entry at a time, never a buffered whole — so
+        // neither exhausts this isolate.
         return programmaticHost(session, portRegistry, deps, portOwners);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
@@ -357,15 +359,24 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
       if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
       const publicRequest = new Request(request);
-      publicRequest.headers.delete('x-slate-depth');
+      // The visitor's own header is dropped first, then the host names this
+      // request's invocation. A preview entry is a root lineage, and naming it
+      // is what stops retained preview bindings standing in for a deeper one.
+      publicRequest.headers.delete('x-slate-call');
+      const invocation = deps.slateInvocation?.(port) ?? null;
+      if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const self = await host();
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
-      if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-        return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
+      try {
+        if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+          return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
+        }
+        return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
+      } finally {
+        invocation?.release();
       }
-      return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
     },
     destroy: () => bundle.destroy(),
   };

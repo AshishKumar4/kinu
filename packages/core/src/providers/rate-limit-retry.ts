@@ -12,6 +12,21 @@ import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
  */
 export const PROVIDER_SDK_RETRIES = 2;
 
+/**
+ * The fallback wait curve, and ONLY the fallback: when a 429 carries
+ * `Retry-After`, that header is the wait and none of these three is consulted
+ * (see `parseRetryAfter` below). They shape the full-jitter ceiling for a
+ * provider that rate-limits without saying for how long.
+ *
+ * None of the three bounds attempts. Attempts are unbounded — a rate-limited
+ * request ends on success, a definitive failure, or the caller's cancellation.
+ * They choose only how often a waiting request re-asks.
+ *
+ * BASE 2_000 ms and MAX 60_000 ms are NOT MEASURED. Nothing in this tree
+ * records what a provider's silent-429 recovery costs, so no derivation is
+ * offered for either. FACTOR 2 is the doubling the other backoffs here use
+ * (events/ingress/peer.ts:172-178, orchestrator/terminal-effects.ts:151).
+ */
 const DEFAULT_BASE_DELAY_MS = 2_000;
 const DEFAULT_BACKOFF_FACTOR = 2;
 const DEFAULT_MAX_DELAY_MS = 60_000;
@@ -40,8 +55,8 @@ export interface RateLimitRetryOptions {
  *
  *   - Every attempt goes out through {@link ProviderPacer.admit}, which spaces
  *     request STARTS against one host and holds each caller behind any wait the
- *     provider has already mandated. A whole swarm level starting at once used to
- *     arrive as N simultaneous first requests on one credential.
+ *     provider has already mandated. Without it a whole swarm level starting at once
+ *     arrives as N simultaneous first requests on one credential.
    *   - Every wait is declared before it is taken, so every sibling request for
    *     this host respects the same provider-mandated cooldown.
  */

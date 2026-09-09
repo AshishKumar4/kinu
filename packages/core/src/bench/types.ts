@@ -54,18 +54,18 @@ export interface AttemptBudget {
  * explores more, which in a scaffold comparison is the thing under test. Raised
  * with headroom; an attempt that genuinely runs away still terminates.
  *
- * `wallClockMs`: the identical argument, which this field did NOT have. It was
- * 300_000 while sharing the sentence above, and an attempt is one whole Kinu
- * turn against the sandbox — measured at up to 509 s. So the tighter arm of the
- * pair was the clock, breaching on exactly the attempts that explored longest
- * and scoring them failed. Raised to the measured figure.
+ * `wallClockMs`: the identical argument on its own measurement. An attempt is
+ * one whole Kinu turn against the sandbox — measured at up to 509 s — so a
+ * 300 s clock is the tighter arm of the pair, breaching on exactly the attempts
+ * that explored longest and scoring them failed. Set to the measured figure,
+ * with the same headroom.
  *
  * THIS IS A MEASUREMENT-HARNESS BOUND, not a runtime one: production turns carry
  * no wall clock at all (owner ruling, 2026-08-21 — the only sanctioned bounds are
  * per LLM call). The budget exists so two variants are provisioned identically
  * and hashed comparably, and so a runaway attempt ends instead of hanging CI. It
- * used to derive from core's former per-turn envelope constant; it now stands on
- * its own measurement, because the runtime number it borrowed no longer exists.
+ * stands on its own measurement rather than on a runtime envelope constant —
+ * there is no per-turn runtime number to borrow.
  */
 export const DEFAULT_ATTEMPT_BUDGET: AttemptBudget = {
   wallClockMs: 600_000,
@@ -104,7 +104,8 @@ export interface AttemptOutcome {
    *  and counted none. */
   tokens?: number;
   /** Exact inference requests observed by the attempt-local meter. Absent only
-   *  for an uninstrumented/legacy solver result; zero is an observed zero. */
+   *  for a solver result that carried no instrumentation; zero is an observed
+   *  zero. */
   modelCalls?: number;
   /** Largest per-turn prompt the provider actually priced over the attempt.
    *  Absent for the same reason `tokens` is; zero means the meter ran and the
@@ -196,15 +197,14 @@ export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
  *  That usage object is a provider trust boundary and its shape is
  *  version-dependent. At the provider layer ai v6 reports the NESTED
  *  `inputTokens: { total, noCache, cacheRead }` (`LanguageModelV3Usage`,
- *  @ai-sdk/provider dist/index.d.ts:1797-1818; V2's flat form is at :2673-2696,
- *  which is what the comment here used to name), while the higher-level
- *  streamText result reports the flat `LanguageModelUsage` (ai
- *  dist/index.d.ts:267-325). Both dialects are read here and the nested one is
- *  lifted onto the flat one, so `normalizeUsage` stays the ONE thing that
- *  decides what a provider reported — the first version of this added the
- *  objects together and produced the STRING "0[object Object]".
+ *  @ai-sdk/provider dist/index.d.ts:1797-1818; V2's flat form is at
+ *  :2673-2696), while the higher-level streamText result reports the flat
+ *  `LanguageModelUsage` (ai dist/index.d.ts:267-325). Both dialects are read
+ *  here and the nested one is lifted onto the flat one, so `normalizeUsage`
+ *  stays the ONE thing that decides what a provider reported — adding the two
+ *  objects together instead produces the STRING "0[object Object]".
  *
- *  What it no longer does is call an unreadable or missing field zero. A token
+ *  What it NEVER does is call an unreadable or missing field zero. A token
  *  budget that silently mis-sums is worse than no budget, and a fabricated zero
  *  is that mis-sum in its most expensive form: it prices an unmeasured attempt
  *  as free, which any comparison against a cap then reads as "inside budget". So

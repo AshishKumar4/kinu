@@ -2,13 +2,13 @@
  * KinuSandbox — Kinu's workspace container, and nothing more than the four
  * things that are Kinu's.
  *
- * The lifecycle that used to live here — the activity lease, the split start
- * sequence, supervised process and port manifests, lifecycle incidents and the
- * snapshot-chain storage — is `@kinu.run/devbox` now. It moved WHOLE rather
- * than being copied: an ephemeral container presented as a persistent machine
- * is not a Kinu idea, and two copies of that machinery would drift the moment
- * one of them was fixed. What is left below is the part no other host can
- * supply, and it is deliberately small:
+ * The lifecycle — the activity lease, the split start sequence, supervised
+ * process and port manifests, lifecycle incidents and the snapshot-chain
+ * storage — is `@kinu.run/devbox`, WHOLE and in exactly one copy: an ephemeral
+ * container presented as a persistent machine is not a Kinu idea, and two
+ * copies of that machinery would drift the moment one of them was fixed. What
+ * is left below is the part no other host can supply, and it is deliberately
+ * small:
  *
  *   * the store this workspace's state lives in (`BACKUP_BUCKET`),
  *   * the preview zone its ports are published on,
@@ -96,9 +96,8 @@ export class KinuSandbox extends Devbox<Env> {
   }
 
   /** The format the bytes in that bucket are written in. Stated here, not
-   *  inherited silently: a box that already holds bytes cannot change it, and
-   *  the decision it restates is the decisive comparison's
-   *  (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`). */
+   *  inherited silently: a box that already holds bytes cannot change it, so
+   *  the format belongs to this class rather than to a call. */
   protected override get strategy(): DevboxStrategyName {
     return DEFAULT_DEVBOX_STRATEGY;
   }

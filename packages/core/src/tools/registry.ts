@@ -101,6 +101,12 @@ export const TOOL_REACH = {
   // turns to earn a standing top-level choice.
   release: { native: false, codemode: 'release', replay: 'claimed' },
   agent: { native: false, codemode: 'agent', replay: 'claimed' },
+  // Structured workspace data. Codemode-only because a table is worked, not
+  // announced: the operations are compiled from arguments by the host store
+  // (tools/db-codemode.ts), and a program that creates a table then fills it
+  // is one call rather than eight. `claimed` because an insert repeated by a
+  // recovery replay is a second row — the same reason `memory` is claimed.
+  db: { native: false, codemode: 'db', replay: 'claimed' },
   slate: { native: false, codemode: 'workspace', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
 
@@ -250,12 +256,12 @@ export function codemodeCapabilitiesFor(
 /**
  * One role's tool surface, over BOTH places a capability can be reached.
  *
- * THE POINT IS THE SINGLE SET. Role narrowing used to be applied to the native
- * ToolSet only, while `execute_tools` built its codemode providers from
- * unfiltered deps — so a role allowed `execute_tools` and denied `agents` still
- * delegated, hired and wrote memory through `agents.*`, and the narrowing was
- * decorative for any role that kept the sandbox. Both surfaces now read the
- * same merged list, so they cannot disagree.
+ * THE POINT IS THE SINGLE SET. Both surfaces read the same merged list, so they
+ * cannot disagree. Narrow the native ToolSet alone and `execute_tools` builds
+ * its codemode providers from unfiltered deps — a role allowed `execute_tools`
+ * and denied `agents` still delegates, hires and writes memory through
+ * `agents.*`, and the narrowing is decorative for any role that keeps the
+ * sandbox.
  */
 export interface ToolSurfaceNarrowing {
   /** Whether a native tool id survives. */
@@ -330,13 +336,14 @@ export interface BuiltinToolSpec {
 }
 
 // ── Delegation doctrine (single source) ─────────────────────────────────────
-// The `agents` tool is ONE ladder with TWO rungs, and they differ on lifetime
-// and on who decides: swarm = an ephemeral search whose candidates are MEASURED
-// against a number the caller declares and which settles into this turn; hire =
-// a persistent subordinate that outlives the turn and starts from a blank
-// context; ask/send = talking to what already exists. The tool docstring
-// renders these rungs verbatim and the prompt's Delegation section indexes
-// them, so editing them here is the only place delegation doctrine changes.
+// The `agents` tool is ONE ladder with TWO rungs, and they differ on who
+// decides: swarm = an ephemeral search whose candidates are MEASURED against a
+// number the caller declares and which settles into this turn; hire = one agent
+// engaged on one workstream, whose `lifetime` says whether it answers once and
+// retires or stays in the roster across turns. msg = talking to what already
+// exists. The tool docstring renders these rungs verbatim and the prompt's
+// Delegation section indexes them, so editing them here is the only place
+// delegation doctrine changes.
 //
 // TREE SEARCH IS `swarm`, AND IT HAS EXACTLY ONE SPELLING. Every configured
 // search of any depth is `action:'swarm'`, whose candidates are scored against
@@ -349,37 +356,43 @@ export interface BuiltinToolSpec {
 //
 // NAMING, settled 2026-08-17 so it is not re-opened: the persistent rung is
 // `hire`, not `staff` and not `spawn`.
-//   `spawn` is disqualified outright — BOTH rungs spawn something, so the word
+//   `spawn` is disqualified outright — EVERY rung spawns something, so the word
 //     is exactly the information the ladder is keyed on, removed.
-//   `staff` carried the lifetime signal but takes the wrong OBJECT: you staff
+//   `staff` carries the lifetime signal but takes the wrong OBJECT: you staff
 //     an organisation and you hire a person, and this action's object is one
 //     person (`role` + `mission` → one subordinate). It was defensible only
 //     while the caller was the workspace orchestrator, where "staff the
 //     workspace" was a readable elision; a subordinate hiring its own helper
 //     has no organisation to staff, and subordinates hire now.
-//   `hire` keeps the lifetime signal (nobody hires for one turn), takes the
-//     object the call actually has, matches the workplace vocabulary the rest
-//     of this surface already uses (role, mission, roster, dismiss), and pairs
-//     with `dismiss` — hire/dismiss is a matched pair on the enum, staff/dismiss
-//     was not.
-// The cutover is total: no alias, no accepted-legacy action.
+//   `hire` takes the object the call actually has, matches the workplace
+//     vocabulary the rest of this surface already uses (role, mission, roster,
+//     dismiss), and pairs with `dismiss` — hire/dismiss is a matched pair on the
+//     enum, staff/dismiss was not.
+//
+// LIFETIME IS A FIELD: `hire` with `lifetime:'task'` answers one question over
+// the same roster a durable hire stays in; the lifetime says how long the
+// helper lives.
+//
+// ADDRESSING IS ONE VERB: `msg` takes `agent` or `event_id` and refuses both.
+// No alias, no accepted-legacy action.
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see
  *  agentsActionsFor in tools/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
-  'swarm', 'hire', 'ask', 'send', 'reply', 'list', 'dismiss',
+  'swarm', 'hire', 'msg', 'list', 'dismiss',
 ] as const;
 
 export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, three rungs, keyed on lifetime: a search is ephemeral and settles into this turn, a temporary agent lives for one question, and a subordinate persists across turns.';
+  'One delegation ladder, two rungs: a search is ephemeral and settles into this turn, and a hire is one agent whose `lifetime` decides whether it answers one question and retires or stays in your roster across turns.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
- * which rung a task wants, and the half neither rung used to state.
+ * which rung a task wants, and the half each rung's doctrine composes from here
+ * rather than wording for itself.
  *
  * Keyed by ACTION rather than written as one paragraph covering both, because
  * the two rungs need OPPOSITE instructions and a rule the model has to apply
@@ -421,7 +434,7 @@ export const DELEGATION_INHERITANCE = {
   },
   hire: {
     rung:
-      'A subordinate starts FRESH: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
+      'A hire starts FRESH at either lifetime: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
     brief:
       'It did not watch this conversation and gets only a short digest of your recent messages, so state the goal, the constraints and what finished looks like here rather than assuming shared ground.',
   },
@@ -455,45 +468,42 @@ export const DELEGATION_RUNGS = {
     // The delivery contract, stated because it changes how a caller plans the turn.
     + 'It takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you; never poll a backgrounded job or spawn it twice. '
     + 'It refuses rather than approximates: an illegal composition comes back naming the axis and what to change, and a shape no engine here can run faithfully says so instead of returning a number from a different mechanism.',
-  // The rung between the two, and it is defined by what it COSTS the caller
-  // rather than by what it is: the work happens in somebody else's window and
-  // only the answer comes back into this one. Stated before the persistent rung
-  // because it is the cheaper mistake to make — a temporary agent that should
-  // have been a hire wastes one question, while a hire that should have been a
-  // temporary agent leaves a roster row nobody retires.
-  temporary:
-    'Ask a ROLE (action=ask with `role` instead of `agent`) when you want an answer, not a colleague: it creates a full agent for that one question — its own context window, its own tool loop, this same workspace — waits for it to finish, and returns its answer here. '
-    + 'It is the rung for work that is bounded and self-contained: reading a large file or a spill path to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. '
-    + 'Name material by `context_ref` (workspace paths) rather than pasting it: the agent reads those bytes itself and they never enter your window, which is the whole saving. '
-    + 'It is not in your roster, you cannot send it a follow-up, and it is released the moment it answers — its transcript is kept. So state the whole question once; a second exchange is a hire.',
+  // ONE rung, and `lifetime` is the whole choice inside it. It used to be two
+  // actions, and the two differed on exactly one fact — how long the helper
+  // lives — so the caller had to pick a VERB to express a duration. Stating the
+  // cheap lifetime first because it is the cheaper mistake to make: a `task`
+  // hire that should have been `durable` wastes one question, while a `durable`
+  // hire that should have been `task` leaves a roster row nobody retires.
   hire:
-    'Hire a subordinate (action=hire), creating one subordinate per independent workstream and running them in parallel. A subordinate outlives this turn and keeps its own context; it starts fresh, so its mission is the whole brief. ' +
+    'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace, and `lifetime` decides how long it lives. '
+    + 'lifetime:"task" is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted "durable". '
+    + 'lifetime:"durable" (the default) outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished durable hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
-    `${DELEGATION_INHERITANCE.hire.rung} ` +
-    'It then keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
-    'A finished subordinate reports and STAYS, resumable with its context intact — dismiss only a subordinate whose role is permanently over.',
+    + `${DELEGATION_INHERITANCE.hire.rung} `
+    + 'Naming an `agent` that already exists instead of a `role` hands that agent the workstream rather than creating one, with `deliverable` saying what finished looks like.',
 } as const;
 
-/** How ask/send/reply address existing agents — the converse half of the
- *  `agents` docstring. */
+/** How `msg` addresses an agent or an inbound question — the converse half of
+ *  the `agents` docstring. */
 export const DELEGATION_CONVERSE =
-  'ask/send message any agent by name — a subordinate in this workspace or one of the owner\'s other workspace agents (ask expects the answer back, send is fire-and-forget); ' +
-  'reply answers an incoming agent message event by its event_id; hire scope=workspace creates a specialist workspace of its own. ' +
+  'msg says something to an agent without handing it a workstream: `agent` names one — a subordinate in this workspace or one of the owner\'s other workspace agents — and `event_id` answers an incoming agent message event instead. One or the other, never both. ' +
+  'hire scope=workspace creates a specialist workspace of its own. ' +
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
-// The preset doctrine USED TO BE HERE, as `SWARM_PRESET_DOCTRINE`. It now lives in
-// strategy/swarm.ts, beside the preset table it describes, and is rendered from those
-// rows rather than written alongside them.
+// The preset doctrine is NOT here. It lives in strategy/swarm.ts as
+// `SWARM_PRESET_DOCTRINE`, beside the preset table it describes, and is rendered
+// from those rows rather than written alongside them.
 //
-// The distance was the defect. This module is import-free by design, so the prose here
-// could not read the table there: it asserted that `optimise` "requires `objective`"
-// and that research/audit/redteam "require `objective` and `key`" while the table and
-// the validator were what actually decided, and the two were free to disagree. They
-// did — a live incident spent five of a model's ten steps on a call the doctrine
-// described as legal. Only the clause a renderer cannot derive is still hand-written,
+// Distance from the table is the defect that placement avoids. This module is
+// import-free by design, so prose written here cannot read the table there: it
+// would assert that `optimise` "requires `objective`" and that
+// research/audit/redteam "require `objective` and `key`" while the table and the
+// validator are what actually decide, and the two would be free to disagree. A
+// live incident spent five of a model's ten steps on a call hand-written doctrine
+// described as legal. Only the clause a renderer cannot derive is hand-written,
 // and it sits on the row itself (`SwarmPresetPoint.doctrine`).
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────
@@ -532,10 +542,10 @@ export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
 /**
  * The one wording for "the model sent a discriminant that is not in the
- * vocabulary" — shared by every native dispatcher, because they used to
- * disagree about it and the disagreement was the defect: `tasks` answered
- * `unknown tasks action 'list">'`, naming what the model typed and none of the
- * words that would have worked, so the retry repeated the mistake.
+ * vocabulary" — shared by every native dispatcher, because a per-dispatcher
+ * wording is free to drop the half that matters: `unknown tasks action 'list">'`
+ * names what the model typed and none of the words that would have worked, so
+ * the retry repeats the mistake.
  *
  * Both halves earn their place. The vocabulary is what makes the next call
  * succeed. The echo is what tells the model WHICH of its arguments was wrong
@@ -754,8 +764,8 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.temporary} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
-    // The same three facts as positives. This field's LABEL still frames them
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+    // The same facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
     // prohibitions, and this was the one delegation surface that read as one.
@@ -765,8 +775,8 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse:
       'A single short coherent change is yours to make directly. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result:
-      'hire/dismiss return roster state. '
-      + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
+      'A durable hire and dismiss return roster state; a lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. '
+      + 'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
       // The result half is stated because a swarm's answer is not the only thing it
       // carries, and the two extra fields are the ones a caller must not skip: the
@@ -814,7 +824,7 @@ export const BUILTIN_TOOL_SPECS = {
     whenNotToUse: 'Do not use for things you already know. Do not fetch private or internal addresses; they are blocked.',
     result:
       'search returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected). '
-      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file in ranges, or hand its path to a temporary agent as `context_ref` on agents ask.',
+      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file in ranges, or name the path in the message of a lifetime:"task" hire so that agent reads it instead of you.',
     example: "web({action:'search', query:'durable objects sqlite storage limits'})",
   },
   report: {

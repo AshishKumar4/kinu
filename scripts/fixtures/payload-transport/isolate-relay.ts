@@ -2,25 +2,23 @@
  * THE ISOLATE RELAY THIS INSTRUMENT PRICES: pull a container file out through
  * the owning Durable Object and upload it from there.
  *
- * IT LIVES HERE BECAUSE THE PRODUCT NO LONGER HAS IT. This was
- * `packages/devbox/src/object-store.ts`'s `putStream`, and the `do-base64` arm
- * called it so the number would be devbox's own rather than a copy's. The
- * instrument answered on 2026-09-01: 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB
- * through the isolate, against 23.22 and 39.00 MiB/s for the same bytes moved
- * by the container itself. The snapshot chain now writes its archive through a
- * store mount, the isolate-side upload is deleted from the product, and the arm
- * keeps this shape as the baseline that removal is measured against. So the
- * shape moved to the arm that still measures it.
+ * IT LIVES HERE BECAUSE THE PRODUCT DOES NOT CARRY IT. devbox's snapshot chain
+ * writes its archive through a store mount, so there is no isolate-side upload
+ * in `packages/devbox/src/object-store.ts`; this file holds that shape as the
+ * baseline the mount path is measured against, and the `do-base64` arm calls it
+ * so the number is devbox's own rather than a copy's. The instrument answered
+ * on 2026-09-01: 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB through the isolate,
+ * against 23.22 and 39.00 MiB/s for the same bytes moved by the container
+ * itself.
  *
  * NOTHING IN THE PRODUCT MAY IMPORT THIS. A devbox that carries payload through
- * its own isolate is the defect the mount path removed; this file is a fixture,
+ * its own isolate is the defect the mount path removes; this file is a fixture,
  * and `scripts/payload-transport.test.ts` holds it to that.
  *
- * WHAT IS UNCHANGED FROM THE PRODUCT COPY: the routing boundary, the part
- * geometry, and the digest taken over the bytes as they pass. Only the two
- * pass-through parameters no caller here supplies — R2 put options and the
- * multipart registry hook — are gone, because a dead parameter is a dead
- * declaration.
+ * WHAT IT KEEPS, so the baseline prices the real thing: the routing boundary,
+ * the part geometry, and the digest taken over the bytes as they pass. It
+ * carries no R2 put options and no multipart registry hook, because no caller
+ * here supplies them and a dead parameter is a dead declaration.
  */
 
 import { createHash } from 'node:crypto';

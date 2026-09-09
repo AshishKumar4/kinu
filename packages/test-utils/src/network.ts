@@ -108,11 +108,11 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
 //
 // A provider contract test asserts what went OUT, but it still has to let the
 // call come back: a body the SDK cannot parse makes `generateText` reject, and
-// the tests used to absorb that rejection — which meant a provider that broke
-// on the way back looked identical to one that worked. These are the smallest
-// bodies each wire shape actually parses (measured against the installed SDK,
-// not copied from the API reference), so a contract test can await the call and
-// let any real failure through.
+// a test that absorbs that rejection makes a provider that broke on the way
+// back look identical to one that worked. These are the smallest bodies each
+// wire shape actually parses (measured against the installed SDK, not copied
+// from the API reference), so a contract test can await the call and let any
+// real failure through.
 
 /** OpenAI Responses API (`POST /v1/responses`) — the OpenAI and Codex surface. */
 export const OPENAI_RESPONSES_BODY = {

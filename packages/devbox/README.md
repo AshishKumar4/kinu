@@ -55,9 +55,7 @@ a deadline argument.
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
 so tests can pin the reasoning without the platform.
 
-## Storage strategies
-
-### `snapshot-chain`
+## Storage
 
 The chain is one immutable base plus one cumulative delta, both squashfs archives
 in R2, attached as lazy FUSE layers. The first checkpoint archives the work
@@ -83,16 +81,16 @@ the previous generation's layers are still mounted.
 A record names two generations: the one it serves, and one fallback. A rebase
 writes a new generation and keeps the outgoing one. The attach that mounts the
 new generation proves it, and only then does the old one become garbage. So a
-restore always has a second candidate, and garbage collection cannot remove the
-last proven copy before its replacement is proven.
+restore always has a second generation to fall back to, and garbage collection
+cannot remove the last proven copy before its replacement is proven.
 
-Attach reads the two candidates newest first. It compares the size the record
+Attach reads the two generations newest first. It compares the size the record
 declares against the size the store holds, compares the layer's identity the
 same way, then mounts. If the newest generation is missing, or its archive is
 not the one the record describes, attach records the refusal on the state row,
 promotes the fallback in one write, and serves it. The event line says which
-generation recovered. If both candidates fail, the start fails with both reasons
-and deletes neither.
+generation recovered. If both fail, the start fails with both reasons and
+deletes neither.
 
 Each layer carries two identities. The first is the SHA-256 of the bytes that
 landed: Devbox takes it while the upload streams, so it costs one CPU pass and
@@ -141,48 +139,11 @@ A chain is written only after a mount proves its mode. Its stored attach
 postcondition is strict: a chain-mode record must end as an overlay or attach
 throws.
 
-### `r2fs`
-
-`r2fs` mounts the box's R2 prefix with s3fs over a disk cache. It has no archive
-or restore. Attach is a mount, so it is fast whatever the prefix holds.
-
-- A write becomes durable when the writer closes it. s3fs buffers locally and
-  uploads on release. An open file loses unclosed data when the container stops.
-  The chain can archive its upper directory with an open handle.
-- `sync` pushes dirty pages into s3fs, but s3fs uploads only on close. A
-  checkpoint commits closed files, never open files, and reports bytes held in
-  the prefix rather than bytes moved.
-- Reads use cache while the entity tag matches, then R2. Metadata caches for
-  `stat_cache_expire` seconds.
-- `rename` copies then deletes. It is not atomic and costs object bytes.
-- One prefix has one writer. Two containers on it lose each other's writes.
-
-`use_cache` avoids an R2 request for every read. The options set
-`stat_cache_expire=300`, `max_stat_cache_size=200000`, `enable_noobj_cache`,
-`multipart_size=16`, `parallel_count=20`, `ensure_diskfree=1024`, and
-`del_cache`. The cache and work directory share one disk. s3fs sets no cache
-limit, so an unbounded cache fills the disk and an unrelated write fails with
-ENOSPC.
-
-The shipped s3fs 1.90 rejects `compat_dir` with
-`fuse: unknown option 'compat_dir'`; its requested behaviour is already the
-default. `notsup_compat_dir` disables that default, making an R2-binding-written
-prefix read empty. The SDK adds `use_path_request_style`, `url`, `ahbe_conf`,
-and `ro` after caller options, so Devbox does not pass them.
-
-### `overlay-cas`
-
-`overlay-cas` mounts its materialized `tree/` read-only as a lower layer and a
-fresh native fuse-overlayfs upper over it. Attach replays only journal entries
-newer than the folded cursor, so recovery costs the pending change.
-
-A tick scans the upper, stages chunk blobs, then appends one journal object per
-batch of 64 entries, blob before journal. Class-A cost is new blobs plus
-`ceil(p / 64)`, not one `PUT` per changed path. This suits npm-shaped ticks that
-touch thousands of paths but few bytes.
-
-`overlay-cas.test.ts` red-tests one `PUT` per batch. The deployed cost remains
-unmeasured: no deployed run has observed batching.
+The workspace therefore relies on an upper layer that honours writable
+`MAP_SHARED` mappings, which SQLite's WAL mode needs for its shared-memory
+index: `tests/workspace-mount-contract.test.ts` holds that contract against the
+shipped image, and against a FUSE fixture that refuses it to prove the case can
+go red.
 
 ## Platform constraints
 
@@ -219,10 +180,10 @@ destroys nothing, and refuses again if the attach fails again. Any attach that
 lands deletes the row.
 
 ONE BUDGET covers the whole restoration: the attach, the workload restart, each
-listener proof, each exposure, and the boot stamp. Only `attach()` used to be
-wrapped, and the listener proof carried a window per port, so three silent ports
-added about ninety seconds while every caller waited in the readiness gate and
-nothing bounded the total. Each step now draws an allowance — what is left divided
+listener proof, each exposure, and the boot stamp. Wrapping `attach()` alone,
+with the listener proof carrying a window per port, leaves three silent ports
+adding about ninety seconds while every caller waits in the readiness gate and
+nothing bounds the total. Each step draws an allowance — what is left divided
 by the steps still declared, every probe and exposure and the boot stamp included
 — so no one step can spend what the rest still need, and nothing is reserved.
 
@@ -254,9 +215,10 @@ and destroys no identity.
 local kernel-overlay tests, then failed deployed with `produced an overlay whose
 upper directory (unnamed) does not exist`. Devbox asks the mount line only if it
 is mounted and overlay-family. The strategy verifies its chosen upper directory
-by direct probe and reads the delta there. Chain matches `overlay`; r2fs matches
-`s3fs`, because `fuse.fuse-overlayfs` and `fuse.s3fs` are distinct mechanisms.
-A generic `fuse` test would let either strategy claim the other's box.
+by direct probe and reads the delta there. A mount is the workspace's only if
+its filesystem is overlay-family: `fuse.fuse-overlayfs` and `fuse.s3fs` are
+distinct mechanisms, and a generic `fuse` test would read a store mount as the
+workspace.
 
 The activity lease prevents only our own inactivity sleep. I held a probe box
 through an 11-minute true idle. The final tick was
@@ -272,10 +234,10 @@ instance the durable state expects. Replacement is a platform fact, not a
 package failure.
 
 Three of four schedule rows re-arm themselves. A broken chain does not restart
-itself. Devbox now arms all three initial rows because `devboxHeartbeat` cannot
+itself. Devbox arms all three initial rows because `devboxHeartbeat` cannot
 supply its own first link. Its idempotence guard counts only strictly-future
 rows: the SDK retains a fired row until its callback returns, so counting the
-active row used to suppress its successor.
+active row would suppress its successor.
 
 Devbox never enables `setKeepAlive(true)`. The SDK alarm loop's activity branch
 returns without an alarm. With keepAlive on, `onActivityExpired` logs, then an
@@ -300,10 +262,10 @@ a baseline, content counts as change.
 packages/devbox` exits 0. Each suite passes standalone, and their standalone
 counts equal the directory total.
 
-NO TEST COUNT IS RECORDED HERE, deliberately. This file used to carry one, and it
-was wrong within the hour every time: two runs of the same commit minutes apart
-gave different totals while suites landed around it, so the number measured the
-moment it was written rather than the package. Run the command; it answers with
+NO TEST COUNT IS RECORDED HERE, deliberately. A count written here is wrong
+within the hour: two runs of the same commit minutes apart gave different totals
+while suites landed around them, so the number measures the moment it was
+written rather than the package. Run the command; it answers with
 today's total. What is worth writing down is which suite pins WHAT, which is what
 follows.
 
@@ -320,8 +282,10 @@ follows.
   postconditions, unattached checkpoint refusal, archive scope, generation
   retention, and fallback recovery. Its denominator tests make an unexercised
   outcome kind fail.
-- `overlay-cas.test.ts` covers journal folding, replay cursor, chunk staging,
-  and blob-before-journal order. `r2fs.test.ts` covers the mount strategy.
+- `strategy-conformance.test.ts` drives the shipped adapter through its own
+  production ports over a durable store and a container disk a replacement
+  blanks, dying at each commit sub-step. `workspace-mount-contract.test.ts`
+  holds the mmap and WAL contract below against the real image.
 - `independence.test.ts` rejects product-core imports and workspace dependencies;
   its third test proves the check can fail.
 - `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this

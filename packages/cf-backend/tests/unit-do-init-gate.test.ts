@@ -36,19 +36,18 @@ mockAgentsSdk();
 // real `agents` dist reaches `cloudflare:*`, so the SDK mock must be registered
 // before these modules evaluate, and a static import would hoist above it.
 const { OrchestratorAgent } = await import('../src/orchestrator');
-const { SubordinateAgent } = await import('../src/subordinate-agent');
 
 /** Every Kinu class whose `onStart` runs inside `blockConcurrencyWhile`,
  *  with the shape its gate is ALLOWED to have. The orchestrator is async by
  *  the owner's 2026-08-31 ruling — bounded once-per-start work stays in the
  *  gate, concretely the workspace boot — and `gate:do-init` holds every await
- *  in it to the pinned admitted list. The facet class stays synchronous in
- *  every mode: its activation is DDL plus a detached fiber, whatever seed it
- *  later takes. UserDO declares no override, MonitorDO is a plain DurableObject
- *  with no partyserver gate, and KinuSandbox is a third-party base. */
+ *  in it to the pinned admitted list. The inventory is ONE class — hired
+ *  children are hosted actors with no activation of their own — and a second
+ *  Durable Object class added later must add its entry here. UserDO declares
+ *  no override, MonitorDO is a plain DurableObject with no partyserver gate,
+ *  and KinuSandbox is a third-party base. */
 const GATED_CLASSES = [
   ['OrchestratorAgent', OrchestratorAgent, 'AsyncFunction'],
-  ['SubordinateAgent', SubordinateAgent, 'Function'],
 ] as const;
 
 describe('no Durable Object awaits anything unadmitted inside its init gate', () => {
@@ -85,9 +84,7 @@ describe('the scaffold precondition moved to the turn, and is still reached', ()
     // Two `onStart` copies collapsed into one call on the turn path; a second
     // declaration would be the duplication that produced them.
     expect(actor.match(/ensureOwnedScaffold\(\): Promise<void>/g)).toHaveLength(1);
-    for (const file of ['orchestrator.ts', 'subordinate-agent.ts']) {
-      const source = readFileSync(join(import.meta.dir, '..', 'src', file), 'utf8');
-      expect(source).not.toContain('ensureOwnedScaffold(): Promise<void>');
-    }
+    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+    expect(orchestrator).not.toContain('ensureOwnedScaffold(): Promise<void>');
   });
 });

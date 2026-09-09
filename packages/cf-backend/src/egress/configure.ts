@@ -4,13 +4,12 @@
  *
  * APPLYING it belongs to `KinuSandbox.configureEgress`, which is the Durable
  * Object that owns the container and the only place the two handlers may be
- * bound in the one order that is safe. This module used to bind them too,
- * through a narrow `OutboundConfigurable` interface, and that second path is
- * what left the workspace name unpinned: the DO method wrote the name and
- * nothing called it, while the live path bound the handlers without it. Both
- * host hooks that need the name — telling the agent its container failed, and
- * asking the workspace whether background work still holds it — were dead as a
- * result. One writer now.
+ * bound in the one order that is safe. A second binding path here — through a
+ * narrow `OutboundConfigurable` interface — is what leaves the workspace name
+ * unpinned: the DO method writes the name and nothing calls it, while the live
+ * path binds the handlers without it, and both host hooks that need the name —
+ * telling the agent its container failed, and asking the workspace whether
+ * background work still holds it — go dead. ONE writer.
  *
  * WHEN it is applied belongs to the sandbox handle adapter
  * (`sandbox-exec-lane.ts`), which runs it before any operation that can make

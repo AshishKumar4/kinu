@@ -83,10 +83,11 @@ import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  type LLMProviderConfig, type RunEvent,
+  type EvalBudget, type LLMProviderConfig, type RunEvent,
 } from '../../packages/core/src/index';
 import {
-  EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents, outcomeRow, projectRunEventProvenance,
+  budgetRow, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents, measuredToolErrorRate,
+  outcomeRow, outputCapRow, projectRunEventProvenance, stepBoundEvidence,
   publishRunRecord, reportLiveModelSpend, retainEpisodeTranscript, withEpisodeEvidence,
   subgoalOutcome, subgoalsOutcome, TASK_OUTCOME,
   compareRunEventOrder, INFRA_FAILURE_MARKER,
@@ -175,6 +176,11 @@ interface TrajectoryCase {
   /** A correction submitted while `turns[0]` is still running, when the case is
    *  about steering. */
   readonly steer?: string;
+  /** What the whole episode may spend. Same four ceilings the behaviour arm
+   *  scores, so a public-plane episode and a local episode cost in the same
+   *  currency. First sizing from the two-turn shape; the recorded `measured`
+   *  re-sizes it. */
+  readonly budget: EvalBudget;
   /** The machine-checkable subgoals, over the workspace and the ledger the
    *  public surfaces expose. */
   verify(input: {
@@ -211,6 +217,19 @@ const RecoveryTestRunSchema = v.object({
   command: v.literal(RECOVERY_TEST_COMMAND),
   runtime: v.optional(v.literal('workspace')),
 });
+/**
+ * What one public-plane episode may spend. Wider than the local single-turn
+ * ceilings because every case here is two turns through a deployed workspace —
+ * two prompts, two settlements, network between the runner and the plane. Same
+ * first-sizing honesty as the other tiers: sized not to fire on a competent
+ * episode, re-sized from the recorded `measured`.
+ */
+const PUBLIC_BUDGET: EvalBudget = {
+  steps: 60,
+  tokens: 300_000,
+  toolErrorRate: 0.5,
+  wallMs: 1_200_000,
+};
 
 const CASES: readonly TrajectoryCase[] = [
   {
@@ -222,6 +241,7 @@ const CASES: readonly TrajectoryCase[] = [
       + 'public-artifact.txt. Then reply with only the word DONE.',
       'Read public-artifact.txt back with your file tool and reply with only its exact contents.',
     ],
+    budget: { ...PUBLIC_BUDGET },
     async verify({ session, events, history }) {
       const bytes = await session.readFile('public-artifact.txt', { allowMissing: true });
       const answers = history.filter((row) => row.role === 'assistant');
@@ -266,6 +286,7 @@ const CASES: readonly TrajectoryCase[] = [
     ],
     steer: `Correction before you finish: write the one-line version into notes/steered.txt `
       + `instead of notes/short.txt, and make its first line exactly ${STEER_MARKER}.`,
+    budget: { ...PUBLIC_BUDGET },
     async verify({ session, events, steerLanding, history }) {
       const steered = await session.readFile('notes/steered.txt', { allowMissing: true });
       const wal = await session.readFile('notes/wal.txt', { allowMissing: true });
@@ -314,6 +335,7 @@ const CASES: readonly TrajectoryCase[] = [
       `Fix the bug in broken.ts so that test passes, run \`${RECOVERY_TEST_COMMAND}\` again, and `
       + 'reply with only PASS or FAIL.',
     ],
+    budget: { ...PUBLIC_BUDGET },
     async verify({ session, events, history }) {
       const originalTests = await session.readFile('broken.test.ts', { allowMissing: true });
       const result = await session.execute('workspace', RECOVERY_TEST_COMMAND);
@@ -353,6 +375,92 @@ const CASES: readonly TrajectoryCase[] = [
       ];
     },
   },
+  {
+    id: 'public-memory-across-turns',
+    purpose: 'An assistant that writes down what it must not forget and reads it back in a later turn.',
+    seed: [],
+    turns: [
+      'Save this note with your memory tool (action=save): `The BLUEBIRD protocol requires '
+      + 'a quorum of three relays before failover.` Reply with only DONE.',
+      'Search your memory (action=search) for BLUEBIRD. If the search finds the note, write '
+      + 'the single word BLUEBIRD into found-public.txt with your file tool. Reply with only DONE.',
+    ],
+    budget: { ...PUBLIC_BUDGET },
+    async verify({ session, events }) {
+      const found = await session.readFile('found-public.txt', { allowMissing: true });
+      const saves = promptToolCalls(events, this.turns[0])
+        .filter((call) => toolActionOn(call, 'memory', 'save'));
+      const searches = promptToolCalls(events, this.turns[1])
+        .filter((call) => toolActionOn(call, 'memory', 'search'));
+      requireMeasuredToolOutcomes(saves);
+      requireMeasuredToolOutcomes(searches);
+      const writes = promptToolCalls(events, this.turns[1])
+        .filter((call) => fileActionOn(call, 'write', 'found-public.txt'));
+      return [
+        {
+          what: 'saved-first-turn',
+          reached: saves.length > 0,
+          detail: `${String(saves.length)} memory save(s) in the first prompt's run`,
+        },
+        {
+          what: 'searched-second-turn',
+          reached: searches.length > 0,
+          detail: `${String(searches.length)} memory search(es) in the second prompt's run`,
+        },
+        {
+          what: 'retrieved',
+          reached: found.trim() === 'BLUEBIRD' && writes.length > 0,
+          detail: `found-public.txt over the files route: ${JSON.stringify(found.slice(0, 120))}`,
+        },
+      ];
+    },
+  },
+  {
+    id: 'public-tasks-across-turns',
+    purpose: 'An assistant that tracks multi-step work in its task list and closes it out.',
+    seed: [],
+    turns: [
+      'Track this job with your tasks tool: add two tasks titled public-first and public-second '
+      + '(action=add). Reply with only DONE.',
+      'Mark public-first done with your tasks tool (action=update), using the id from the add '
+      + 'result. Then list the tasks (action=list) and write exactly public-first:done into '
+      + 'status-public.txt with your file tool. Reply with only DONE.',
+    ],
+    budget: { ...PUBLIC_BUDGET },
+    async verify({ session, events }) {
+      const status = await session.readFile('status-public.txt', { allowMissing: true });
+      const adds = promptToolCalls(events, this.turns[0])
+        .filter((call) => toolActionOn(call, 'tasks', 'add'));
+      const second = promptToolCalls(events, this.turns[1]);
+      const updates = second.filter((call) => toolActionOn(call, 'tasks', 'update'));
+      const lists = second.filter((call) => toolActionOn(call, 'tasks', 'list'));
+      requireMeasuredToolOutcomes(adds);
+      requireMeasuredToolOutcomes(second.filter((call) => call.name === 'tasks'));
+      const writes = second.filter((call) => fileActionOn(call, 'write', 'status-public.txt'));
+      return [
+        {
+          what: 'added-first-turn',
+          reached: adds.length > 0,
+          detail: `${String(adds.length)} tasks add(s) in the first prompt's run`,
+        },
+        {
+          what: 'updated-second-turn',
+          reached: updates.length > 0,
+          detail: `${String(updates.length)} tasks update(s) in the second prompt's run`,
+        },
+        {
+          what: 'listed-second-turn',
+          reached: lists.length > 0,
+          detail: `${String(lists.length)} tasks list(s) in the second prompt's run`,
+        },
+        {
+          what: 'transcribed',
+          reached: status.trim() === 'public-first:done' && writes.length > 0,
+          detail: `status-public.txt over the files route: ${JSON.stringify(status.slice(0, 120))}`,
+        },
+      ];
+    },
+  },
 ];
 
 const DECLARED = CASES.map((entry) => entry.id);
@@ -379,6 +487,19 @@ function fileActionOn(
   if (!args.success || args.output.action !== action) return false;
   const actual = posix.normalize(args.output.path);
   return actual === path || actual === `/${path}`;
+}
+
+const ToolActionSchema = v.object({ action: v.string() });
+
+/** A successful call of a named ACTION on a native tool (`memory` save, `tasks`
+ *  list): the file helper above plus the path it needs, for tools whose calls
+ *  carry no path. Attribution required — an unmeasured row proves nothing. */
+function toolActionOn(
+  call: Extract<RunEvent, { type: 'tool_call_end' }>, tool: string, action: string,
+): boolean {
+  if (call.name !== tool || call.outcome?.success !== true) return false;
+  const args = v.safeParse(ToolActionSchema, call.args);
+  return args.success && args.output.action === action;
 }
 
 function isRecoveryTestRun(call: Extract<RunEvent, { type: 'tool_call_end' }>): boolean {
@@ -429,6 +550,11 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     for (const entry of CASES) {
       expect(entry.turns.length, `${entry.id} is not multi-turn`).toBeGreaterThanOrEqual(2);
       expect(entry.purpose.length).toBeGreaterThan(20);
+      // Cost without a ceiling is a number nobody can hold anything to. The
+      // live path scores every episode against this, so a case without one
+      // would record spend it can never judge. Presence, not sizing: re-sizing
+      // a ceiling from the run record must never break this guard.
+      expect(Object.keys(entry.budget).length, `${entry.id} declares no budget`).toBeGreaterThan(0);
     }
     // The mechanisms only a conversation has, each covered by exactly one case:
     // a steer that arrives mid-turn, and a failure that turn two repairs.
@@ -464,13 +590,13 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       ? { ...event, error: undefined, result: ARTIFACT_MARKER, outcome: { success: true } } : event);
     const read = await entry.verify({ ...input, events: corrected });
     expect(read.every((subgoal) => subgoal.reached)).toBe(true);
-    const legacy = corrected.map((event): RunEvent => {
+    const noOutcome = corrected.map((event): RunEvent => {
       if (event.type !== 'tool_call_end') return event;
       const { outcome: _outcome, ...withoutOutcome } = event;
       return withoutOutcome;
     });
-    await expect(entry.verify({ ...input, events: legacy })).rejects.toThrow('unmeasured');
-    expect(ledgerTotalsFromEvents(legacy).toolCalls).toBe(2);
+    await expect(entry.verify({ ...input, events: noOutcome })).rejects.toThrow('unmeasured');
+    expect(ledgerTotalsFromEvents(noOutcome).toolCalls).toBe(2);
   });
 
   test('a steering answer cannot invent the other file it lists', async () => {
@@ -539,6 +665,85 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('memory persists across turns only when both turns use the tool', async () => {
+    const entry = CASES.find((candidate) => candidate.id === 'public-memory-across-turns');
+    if (!entry) throw new Error('missing memory case');
+    const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
+      type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
+      agentId: 'eval-public', userMessage: entry.turns[turn],
+    });
+    const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
+      type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
+      name, toolCallId: `${runId}-${action}`,
+      args: path === undefined ? { action } : { action, path },
+      outcome: { success: true },
+    });
+    const events: RunEvent[] = [
+      turnRun('save', 0, '01'),
+      toolRow('save', '02', 'memory', 'save'),
+      turnRun('find', 1, '03'),
+      toolRow('find', '04', 'memory', 'search'),
+      toolRow('find', '05', 'file', 'write', 'found-public.txt'),
+    ];
+    const input = {
+      session: {
+        readFile: async () => 'BLUEBIRD',
+        execute: async () => ({ exitCode: 0 }),
+      },
+      events, steerLanding: null, history: [],
+    };
+    const happy = await entry.verify(input);
+    expect(happy.every((subgoal) => subgoal.reached)).toBe(true);
+    // The note saved but never searched: the second turn's behaviour is
+    // missing even though the artifact exists, so only the retrieval half holds.
+    const unsearched = events.filter((event) => event.type !== 'tool_call_end'
+      || event.runId !== 'find' || event.name !== 'memory');
+    const partial = await entry.verify({ ...input, events: unsearched });
+    expect(partial.find((subgoal) => subgoal.what === 'saved-first-turn')?.reached).toBe(true);
+    expect(partial.find((subgoal) => subgoal.what === 'searched-second-turn')?.reached).toBe(false);
+    expect(partial.find((subgoal) => subgoal.what === 'retrieved')?.reached).toBe(true);
+  });
+
+  test('a task list transcribed without listing is not evidence', async () => {
+    const entry = CASES.find((candidate) => candidate.id === 'public-tasks-across-turns');
+    if (!entry) throw new Error('missing tasks case');
+    const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
+      type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
+      agentId: 'eval-public', userMessage: entry.turns[turn],
+    });
+    const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
+      type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
+      name, toolCallId: `${runId}-${action}`,
+      args: path === undefined ? { action } : { action, path },
+      outcome: { success: true },
+    });
+    const events: RunEvent[] = [
+      turnRun('plan', 0, '01'),
+      toolRow('plan', '02', 'tasks', 'add'),
+      turnRun('close', 1, '03'),
+      toolRow('close', '04', 'tasks', 'update'),
+      toolRow('close', '05', 'tasks', 'list'),
+      toolRow('close', '06', 'file', 'write', 'status-public.txt'),
+    ];
+    const input = {
+      session: {
+        readFile: async () => 'public-first:done',
+        execute: async () => ({ exitCode: 0 }),
+      },
+      events, steerLanding: null, history: [],
+    };
+    const happy = await entry.verify(input);
+    expect(happy.every((subgoal) => subgoal.reached)).toBe(true);
+    // Updated and transcribed but never listed: the agent closed work it never
+    // re-read, so the listing subgoal misses while the rest hold.
+    const unlisted = events.filter((event) => !isToolCallEnd(event) || !toolActionOn(event, 'tasks', 'list'));
+    const partial = await entry.verify({ ...input, events: unlisted });
+    expect(partial.find((subgoal) => subgoal.what === 'added-first-turn')?.reached).toBe(true);
+    expect(partial.find((subgoal) => subgoal.what === 'updated-second-turn')?.reached).toBe(true);
+    expect(partial.find((subgoal) => subgoal.what === 'listed-second-turn')?.reached).toBe(false);
+    expect(partial.find((subgoal) => subgoal.what === 'transcribed')?.reached).toBe(true);
   });
 
   /**
@@ -644,7 +849,22 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // so a missed subgoal can be read back from what the trajectory did.
         const retained = retainEpisodeTranscript(TRANSCRIPTS, entry.id, { events, history, subgoals });
         const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
-        const scores: EvalScoreRow[] = [outcomeRow(outcome), ...scorePublicLedger(events)];
+        const mechanisms = scorePublicLedger(events);
+        // Same currency as the local arm: the episode's cost beside whether it
+        // solved the case. The error rate is the `tool_outcomes` row in the
+        // array above, read off it rather than recomputed.
+        const budget = budgetRow(entry.budget, {
+          steps: totals.steps,
+          tokens: totals.tokensIn + totals.tokensOut,
+          toolErrorRate: measuredToolErrorRate(mechanisms),
+          wallMs: Date.now() - startedAt,
+        });
+        // The same cap verdict the local arm carries, over the deployment's own
+        // events: an episode the provider cut is scored on a truncated answer,
+        // and the public plane is where a cut is easiest to misread as the web
+        // client dropping a frame.
+        const cap = outputCapRow(stepBoundEvidence(events).lastStepReason);
+        const scores: EvalScoreRow[] = [outcomeRow(outcome), ...mechanisms, cap, budget];
 
         // The observation FIRST, so a missed subgoal still reaches the record
         // with what the trajectory did — a record that only accumulates

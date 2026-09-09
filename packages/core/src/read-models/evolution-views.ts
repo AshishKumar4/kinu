@@ -11,6 +11,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';
@@ -44,15 +45,19 @@ const MAX_CHANGELOG_LIMIT = 200;
 /** The "what I changed about myself" digest, assembled on demand from the
  *  durable ledgers — no second event system. */
 export function getEvolutionChangelog(
-  config: AgentConfigStore,
   sql: SqlExecutor,
+  actor: ActorHandle,
   limit = DEFAULT_CHANGELOG_LIMIT,
 ): EvolutionChangelogView {
-  const seenAt = config.getChangelogSeenAt();
+  // The seen marker is a key on this actor's own config store, so the handle is
+  // the only thing either read needs. Taking a separate `AgentConfigStore`
+  // beside the scoped `sql` let a caller pair one actor's marker with another
+  // actor's ledgers, and nothing in the types could catch it.
+  const seenAt = actor.config.getChangelogSeenAt();
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
   return {
-    entries: buildChangelog(sql, { limit: page }),
-    unseenCount: countUnseenChangelog(sql, seenAt),
+    entries: buildChangelog(sql, actor, { limit: page }),
+    unseenCount: countUnseenChangelog(sql, actor, seenAt),
     seenAt,
   };
 }
@@ -61,8 +66,8 @@ export function getEvolutionChangelog(
  *  the owner has not read yet. The needs-you queue's one row is built from it,
  *  so the queue and the journal below it can never disagree about what exists:
  *  they are the same entries, filtered by the same marker. */
-export function getUnseenChangelog(config: AgentConfigStore, sql: SqlExecutor): ChangelogEntry[] {
-  return listUnseenChangelog(sql, config.getChangelogSeenAt());
+export function getUnseenChangelog(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
+  return listUnseenChangelog(sql, actor, actor.config.getChangelogSeenAt());
 }
 
 /** The operator viewed the changelog — zero the unseen badge. */
@@ -74,6 +79,8 @@ export function markChangelogSeen(config: AgentConfigStore) {
 
 export interface TakePickDeps {
   readonly sql: SqlExecutor;
+  /** The actor whose scaffold lineage and take ledger this pick answers for. */
+  readonly actor: ActorHandle;
   readonly engine: EvolutionEngine;
   readonly signals: SignalDeliverer;
 }
@@ -93,9 +100,9 @@ export async function pickAlternateTake(
   if (!takeId || !nodeId) {
     throw new Error('pickAlternateTake requires takeId and nodeId');
   }
-  const record = recordTakePick(deps.sql, {
+  const record = recordTakePick(deps.sql, deps.actor, {
     takeId, nodeId,
-    scaffoldVersion: getCurrentScaffoldVersion(deps.sql),
+    scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
   });
   try {
     await deps.engine.applyTakePick(record.set.turnId, record.outcome);
