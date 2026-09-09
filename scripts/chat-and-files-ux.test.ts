@@ -1387,17 +1387,41 @@ describe('history and roster request generations at actual hook boundaries', () 
       const page = await browser.newPage();
       await page.goto(`${origin}/gallery.html?frame=rosterauthority`, { waitUntil: 'networkidle0' });
       await page.click('[data-roster-local-rename]');
+      // POSITIVE FIRST: the local transition really landed.
       await page.waitForFunction(
         () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
         { timeout: 10_000 },
       );
       await page.click('[data-roster-release]');
-      // The old server row spells "Checkout coupon bug". Once released it must
-      // remain stale and cannot reclaim the public local transition.
-      await page.waitForFunction(
-        () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
-        { timeout: 10_000 },
-      );
+
+      // The old server row spells "Checkout coupon bug", and the local edit
+      // retired every read in flight, so the released list must publish
+      // NOTHING. That is a claim about something NOT happening, and the proof
+      // cannot be another `waitForFunction` on the rename: that condition is
+      // already true, returns at once, and passed whatever the roster did
+      // next. It cannot be a task-queue drain either — the publish rides
+      // `startTransition`, which React is free to defer past any number of
+      // turns, so a short drain reports "not yet" as "never".
+      //
+      // So the window is explicit and the observation is the timeout: watch
+      // FOR THE CLOBBER, bounded, and require that it never arrives. Under a
+      // roster that failed to retire the read, the stale spelling appears well
+      // inside this window and the case fails naming it. Only the window
+      // running out means "never"; a crashed page or a detached frame is a
+      // different failure and must not read as a pass.
+      let clobbered = true;
+      try {
+        await page.waitForFunction(
+          () => document.querySelector('[data-roster-probe]')?.textContent?.includes('Checkout coupon bug') === true,
+          { timeout: 5_000 },
+        );
+      } catch (cause) {
+        if (!(cause instanceof TimeoutError)) throw cause;
+        clobbered = false;
+      }
+      expect(clobbered).toBe(false);
+      expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
+        .toBe('checkout-fixes:Renamed locally');
       await page.close();
     });
   }, 240_000);

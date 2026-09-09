@@ -1,15 +1,23 @@
 /** Chat-error surface wiring (the "UI shows nothing on error frames" P0).
- *  No DOM harness exists in this repo, so — like unit-turn-pipeline-
- *  correctness — these assert the load-bearing seams in source: both error
- *  channels feed one exposed chat-error state, the on-connect terminal
- *  replay (dropped by the ws transport's request-id filter) is caught in the
- *  raw onMessage handler, and WorkspacePage renders the card with retry.
- *  The interactive behavior needs a browser check (see the fix report). */
+ *
+ *  The REPLAY RULE is behavioural: `terminalChatError` is the decision the raw
+ *  `onMessage` handler makes, extracted so an inverted comparison fails a test
+ *  instead of leaving the expected characters in place. See
+ *  `src/hooks/chat-turn-error.ts`.
+ *
+ *  The rest is still asserted in source, because no DOM harness exists in this
+ *  repo and the remaining seams are React effect wiring — a `setChatError(null)`
+ *  inside the send path and inside the workspace-switch effect, and the names
+ *  the hook returns. Those anchors are `between`, which THROWS on a rename
+ *  rather than silently slicing an empty region. The card's rendered behaviour
+ *  is covered for real by the browser tier: `scripts/chat-and-files-ux.test.ts`
+ *  reads the live and replayed headings off the mounted card. */
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { between } from '@kinu.run/test-utils';
+import { terminalChatError, UNKNOWN_TURN_FAILURE } from '../src/hooks/chat-turn-error';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-kinu.ts'), 'utf8');
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
@@ -23,19 +31,56 @@ describe('use-kinu chat-error wiring', () => {
   });
 
   test('catches the on-connect terminal-error replay frame in the raw onMessage handler', () => {
-    // `between` searches the closing anchor AFTER the opening one and throws
-    // when it is absent. A bare pair of `indexOf` calls did not: the first
-    // `const {` in the file moved above the handler and the slice silently
-    // became empty, which asserts nothing.
-    const handler = between(hook, 'onMessage: useCallback', 'const {', 'use-kinu.ts');
-    expect(handler).toContain('data?.type === "cf_agent_use_chat_response" && data.error === true && data.done === true');
-    expect(handler).toContain('setChatError(');
-    // And it must be able to SAY it is a replay. The server keeps its last
-    // terminal record until a later turn supersedes it, so an idle workspace
-    // re-serves an old failure on every connect; the id it announced in
-    // `cf_agent_stream_resuming` is what tells the two apart.
-    expect(handler).toContain('resumedRequestIds.current.add(data.id)');
-    expect(handler).toContain('replayed: data.id !== undefined && resumedRequestIds.current.has(data.id)');
+    // BEHAVIOURAL, over the rule the handler now calls. This asserted the
+    // handler's source text, which could not fail on the three bugs that
+    // matter: an inverted replay comparison, a dropped `done` check, and a
+    // resumed-id set that is read but never populated. All three read as
+    // correct characters. Each is now a case.
+    const announced = new Set<string>();
+
+    // The live failure: no id was announced, so this is this session's turn.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, done: true, body: 'Unauthorized', id: 'req-1' },
+      announced,
+    )).toEqual({ body: 'Unauthorized', replayed: false });
+
+    // The server announces the record it is about to resume, then replays it.
+    announced.add('req-1');
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, done: true, body: 'Unauthorized', id: 'req-1' },
+      announced,
+    )).toEqual({ body: 'Unauthorized', replayed: true });
+
+    // A DIFFERENT id, with a replay already announced: still live. An
+    // implementation that reported `announced.size > 0` would backdate it.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, done: true, body: 'boom', id: 'req-2' },
+      announced,
+    )).toEqual({ body: 'boom', replayed: false });
+
+    // No id at all is in no set, so it is never a replay.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, done: true, body: 'boom' },
+      announced,
+    )).toEqual({ body: 'boom', replayed: false });
+
+    // Mid-stream failures are the live channel's, not this one's: `done` is
+    // absent, and folding them in here draws the card twice for one failure.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, id: 'req-1' }, announced,
+    )).toBeNull();
+    // A successful terminal frame is not an error.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', done: true, body: 'fine' }, announced,
+    )).toBeNull();
+    // And no other frame type reaches the card at all.
+    expect(terminalChatError({ type: 'cf_agent_stream_resuming', id: 'req-1' }, announced)).toBeNull();
+
+    // An empty body still says something honest rather than rendering blank —
+    // the "UI shows nothing on error frames" P0 this file exists for.
+    expect(terminalChatError(
+      { type: 'cf_agent_use_chat_response', error: true, done: true, body: '   ', id: 'x' }, announced,
+    )).toEqual({ body: UNKNOWN_TURN_FAILURE, replayed: false });
   });
 
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {

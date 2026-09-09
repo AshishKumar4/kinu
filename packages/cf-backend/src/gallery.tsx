@@ -405,7 +405,14 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (answer !== null) return Promise.resolve(answer);
   }
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
-    return rosterAuthorityHold.promise;
+    // CLONED PER CALL. A `Response` body can be read once, and the provider
+    // has more than one read in flight against this route (mount plus its
+    // re-run), so handing every caller the same object made the second read
+    // fail on a consumed body — and a released list that nobody can parse
+    // cannot overwrite anything. The case watching for that overwrite then
+    // could not fail whatever the roster did, which is the opposite of a
+    // fixture's job.
+    return rosterAuthorityHold.promise.then((held) => held.clone());
   }
   const response = STUB.get(path);
   if (response !== undefined && (!init?.method || init.method === "GET")) {
