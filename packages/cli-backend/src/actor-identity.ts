@@ -251,10 +251,9 @@ function requireBinding(binding: LocalActorBinding): LocalActorScope {
 /**
  * Bind a handle to an actor this root issued.
  *
- * The validator is the DIRECTORY ROW and nothing else. A second copy of the
- * same fact would have to live in a table that holds exactly one actor, so it
- * could not survive N actors sharing one database, and checking it would only
- * compare the directory against a mirror the directory had written.
+ * The directory row is the binding authority; comparing it with an identity
+ * mirror seeded from that directory adds no independent validation. A singleton
+ * identity row cannot represent the N actors sharing this database.
  */
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = requireBinding(binding);
