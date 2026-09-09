@@ -44,7 +44,7 @@ export interface TickRecord {
    * THREE-VALUED ON PURPOSE. A committed tick reports what it staged. A SKIPPED
    * tick reports 0, because a skip knows it moved nothing. A FAILED tick reports
    * `null`, because it may have landed blobs before throwing and genuinely cannot
-   * say — and r2fs reports `null` always, since s3fs uploads when the last handle
+   * say — and a store that uploads on close reports `null` always, since it writes when the last handle
    * closes so no bytes attribute to a commit boundary.
    *
    * `null` means CANNOT ANSWER and must never be coerced to 0. Collapsing them
