@@ -20,14 +20,13 @@ import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 /**
- * THE PLAN SURFACE IS THE WORKSPACE ROOT'S, AND NOTHING ELSE HAS ONE.
+ * THE PLAN SUBMISSION SURFACE IS THE WORKSPACE ROOT'S.
  *
  * `submitPlan` reaches a turn only through `actorToolDeps()`, which the
- * orchestrator declares for its own pipeline, and a hosted actor's delegated
- * turn runs `hostedTaskTools` — the confined builtin set plus `report`.
- * `AgentStores` carries no plan-review store either, so a hosted actor has no
- * plan plane at all. Every test in this file therefore drives the ROOT; a
- * child-side case would need a surface invented to receive it.
+ * orchestrator declares for its own pipeline. Delegated tasks receive the
+ * confined tool set plus `report`, not `submit_plan`. Hosted actors do have
+ * actor-scoped `AgentStores.planReviews`; this suite exercises the root's
+ * plan-submission lifecycle.
  */
 type HarnessAgent = HarnessOrchestratorAgent;
 
@@ -190,16 +189,16 @@ describe('Plan mode tool lifecycle', () => {
   });
 
   /**
-   * THE ADDITIONAL-AGENT PLAN TURN HAS NO SURFACE, SO NOTHING HERE ASSERTS ONE.
+   * NO ADDITIONAL-AGENT PLAN-SUBMISSION SURFACE, SO NOTHING HERE ASSERTS ONE.
    *
-   * Three facts make it unreachable, and none of them is about this file:
    *   • `submitPlan` reaches a turn only through `actorToolDeps()`
    *     (orchestrator.ts), which is the ROOT's own pipeline. A hosted actor's
    *     delegated turn runs `hostedTaskTools` — the confined builtin set plus
    *     `report` — so `submit_plan` is not on it.
-   *   • `AgentStores` carries no plan-review store. `ActorAgent.planReviews` is
-   *     built from `this.actorHandle()`, the root's, so there is no per-hosted-
-   *     actor plan plane for a revision to land in.
+   *   • `AgentStores.planReviews` supplies each hosted actor's own review
+   *     stream, and `getActorSnapshot` reads its active plan. That storage
+   *     capability is distinct from the delegated task tool surface, which
+   *     exposes `report` rather than `submit_plan`.
    *   • `OrchestratorAgent.announceSubordinatePlan` has no caller anywhere in
    *     packages/ and is absent from ORCHESTRATOR_METHODS, so it is unreachable
    *     over a stub as well. The client still parses and handles the
@@ -207,11 +206,10 @@ describe('Plan mode tool lifecycle', () => {
    *     therefore has no reachable producer.
    *
    * Giving an additional agent its own Plan turn — `submit_plan` present and
-   * `report` absent on the submitting arm, the Plan system prompt on it, a
-   * revision in the child's own tables, an approval queued on the child's own
-   * host — needs an actor-scoped plan store in core plus `submitPlan` on a
-   * hosted actor's chat surface. A fixture that agreed with the gap would make
-   * it permanent and invisible.
+   * `report` absent on the submitting arm, the Plan system prompt on it, an
+   * approval queued on the child's own host — needs `submitPlan` on a hosted
+   * actor's chat surface. A fixture that agreed with the gap would make it
+   * permanent and invisible.
    */
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {

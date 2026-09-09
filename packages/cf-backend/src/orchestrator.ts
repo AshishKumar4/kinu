@@ -538,16 +538,10 @@ export class OrchestratorAgent extends ActorAgent {
    * public transport.
    */
   /**
-   * NOTHING FORWARDS A FILE OPERATION.
-   *
-   * Hosted actors are handed the very handle this workspace composed
-   * (`WorkspaceHostSeams.workspaceBox`), so there is no monomorphic
-   * `workspaceBoxOp(shellId, op)` over a 25-arm operation union, no dispatcher
-   * for it and no client. A forwarder like that exists for exactly one reason —
-   * a facet that is a separate Durable Object sharing its parent's tree without
-   * being able to reach it, so `files.read`, `exec` and `ports.expose` all cross
-   * an isolate boundary — and it would also be the single widest thing on this
-   * stub transport, since `NimbusExecOptions.cred` names a uid.
+   * Hosted actors receive the workspace's composed
+   * `WorkspaceHostSeams.workspaceBox` handle and perform file, exec and port
+   * operations in the root's isolate. The uid-bearing execution handle is not
+   * exposed through an additional file-forwarding RPC surface.
    */
 
   /**
@@ -752,9 +746,9 @@ export class OrchestratorAgent extends ActorAgent {
         };
       },
       // The splitting head's own actor and runtime are NOT needed here: the
-      // journal and the merge model are the workspace's, and the children are
-      // acquired from the same host by id. One journal for the whole subtree —
-      // the C2 fix — is expressed as an argument this does not take.
+      // journal and merge model belong to the workspace, and every child is
+      // acquired by id from the same host. This keeps every subtree's journal
+      // and step rows joinable in one database (C2).
       split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
     };
   }
@@ -4401,17 +4395,11 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * There is no inbound `publishHeadStream` RPC, and no `rpc-surface.ts`
-   * allowlist row for one.
-   *
-   * Head-stream frames are published in process by `publishHeadStreamFrame`,
-   * reached by `reportNodeDelta` and by `ExplorationHostSeams.publishDelta`. An
-   * inbound RPC a facet called to forward the frames it was producing would be a
-   * DUPLICATE of that, not an unreached producer — a live implementation
-   * elsewhere is a duplicate, while the only implementation with a departed
-   * caller is a producer, and those get wired instead. An allowlist row for it
-   * would keep the facet shape REACHABLE with no caller behind it, which is the
-   * fail-closed surface `sealRpcSurface` exists to keep shut.
+   * `publishHeadStreamFrame` is the in-process head-stream publisher, reached
+   * through `reportNodeDelta` and `ExplorationHostSeams.publishDelta`; an
+   * inbound forwarding RPC would duplicate that implementation (reachability
+   * reference: 0b6d36886). The RPC allowlist exposes only required remote
+   * capabilities, so local publication does not create another transport entry.
    */
 
   /**
@@ -5060,16 +5048,12 @@ export class OrchestratorAgent extends ActorAgent {
    * read indistinguishable from a quiet one. Live updates arrive via the
    * granular refresh + events.
    *
-   * NO CANVAS AND NO TIMELINE RIDE HERE, AND NEITHER IS COMING BACK AS A SEED.
-   * Measured against production on 2026-08-20, `getExplorationCanvas()`'s page is
-   * 499 KiB on one workspace and 824 KiB on another — a page composes thirty runs
-   * and every one of their heads — and it would seed exactly one thing: the tree
-   * map the Exploration surface rebuilds from its OWN `getExplorationCanvas` read
-   * the moment it mounts. `getRunTimeline({limit: 250})` is 250 merged spans that
-   * no component reads at all; `kinu timeline` calls `getRunTimeline` itself.
-   * Carrying both would make the chat pane pay for them on every workspace open
-   * while showing neither. A surface that is not open does not get to be on the
-   * critical path of the one that is.
+   * The initial snapshot carries neither canvas nor timeline data: the canvas
+   * measures 499 KiB and 824 KiB on the two production workspaces sampled on
+   * 2026-08-20, and its thirty-run page would seed a tree map that Exploration
+   * fetches for itself. A 250-span timeline seed has no component consumer,
+   * while `kinu timeline` fetches it directly, so neither payload belongs on
+   * the chat pane's opening critical path.
    */
   /** A reset owns no live branch fibers. Before a snapshot can say a branch is
    * running, seal every reportless branch head with one durable error report;

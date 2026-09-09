@@ -1189,15 +1189,11 @@ export abstract class ActorAgent extends Think<Env> {
    * THE child substrate of this actor: how a subordinate is born, addressed and
    * retired on this platform.
    *
-   * One object, memoized, because two rungs ride it — the durable roster and the
-   * temporary register — and a second copy would be a second path to the same
-   * actors. It is NOT a facet spawner: there is no `subAgent` stub to resolve,
-   * no seed to push and verify against a bootstrap RPC, and therefore no
-   * half-seeded state to clean up and no database to leak
-   * (`subordinate-hosting.ts`). A swallowed cleanup on that path would leave a
-   * permanent database inside this object charged against a quota every facet
-   * shared, which is why the reclamation failure would have to be reported
-   * LOUDER than the seeding failure that caused it.
+   * One memoized hosted subordinate runtime serves both the durable roster and
+   * the temporary register, so both address the same actors. Actor creation is
+   * owned by `subordinate-hosting.ts` and does not allocate a separately seeded
+   * facet database that could remain charged to the workspace quota after
+   * failed reclamation.
    */
   protected subordinateRuntime(): SubordinateRuntime {
     this._subordinateRuntime ??= hostedSubordinateRuntime(
@@ -5586,28 +5582,13 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * A SWARM NODE'S LOOP RUNS IN THE SEARCH'S OWN ISOLATE.
+   * A node loop runs in the search's isolate with an arbiter closure over the
+   * live remaining-children budget; its host provisions the home from its
+   * directory row.
    *
-   * So there is no node transport and no arbiter registry: a `NodeLoopHost` over
-   * this actor's facet verbs exists only for a loop whose live seams have to call
-   * back across an RPC, and nothing here does. Two consequences are worth
-   * spelling out:
-   *
-   *   • A hosted node's home is provisioned by the host in this isolate, from
-   *     its directory row — never registered by the node and asked back over a
-   *     facet-home port.
-   *   • The loop is handed the arbiter as the closure it always was, so no RPC
-   *     reaches into this object for a verdict and no in-memory registry keyed
-   *     by node id lets a facet reach a budget that exists solely here. A
-   *     verdict is decided against a LIVE remaining-children count, so such a
-   *     registry could never be a table anyway. The refusal for "no arbiter is
-   *     registered" is unreachable rather than unnecessary: there is no window
-   *     in which a node holds an id whose arbiter has been withdrawn.
-   *
-   * One factory does it: `hostNodeSeat` in `exploration-hosting.ts`, asked PER
-   * NODE, because node deps are built once per search and shallow-copied per
-   * child — a single actor on those deps would give a whole wave one claim
-   * ledger and one loop pointer.
+   * `hostNodeSeat` (`exploration-hosting.ts`) is requested PER NODE because
+   * search deps are shallow-copied per child, and sharing one seat would give
+   * a whole wave one claim ledger and one loop pointer.
    */
 
   /**
