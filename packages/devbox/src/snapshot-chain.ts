@@ -41,8 +41,8 @@
  * every attach forever once that copy is missing or the wrong size. So the
  * record also names `fallback`: the newest generation an attach has PROVEN
  * it can serve, retained until a newer one passes the same proof. A restore
- * reads them newest first, verifies a candidate before serving it, stamps a
- * refused candidate on the record's failure field, and publishes which
+ * reads them newest first, verifies the one it offers before serving it,
+ * stamps a refusal on the record's failure field, and publishes which
  * generation recovered.
  *
  * EXTRACTION IS LOCAL DEVELOPMENT ONLY. A store mount needs container
@@ -394,7 +394,7 @@ export interface ChainState extends ChainGeneration {
    *  is proven. A publication that supersedes a generation fills the slot; the
    *  attach that PROVES the current generation moves the occupant to `orphans`
    *  and clears it ({@link supersedeGeneration}). Its sizes are here because
-   *  a candidate the integrity probe cannot check is not a candidate. */
+   *  a fallback the integrity probe cannot check is not a fallback. */
   readonly fallback: ChainGeneration | undefined;
   /** Generations this box has superseded and no longer retains. Named here
    *  BEFORE the delete and cleared after it, so a crash between a rebase's
@@ -1176,7 +1176,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
-  /** Serve one candidate generation, or answer why its own bytes cannot be
+  /** Serve one offered generation, or answer why its own bytes cannot be
    *  served. A refusal is always about THIS generation ({@link LayerUnreadable});
    *  everything else travels as a throw, because trying an older generation
    *  against a broken host would fail twice and hide the reason. The probe and
@@ -1184,22 +1184,22 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  the cost this strategy exists to avoid. */
   const serve = async (
     mode: ChainMode,
-    candidate: ChainGeneration,
+    offered: ChainGeneration,
   ): Promise<{ served: AttachOutcome; generation: ChainGeneration } | { refusal: string }> => {
-    const sound = await probe(mode, candidate);
+    const sound = await probe(mode, offered);
     if (sound.refusal !== null) return { refusal: sound.refusal };
     // ADOPT a delta whose recorded size went stale, digest included: a size
     // that disagrees is the crash-window delta. Same size with a different
     // digest never reaches here; `probe` refuses it as corruption.
-    let generation = candidate;
-    if (candidate.delta !== undefined && sound.delta !== undefined
-      && sound.delta.bytes !== candidate.delta.bytes) {
-      const drift = sound.delta.bytes - candidate.delta.bytes;
+    let generation = offered;
+    if (offered.delta !== undefined && sound.delta !== undefined
+      && sound.delta.bytes !== offered.delta.bytes) {
+      const drift = sound.delta.bytes - offered.delta.bytes;
       ports.log(
         `delta record was stale by ${drift} bytes (${Math.abs(drift) / 4096} squashfs blocks); `
         + `adopting the stored archive of ${sound.delta.bytes} bytes`,
       );
-      generation = { ...candidate, delta: sound.delta };
+      generation = { ...offered, delta: sound.delta };
     }
     try {
       const served = mode === 'chain'

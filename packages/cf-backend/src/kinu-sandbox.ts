@@ -96,9 +96,8 @@ export class KinuSandbox extends Devbox<Env> {
   }
 
   /** The format the bytes in that bucket are written in. Stated here, not
-   *  inherited silently: a box that already holds bytes cannot change it, and
-   *  the decision it restates is the decisive comparison's
-   *  (`packages/devbox/bench/measure-first/DECISIVE-2026-09-05.md`). */
+   *  inherited silently: a box that already holds bytes cannot change it, so
+   *  the format belongs to this class rather than to a call. */
   protected override get strategy(): DevboxStrategyName {
     return DEFAULT_DEVBOX_STRATEGY;
   }
