@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
-import { facetHomeProvisioner, nodeAgentName, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
+import { explorationActorKey, facetHomeProvisioner, nodeAgentName, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
-import { registerLocalActorState } from '../packages/cli-backend/src/actor-identity';
+import { bindLocalActor, registerLocalActor, registerLocalNode } from '../packages/cli-backend/src/actor-identity';
 
 const database = new Database(':memory:');
 const config = {
@@ -16,9 +16,16 @@ try {
     const nodeRuntime = runtime.nodeRuntime;
     if (!host || !nodeRuntime) throw new Error('local workspace has no node plane');
     const provision = facetHomeProvisioner(host());
-    const node = registerLocalActorState(runtime.actor, { name: 'exp:node-probe', creationId: 'node-probe', kind: 'node', lifetime: 'task' });
-    const head = registerLocalActorState(runtime.actor, { name: 'exp:head-probe', creationId: 'head-probe', kind: 'head', lifetime: 'task' });
-    const subordinate = registerLocalActorState(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' });
+    const sql = runtime.storage.sql;
+    // Registered exactly the way production registers each kind: a node
+    // through the session's own node entry (`LocalAgentSession` builds its
+    // `provisionNodeHome`/`runtimeForNodeWorkspace` handles with this), a head
+    // and a hire through the directory pair every host binds them with
+    // (`agent-host/host.ts` hire, `buildLocalActorRuntime` head). No probe-only
+    // shortcut, so what this prints is what a real actor of each kind gets.
+    const node = registerLocalNode(runtime.actor, { nodeId: 'node-probe', rootId: 'node-probe', depth: 1 });
+    const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', kind: 'head', lifetime: 'task' }));
+    const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' }));
     const identities = [
       { name: 'node', actor: node, workspace: await provision(nodeAgentName(node.storageKey)) },
       { name: 'head', actor: head, workspace: await provision(headAgentName(head.storageKey)) },

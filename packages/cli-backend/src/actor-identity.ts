@@ -226,14 +226,14 @@ export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): Acto
 /**
  * Register a child and return its bound HANDLE, without a runtime.
  *
- * Exported for `scripts/workspace-planes-probe.ts`, which asks the one question
- * this shape answers — what storage key each kind is issued, and what home that
- * key provisions — with no session and no loop. `gate:wired` reports this export
- * as unreached because its corpus does not include `scripts/`; the consumer is
- * real, so the export stays and this comment is here so the next reader does not
- * remove it on the gate's word and break the probe.
+ * MODULE-LOCAL, because `registerLocalNode` is the only shape that wants a
+ * handle and no binding: a swarm node is registered and immediately acted as,
+ * with nothing in between to hand a binding to. Every caller outside this
+ * module registers with `registerLocalActor` and binds with `bindLocalActor` —
+ * the pair a hire and a head already go through, and the one that mints a
+ * handle a host can fence.
  */
-export function registerLocalActorState(parent: ActorHandle, input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] }): ActorHandle {
+function registerLocalActorState(parent: ActorHandle, input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] }): ActorHandle {
   const scope = scopeFor(parent);
   const entry = scope.directory.apply(parent, scope.path, { action: 'register', ...input });
   const actor = scope.directory.open(entry.reference.actorId);

@@ -14,7 +14,7 @@ import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
 import {
-  createActorHost, actorScopedTables, childContextResolver,
+  createActorHost, childContextResolver,
   type ActorHost, type BoundActor,
 } from '../src/state/actor-host';
 import { initEventsHubTables, EventLog } from '../src/events/hub/index';
@@ -328,20 +328,40 @@ describe('one workspace database, many logical actors', () => {
     expect(pending[0]?.record.name).toBe('alpha');
   });
 
-  test('the retirement purge reads its table set off the live schema', () => {
+  test('a retirement purge sweeps a table the schema grew, and nothing that carries no actor', async () => {
     const fx = build();
-    const tables = actorScopedTables(fx.sql);
-    expect(tables).toContain('actor_turn_claims');
-    expect(tables).toContain('actor_context_revisions');
-    expect(tables).toContain('messages');
-    expect(tables).toContain('scaffold_versions');
-    // The roster row's lifecycle is the directory's, not the purge's.
-    expect(tables).not.toContain('workspace_actors');
-    // Every named table really exists in THIS database.
-    for (const table of tables) {
-      expect(fx.sql<{ n: number }>`
-        SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ${table}`[0]?.n).toBe(1);
-    }
+    const a = fx.child('alpha', 'c-alpha', 'subordinate');
+    const b = fx.child('beta', 'c-beta', 'subordinate');
+    const alpha = await fx.host.acquire(a);
+    const beta = await fx.host.acquire(b);
+    alpha.stores.claims.admit({ runId: 'r-a', turnId: 't-a', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    beta.stores.claims.admit({ runId: 'r-b', turnId: 't-b', workMode: 'build', program: BUILTIN, context: [], workingRevision: 0 });
+    // A table this workspace grew AFTER the host was built, carrying `actor_id`
+    // the way every actor-scoped table does. This is the property, and the rows
+    // are where it is observable: the purge reads its table set off the schema
+    // in front of it, so a table nobody remembered to add to a cleanup list is
+    // swept anyway. Against a hand-kept list, alpha's row below OUTLIVES alpha
+    // — under an id the directory is free to issue again.
+    fx.db.exec(`CREATE TABLE actor_late_notes (actor_id TEXT NOT NULL, note TEXT NOT NULL)`);
+    // …and one that carries no actor at all, which the same pass has to leave
+    // alone: a purge that swept every table would delete the workspace's own
+    // rows, and `DELETE ... WHERE actor_id = ?` over this one throws instead.
+    fx.db.exec(`CREATE TABLE workspace_late_notes (note TEXT NOT NULL)`);
+    void fx.sql`INSERT INTO actor_late_notes (actor_id, note) VALUES (${a.actorId}, 'alpha-note')`;
+    void fx.sql`INSERT INTO actor_late_notes (actor_id, note) VALUES (${b.actorId}, 'beta-note')`;
+    void fx.sql`INSERT INTO workspace_late_notes (note) VALUES ('workspace-note')`;
+
+    await fx.host.retire(fx.main, { reference: a, name: 'alpha', destroy: true });
+
+    // ONE pass took both: the table the schema shipped and the table it grew.
+    expect(fx.sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ${a.actorId}`[0]?.n).toBe(0);
+    expect(fx.sql<{ actor_id: string; note: string }>`SELECT actor_id, note FROM actor_late_notes`)
+      .toEqual([{ actor_id: b.actorId, note: 'beta-note' }]);
+    // The table with no actor column was not the purge's business…
+    expect(fx.sql<{ note: string }>`SELECT note FROM workspace_late_notes`).toEqual([{ note: 'workspace-note' }]);
+    // …and neither was the directory's own row, which is what leaves a
+    // destroyed actor NAMEABLE instead of a dangling id in somebody's log.
+    expect(fx.host.describe(a.actorId)?.name).toBe('alpha');
   });
 
   test('a parent reaches its own children context stores and nobody else', async () => {

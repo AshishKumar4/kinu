@@ -16,15 +16,16 @@ import * as v from 'valibot';
 import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
 import { ActorClaimStore, initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { createActorContextPlane, type ContextEditEvent } from '../src/orchestrator/context-plane';
-import { contextMount, decodeWorkingFile, encodeWorkingFile } from '../src/vfs/context-plane';
+import { contextMount } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
 import { makeVfsError } from '../src/vfs/errno';
+import { decodeModelMessages, encodeModelMessages } from '../src/prompting/message-codec';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import { DynamicContextLedger } from '../src/prompting/volatile-context';
 import { createFileDispatcher } from '../src/tools/file-tool';
 import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
-import type { ActorContextStores, ChildContextResolver } from '../src/vfs/context-plane';
+import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/state/actor-handle';
 import type { JsonValue } from '../src/utils/json';
@@ -105,6 +106,42 @@ async function readText(vfs: VFS, path: string): Promise<string> {
   return text.success ? text.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
 }
 
+/** The header fields these tests observe, named by the plane's OWN published
+ *  header type. The projection is checked by the compiler, so what is read out
+ *  of line 1 below cannot drift from the contract the plane serves. */
+type ServedHeader = Pick<ContextFileHeader, 'actor' | 'revision' | 'effectiveAt'>;
+
+const ServedLine = v.object({
+  $context: v.object({
+    actor: v.string(),
+    revision: v.number(),
+    effectiveAt: v.optional(v.picklist(['step', 'turn'])),
+  }),
+});
+
+/** What a client of `/context/working.jsonl` reads out of line 1: the
+ *  `$context` object the plane put there. What each field must SAY is the
+ *  assertion at the call site, not this accessor. */
+function servedHeader(text: string): ServedHeader {
+  return v.parse(ServedLine, JSON.parse(text.split('\n', 1)[0] ?? '')).$context;
+}
+
+/** The message lines, through the durable codec the file states it carries them
+ *  in. */
+function servedMessages(text: string): ModelMessage[] {
+  const lines = text.split('\n').filter((line) => line.trim().length > 0);
+  return decodeModelMessages(`[${lines.slice(1).join(',')}]`);
+}
+
+/** The served bytes with more messages after them: every line the read produced
+ *  left exactly as it arrived, then one encoded message per new line — the
+ *  append half of a real read-modify-write. */
+function appended(text: string, extra: readonly ModelMessage[]): string {
+  const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(extra)));
+  const head = text.endsWith('\n') ? text : `${text}\n`;
+  return head + encoded.map((message) => `${JSON.stringify(message)}\n`).join('');
+}
+
 test('a fresh actor serves an empty working history at revision 0, and an edit of it becomes revision 1', async () => {
   const ws = workspace();
   const actor = ws.bind('actor-fresh');
@@ -113,18 +150,17 @@ test('a fresh actor serves an empty working history at revision 0, and an edit o
   // Before ANY turn: the path exists, reads, and names a revision. This is the
   // arm that used to be unreachable — a claims getter with no claim.
   const before = await readText(vfs, '/context/working.jsonl');
-  const parsedBefore = decodeWorkingFile(before);
-  expect(parsedBefore.header).toMatchObject({ actor: 'actor-fresh', revision: 0 });
-  expect(parsedBefore.messages).toEqual([]);
+  expect(servedHeader(before)).toMatchObject({ actor: 'actor-fresh', revision: 0 });
+  expect(servedMessages(before)).toEqual([]);
 
   const edited: ModelMessage[] = [{ role: 'user', content: 'seeded before the first turn' }];
-  await vfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    { ...parsedBefore.header, status: 'empty', effectiveAt: 'turn', turn: null }, edited,
-  ));
+  // A fresh file has no message lines yet, so the edit IS the served header
+  // line with the array written under it.
+  await vfs.writeFile('/context/working.jsonl', appended(before, edited));
 
-  const after = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
-  expect(after.header.revision).toBe(1);
-  expect(after.messages).toEqual(edited);
+  const after = await readText(vfs, '/context/working.jsonl');
+  expect(servedHeader(after).revision).toBe(1);
+  expect(servedMessages(after)).toEqual(edited);
   // Staged, not active: nothing has consumed it yet, and the plane says so
   // rather than claiming the edit is in effect.
   const state = createActorContextPlane({ claims: actor.claims }).read();
@@ -141,14 +177,15 @@ test('two edits from the same read: the second is refused stale and the first su
   const plane = createActorContextPlane({ claims: actor.claims });
   plane.hydrate([{ role: 'user', content: 'original' }]);
 
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
-  const header = { ...observed.header, status: 'active' as const, effectiveAt: 'turn' as const, turn: null };
-  await vfs.writeFile('/context/working.jsonl', encodeWorkingFile(header, [{ role: 'user', content: 'first edit' }]));
+  // One read, two edits of the bytes it served — a literal replacement in the
+  // text, which is the change an editor of this file actually makes.
+  const served = await readText(vfs, '/context/working.jsonl');
+  await vfs.writeFile('/context/working.jsonl', served.replace('original', 'first edit'));
 
-  // The same header again — a second editor that read before the first wrote.
-  await expect(vfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    header, [{ role: 'user', content: 'second edit' }],
-  ))).rejects.toMatchObject({ verdict: 'stale' });
+  // The same served text again — a second editor that read before the first
+  // wrote, and so carries the same header line.
+  await expect(vfs.writeFile('/context/working.jsonl', served.replace('original', 'second edit')))
+    .rejects.toMatchObject({ verdict: 'stale' });
 
   const head = plane.read().head;
   expect(head?.messages).toEqual([{ role: 'user', content: 'first edit' }]);
@@ -164,10 +201,13 @@ test('a header naming another actor is refused, and the caller cannot retarget b
   createActorContextPlane({ claims: actor.claims }).hydrate([{ role: 'user', content: 'mine' }]);
   createActorContextPlane({ claims: other.claims }).hydrate([{ role: 'user', content: 'theirs' }]);
 
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
-  await expect(vfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    { ...observed.header, actor: 'actor-other' }, [{ role: 'user', content: 'written through the wrong plane' }],
-  ))).rejects.toMatchObject({ code: 'EACCES' });
+  // The actor name rewritten in place in the served header line, carrying new
+  // content: the whole retarget an editor of this file can attempt.
+  const retargeted = (await readText(vfs, '/context/working.jsonl'))
+    .replace('actor-self', 'actor-other')
+    .replace('mine', 'written through the wrong plane');
+  await expect(vfs.writeFile('/context/working.jsonl', retargeted))
+    .rejects.toMatchObject({ code: 'EACCES' });
 
   // Neither actor's history moved.
   expect(createActorContextPlane({ claims: actor.claims }).read().head?.messages)
@@ -183,10 +223,12 @@ test('a working history that severs a tool call from its result is refused befor
   const vfs = planeFor(actor);
   const plane = createActorContextPlane({ claims: actor.claims });
   plane.hydrate([{ role: 'user', content: 'ask' }]);
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
+  const served = await readText(vfs, '/context/working.jsonl');
 
-  await expect(vfs.writeFile('/context/working.jsonl', encodeWorkingFile(observed.header, [
-    { role: 'user', content: 'ask' },
+  // The served history with a tool call appended and no result behind it. Every
+  // line the read produced is untouched, so the severed call is the only new
+  // thing in the file.
+  await expect(vfs.writeFile('/context/working.jsonl', appended(served, [
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c9', toolName: 'probe', input: {} }] },
   ]))).rejects.toMatchObject({ code: 'bad_input' });
 
@@ -233,22 +275,20 @@ test('a rollback is a new revision written from a retained one, and the audit it
   const vfs = planeFor(actor);
   const plane = createActorContextPlane({ claims: actor.claims });
   plane.hydrate([{ role: 'user', content: 'the good history' }]);
-  const first = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
+  const first = await readText(vfs, '/context/working.jsonl');
 
-  await vfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    first.header, [{ role: 'user', content: 'a regrettable edit' }],
-  ));
-  const regret = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
-  expect(regret.messages).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
+  await vfs.writeFile('/context/working.jsonl', first.replace('the good history', 'a regrettable edit'));
+  const regret = await readText(vfs, '/context/working.jsonl');
+  expect(servedMessages(regret)).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
 
   // Roll back BY WRITING the validated prior revision's OWN retained bytes
   // back, read out of its revision file rather than retyped: that is what
   // makes a rollback a real path rather than an assertion about one.
-  const prior = JSON.parse(await readText(vfs, `/context/revisions/${first.header.revision}.json`));
-  expect(prior).toMatchObject({ revision: first.header.revision, source: 'hydrate' });
+  const prior = JSON.parse(await readText(vfs, `/context/revisions/${servedHeader(first).revision}.json`));
+  expect(prior).toMatchObject({ revision: servedHeader(first).revision, source: 'hydrate' });
   const priorMessages = v.parse(v.array(v.unknown()), prior.messages);
   await vfs.writeFile('/context/working.jsonl', [
-    JSON.stringify({ $context: regret.header }),
+    regret.split('\n', 1)[0] ?? '',
     ...priorMessages.map((message) => JSON.stringify(message)),
   ].join('\n') + '\n');
 
@@ -282,13 +322,12 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
   const vfs = planeFor(parent, resolver);
 
   expect(await vfs.readdir('/context/agents')).toEqual(['agent:child']);
-  const seen = decodeWorkingFile(await readText(vfs, '/context/agents/agent:child/working.jsonl'));
-  expect(seen.header.actor).toBe('actor-child');
-  expect(seen.messages).toEqual([{ role: 'user', content: 'child history' }]);
+  const seen = await readText(vfs, '/context/agents/agent:child/working.jsonl');
+  expect(servedHeader(seen).actor).toBe('actor-child');
+  expect(servedMessages(seen)).toEqual([{ role: 'user', content: 'child history' }]);
 
-  await vfs.writeFile('/context/agents/agent:child/working.jsonl', encodeWorkingFile(
-    seen.header, [{ role: 'user', content: 'parent corrected this' }],
-  ));
+  await vfs.writeFile('/context/agents/agent:child/working.jsonl',
+    seen.replace('child history', 'parent corrected this'));
   const staged = child.claims.working.staged();
   // The child's row, authored by the PARENT, through the child's own handle.
   expect(staged).toMatchObject({ author: 'actor-parent', via: 'owner', messageCount: 1 });
@@ -313,13 +352,12 @@ test('a retired actor stops authorising context reads and writes at its own hand
     stores: () => ({ actorId: 'actor-retired', claims, events: null }),
   })]);
   createActorContextPlane({ claims }).hydrate([{ role: 'user', content: 'while live' }]);
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
+  const served = await readText(vfs, '/context/working.jsonl');
 
   live = false;
   await expect(readText(vfs, '/context/working.jsonl')).rejects.toThrow();
-  await expect(vfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    observed.header, [{ role: 'user', content: 'after retirement' }],
-  ))).rejects.toThrow();
+  await expect(vfs.writeFile('/context/working.jsonl', served.replace('while live', 'after retirement')))
+    .rejects.toThrow();
 
   live = true;
   expect(claims.working.staged()).toBeNull();
@@ -382,12 +420,11 @@ test('binary and tool-result parts survive a read/write round trip through the f
   // Not a lossy JSON dump of the bytes: `{"0":137,…}` is exactly what the codec
   // exists to avoid, and it would not decode back to a Uint8Array.
   expect(text).not.toContain('"0":137');
-  const observed = decodeWorkingFile(text);
 
-  // Write the array straight back and read it again: the attachment and the
-  // tool pairing must be byte-identical, or an edit would quietly corrupt the
-  // context it claims to preserve.
-  await vfs.writeFile('/context/working.jsonl', encodeWorkingFile(observed.header, observed.messages));
+  // Write the SERVED BYTES straight back and read them again: the attachment
+  // and the tool pairing must survive the plane decoding its own text, or an
+  // edit would quietly corrupt the context it claims to preserve.
+  await vfs.writeFile('/context/working.jsonl', text);
   const roundTripped = plane.read().head?.messages ?? [];
   const parts = Array.isArray(roundTripped[0]?.content) ? roundTripped[0].content : [];
   const attached = parts.find((part) => part.type === 'file');
@@ -409,18 +446,17 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
 
   const stat = await vfs.stat('/context/working.jsonl');
   expect(stat?.revision).toBe(1);
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
+  const served = await readText(vfs, '/context/working.jsonl');
   const conditional = vfs.writeFileIfRevision;
   if (conditional === undefined) throw new Error('the context plane must offer a conditional write');
 
   const saved = await conditional.call(vfs, '/context/working.jsonl',
-    new TextEncoder().encode(encodeWorkingFile(observed.header, [{ role: 'user', content: 'edited in the browser' }])),
-    1);
+    new TextEncoder().encode(served.replace('from the browser', 'edited in the browser')), 1);
   expect(saved).toMatchObject({ ok: true, revision: 2 });
 
   await expect(conditional.call(vfs, '/context/working.jsonl',
-    new TextEncoder().encode(encodeWorkingFile(observed.header, [{ role: 'user', content: 'from a stale tab' }])),
-    1)).rejects.toMatchObject({ verdict: 'stale' });
+    new TextEncoder().encode(served.replace('from the browser', 'from a stale tab')), 1))
+    .rejects.toMatchObject({ verdict: 'stale' });
   ws.close();
 });
 
@@ -594,13 +630,11 @@ test('an edit authored between turns is consumed by the next turn with the new i
 
   // Between turns: the file serves the settled history, and an edit of it says
   // it becomes effective at the next TURN rather than the next step.
-  const observed = decodeWorkingFile(await readText(vfs, '/context/working.jsonl'));
-  expect(observed.header.effectiveAt).toBe('turn');
-  expect(observed.messages).toHaveLength(2);
-  await vfs.writeFile('/context/working.jsonl', encodeWorkingFile(observed.header, [
-    { role: 'user', content: 'first question, corrected' },
-    { role: 'assistant', content: 'first answer' },
-  ]));
+  const served = await readText(vfs, '/context/working.jsonl');
+  expect(servedHeader(served).effectiveAt).toBe('turn');
+  expect(servedMessages(served)).toHaveLength(2);
+  await vfs.writeFile('/context/working.jsonl',
+    served.replace('first question', 'first question, corrected'));
 
   // The next turn's input arrives after the edit was authored.
   const next = plane.startTurn({ turnId: 'turn-two', history: [
@@ -639,14 +673,13 @@ test('a cold reader with no live turn can read and edit the working history it w
   // actor: what an activation that did not run the turn can see.
   const cold = ws.bind('actor-cold');
   const coldVfs = planeFor(cold);
-  const seen = decodeWorkingFile(await readText(coldVfs, '/context/working.jsonl'));
-  expect(seen.messages).toEqual([{ role: 'user', content: 'before the crash' }]);
-  expect(seen.header.revision).toBe(1);
+  const seen = await readText(coldVfs, '/context/working.jsonl');
+  expect(servedMessages(seen)).toEqual([{ role: 'user', content: 'before the crash' }]);
+  expect(servedHeader(seen).revision).toBe(1);
   // The recovered activation may edit it, and the edit is staged against the
   // revision it read — no live turn required, and no getter that throws.
-  await coldVfs.writeFile('/context/working.jsonl', encodeWorkingFile(
-    seen.header, [{ role: 'user', content: 'recovered and corrected' }],
-  ));
+  await coldVfs.writeFile('/context/working.jsonl',
+    seen.replace('before the crash', 'recovered and corrected'));
   expect(cold.claims.working.staged()).toMatchObject({ revision: 2, via: 'file' });
   ws.close();
 });

@@ -6,7 +6,7 @@
  * `ActorSession` (open-41): the session pins the program, admits the durable
  * claim naming that program's version and source digest, records the exact
  * array each step consumed, and owns the abort. So a fixture can no longer hand
- * a bare `AgentRuntime` to `runHeadInference` or `runNodeLoop` — it has to
+ * a bare `AgentRuntime` to `runHeadInference` or to a node's own run — it has to
  * supply the actor those turns belong to.
  *
  * This is that fixture, and it is deliberately the PRODUCTION path: the
