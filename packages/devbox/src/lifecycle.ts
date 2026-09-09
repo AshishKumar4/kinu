@@ -515,8 +515,8 @@ export type StoredRecovery =
  *  attempt deletes it.
  *
  *  The parameter is `StoredValue` — what durable storage can actually hand back
- *  — rather than a bare `unknown`: it is the same boundary `normalizeChainState`
- *  and `readCandidateControl` already stand on. */
+ *  — rather than a bare `unknown`: it is the same boundary
+ *  `normalizeChainState` already stands on. */
 export function parseRecoveryRow(stored: StoredValue): StoredRecovery {
   if (stored === undefined) return { kind: 'absent' };
   const parsed = v.safeParse(RecoveryRowSchema, stored);
@@ -783,10 +783,10 @@ const HOLDER_TERM_WAIT_MS = 5_000;
  * separator before `done`, no separator before `if`. `sh` answered `Syntax
  * error: "do" unexpected` and exited 2, and because every command runs inside
  * the SDK's ONE persistent session shell that exit ENDED THE SESSION: run
- * `e2e20260901140445` lost `stop-small` on snapshot-chain and r2fs to
- * `SessionTerminatedError: Session 'sandbox-default' shell exited (exit code:
- * 2)`, 2,362 ms and 785 ms into a stop that had already committed its
- * checkpoint. A separator that lives in the data is a separator somebody can
+ * `e2e20260901140445` lost `stop-small` twice to `SessionTerminatedError:
+ * Session 'sandbox-default' shell exited (exit code: 2)`, 2,362 ms and 785 ms
+ * into stops that had already committed their checkpoint. A separator that
+ * lives in the data is a separator somebody can
  * forget; the fakes now parse every composed command with `sh -n`, so this
  * class cannot pass a test again.
  *

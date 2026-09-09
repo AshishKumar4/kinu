@@ -151,7 +151,7 @@ export async function deliverIncidents(
  * Hold the ledger to {@link INCIDENT_LEDGER_MAX_ROWS}.
  *
  * Delivered and rejected rows go oldest-settled first; a pending row is never
- * a candidate, so a host that is slow to accept loses nothing it has not seen.
+ * reaped, so a host that is slow to accept loses nothing it has not seen.
  * Answers how many rows were deleted.
  */
 export async function reapDeliveredIncidents(store: IncidentStore): Promise<number> {
