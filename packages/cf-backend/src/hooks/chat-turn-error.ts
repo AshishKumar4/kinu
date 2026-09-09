@@ -39,7 +39,7 @@ export interface ChatTurnError {
 }
 
 /** What the body says when the server sent a terminal error and no text. */
-export const UNKNOWN_TURN_FAILURE = 'The turn failed with an unknown error.';
+const UNKNOWN_TURN_FAILURE = 'The turn failed with an unknown error.';
 
 /**
  * The frame fields this rule reads. Structural on purpose: the canonical

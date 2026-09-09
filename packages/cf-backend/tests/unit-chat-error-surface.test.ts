@@ -17,7 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { between } from '@kinu.run/test-utils';
-import { terminalChatError, UNKNOWN_TURN_FAILURE } from '../src/hooks/chat-turn-error';
+import { terminalChatError } from '../src/hooks/chat-turn-error';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-kinu.ts'), 'utf8');
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
@@ -80,7 +80,7 @@ describe('use-kinu chat-error wiring', () => {
     // the "UI shows nothing on error frames" P0 this file exists for.
     expect(terminalChatError(
       { type: 'cf_agent_use_chat_response', error: true, done: true, body: '   ', id: 'x' }, announced,
-    )).toEqual({ body: UNKNOWN_TURN_FAILURE, replayed: false });
+    )).toEqual({ body: 'The turn failed with an unknown error.', replayed: false });
   });
 
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {
