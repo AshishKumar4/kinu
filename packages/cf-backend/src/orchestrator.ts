@@ -20,9 +20,9 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, buildHeadToolSet, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadCapture, HeadController, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
-  type ActorHost, type BoundActor, type DynamicContext, type HeadInput,
+  type ActorHost, type BoundActor, type DynamicContext, type HeadCapture, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type MergeResult, type NimbusSandboxHandle, type NodeHomeHost,
   type SqlExec, type SqlValue, type WorkspaceActor, type WriteObserver,
@@ -769,7 +769,7 @@ export class OrchestratorAgent extends ActorAgent {
       // told a `scribe` child it had the workspace's whole surface.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
-      taskTools: (actor, runtime, reports, input) => this.hostedTaskTools(actor, runtime, reports, input),
+      taskTools: (actor, runtime, reports, input, capture) => this.hostedTaskTools(actor, runtime, reports, input, capture),
       dynamic: (actor) => this.hostedActorDynamicContext(actor),
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
@@ -792,7 +792,10 @@ export class OrchestratorAgent extends ActorAgent {
    * surface, so it finishes itself rather than carrying the actor clamp and the
    * effect claim an owner chat's surface carries.
    */
-  private hostedTaskTools(actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger, input: HeadInput): ToolSet {
+  private hostedTaskTools(
+    actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger,
+    input: HeadInput, capture: HeadCapture,
+  ): ToolSet {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
     const factory = createExecuteToolsFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
@@ -822,13 +825,17 @@ export class OrchestratorAgent extends ActorAgent {
     // given work, does it, reports. An owner chat with this actor is a different
     // surface and is built where owner chats are built.
     //
-    // THE CALLER'S `HeadInput`, not a second one built here. The runner claims
-    // the turn under this exact value and recovery verifies that claim, so a
-    // literal rebuilt at this site is how a turn gets claimed under one shape
-    // and tooled under another. `delegatedHeadInput` is the one builder.
+    // THE CALLER'S `HeadInput` AND THE CALLER'S CAPTURE, not second ones built
+    // here. The runner claims the turn under that exact input and recovery
+    // verifies the claim, so a literal rebuilt at this site is how a turn gets
+    // claimed under one shape and tooled under another; and the capture these
+    // tools write is the one the runner reads into the report, so a fresh one
+    // here is where a turn's decisions, evidence and tool calls go to be
+    // forgotten. `delegatedHeadInput` is the one builder and `runHostedTask`
+    // owns the one capture.
     return buildHeadToolSet({
       input,
-      capture: new HeadCapture(),
+      capture,
       rt: runtime,
       executeTool: (finished: ToolSet) => factory.toolFor(finished),
       webSearch,

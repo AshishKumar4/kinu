@@ -104,10 +104,22 @@ export interface SubordinateHostSeams {
   }): Promise<ExplorationProfile>;
   resolveModel(spec: string): LanguageModel;
   /** The tool surface this hosted actor's delegated turn admits, built over its
-   *  own runtime: its role's tools, its `report` lane, its own hires. The
-   *  ledger is handed in rather than returned, because the `report` tool writes
-   *  it while the loop is still running and the relay decision reads it after. */
-  taskTools(actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger, input: HeadInput): ToolSet;
+   *  own runtime: its role's tools, its `report` lane, its own hires.
+   *
+   *  BOTH ACCUMULATORS ARE HANDED IN, and for one reason each. The report
+   *  `ledger` is, because the `report` tool writes it while the loop is still
+   *  running and the relay decision reads it after. The `capture` is, because
+   *  it is the run's ONE findings accumulator: the tools record evidence,
+   *  decisions, artifacts and their own calls into it, and `runHeadInference`
+   *  reads exactly that instance into the report the caller gets back. A
+   *  surface built over a capture of its own would record a turn's whole
+   *  working record into an object nothing reads, and the report would come
+   *  back thinner than the run.
+   */
+  taskTools(
+    actor: HostedActor, runtime: CFRuntime, reports: HostedReportLedger,
+    input: HeadInput, capture: HeadCapture,
+  ): ToolSet;
   /** The per-step live plane the turn reports. */
   dynamic(actor: HostedActor): DynamicContext;
   /** The mission ledger a delegated turn charges, or null. */
@@ -342,6 +354,15 @@ export async function runHostedTask(
     // caller does not supply it: a caller-supplied `HeadInput` is a second shape
     // that can disagree with the one the tools were built from.
     const input = delegatedHeadInput(actor.record, task);
+    // THE RUN'S ONE FINDINGS ACCUMULATOR, built here beside the input and for
+    // the same reason: the tools write it while the turn runs and
+    // `runHeadInference` reads it into the report this call returns, so a
+    // second instance is a working record nothing reads. With two, a delegated
+    // turn's decisions, evidence, artifacts and tool calls all landed in the
+    // tool surface's own copy, and the report came back with none of them —
+    // which the caller sees as an answer synthesised from nothing when the
+    // turn produced no closing prose.
+    const capture = new HeadCapture();
     // Annotated with the NAMED interface and assembled in statements: `mission`
     // is added only when this turn is budgeted, so an UNBUDGETED turn carries no
     // key at all rather than a spread of nothing. Absent and present are
@@ -351,8 +372,8 @@ export async function runHostedTask(
       actor,
       runId: crypto.randomUUID(),
       model: seams.resolveModel(profile.tier.model),
-      tools: seams.taskTools(actor, runtime, reports, input),
-      capture: new HeadCapture(),
+      tools: seams.taskTools(actor, runtime, reports, input, capture),
+      capture,
       workspaceLayout: 'shared-workspace',
       // Cancellation is the session's. A delegated turn is not cancelled by the
       // parent hanging up, by a socket closing or by an eviction: an interrupted
