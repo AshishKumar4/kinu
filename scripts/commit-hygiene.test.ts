@@ -138,14 +138,18 @@ describe('a legitimate product possessive PASSES — the false-positive control'
     }
   });
 
-  test('the list is the measured five, the owner, and one deleted identifier', () => {
+  test('the list is the measured five, the owner, and two deleted identifiers', () => {
     // The list's whole defence is that it stays short and every entry is a fact
-    // someone can check, so its exact contents are the assertion. `FacetIdentity`
-    // is the one deleted-class entry the gate's own doc reserved room for: the
-    // actor-host cutover removed the type, and `76936034ba` cites it correctly.
+    // someone can check, so its exact contents are the assertion. Two entries are
+    // deleted-class citations the gate's own doc reserves room for: the actor-host
+    // cutover removed `FacetIdentity` and `76936034ba` cites it correctly, and the
+    // actor cutover's completion removed `NodeLoopHost` — the seam a facet ran a
+    // swarm node through, superseded by the required `AgentsForkDeps.hostNode` —
+    // which `9078d528c8` line 3 cites correctly. Both name a type this repository
+    // shipped, so both are checkable at the SHA that cites them.
     expect([...NAMES_WITHOUT_CODE].sort()).toEqual([
       'AlphaEvolve', 'AshishKumar4', 'FacetIdentity', 'FunSearch', 'GitHub', 'JavaScript',
-      'TypeScript',
+      'NodeLoopHost', 'TypeScript',
     ]);
     expect(inspect("chore(deps): move to TypeScript 7\n\nTypeScript's project references now "
       + 'resolve the scripts project.', isCode)).toEqual([]);

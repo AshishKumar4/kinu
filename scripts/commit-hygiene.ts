@@ -198,10 +198,23 @@ export const ROSTER: readonly string[] = ['Main'];
  * actor-host cutover deleted the per-actor facet identity row it named. The
  * citation is a class this repository shipped, checkable at either SHA, and
  * deleting a type is not grounds for rewriting the history that used it.
+ *
+ * `NodeLoopHost` is the fifth, and it arrived the same way one commit later.
+ * `9078d528c8` line 3 ("The search's abort signal never reached a node run in a
+ * facet: NodeLoopHost took no signal") cites the seam a facet backend ran a
+ * swarm node through; `packages/core/src/strategy/node-host.ts` declared it at
+ * that commit and still declared it at `008ee768a`, and THIS commit deletes it,
+ * because the actor cutover replaced that seam with the required
+ * `AgentsForkDeps.hostNode` and left `nodeHost` supplied by nothing in either
+ * backend. So the citation is again a type this repository shipped, checkable
+ * at either SHA — and again not grounds for rewriting the history that used it.
+ * Note the shape of the trap: the gate reads a name as a person exactly when
+ * the tree stops holding it, so completing a cutover is what turns a correct
+ * historical message red. The remedy is this list, not a reset.
  */
 export const NAMES_WITHOUT_CODE: readonly string[] = [
   'TypeScript', 'JavaScript', 'GitHub', 'AlphaEvolve', 'FunSearch', 'AshishKumar4',
-  'FacetIdentity',
+  'FacetIdentity', 'NodeLoopHost',
 ];
 
 export interface Narration {

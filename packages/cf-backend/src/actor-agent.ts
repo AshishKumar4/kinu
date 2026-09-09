@@ -5900,6 +5900,37 @@ export abstract class ActorAgent extends Think<Env> {
     if (pending.length > 0) this.userSteer.restorePending(pending);
   }
 
+  /**
+   * The turn-local message tail: the unapproved instruction files, then the
+   * volatile turn-local block — the order they ride ahead of the turn in.
+   *
+   * Both are turn-scoped user messages that are absent more often than not,
+   * which is the whole of the branching here: three independent "is there
+   * anything to say" decisions whose only shared answer is this array. The
+   * unapproved half of the two instruction sources the system prompt just
+   * rendered is agent-writable, so it rides one sealed user message instead of
+   * the system plane, and it is null when every discovered file was approved.
+   *
+   * Never persisted: `assembleTurnMessages` appends this after the extension
+   * transformContext seam, so compaction never sees it.
+   */
+  private turnLocalTail(
+    deviceNotice: string | null,
+    agentsMd: AgentsMdSources,
+    activeSkills: ActiveSkillSet | undefined,
+  ): ModelMessage[] {
+    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = { deviceNotice };
+    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
+    const turnLocal = turnLocalContextMessage(turnLocalOptions);
+    const unverified = unverifiedInstructionsMessage(
+      activeSkills ? { agentsMd, activeSkills } : { agentsMd },
+    );
+    return [
+      ...(unverified ? [unverified] : []),
+      ...(turnLocal ? [turnLocal] : []),
+    ];
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     this._turnProgram = null;
     ctx.signal?.throwIfAborted();
@@ -6147,16 +6178,7 @@ export abstract class ActorAgent extends Think<Env> {
     // model sees its latest lessons in-turn. Read once here rather than per
     // step: it is the one dynamic-context input that needs an await.
     this._turnMemoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocalOptions: Parameters<typeof turnLocalContextMessage>[0] = { deviceNotice };
-    if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
-    const turnLocal = turnLocalContextMessage(turnLocalOptions);
-    // The unapproved half of the two instruction sources the system prompt just
-    // rendered. Those bytes are agent-writable, so they ride one sealed user
-    // message ahead of the turn-local tail instead of the system plane; null
-    // when every discovered file was approved.
-    const unverified = unverifiedInstructionsMessage(
-      activeSetForPrompt ? { agentsMd, activeSkills: activeSetForPrompt } : { agentsMd },
-    );
+    const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
     // The shared turn-context assembly (core orchestrator/turn-context.ts) —
     // the SAME ordering runChat runs on the CLI: attachment sanitize →
     // extension onTurnStart → awaited transformContext (compaction, over the
@@ -6169,10 +6191,7 @@ export abstract class ActorAgent extends Think<Env> {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
       extensions: this.extensions,
-      turnLocal: [
-        ...(unverified ? [unverified] : []),
-        ...(turnLocal ? [turnLocal] : []),
-      ],
+      turnLocal,
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
       trigger: measured.trigger,

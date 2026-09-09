@@ -113,16 +113,42 @@ describe('reachability of the root policy read', () => {
 
   /** The control that makes the pass above mean "inherited" rather than
    *  "ungated": with nothing granted on the root, the same command through the
-   *  same hosted shell is refused. */
+   *  same hosted shell is REFUSED, and the refusal says what refused it.
+   *
+   *  Stated as a classification and a named rule rather than "something came
+   *  back", because the two builds this control exists to separate both answer
+   *  with a value: one that wrongly ADMITS the command answers with no
+   *  `refusal` at all, and one that refuses for an unrelated reason (no shell,
+   *  an unreachable root read) never names the rule the root failed to grant.
+   *  `unavailable` is the ladder's own answer for a 'gate' decision with nobody
+   *  to ask — a facet carries no approval channel and no queue of its own
+   *  (`createInheritedApprovalPolicy`), so this is the exact rung the refusal
+   *  must come off, not merely a refusal of some kind. */
   test('a hosted actor whose root granted nothing is still gated', async () => {
     const workspace = orchestratorHarness();
+    // The premise the title names, read rather than assumed: nothing is granted
+    // in the one place grants are ever written. A harness that started seeding
+    // a grant here would turn this case into a duplicate of the one above.
+    expect(workspace.agent.observeRuntime().actor.config.getShellApprovalGrants()).toEqual([]);
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',
       mission: 'inherit an empty policy', roleId: 'implementer',
     });
     const shell = child.actor.runtime.shell;
     if (!shell) throw new Error('a hosted subordinate carries a shell');
-    expect((await shell.exec(GATED)).refusal).toBeDefined();
+
+    const refused = await shell.exec(GATED);
+
+    // The gate's own classification — the field a caller branches on.
+    expect(refused.refusal?.reason).toBe('unavailable');
+    // ...about THIS command's rule, so the refusal is attributable to the
+    // ungranted force-push and not to the shell being absent or broken.
+    expect(refused.refusal?.error).toContain(GATED_RULE);
+    expect(refused.refusal?.error).toContain('needs owner approval');
+    // ...and shaped as a command that never reached a machine.
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stdout).toBe('');
   });
 });
 

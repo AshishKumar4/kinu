@@ -257,7 +257,7 @@ interface NodeFixture {
   readonly journal: HeadJournal;
 }
 
-function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixture {
+function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runtimeForWorkspace'] }): NodeFixture {
   const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
   const input: NodeAgentInput = {
@@ -291,7 +291,7 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
-  if (over?.host !== undefined) deps.host = over.host;
+  if (over?.runtimeForWorkspace !== undefined) deps.runtimeForWorkspace = over.runtimeForWorkspace;
   return { input, deps, journal };
 }
 
@@ -299,10 +299,11 @@ function nodeFixture(over?: { readonly host?: NodeAgentDeps['host'] }): NodeFixt
 
 describe('a node that failed is not a node still working', () => {
   test('a transport that raises leaves a terminal row with the cause chained', async () => {
-    // A host is an RPC to another Durable Object; a rejection there arrives with no
-    // report behind it, which is the one path that reached neither terminal writer.
+    // A node's own runtime is the backend's to build — a shell and a file plane acting
+    // as the node's credential — and a failure there arrives with no report behind it,
+    // which is the one path that reached neither terminal writer.
     const { input, deps, journal } = nodeFixture({
-      host: () => Promise.reject(new Error(UPSTREAM)),
+      runtimeForWorkspace: () => Promise.reject(new Error(UPSTREAM)),
     });
 
     let failure: Error | null = null;

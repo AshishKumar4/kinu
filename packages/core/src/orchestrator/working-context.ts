@@ -54,7 +54,7 @@ import { decodeModelMessages, encodeModelMessages, modelMessagesDigest } from '.
 import { sqlCheckList } from '../identity/schema';
 
 /** How a revision came to exist. */
-export const WORKING_SOURCES = ['hydrate', 'turn', 'edit'] as const;
+const WORKING_SOURCES = ['hydrate', 'turn', 'edit'] as const;
 export type WorkingSource = (typeof WORKING_SOURCES)[number];
 
 /**
@@ -65,16 +65,16 @@ export type WorkingSource = (typeof WORKING_SOURCES)[number];
  * every revision that is neither, whether it was effective once (its
  * `activatedAt` says so) or never became effective (`closedReason` says why).
  */
-export const WORKING_STATUSES = ['staged', 'active', 'superseded'] as const;
+const WORKING_STATUSES = ['staged', 'active', 'superseded'] as const;
 export type WorkingStatus = (typeof WORKING_STATUSES)[number];
 
 /** Which surface authored a revision. `runtime` is the host recording what the
  *  actor's own history now is; the other three are edits. */
-export const WORKING_VIAS = ['runtime', 'file', 'session', 'owner'] as const;
+const WORKING_VIAS = ['runtime', 'file', 'session', 'owner'] as const;
 export type WorkingVia = (typeof WORKING_VIAS)[number];
 
 /** Why a staged edit was closed without ever becoming effective. */
-export const WORKING_CLOSED_REASONS = ['history_rewritten', 'superseded_by_edit'] as const;
+const WORKING_CLOSED_REASONS = ['history_rewritten', 'superseded_by_edit'] as const;
 export type WorkingClosedReason = (typeof WORKING_CLOSED_REASONS)[number];
 
 /** One revision's metadata — everything except the messages themselves, which

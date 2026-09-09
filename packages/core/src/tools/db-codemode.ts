@@ -62,7 +62,7 @@ import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 
 /** The physical prefix of every agent-created data table. */
-export const APP_TABLE_PREFIX = 'app_';
+const APP_TABLE_PREFIX = 'app_';
 
 /**
  * The catalogue of agent data tables.
@@ -73,7 +73,7 @@ export const APP_TABLE_PREFIX = 'app_';
  * read out of it. Sitting outside the prefix makes that structural rather than
  * a name on a deny list.
  */
-export const AGENT_DATA_CATALOG = 'agent_data_tables';
+const AGENT_DATA_CATALOG = 'agent_data_tables';
 
 /**
  * The column the host owns on a `scope: 'actor'` table.
@@ -85,7 +85,7 @@ export const AGENT_DATA_CATALOG = 'agent_data_tables';
 const ACTOR_COLUMN = 'actor_id';
 
 /** Column types a declaration may use. */
-export const APP_COLUMN_TYPES = ['text', 'integer', 'real', 'blob', 'json'] as const;
+const APP_COLUMN_TYPES = ['text', 'integer', 'real', 'blob', 'json'] as const;
 export type AppColumnType = (typeof APP_COLUMN_TYPES)[number];
 
 /** What each declared type is in SQLite. A JSON document is TEXT that this
@@ -104,7 +104,7 @@ export const APP_TABLE_SCOPES = ['actor', 'workspace'] as const;
 export type AppTableScope = (typeof APP_TABLE_SCOPES)[number];
 
 /** Comparisons a predicate may name. */
-export const APP_COMPARISONS = ['=', '!=', '<', '<=', '>', '>=', 'like'] as const;
+const APP_COMPARISONS = ['=', '!=', '<', '<=', '>', '>=', 'like'] as const;
 
 /**
  * Bounds. Each one is a refusal that names its own limit, never a silent clamp:
@@ -330,7 +330,7 @@ export interface AppDataStoreDeps {
  * and the index rides beside the refusal the way `execution` does on a
  * branchable tool call (tools/outcome.ts).
  */
-export class AppBatchError extends KinuError {
+class AppBatchError extends KinuError {
   override readonly name = 'AppBatchError';
   constructor(readonly failedIndex: number, cause: KinuError) {
     super(cause.code, `batch operation ${failedIndex} was refused, so none of the batch landed`, { cause });
@@ -1087,7 +1087,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
  * when the provider does, through the one `renderExecuteToolsDescription` both
  * backends compose.
  */
-export const DB_TYPES = `type DbValue = null | boolean | number | string | DbValue[] | { [key: string]: DbValue };
+const DB_TYPES = `type DbValue = null | boolean | number | string | DbValue[] | { [key: string]: DbValue };
 type DbColumnType = 'text' | 'integer' | 'real' | 'blob' | 'json';
 type DbColumn = { name: string; type: DbColumnType; notNull?: boolean; primaryKey?: boolean; unique?: boolean };
 type DbTable = { name: string; scope: 'actor' | 'workspace'; columns: DbColumn[]; createdBy: string; createdAt: number };

@@ -618,6 +618,51 @@ export interface HeadInferenceDeps {
 const ConstructedModelSchema = v.object({ modelId: v.string(), provider: v.string() });
 
 /**
+ * WHAT ENDED THE RUN, and how it reads: the report's `status` and the
+ * `stopReason` every non-completed summary and `errorMessage` is built from.
+ *
+ * A throw the abort or the deadline already explains is NOT a failure of the
+ * work: the turn body ends a cut turn by yielding `done` and then throwing, so
+ * the steps it recorded are already in the report and the throw only says the
+ * turn did not finish. Anything else — a dead provider stream, a stalled one,
+ * a model that cannot call the tools it was given — IS the failure.
+ *
+ * THE CAUSE CHAIN, not the bare message, when it broke. `runNodeAgent`'s
+ * transport catch renders one for the same column of the same store, and a run
+ * whose LOOP failed used to get the outermost sentence only — so two terminal
+ * rows written minutes apart read at different depths and the one with the
+ * real reason in it was the one nobody had to debug.
+ *
+ * Its own function because the two outputs are ONE reading: `status` and
+ * `stopReason` must name the same cut, and a status derived in one place and a
+ * reason in another is how an `errored` report ends up carrying an abort's
+ * reason. The gates are read here, once, in the order the run reads them —
+ * the deadline first, then the spawner's cancel — so the verdict is taken on
+ * one observation rather than two that a cut between them could split.
+ */
+function classifyHeadOutcome(
+  budget: HeadInput['budget'],
+  deps: Pick<HeadInferenceDeps, 'isAborted' | 'abortReason'>,
+  failure: KinuError | undefined,
+) {
+  const budgetGate = budgetExhausted(budget);
+  const aborted = deps.isAborted();
+  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
+  const status: HeadReport['status'] = broke
+    ? 'errored'
+    : aborted
+      ? 'aborted'
+      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
+  const stopReason = broke
+    ? renderThrownChain({ cause: failure })
+    : deps.abortReason?.()
+      ?? (budgetGate.exhausted
+        ? `${budgetGate.reason} budget exhausted`
+        : null);
+  return { status, stopReason };
+}
+
+/**
  * RUN ONE AGENT — every kind that is not an actor's own chat — AND ASSEMBLE ITS
  * REPORT.
  *
@@ -867,30 +912,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, recorded);
   }
 
-  const budgetGate = budgetExhausted(input.budget);
-  const aborted = deps.isAborted();
-  // A throw the abort or the deadline already explains is NOT a failure of the
-  // work: the turn body ends a cut turn by yielding `done` and then throwing, so
-  // the steps it recorded are already in this report and the throw only says the
-  // turn did not finish. Anything else — a dead provider stream, a stalled one,
-  // a model that cannot call the tools it was given — IS the failure.
-  const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
-  const status: HeadReport['status'] = broke
-    ? 'errored'
-    : aborted
-      ? 'aborted'
-      : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
-  // THE CAUSE CHAIN, not the bare message. `runNodeAgent`'s transport catch
-  // renders one for the same column of the same store, and a run whose LOOP
-  // failed used to get the outermost sentence only — so two terminal rows written
-  // minutes apart read at different depths and the one with the real reason in it
-  // was the one nobody had to debug.
-  const stopReason = broke
-    ? renderThrownChain({ cause: failure })
-    : deps.abortReason?.()
-      ?? (budgetGate.exhausted
-        ? `${budgetGate.reason} budget exhausted`
-        : null);
+  const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
   const summary = status === 'completed'
     ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
       || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })

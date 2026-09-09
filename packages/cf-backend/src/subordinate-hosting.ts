@@ -129,7 +129,7 @@ export interface SubordinateHostSeams {
  *  kept it in memory would reset and rebuild the whole tree beneath itself. The
  *  directory row is that durability now, and it cannot disagree with the roster
  *  because it IS the roster. */
-export function hostedDelegationBudget(
+function hostedDelegationBudget(
   seams: SubordinateHostSeams, actor: BoundActor,
 ): DelegationBudget {
   let depth = 0;
@@ -166,7 +166,7 @@ export function hostedDelegationBudget(
  * two are different limits on different verbs, and the only honest way to build
  * this from both would be to take a value it then ignores.
  */
-export function delegatedHeadInput(
+function delegatedHeadInput(
   record: WorkspaceActor,
   task: { readonly body: string; readonly mode: WorkMode },
 ): HeadInput {

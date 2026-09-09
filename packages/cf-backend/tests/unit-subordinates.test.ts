@@ -171,7 +171,7 @@ describe('subordinate wiring', () => {
       nameOrigin: 'user',
       mission: 'prove confinement',
     });
-    const subTools = workspace.agent.observeHostedTaskTools(child.actor, 'prove confinement');
+    const subTools = await workspace.agent.observeHostedTaskTools(child.actor, 'prove confinement');
     const subKeys = Object.keys(subTools);
     // No team to hire through, no memory or task stores of its own: a
     // delegated task reports; it does not branch the workspace.
