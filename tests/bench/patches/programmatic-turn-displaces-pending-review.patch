@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/evolution/session-window.ts b/packages/core/src/evolution/session-window.ts
-index 8ca493252..5a9458898 100644
+index 31bd1f8c6..b3dd60de5 100644
 --- a/packages/core/src/evolution/session-window.ts
 +++ b/packages/core/src/evolution/session-window.ts
-@@ -349,7 +349,7 @@ export function createCompletedTurnStore(sql: SqlExecutor): CompletedTurnStore {
-       // left the row at `none` with its review lost, while a replay of the
-       // recording dispatched it a second time. The obligation is now part of the
-       // row, and the durable queued-review lane claims it exactly once.
+@@ -351,7 +351,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle):
+       // insert returned instead, an eviction between the two would leave the
+       // row at `none` with its review lost, and a replay of the recording would
+       // dispatch it a second time.
 -      const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
 +      const review = 'awaiting_followup';
        const id = opts.id ?? `turn-${nanoid()}`;
