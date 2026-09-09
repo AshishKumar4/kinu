@@ -428,10 +428,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // the prompt builder classifies AGENTS.md and skills on every turn on every
     // root, and a missing table there would fail the read that decides trust.
     instruction_approvals: EVERYWHERE,
-    // The one-time pre-trust baseline marker. It is read beside
-    // instruction_approvals before every source can resolve trust, so a missing
-    // table is a fault rather than an empty migration.
-    instruction_approval_migrations: EVERYWHERE,
     plan_reviews: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,

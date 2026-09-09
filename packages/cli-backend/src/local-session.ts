@@ -112,7 +112,6 @@ import {
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
   initWorkspaceBaselineTable, initWorkspaceSchema,
   InstructionApprovalStore, listInstructionApprovals, gatherApprovableInstructions,
-  snapshotExistingInstructions,
   admitInstructionDecision, type AdmittedInstructionDecision,
   openInstructionSource,
   type InstructionSourceRow, type InstructionSourceView,
@@ -811,10 +810,6 @@ export class LocalAgentSession implements BackendHost {
    *  the authority that decides whether discovered AGENTS.md / skill bytes are
    *  placed as system instructions or as unverified reference material. */
   private readonly instructionApprovals: InstructionApprovalStore;
-  /** The migration is awaited before the first turn can resolve a trust verdict.
-   * It snapshots existing paths once; later paths never receive a first-seen
-   * fallback. */
-  private instructionMigration: Promise<void> | null = null;
   /** Bound once rather than rebuilt per turn: both discovery and skill
    * admission take the resolver as a plain function. */
   private readonly instructionTrust: InstructionTrustResolver =
@@ -939,7 +934,6 @@ export class LocalAgentSession implements BackendHost {
       this.rt.storage.sql,
       this.rt.actor,
       `local:${approvalScope}`,
-      (body) => opts.db.transaction(body)(),
     );
 
     // The stores every agent has, from core — one list both backends inherit.
@@ -1117,34 +1111,6 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
-  private async ensureInstructionApprovalMigration(): Promise<void> {
-    const existing = this.instructionMigration;
-    if (existing !== null) {
-      await existing;
-      return;
-    }
-    const migration = (async () => {
-      const limits = {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      };
-      const agentsMd = discoverAgentsMd(this.cwd, limits, () => 'unverified');
-      const entries = await snapshotExistingInstructions({
-        agentsMd,
-        skillsVfs: skillsVfsOver(this.rt.storage.vfs),
-        admissionTokens: stepContextLimit(limits),
-      });
-      this.instructionApprovals.grandfatherExisting(entries);
-    })();
-    this.instructionMigration = migration;
-    try {
-      await migration;
-    } catch (cause) {
-      if (this.instructionMigration === migration) this.instructionMigration = null;
-      throw cause;
-    }
-  }
-
   /**
    * The owner's instruction-file surface for this working directory
    * (KINU-N028): every AGENTS.md and workspace skill this session would carry,
@@ -1152,10 +1118,10 @@ export class LocalAgentSession implements BackendHost {
    *
    * Discovery runs fresh rather than reporting the last turn's values, because
    * the owner has to be shown what is on disk NOW — approving a digest that has
-   * already moved on would grant nothing and say it granted something.
+   * already moved on would grant nothing and say it granted something. A file
+   * with no owner decision is unverified, however long it has sat on disk.
    */
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    await this.ensureInstructionApprovalMigration();
     const limits = {
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
@@ -1173,7 +1139,6 @@ export class LocalAgentSession implements BackendHost {
 
   /** One row, opened: the bytes of THAT file and nothing else. */
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    await this.ensureInstructionApprovalMigration();
     const clean = path.trim();
     if (clean === '') return null;
     const limits = {
@@ -1192,7 +1157,6 @@ export class LocalAgentSession implements BackendHost {
   /** Follow these exact bytes at this path as instructions. Same admission rule
    *  as the cloud transport, because it is core's rule, not either side's. */
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
-    await this.ensureInstructionApprovalMigration();
     const admitted = admitInstructionDecision(path, reviewedDigest);
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
@@ -1205,7 +1169,6 @@ export class LocalAgentSession implements BackendHost {
 
   /** Stop following a path, and keep the refusal so nothing re-grants it. */
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
-    await this.ensureInstructionApprovalMigration();
     const admitted = admitInstructionDecision(path);
     if (!admitted.ok) return admitted;
     this.instructionApprovals.revoke(admitted.path);
@@ -2669,7 +2632,6 @@ export class LocalAgentSession implements BackendHost {
     // THIS turn, and both the profile resolution below and the toolset rebuild
     // after it consult it.
     this.turnIsParentAssigned = item.kind === 'programmatic';
-    await this.ensureInstructionApprovalMigration();
     const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];

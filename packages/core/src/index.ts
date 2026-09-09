@@ -1775,7 +1775,7 @@ export type {
 export { buildPendingActions } from './read-models/pending-actions';
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
-  previewInstruction, gatherApprovableInstructions, snapshotExistingInstructions,
+  previewInstruction, gatherApprovableInstructions,
 } from './read-models/instruction-approvals';
 export type {
   InstructionSourceKind, InstructionSourceMeta, InstructionSourceRow,

@@ -215,7 +215,7 @@ import {
   collectWorkspaceAgentsMd, type AgentsMdSources,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
-  listInstructionApprovals, gatherApprovableInstructions, snapshotExistingInstructions,
+  listInstructionApprovals, gatherApprovableInstructions,
   openInstructionSource, admitInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   stepContextLimit,
@@ -4167,14 +4167,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  unapproved. The owner's decisions and the turn's classification read the
    *  same rows — there is no second authority to drift from. */
   private _instructionApprovals: InstructionApprovalStore | null = null;
-  private _instructionMigration: AsyncTaskOwner | null = null;
   protected _workspaceInstructionApprovals: readonly InstructionApproval[] | null = null;
   private instructionApprovals(): InstructionApprovalStore {
     this._instructionApprovals ??= new InstructionApprovalStore(
       this.rt.storage.sql,
       this.actorHandle(),
       `cf:${this.workspaceName()}`,
-      (body) => this.ctx.storage.transactionSync(body),
     );
     return this._instructionApprovals;
   }
@@ -4191,56 +4189,12 @@ export abstract class ActorAgent extends Think<Env> {
     return this._instructionTrust;
   }
 
-  protected async refreshInstructionApprovalAuthority(): Promise<void> {
-    await this.ensureInstructionApprovalMigration();
-    this._workspaceInstructionApprovals = null;
-  }
-
-  /**
-   * Snapshot existing instruction files before this actor's first turn.
-   *
-   * The durable marker makes this asynchronous activation boundary the only
-   * place a grandfather row is written. Later agent-created paths have no row
-   * and resolve unverified.
-   */
-  protected ensureInstructionApprovalMigration(): Promise<void> {
-    const existing = this._instructionMigration;
-    if (existing !== null && existing.promise !== null) return existing.promise;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._instructionMigration = owner;
-    const migration = (async () => {
-      try {
-        const limits = {
-          contextWindow: this.sessionContextWindow(),
-          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-        };
-        const agentsMd = await collectWorkspaceAgentsMd(
-          this.rt.storage.vfs,
-          limits,
-          () => 'unverified',
-          this.rt.executionRouter?.getProvider('sandbox'),
-        );
-        const entries = await snapshotExistingInstructions({
-          agentsMd,
-          skillsVfs: this.getSkillsVfs(),
-          admissionTokens: stepContextLimit(limits),
-        });
-        this.instructionApprovals().grandfatherExisting(entries);
-      } catch (cause) {
-        if (this._instructionMigration === owner) this._instructionMigration = null;
-        throw cause;
-      }
-    })();
-    owner.promise = migration;
-    return migration;
-  }
-
 
   /** The workspace root's authoritative approval rows. Facets fetch this before
    * each turn; they never consult their private actor SQL for shared files. */
   @callable()
   async getWorkspaceInstructionApprovals(): Promise<readonly InstructionApproval[]> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     return this.instructionApprovals().list();
   }
   /**
@@ -4253,7 +4207,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   @callable()
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const agentsMd = await this.discoverInstructionSources();
     return listInstructionApprovals({
       ...request,
@@ -4272,7 +4226,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** One row, opened: the bytes of THAT file and nothing else. */
   @callable()
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const clean = path.trim();
     if (clean === '') return null;
     return openInstructionSource({
@@ -4307,7 +4261,7 @@ export abstract class ActorAgent extends Think<Env> {
   async approveInstruction(
     path: string, reviewedDigest: string,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path, reviewedDigest);
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
@@ -4324,7 +4278,7 @@ export abstract class ActorAgent extends Think<Env> {
   async revokeInstruction(
     path: string,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path);
     if (!admitted.ok) return admitted;
     this.instructionApprovals().revoke(admitted.path);
@@ -5994,7 +5948,7 @@ export abstract class ActorAgent extends Think<Env> {
       turnIndex: this.orch.sessionTurnIndex,
     });
 
-    await this.refreshInstructionApprovalAuthority();
+    this._workspaceInstructionApprovals = null;
     // ── Skills resolution for this turn (core turn-surface) ──────────────
     this._turnActiveSkills = null;
     // The actor's REAL tool surface: deps-gated builtins (report) are

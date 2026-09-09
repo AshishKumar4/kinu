@@ -20,7 +20,7 @@
 
 import {
   instructionDigest,
-  type InstructionApproval, type InstructionDecision, type InstructionMigrationEntry,
+  type InstructionApproval, type InstructionDecision,
   type InstructionTrust, type InstructionTrustResolver,
 } from '../safety/instruction-trust';
 import {
@@ -283,43 +283,6 @@ export async function gatherApprovableInstructions(input: {
     sources.push({ path: unread.path, kind: 'skill', bytes: unread.bytes });
   }
   return sources;
-}
-
-/**
- * The one migration-time snapshot: current AGENTS.md bytes plus complete,
- * valid workspace skill files.
- *
- * It runs before the first turn, not during ordinary discovery.
- * The marker in InstructionApprovalStore then closes the baseline forever: a
- * new path appearing after this call has no row and begins unverified.
- *
- * `admissionTokens` is the real turn allocation, not an invented migration
- * maximum: a file too big to reach a turn is inert and stays unverified, and
- * migration never materializes an unbounded corpus merely to grandfather it.
- */
-export async function snapshotExistingInstructions(input: {
-  readonly agentsMd?: AgentsMdSources;
-  readonly skillsVfs: SkillsVfs;
-  readonly admissionTokens: number;
-}): Promise<InstructionMigrationEntry[]> {
-  const entries: InstructionMigrationEntry[] = (input.agentsMd?.admitted ?? []).map((file) => ({
-    path: file.path,
-    digest: instructionDigest(file.content),
-  }));
-  const discovery = await discoverSkills(input.skillsVfs, {
-    admissionTokens: input.admissionTokens,
-  });
-  for (const skill of discovery.skills) {
-    if (skill.bodyRef.kind !== 'file') continue;
-    // One raw source at a time: retain only its digest before moving on, so a
-    // large valid corpus cannot hold every source string during migration.
-    const source = await readSkillFile(input.skillsVfs, skill.bodyRef);
-    entries.push({
-      path: skill.bodyRef.path,
-      digest: instructionDigest(source),
-    });
-  }
-  return entries;
 }
 
 /**
