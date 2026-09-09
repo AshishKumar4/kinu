@@ -24,12 +24,15 @@ import {
   TOOL_REACH,
   createAgentsCodemodeProvider,
   createAgentSelfProvider,
+  createAppDataStore,
+  createDbCodemodeProvider,
   createMemoryCodemodeProvider,
   createReleaseCodemodeProvider,
   createReportCodemodeProvider,
   createTasksCodemodeProvider,
   createWebCodemodeProvider,
   MissionGovernor,
+  RunEventRecorder,
   TaskListStore,
   type AgentSelfHost,
   type CodemodeProvider,
@@ -38,11 +41,14 @@ import {
   type ReleaseChange,
   type AgentRuntime,
 } from '../src/index';
+import { refuseHostNode } from './helpers-actor-host';
 
 /** `createAgentSelfProvider` reads nothing off the host at construction — the
  *  host is consumed inside each member's execute, which unit-agent-self.test.ts
  *  covers. This exists only so the provider can be built here. */
-function agentSelfHost(storage: AgentRuntime['storage']): AgentSelfHost {
+function agentSelfHost(
+  storage: AgentRuntime['storage'], actor: AgentRuntime['actor'],
+): AgentSelfHost {
   return {
     proposeCurriculumTasks: async () => [],
     listCurriculumTasks: async () => [],
@@ -50,7 +56,7 @@ function agentSelfHost(storage: AgentRuntime['storage']): AgentSelfHost {
     proposeScaffold: async () => ({ ok: false, reason: 'not in this test' }),
     listScaffoldVersions: () => [],
     createTimerTrigger: async () => ({ id: 't1', kind: 'timer_oneshot', nextFireAt: null }),
-    budget: new MissionGovernor({ storage }),
+    budget: new MissionGovernor({ storage, actor }),
     cancelTrigger: () => ({ ok: true, changed: false }),
     jobResult: async () => null,
     listBackgroundJobs: async () => [],
@@ -107,7 +113,13 @@ describe('the reach declaration', () => {
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
         mode: 'build',
-        fork: { rt, model: new MockLanguageModelV3() },
+        // REFUSES to seat a node rather than answering with a stub: this case
+        // only builds each provider, so a node hosted here would be a node
+        // nothing asked for, running under a fabricated actor.
+        fork: {
+          rt, model: new MockLanguageModelV3(),
+          hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
+        },
       })),
       memory: () => createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor })),
       tasks: () => createTasksCodemodeProvider(
@@ -120,7 +132,19 @@ describe('the reach declaration', () => {
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),
       release: () => createReleaseCodemodeProvider(() => releaseDeps),
-      agent: () => createAgentSelfProvider(agentSelfHost(rt.storage)),
+      agent: () => createAgentSelfProvider(agentSelfHost(rt.storage, rt.actor)),
+      // The agent-data namespace over a REAL store on this runtime's own
+      // database. `events` and `runId` are read per mutation, and this case
+      // performs none — but they are the actor's real recorder and a named run
+      // rather than throwing stubs, because a factory that cannot be built is
+      // indistinguishable here from a namespace nobody wired.
+      db: () => createDbCodemodeProvider(createAppDataStore({
+        sql: rt.storage.sql,
+        actor: rt.actor,
+        transactionSync: rt.storage.transactionSync,
+        events: () => new RunEventRecorder(rt.storage.sql, rt.actor),
+        runId: () => 'run-tool-reach',
+      })),
     } satisfies Record<string, () => CodemodeProvider>;
 
     const declared = Object.entries(TOOL_REACH)

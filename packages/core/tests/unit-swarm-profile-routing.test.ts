@@ -23,6 +23,7 @@
 //      different search wearing the same root id and the same claimed epoch.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { hostedSeatsOver } from './helpers-actor-host';
 import type { MockLanguageModelV3 } from 'ai/test';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
@@ -140,13 +141,17 @@ function harness(input: {
   readonly envelope: ProfileCatalogEnvelope;
   readonly roleId: string;
 }): Harness {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
   const caller = countingModel('m-default');
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
   const resolvedSpecs: string[] = [];
   const fork: AgentsForkDeps = {
     rt,
+    // One REAL actor per node, over the caller's own database: a routed run
+    // records which model each node ran on, and a node with no actor of its own
+    // would have no claim to record it against.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
     // Branching on the three specs this fixture declares rather than a lookup
     // table, so an unexpected spec is a named failure instead of an undefined.
@@ -232,7 +237,7 @@ function seedInterruptedRun(input: {
     budget: 4,
     now: Date.now(),
   });
-  insertSearchNode(sql, {
+  insertSearchNode(sql, input.rt.actor, {
     nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
     task: input.task, action: '', observation: input.task,
     codeUsed: null, depth: 0, msgId: null,
@@ -293,9 +298,12 @@ describe('a delegated tier routes the model its nodes run', () => {
   test('an unrouted actor — no catalog — still runs its nodes on the caller\'s model', async () => {
     // The honest unrouted case, kept working: no profile authority means no tier
     // to route to, so the seam is never consulted and nothing refuses.
-    const { rt } = createTestRuntime();
+    const { rt, testSql } = createTestRuntime();
     const caller = countingModel('m-default');
-    const entry = createAgentsTool({ mode: 'build', fork: { rt, model: caller.model } });
+    const entry = createAgentsTool({
+      mode: 'build',
+      fork: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
+    });
     if (!entry) throw new Error('Expected the agents tool to be created');
     const result = v.parse(v.object({ preset: v.string() }), await toolExecute<AgentsToolInput, unknown>(entry)({
       action: 'swarm', preset: 'ideate', task: 'anything', branches: 1, depth: 1,
@@ -399,13 +407,17 @@ const PerNodeResultSchema = v.object({
 /** A harness whose resolver knows TWO extra specs besides the caller's model, each
  * separately countable, plus the ordered specs the runner asked to build. */
 function perNodeHarness() {
-  const { rt } = createTestRuntime();
+  const { rt, testSql } = createTestRuntime();
   const caller = countingModel('m-default');
   const a = countingModel('m-alpha');
   const b = countingModel('m-beta');
   const resolvedSpecs: string[] = [];
   const fork: AgentsForkDeps = {
     rt,
+    // One REAL actor per node, over the caller's own database: a routed run
+    // records which model each node ran on, and a node with no actor of its own
+    // would have no claim to record it against.
+    hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);

@@ -42,6 +42,19 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
     `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`,
   ).toArray().length > 0;
   if (hasTriggers) {
+    // DELIBERATELY NOT ACTOR-SCOPED, and the reason is a property this schema no
+    // longer enforces. `triggers` is keyed `(actor_id, id)` now, but
+    // `webhook_secrets` carries no `actor_id` at all, so this existence check
+    // matches a trigger id belonging to ANY actor. That is what keeps it
+    // correct: narrowing it to one actor would delete another actor's live
+    // secret as an orphan, which is strictly worse than the alternative.
+    //
+    // THE SAFETY PROPERTY, stated because it is now unenforced: the sweep is
+    // sound iff a trigger id is unique ACROSS actors. `TriggerRegistry.register`
+    // mints it with `ulid()`, so it is true in practice — but the primary key
+    // stopped guaranteeing it when the actor joined the key. Scoping this
+    // properly requires giving `webhook_secrets` an `actor_id`; until then this
+    // relies on ULID uniqueness rather than on the schema.
     sql.exec(`
       DELETE FROM webhook_secrets
       WHERE NOT EXISTS (

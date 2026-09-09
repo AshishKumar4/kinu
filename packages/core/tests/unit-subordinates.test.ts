@@ -43,25 +43,42 @@ import {
   type SubordinateRuntime,
   type KinuEvent,
   WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
+  type ActorHandle,
   type AgentConfigStore,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
-import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor } from './helpers';
+import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
+import {
+  makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
+} from './helpers';
 
 /** One fixed clock for every roster write these scenes make. */
 const NOW = 1_700_000_000_000;
 
-function makeSql(): SqlExec {
-  return makeSqlExec(new Database(':memory:'));
+/**
+ * One database's positional SQL port and the actor every store over it binds
+ * to — both over the SAME `Database`.
+ *
+ * Returned as a pair rather than as a bare port: every table these scenes
+ * touch is keyed by `actor_id` now, so a writer and a reader holding handles
+ * from two databases would each see an EMPTY inbox and roster. That reads as
+ * "nothing was delegated" rather than as the scoping fault it is.
+ */
+function makeWorld(db: Database = new Database(':memory:')) {
+  return {
+    sql: makeSqlExec(db),
+    actor: createTestActor(makeTagged(db), makeExecRaw(db), 'subordinates-workspace', 'main'),
+  } satisfies { sql: SqlExec; actor: ActorHandle };
 }
 
 function makeRosterStore(db: Database = new Database(':memory:')): SubordinateRosterStore {
-  return new SubordinateRosterStore(makeSqlExec(db));
+  const { sql, actor } = makeWorld(db);
+  return new SubordinateRosterStore(sql, actor);
 }
 
 function makeIdentityStore(db: Database = new Database(':memory:')): SubordinateIdentityStore {
-  return new SubordinateIdentityStore(makeSqlExec(db));
+  const { sql, actor } = makeWorld(db);
+  return new SubordinateIdentityStore(sql, actor);
 }
 
 function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
@@ -303,27 +320,33 @@ describe('workspace subordinate roster', () => {
 
 describe('subordinate live status', () => {
   test('returns the latest activity and bounded recent step summaries', () => {
-    const sql = makeSql();
-    sql.exec(`CREATE TABLE activity_log (
-      id TEXT PRIMARY KEY,
-      event TEXT NOT NULL,
-      detail TEXT,
-      elapsed_ms INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    )`);
-    for (let index = 1; index <= 7; index++) {
+    // The PRODUCTION `activity_log`, not a copy of it: the row key is
+    // `(actor_id, id)` now, and a hand-rolled table without that column would
+    // exercise a shape no workspace has.
+    const workspace = createTestWorkspace();
+    const sql = makeSqlExec(workspace.db);
+    const actors = createTestActors(workspace.sql, workspace.execRaw);
+    const insert = (owner: string, index: number, detail: string): void => {
       sql.exec(
-        `INSERT INTO activity_log (id, event, detail, elapsed_ms, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO activity_log (actor_id, id, event, detail, elapsed_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        owner,
         `id-${index}`,
         `step-${index}`,
-        index === 7 ? 'Integrated auth findings' : `detail-${index}`,
+        detail,
         index * 10,
         index * 100,
       );
+    };
+    for (let index = 1; index <= 7; index++) {
+      insert(actors.main.actorId, index, index === 7 ? 'Integrated auth findings' : `detail-${index}`);
     }
+    // A SIBLING's newer step, in the same table. An unscoped read would report
+    // it as this subordinate's live status — a parent watching one child would
+    // be shown another child's work.
+    insert(actors.sibling('other').actorId, 9, 'someone else entirely');
 
-    expect(readSubordinateLiveStatus(sql)).toEqual({
+    expect(readSubordinateLiveStatus(sql, actors.main)).toEqual({
       lastActivity: 700,
       recentSteps: [
         { event: 'step-7', summary: 'Integrated auth findings', elapsedMs: 70, createdAt: 700 },
@@ -593,9 +616,9 @@ describe('team action routing', () => {
     expect(digest).not.toContain('Very noisy tool output');
     expect(digest?.length).toBeLessThanOrEqual(2400);
 
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     admitSubordinateTask(log, {
       fromWorkspace: 'kinu-main',
       kind: 'task',
@@ -868,9 +891,9 @@ describe('team action routing', () => {
 
 describe('subordinate event admission', () => {
   test('canonical tasks and reports enter the standard drain rail', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     const task = admitSubordinateTask(log, {
       fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate',
@@ -902,9 +925,9 @@ describe('subordinate event admission', () => {
   // The sender used to be handed a fixed sentence and told nothing about what
   // happened to the work. Everything below was already known at admission.
   test('the sender is told the event id its report will cite', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const admission = admitSubordinateTask(log, {
       fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
     });
@@ -954,9 +977,9 @@ describe('subordinate event admission', () => {
   });
 
   test('empty actor identities and bodies are rejected before EventLog admission', () => {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
 
     expect(() => admitSubordinateTask(log, {
       fromWorkspace: ' ', kind: 'task', body: 'work', mode: 'build', now: 1,
@@ -987,9 +1010,9 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
    * turn and enters no context.
    */
   function scenario() {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const roster = makeRosterStore();
     roster.ensureSchema();
     // Spawned with a mission, so the parent starts out waiting on an answer.
@@ -1114,9 +1137,9 @@ describe('oversize subordinate reports stay reachable', () => {
   }
 
   function freshLog(): EventLog {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    return new EventLog(sql);
+    return new EventLog(sql, actor);
   }
 
   test('a report past the brief budget spills whole and the parent brief cites it', async () => {
@@ -1158,9 +1181,9 @@ describe('oversize subordinate reports stay reachable', () => {
 describe('the parent ingress, in the order it runs', () => {
   /** One parent, with an open assignment out to `researcher`. */
   function parent() {
-    const sql = makeSql();
+    const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
-    const log = new EventLog(sql);
+    const log = new EventLog(sql, actor);
     const roster = makeRosterStore();
     roster.ensureSchema();
     roster.create(initialRosterEntry);

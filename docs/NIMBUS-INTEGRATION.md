@@ -124,10 +124,11 @@ The orchestrator, its durable subordinates, and exploration heads share the
 workspace's files, processes, and ports. They do not share mutable shell cwd or
 exported environment state. `ActorRuntimeIdentity.shellId`
 (`cf-backend/src/runtime.ts`) supplies a stable actor-specific key on every exec,
-process, and run-code call. The key reads `agent:<name>` for the orchestrator
-(`cf-backend/src/actor-agent.ts:700`), `subordinate:<name>` for a durable
-subordinate (`cf-backend/src/subordinate-agent.ts:220`), and `<scope>:<name>`
-for an exploration facet (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`). The published
+process, and run-code call. The key reads `agent:<name>` for the main actor
+(`cf-backend/src/actor-agent.ts:700`) and `<kind>:<storage-key>` for every
+hosted logical actor — subordinate, head, node and branch alike — from
+`hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
+immutable storage key rather than the registered name. The published
 SDK accepts that key on every exec option (`NimbusExecOptions.shellId`) and
 keeps each keyed shell's state separately. The filesystem and the process
 registry stay shared.

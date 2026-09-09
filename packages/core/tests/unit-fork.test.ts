@@ -133,8 +133,9 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    void src.sql`INSERT INTO search_nodes (id, root_id, task, action, visits, value) VALUES (${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
-    void src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
+    void src.sql`INSERT INTO search_nodes (actor_id, id, root_id, task, action, visits, value) VALUES (${srcActor}, ${'n1'}, ${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
+    void src.sql`INSERT INTO evolution_events (actor_id, type, message) VALUES (${srcActor}, ${'reflection'}, ${'done'})`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
@@ -398,6 +399,7 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
     src.execRaw(SDK_SESSION_DDL);
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
     // Both messages land in the SAME second, which is all the SDK's
     // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. The old cut compared
     // `strftime('%s', created_at) * 1000` against the fork point and so could
@@ -405,8 +407,8 @@ describe('forkWorkspaceStorage', () => {
     for (const [id, parent, role, text] of [
       ['m1', null, 'user', 'hello'], ['m2', 'm1', 'assistant', 'hi'], ['m3', 'm2', 'user', 'after'],
     ] as const) {
-      void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${id}, ${''}, ${parent}, ${role},
+      void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${srcActor}, ${id}, ${''}, ${parent}, ${role},
                 ${JSON.stringify({ id, role, parts: [{ type: 'text', text }] })},
                 ${'1970-01-01 00:00:01'})`;
     }
@@ -459,8 +461,9 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
     src.execRaw(SDK_SESSION_DDL);
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${'m1'}, ${''}, ${null}, ${'user'},
+    const srcActor = openWorkspaceMainActor(src.sql).actorId;
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${srcActor}, ${'m1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] })},
               ${'1970-01-01 00:00:01'})`;
 
@@ -484,10 +487,15 @@ describe('forkWorkspaceStorage', () => {
   });
 
   test('17. a fork that cannot copy assistant_messages FAILS instead of losing them', async () => {
-    // A target carrying an older Session schema (no session_id) rejects the
-    // insert. This used to be swallowed together with the CREATE that preceded
-    // it, so the fork reported success with an empty chat pane — the owner's
-    // messages silently gone. The copy must be all-or-nothing and loud.
+    // A target carrying an older Session schema — no `actor_id`, no
+    // `session_id` — cannot take the fork's pane write. This used to be
+    // swallowed together with the CREATE that preceded it, so the fork reported
+    // success with an empty chat pane — the owner's messages silently gone. The
+    // copy must be all-or-nothing and loud.
+    //
+    // The SOURCE is production-shaped, deliberately: with a pre-actor table
+    // here the source's own ancestry read raised `no such column` first, and
+    // this test passed without the target write ever being attempted.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -495,12 +503,10 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    src.execRaw(`CREATE TABLE assistant_messages (
-      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
-    )`);
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES ('m1', '', NULL, 'user', ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
+    src.execRaw(SDK_SESSION_DDL);
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${openWorkspaceMainActor(src.sql).actorId}, 'm1', '', NULL, 'user',
+              ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
     tgt.execRaw(`CREATE TABLE assistant_messages (
       id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME
     )`);
@@ -561,10 +567,14 @@ function seedPaneTranscript(
   rows: Array<{ id: string; role: string; content: string; parent_id: string | null }>,
 ) {
   src.execRaw(SDK_SESSION_DDL);
+  // The owner the fork's own read resolves to (`snapshotWorkspaceForFork` opens
+  // the source's main actor), so the mirror lands under the same actor whose
+  // `messages` rows it mirrors.
+  const srcActor = openWorkspaceMainActor(src.sql).actorId;
   for (const r of rows) {
     const ui = JSON.stringify({ id: r.id, role: r.role, parts: [{ type: 'text', text: r.content }] });
-    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-      VALUES (${r.id}, ${''}, ${r.parent_id}, ${r.role}, ${ui}, ${'1970-01-01 00:00:01'})`;
+    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      VALUES (${srcActor}, ${r.id}, ${''}, ${r.parent_id}, ${r.role}, ${ui}, ${'1970-01-01 00:00:01'})`;
   }
 }
 

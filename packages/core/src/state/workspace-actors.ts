@@ -123,6 +123,73 @@ export class WorkspaceActorDirectory {
     return this.issue(row);
   }
 
+  /**
+   * Issue a handle with an ADDITIONAL fence the caller owns.
+   *
+   * The directory's own validation always runs first, so this cannot authorise
+   * anything: `also` is consulted after the ownership and row checks and can
+   * only refuse further. That is what lets a host bind runtime objects whose
+   * release must stop the stores it handed out — the release is a refusal the
+   * host knows about and the directory does not — without a second authority
+   * over membership.
+   */
+  openFenced(actorId: string, also: () => void): ActorHandle {
+    this.requireOwnership();
+    const row = this.row(actorId);
+    if (!row || row.retiringAt !== null || row.deletedAt !== null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+    const handle = bindActorHandle(this.sql, { actorId: row.actorId, workspaceId: row.workspaceId, parentActorId: row.parentActorId, name: row.name, storageKey: row.storageKey }, () => {
+      this.requireOwnership();
+      const current = this.row(row.actorId);
+      if (!current || current.retiringAt !== null || current.deletedAt !== null || current.parentActorId !== row.parentActorId) throw new KinuError('missing', 'The actor identity is no longer present.');
+      also();
+    });
+    this.handles.add(handle);
+    return handle;
+  }
+
+  /**
+   * The row in ANY lifecycle state, or null — including retiring and released.
+   *
+   * A retained dismissal keeps the conversation and gives up the name, so the
+   * surface that reads that conversation has to be able to name the actor it is
+   * reading. This read issues NO handle and touches no store: reading a
+   * retained actor cannot start it, which is the whole difference between
+   * "readable" and "hosted".
+   */
+  retained(actorId: string): WorkspaceActor | null {
+    this.requireOwnership();
+    return this.row(actorId);
+  }
+
+  /**
+   * Every actor of this workspace, oldest first, main included.
+   *
+   * `retired: true` includes the retiring and released rows a retained
+   * dismissal leaves — what a whole-workspace archive has to cover, because
+   * those actors' rows are still in the database.
+   */
+  /**
+   * The workspace's actors. `retired: true` means INCLUDE retired rows, not
+   * "only retired ones" — spelled out because a caller read it the other way
+   * and shipped a lister that silently dropped every retained actor. Omitted
+   * or `false` narrows to the live set.
+   */
+  list(options?: { readonly retired?: boolean }): readonly WorkspaceActor[] {
+    this.requireOwnership();
+    const rows = options?.retired === true
+      ? this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE workspace_id = ${this.authority.workspaceId} ORDER BY created_at, actor_id`
+      : this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE workspace_id = ${this.authority.workspaceId} AND deleted_at IS NULL AND retiring_at IS NULL
+        ORDER BY created_at, actor_id`;
+    const actors: WorkspaceActor[] = [];
+    for (const row of rows) {
+      const actor = this.row(row.actor_id);
+      if (actor) actors.push(actor);
+    }
+    return actors;
+  }
+
   main(): ActorHandle {
     this.requireOwnership();
     const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
@@ -172,12 +239,23 @@ export class WorkspaceActorDirectory {
     return this.issue(row);
   }
 
+  /**
+   * The child under this name, or null when there is none to BIND.
+   *
+   * A retiring row still exists — its rows are retained on purpose, and the
+   * archive carries them — but it is no longer acquirable, and {@link open}
+   * says so by throwing `missing`. Resolution REPORTS that absence instead of
+   * raising it, decided on the row's own state rather than by catching `open`'s
+   * error: an owner walking its subtree to inspect a retired child must get a
+   * graceful answer, and a `missing` thrown for some other reason must not be
+   * swallowed on the way. {@link resolvePath} still throws, through its own
+   * null check, because a path naming an unbindable actor is a broken path.
+   */
   resolveChild(parent: ActorHandle, name: string): ActorHandle | null {
     const actor = this.describe(parent);
-    const rows = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE workspace_id = ${this.authority.workspaceId} AND parent_actor_id = ${actor.actorId} AND name = ${name} AND deleted_at IS NULL`;
-    const id = rows[0]?.actor_id;
-    return id === undefined ? null : this.open(id);
+    const row = this.childRow(actor.actorId, name);
+    if (row === null || row.retiringAt !== null || row.deletedAt !== null) return null;
+    return this.open(row.actorId);
   }
 
   private childRow(parentActorId: string, name: string): WorkspaceActor | null {
@@ -341,6 +419,39 @@ export class WorkspaceActorDirectory {
 }
 
 /** Local database access is already owner-authorized. This read never registers an actor. */
+/**
+ * An actor's own state subtree on the SHARED workspace tree.
+ *
+ * Keyed by the IMMUTABLE storage key, never the registered name: a rename must
+ * not move an actor's scaffold, and two actors that briefly shared a name
+ * across a retirement must not share a directory.
+ */
+export function actorStateRoot(storageKey: string): string {
+  return `.kinu/agents/${encodeURIComponent(storageKey)}`;
+}
+
+/**
+ * The scaffold an actor's promoted loop is installed at.
+ *
+ * The root keeps the workspace's own `scaffold/agent.js`; every other actor
+ * gets its own path under its own subtree, which is what lets five actors run
+ * five different promoted programs out of one database and one filesystem.
+ *
+ * IN CORE BECAUSE BOTH BACKENDS MUST AGREE. The cloud host had this and the
+ * local one hardcoded `scaffold/agent.js` for every actor, so on the CLI a
+ * head's `write` landed on its PARENT's scaffold and the parent would go on to
+ * execute its head's source — `surface.ts`'s read falls back to the live view
+ * when an actor has no versioned file of its own. Two actors promoting to v1
+ * also collided on `scaffold/agent.js.v1`. The agent-state plane is shared by
+ * construction, so the path is the only thing that separates two actors'
+ * programs; a second copy of this rule is a second chance for one backend to
+ * drift from it.
+ */
+export function actorScaffoldPath(record: Pick<WorkspaceActor, 'kind' | 'storageKey'>): string {
+  if (record.kind === 'main') return 'scaffold/agent.js';
+  return `${actorStateRoot(record.storageKey)}/scaffold/agent.js`;
+}
+
 export function openWorkspaceMainActor(sql: SqlExecutor): ActorHandle {
   if (!tableExists(sql, 'workspace_identity')) throw new KinuError('missing', 'The workspace has no durable identity.');
   const rows = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;

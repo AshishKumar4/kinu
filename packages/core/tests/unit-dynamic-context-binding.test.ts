@@ -18,6 +18,7 @@ import type {
   DynamicContext, DynamicApproval, DynamicDelegate, MissingCapability,
   ActiveRoster,
 } from '../src/prompting/volatile-context';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -75,6 +76,7 @@ describe('the four store-backed planes are the reading actor\'s own', () => {
       task: 'sibling branch', rationale: 'sibling branch', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { spawnedAt: 1, maxDepth: 2 },
+      loop: defaultLoopOrigin('head'),
     });
 
     const ctx = collect(o);

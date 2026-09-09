@@ -38,7 +38,7 @@ export async function pruneLowValueBranches(
 ): Promise<void> {
   const doomed = rt.storage.sql<{ id: string; branch_agent_key: string | null }>`
     SELECT id, branch_agent_key FROM search_nodes
-    WHERE root_id = ${rootId} AND status = 'open'
+    WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId} AND status = 'open'
       AND value < ${threshold} AND visits >= ${minVisits}
   `;
 
@@ -46,7 +46,7 @@ export async function pruneLowValueBranches(
     // Soft prune: mark status so UCT stops selecting it, drop the agent key.
     void rt.storage.sql`
       UPDATE search_nodes SET status = 'pruned', branch_agent_key = NULL
-      WHERE id = ${node.id}
+      WHERE actor_id = ${rt.actor.actorId} AND id = ${node.id}
     `;
 
     if (node.branch_agent_key) {

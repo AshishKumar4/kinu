@@ -16,6 +16,7 @@ import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import {
   DELEGATION_MAX_DEPTH,
   delegationBudgetAtDepth,
@@ -54,12 +55,17 @@ const ActivityRowSchema = v.object({
   created_at: v.number(),
 });
 
-export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
+export function readSubordinateLiveStatus(
+  sql: SqlExec, actor: ActorHandle,
+): SubordinateLiveStatus {
+  actor.assertCurrent();
   const recentSteps = sql.exec(
     `SELECT event, detail, elapsed_ms, created_at
      FROM activity_log
+     WHERE actor_id = ?
      ORDER BY created_at DESC, id DESC
      LIMIT 5`,
+    actor.actorId,
   ).toArray().flatMap((row) => {
     const parsed = v.safeParse(ActivityRowSchema, row);
     if (!parsed.success) return [];
@@ -173,11 +179,24 @@ function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIden
  * interruption, but no caller can retarget an initialized facet to another
  * workspace, owner or DEPTH. */
 export class SubordinateIdentityStore {
-  constructor(private readonly sql: SqlExec) {}
+  private readonly actorId: string;
+
+  /** Bind the identity row to ONE actor.
+   *
+   *  `id INTEGER PRIMARY KEY CHECK (id = 1)` used to mean one identity per
+   *  DATABASE, which was true only while a subordinate owned a database of its
+   *  own. One workspace database now holds every hired subordinate, so the
+   *  singleton is per ACTOR: the owner leads the key and the `id = 1` CHECK
+   *  keeps each actor's row unique the way it always did. */
+  constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   ensureSchema(): void {
+    this.actor.assertCurrent();
     this.sql.exec(`CREATE TABLE IF NOT EXISTS subordinate_identity (
-      id               INTEGER PRIMARY KEY CHECK (id = 1),
+      actor_id         TEXT NOT NULL,
+      id               INTEGER NOT NULL CHECK (id = 1),
       name             TEXT NOT NULL,
       mission          TEXT NOT NULL,
       parent_workspace TEXT NOT NULL,
@@ -185,11 +204,13 @@ export class SubordinateIdentityStore {
       depth            INTEGER NOT NULL DEFAULT 1,
       lifetime         TEXT NOT NULL DEFAULT 'durable',
       uid              INTEGER,
-      gid              INTEGER
+      gid              INTEGER,
+      PRIMARY KEY (actor_id, id)
     )`);
   }
 
   seed(identity: SubordinateIdentity): void {
+    this.actor.assertCurrent();
     const existing = this.read();
     if (existing) {
       if (identitiesEqual(existing, identity)) return;
@@ -197,8 +218,9 @@ export class SubordinateIdentityStore {
     }
     this.sql.exec(
       `INSERT INTO subordinate_identity
-         (id, name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (actor_id, id, name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid)
+       VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      this.actorId,
       identity.name,
       identity.mission,
       identity.parentWorkspace,
@@ -211,9 +233,11 @@ export class SubordinateIdentityStore {
   }
 
   read(): SubordinateIdentity | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid
-       FROM subordinate_identity WHERE id = 1`,
+       FROM subordinate_identity WHERE actor_id = ? AND id = 1`,
+      this.actorId,
     ).toArray();
     if (rows.length === 0) return null;
     const row = parseIdentityRow(rows[0]);

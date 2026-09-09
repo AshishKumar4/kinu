@@ -41,10 +41,15 @@ function forkedChild(): ChildProcess {
   return lastForked;
 }
 
-// The spawner reads `${basePath}.db` — in production the runtime's OWN
-// database, already carrying every table createCLIRuntime provisions. A worker
-// that cannot open it is a broken workspace, so the fixture provisions the two
-// tables it reads rather than leaving the path absent.
+// The spawner is handed the workspace's ONE database — the same file the parent
+// runtime holds, which is what a branch's own process opens to bind its actor
+// row. It is no longer a base path the spawner decorates: `branch-worker.ts`
+// refuses a `KINU_ROOT_DB` its root-issued bootstrap does not name, so a
+// fixture that passes anything but the runtime's own `dbPath` gets a child that
+// exits before `ready`.
+//
+// `createCLIRuntime` on a root path stops at the identity and actor tables, so
+// the search ledger the branch's own rollouts land in is initialised here.
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
 const parentDbPath = `${dir}.db`;
@@ -116,7 +121,7 @@ function startModelEndpoint() {
 }
 
 async function spawnWorker() {
-  const spawner = createBranchSpawner(dir, { llm: null, parent: parentRuntime.actor });
+  const spawner = createBranchSpawner(parentDbPath, { llm: null, parent: parentRuntime.actor });
   const handle = await spawner.spawn('protocol-only');
   return { proc: forkedChild(), release: () => handle.release() };
 }
@@ -128,7 +133,7 @@ async function spawnWorker() {
 describe('branch-worker protocol — no self-rating', () => {
   test('neither exploration nor reflection caps the branch model output', async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
+    const { spawn, abort } = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('uncapped-branch');
     try {
       const exploration = await handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
@@ -176,7 +181,7 @@ describe('branch-worker protocol — no self-rating', () => {
   });
 
   test('a branch handle releases its exact process after the final read', async () => {
-    const { spawn } = createBranchSpawner(dir, { llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' }, parent: parentRuntime.actor });
+    const { spawn } = createBranchSpawner(parentDbPath, { llm: { name: 'workers-ai', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' }, parent: parentRuntime.actor });
     const handle = await spawn('seam-test-branch');
     // The EXACT process, which is what the title claims and what a
     // `rejects.toThrow()` alone never checked: the pid this spawn forked, alive
@@ -213,7 +218,7 @@ describe('branch-worker protocol — no self-rating', () => {
 describe('branch worker failure replies', () => {
   test("an error reply always carries a message, and it is the provider's", async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
+    const { spawn, abort } = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('failing-branch');
     // The worker's own reply envelopes, read off the real IPC channel: the
     // spawner's promise only ever shows what the PARENT made of them.
@@ -250,7 +255,7 @@ describe('branch worker failure replies', () => {
 
   test('the parent rejects on error PRESENCE, not truthiness, and on a missing result', async () => {
     const endpoint = startModelEndpoint();
-    const { spawn, abort } = createBranchSpawner(dir, { llm: endpoint.llm, parent: parentRuntime.actor });
+    const { spawn, abort } = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('policy-branch');
     const proc = forkedChild();
     // The parent tags every call on a child with ascending ids from 1, and a

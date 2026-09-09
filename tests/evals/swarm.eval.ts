@@ -505,9 +505,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       agents: {
         mode: 'build',
         // The exploration substrate, which is what puts `swarm` in the action enum.
-        fork: { rt, model },
+        // `hostNode` goes through the TARGET: every node of this search is its own
+        // actor of the one workspace database, and this arm drives the rung directly
+        // rather than through `sendTurn`, so without it the search would run every
+        // node on the caller's actor and share one claim ledger across the wave.
+        fork: { rt, model, hostNode: (node) => target.hostNode(node) },
       },
-      effectClaims: { sql: rt.storage.sql, turnId: () => WORKSPACE_RUN_ID },
+      effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     });
     const entry = tools.agents;
     if (!entry) throw new Error('the agents tool was not built, so there is no swarm rung to drive');
@@ -809,13 +813,13 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // Read back through the STORE'S OWN READER, scoped by the identity and the floor
     // — the key a later run holds. Recomputed from the objective this suite declared,
     // so this proves the rows are findable by a caller that never saw the result.
-    const rows = recordsFor(rt.storage.sql, { identity: IDENTITY, floor: FLOOR });
+    const rows = recordsFor(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: FLOOR });
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.length).toBeLessThanOrEqual(records.written);
     // Best FIRST in the objective's own direction, so the store's incumbent is the
     // winner this run crowned.
     expect(rows[0]?.value).toBe(winner);
-    expect(bestInCell(rt.storage.sql, { identity: IDENTITY, floor: FLOOR, descriptor: null })?.value)
+    expect(bestInCell(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: FLOOR, descriptor: null })?.value)
       .toBe(winner);
     // Every row belongs to THIS run's tree, and carries the provenance a leaderboard
     // reader needs without resolving a digest.
@@ -838,10 +842,10 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // nothing, and the same rows under a different floor must find nothing either —
     // the comparable set is the identity AND the floor it was published under, never
     // one without the other.
-    expect(recordsFor(rt.storage.sql, {
+    expect(recordsFor(rt.storage.sql, rt.actor, {
       identity: { ...IDENTITY, metric: 'wall_ms' }, floor: FLOOR,
     })).toEqual([]);
-    expect(recordsFor(rt.storage.sql, { identity: IDENTITY, floor: null })).toEqual([]);
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: null })).toEqual([]);
 
     // ── The run reported what it spent ─────────────────────────────────────────
     // Last, because it is the weakest claim and the easiest to fake: an absent total

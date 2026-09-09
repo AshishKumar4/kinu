@@ -1,9 +1,9 @@
 // @kinu.run/core — barrel export
 
 // Identity system
-export { initActorTables, initAllTables, tableExists } from './identity/schema';
+export { initActorTables, initAllTables, initFiberTable, tableExists } from './identity/schema';
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
-export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess, type SubordinateInspectionPort } from './subordinates/inspection-path';
+export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 // The once-only lifecycle of one settled response, and the per-effect ledger it
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
 // machine over the same table and supply only effect bodies and a wake.
@@ -377,6 +377,11 @@ export {
   createActorContextPlane,
   type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
   type SettledContext, type ContextEditReceipt, type ContextEditEffect, type ContextPlaneState,
+  // The audit port every host wires per actor, and the event it takes. Exported
+  // because the hosts that construct a session are in other packages: a
+  // recorder that satisfies this is what turns a landed context edit into
+  // evidence, and `null` is the stated spelling for a host that publishes none.
+  type ContextEventRecorder, type ContextEditEvent,
 } from './orchestrator/context-plane';
 export {
   contextMount, createContextPlane, encodeWorkingFile, decodeWorkingFile,
@@ -531,9 +536,17 @@ export {
 } from './tools/db-codemode';
 export { ActorReferenceSchema, ActorIdentitySchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
-export { FacetIdentity, type FacetIdentityRow } from './state/facet-identity';
 export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, SubordinateSeedSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
-export { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
+// open-38: ONE physical workspace SQLite for every logical actor. The host that
+// binds an issued actor's runtime objects over that one database, and the loop
+// origin every created actor is seeded with.
+export {
+  createActorHost, recoverActorTurns, actorScopedTables, childContextResolver,
+  type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
+  type LoopSeed, type ActorRetirement, type ResumableActorTurn,
+} from './state/actor-host';
+export { seedActorLoop, defaultLoopOrigin, type LoopOrigin } from './scaffold/bootstrap';
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 export {

@@ -35,7 +35,9 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const memory = createMemoryMemory(db, vfs);
   const craftStore = createMemoryCraftStore(db);
   const executor = createMockExecutor();
-  const schedule = createMemorySchedule(db);
+  // The actor first: `fibers` is actor-scoped, so a lane belongs to somebody.
+  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test');
+  const schedule = createMemorySchedule(db, actor);
 
   await vfs.mkdir('scaffold', { recursive: true });
   await vfs.writeFile('scaffold/agent.js', 'initial');
@@ -61,7 +63,6 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
     };
   }
 
-  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'e2e-test');
   const rt: AgentRuntime = {
     actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },

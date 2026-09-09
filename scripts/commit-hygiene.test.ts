@@ -138,11 +138,25 @@ describe('a legitimate product possessive PASSES — the false-positive control'
     }
   });
 
-  test('a declared external name is clean, and the list is the measured five plus the owner', () => {
-    expect([...NAMES_WITHOUT_CODE].sort())
-      .toEqual(['AlphaEvolve', 'AshishKumar4', 'FunSearch', 'GitHub', 'JavaScript', 'TypeScript']);
+  test('the list is the measured five, the owner, and one deleted identifier', () => {
+    // The list's whole defence is that it stays short and every entry is a fact
+    // someone can check, so its exact contents are the assertion. `FacetIdentity`
+    // is the one deleted-class entry the gate's own doc reserved room for: the
+    // actor-host cutover removed the type, and `76936034ba` cites it correctly.
+    expect([...NAMES_WITHOUT_CODE].sort()).toEqual([
+      'AlphaEvolve', 'AshishKumar4', 'FacetIdentity', 'FunSearch', 'GitHub', 'JavaScript',
+      'TypeScript',
+    ]);
     expect(inspect("chore(deps): move to TypeScript 7\n\nTypeScript's project references now "
       + 'resolve the scripts project.', isCode)).toEqual([]);
+  });
+
+  test('a deleted class is clean only once declared — an undeclared one still fires', () => {
+    expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
+      + "the init RPC before its ack, following FacetIdentity's pattern.", isCode)).toEqual([]);
+    expect(inspect('fix(cf): make an acknowledged facet bootstrap a durable one\n\nWritten inside '
+      + "the init RPC before its ack, following FacetBinding's pattern.", isCode)
+      .map((violation) => violation.rule)).toEqual(['named-actor']);
   });
 });
 

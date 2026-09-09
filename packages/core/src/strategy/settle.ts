@@ -24,6 +24,7 @@ import { DEFAULT_CONFIG } from '../config';
 import { selectFrontierNode, type FrontierPolicy } from '../mcts/frontier';
 import type { Logger } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { admitToArchive, archiveCellOf, type ArchiveVerdict } from './archive';
@@ -180,6 +181,9 @@ export async function settleRun(input: {
   readonly started: number;
   readonly log: Logger;
   readonly sql: SqlExecutor;
+  /** Whose run is settling. Every record and archive row this writes is that
+   *  actor's, and the leaderboard a later run reads back is the same actor's. */
+  readonly actor: ActorHandle;
   readonly resolved: ResolvedSwarm;
   readonly rootId: string;
   readonly maxDepth: number;
@@ -219,7 +223,7 @@ export async function settleRun(input: {
   readonly runProfile: SwarmProfileSnapshot | null;
 }): Promise<SwarmResult> {
   const {
-    started, log, sql, resolved, rootId, maxDepth, branches, policy, paretoAxes, ctx, verifier,
+    started, log, sql, actor, resolved, rootId, maxDepth, branches, policy, paretoAxes, ctx, verifier,
     measured, baseline, identity, publishing, archive, publication, candidates, best,
     usage, judgeSamples, ensembles, spentBy, carriedIn, carriedBest, levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget, expansionBudget, inheritedExpansions,
@@ -394,7 +398,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
       // NO PARTITION, which is not "the unnamed cell": this objective has no descriptor
       // and its comparable set is one cell, exactly as `ExplorationRecord.descriptor`'s
       // nullability states.
-      verdict = recordExploration(sql, { publication, write: { ...write, descriptor: null } });
+      verdict = recordExploration(sql, actor, { publication, write: { ...write, descriptor: null } });
     } else {
       const cell = archiveCellOf(archive.key, candidate.measured.measured);
       if (cell.kind === 'unwitnessed') {
@@ -408,7 +412,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
         continue;
       }
       cellName = cell.descriptor;
-      verdict = admitToArchive(sql, {
+      verdict = admitToArchive(sql, actor, {
         publication,
         write: { ...write, descriptor: cell.descriptor },
         novelty: archive.novelty,
@@ -489,7 +493,7 @@ const report = settleReport({
     remainingBudget: budget.remaining,
     frontierOpen: policy === 'pareto'
       ? false
-      : selectFrontierNode(sql, {
+      : selectFrontierNode(sql, actor, {
         rootId, policy, maxDepth,
         explorationWeight: resolved.config.explorationWeight
           ?? DEFAULT_CONFIG.mcts.explorationWeight,

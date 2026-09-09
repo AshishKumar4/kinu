@@ -172,7 +172,22 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const taskList = new TaskListStore(sql, rt.actor, rt.storage.transactionSync);
   const config = rt.actor.config;
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
-  const fork: AgentsForkDeps = { rt, model };
+  // This builds a TOOL SURFACE — the tools, the action enum and the system
+  // prompt — for arms that assert their shape. It holds no session, and local
+  // node hosting is session-bound by design (`LocalAgentSession.hostNode`: the
+  // session is a node's client fan-out and turn queue). So the seat REFUSES
+  // rather than returning something. An arm that means to drive the swarm rung
+  // has a target and passes `target.hostNode` (see `swarm.eval.ts`); one that
+  // reaches it through this surface would otherwise run every node on the
+  // caller's own actor, which is the failure this cutover exists to remove.
+  const fork: AgentsForkDeps = {
+    rt,
+    model,
+    hostNode: () => Promise.reject(new Error(
+      'this eval surface builds tools without a session, so it cannot seat a swarm node; '
+      + 'drive the rung through a target that implements hostNode',
+    )),
+  };
   const agents: AgentsToolDeps = { mode: 'build', fork };
   const tools = buildActorTools({
     rt,
@@ -186,7 +201,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       ],
     }),
     agents,
-    effectClaims: { sql, turnId: () => WORKSPACE_RUN_ID },
+    effectClaims: { sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     facts,
     webSearch,
   });
@@ -209,7 +224,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       planSubmissionAvailable: false,
       model: { id: llm.model },
       currentDate: currentDateForPrompt(),
-      sectionOverrides: activePromptSectionOverrides(sql),
+      sectionOverrides: activePromptSectionOverrides(sql, rt.actor),
     }),
   };
 }

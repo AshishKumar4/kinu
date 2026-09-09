@@ -608,7 +608,7 @@ export class LocalAgentClient implements AgentClient {
 
   async searchNodes(): Promise<AgentSearchNode[]> {
     // The latest search only — the same projection the cloud getMctsTree serves.
-    const nodes = readLatestSearchTree(this.deps.rt.storage.sql);
+    const nodes = readLatestSearchTree(this.deps.rt.storage.sql, this.deps.rt.actor);
     return nodes.map((node) => ({
       depth: node.depth,
       status: node.status,

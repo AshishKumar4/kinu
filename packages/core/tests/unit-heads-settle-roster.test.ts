@@ -21,6 +21,7 @@ import { listForkRuns } from '../src/read-models/fork-runs';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import type { HeadInput, MergeResult } from '../src/heads/index';
 import type { SqlExecutor } from '../src/types/primitives';
+import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const RUN = 'root-merge-1';
 
@@ -47,6 +48,7 @@ function spawn(id: string): HeadInput {
     task: `walk ${id}`, mode: 'build', rationale: 'one call site each',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
+    loop: defaultLoopOrigin('head'),
   };
 }
 

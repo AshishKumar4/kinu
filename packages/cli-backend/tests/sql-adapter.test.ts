@@ -10,14 +10,31 @@
 // matched" out of a write that had just succeeded.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { DeferredApprovalStore, EventLog, initWorkspaceSchema } from '@kinu.run/core';
+import { DeferredApprovalStore, EventLog, initWorkspaceSchema, type ActorHandle } from '@kinu.run/core';
+import { createTestActors } from '@kinu.run/test-utils';
 import { makeSql, makeSqlExec, makeWorkspaceSchemaSql } from '../src/runtime';
+
+/**
+ * One workspace's schema and its main actor, issued over the adapters under
+ * test.
+ *
+ * Both stores below are actor-scoped — every statement they run carries an
+ * `actor_id` — so the handle has to be one the production directory really
+ * issued: `initWorkspaceSchema` creates the tables but writes no identity row,
+ * and `openWorkspaceMainActor` on that database has no owner to open. Issuing
+ * it through `makeSql` is deliberate too: the directory's own INSERT …
+ * RETURNING is the first statement whose rows this adapter has to hand back.
+ */
+function mainActor(db: Database): ActorHandle {
+  const schemaSql = makeWorkspaceSchemaSql(db);
+  initWorkspaceSchema(schemaSql);
+  return createTestActors(schemaSql.sql, schemaSql.execRaw).main;
+}
 
 /** A grant the owner has approved and nobody has spent — the state a deferred
  *  shell approval sits in until the agent comes back for it. */
 function approvedGrant(db: Database): DeferredApprovalStore {
-  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const store = new DeferredApprovalStore(makeSql(db));
+  const store = new DeferredApprovalStore(makeSql(db), mainActor(db));
   store.create({
     id: 'act-1',
     command: 'rm -rf ./build',
@@ -63,8 +80,7 @@ describe('the local SQL adapter returns the rows a write produces', () => {
 
   test('a stranded event delivery is named by the reclaim that re-pends it', () => {
     const db = new Database(':memory:');
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const log = new EventLog(makeSqlExec(db));
+    const log = new EventLog(makeSqlExec(db), mainActor(db));
     const { id } = log.publish({
       descriptor: {
         ingress: 'chat_ws',

@@ -23,6 +23,7 @@ import {
 } from './types';
 import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
+import type { ActorHandle } from '../../state/actor-handle';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 
@@ -68,15 +69,25 @@ export interface OpenChannelOpts {
 }
 
 export class ReplyChannelStore {
+  private readonly actorId: string;
+
+  /** Bind the channel table to ONE actor. A channel answers an event, and an
+   *  event belongs to the actor whose inbox admitted it — so the sink for that
+   *  answer is that actor's, and an id alone is not authority over a sibling's
+   *  open reply. */
   constructor(
     private readonly sql: SqlExec,
+    private readonly actor: ActorHandle,
     private readonly dispatchers: Partial<Record<ReplyChannelKind, ReplyDispatcher>> = {},
-  ) {}
+  ) {
+    this.actorId = actor.actorId;
+  }
 
   /** Create a new channel. Returns the row's id. Channels for `kind='none'`
    *  return a sentinel id and are never persisted; the caller treats null
    *  reply intent the same way. */
   open(opts: OpenChannelOpts, now: number): ReplyChannelId | null {
+    this.actor.assertCurrent();
     if (opts.kind === 'none') return null;
     const id = ulid();
     const ttl = opts.kind === 'ws_session'
@@ -85,10 +96,10 @@ export class ReplyChannelStore {
     const expires = ttl === 0 ? 0 : now + ttl;
     this.sql.exec(
       `INSERT INTO reply_channels
-         (id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
+         (actor_id, id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
           state, reply_payload, attempt_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, 0, ?, ?)`,
-      id, opts.event_id, opts.kind, opts.holder_addr, expires,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, 0, ?, ?)`,
+      this.actorId, id, opts.event_id, opts.kind, opts.holder_addr, expires,
       opts.payload_policy, now, now,
     );
     return id;
@@ -98,20 +109,22 @@ export class ReplyChannelStore {
    *  reply tools that hold an event id, not a channel id — e.g. a peer answering
    *  the ask event it was woken with. */
   findOpenByEvent(event_id: EventId, kind?: ReplyChannelKind): ReplyChannelRow | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id FROM reply_channels
-       WHERE event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
+       WHERE actor_id = ? AND event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
        ORDER BY created_at DESC LIMIT 1`,
-      ...(kind ? [event_id, kind] : [event_id]),
+      ...(kind ? [this.actorId, event_id, kind] : [this.actorId, event_id]),
     ).toArray().map((row) => v.parse(IdRowSchema, row));
     return rows.length > 0 ? this.get(rows[0].id) : null;
   }
 
   get(id: ReplyChannelId): ReplyChannelRow | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
               state, reply_payload, attempt_count, created_at, updated_at
-       FROM reply_channels WHERE id = ?`, id,
+       FROM reply_channels WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray();
     if (rows.length === 0) return null;
     const r = v.parse(ReplyChannelRowSchema, rows[0]);
@@ -133,8 +146,10 @@ export class ReplyChannelStore {
   /** Re-point a channel at its real event id (channels are opened before
    *  publish so the event row can carry the ref). */
   bindEvent(id: ReplyChannelId, eventId: EventId): void {
+    this.actor.assertCurrent();
     this.sql.exec(
-      `UPDATE reply_channels SET event_id = ? WHERE id = ?`, eventId, id,
+      `UPDATE reply_channels SET event_id = ? WHERE actor_id = ? AND id = ?`,
+      eventId, this.actorId, id,
     );
   }
 
@@ -175,8 +190,8 @@ export class ReplyChannelStore {
                  reply_payload = ?,
                  attempt_count = attempt_count + 1,
                  updated_at = ?
-           WHERE id = ?`,
-          JSON.stringify(payload ?? null), now, id,
+           WHERE actor_id = ? AND id = ?`,
+          JSON.stringify(payload ?? null), now, this.actorId, id,
         );
         return { outcome: 'delivered' };
       }
@@ -190,47 +205,54 @@ export class ReplyChannelStore {
 
   /** Mark a channel as aborted (e.g. on socket close). Idempotent. */
   abort(id: ReplyChannelId, now: number, reason?: string): void {
+    this.actor.assertCurrent();
     this.sql.exec(
       `UPDATE reply_channels
          SET state = 'aborted',
              reply_payload = COALESCE(?, reply_payload),
              updated_at = ?
-       WHERE id = ? AND state = 'open'`,
-      reason ? JSON.stringify({ aborted: reason }) : null, now, id,
+       WHERE actor_id = ? AND id = ? AND state = 'open'`,
+      reason ? JSON.stringify({ aborted: reason }) : null, now, this.actorId, id,
     );
   }
 
   /** Expire channels whose TTL has passed. Returns the number of channels
    *  expired. Currently unwired — no periodic caller exists. */
   expireDue(now: number): number {
+    this.actor.assertCurrent();
     const before = this.countOpen();
     this.sql.exec(
       `UPDATE reply_channels
          SET state = 'expired',
              updated_at = ?
-       WHERE state = 'open' AND ttl_expires_at > 0 AND ttl_expires_at < ?`,
-      now, now,
+       WHERE actor_id = ? AND state = 'open' AND ttl_expires_at > 0 AND ttl_expires_at < ?`,
+      now, this.actorId, now,
     );
     return Math.max(0, before - this.countOpen());
   }
 
   private markState(id: ReplyChannelId, state: ReplyChannelState, now: number): void {
+    this.actor.assertCurrent();
     this.sql.exec(
-      `UPDATE reply_channels SET state = ?, updated_at = ? WHERE id = ?`,
-      state, now, id,
+      `UPDATE reply_channels SET state = ?, updated_at = ? WHERE actor_id = ? AND id = ?`,
+      state, now, this.actorId, id,
     );
   }
 
   private bumpAttempt(id: ReplyChannelId, now: number): void {
+    this.actor.assertCurrent();
     this.sql.exec(
-      `UPDATE reply_channels SET attempt_count = attempt_count + 1, updated_at = ? WHERE id = ?`,
-      now, id,
+      `UPDATE reply_channels SET attempt_count = attempt_count + 1, updated_at = ?
+       WHERE actor_id = ? AND id = ?`,
+      now, this.actorId, id,
     );
   }
 
   private countOpen(): number {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
-      `SELECT COUNT(*) AS n FROM reply_channels WHERE state = 'open'`,
+      `SELECT COUNT(*) AS n FROM reply_channels WHERE actor_id = ? AND state = 'open'`,
+      this.actorId,
     ).toArray();
     return rows[0] ? v.parse(CountRowSchema, rows[0]).n : 0;
   }

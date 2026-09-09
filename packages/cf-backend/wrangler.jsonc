@@ -106,10 +106,13 @@
   "durable_objects": {
     "bindings": [
       // The binding NAME is load-bearing beyond routing: it is the workspace
-      // host namespace the fabric resolves every hosted workspace's facets
-      // through (`hostNamespace: 'OrchestratorAgent'` in
-      // src/nimbus-programmatic.ts). Rename it and the supervisor entrypoint
-      // resolves a namespace that does not exist.
+      // host namespace the fabric resolves every hosted workspace through
+      // (`hostNamespace: 'OrchestratorAgent'` in src/nimbus-programmatic.ts).
+      // Rename it and the supervisor entrypoint resolves a namespace that does
+      // not exist. This is now the ONLY actor-bearing class: every logical
+      // actor in a workspace — the main actor, hired subordinates, ask-by-role
+      // temporaries, branching heads, swarm nodes, MCTS rollout branches —
+      // lives inside one object of this namespace, over its one SQLite.
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by the stable Kinu userId derived from the verified email.
@@ -174,9 +177,12 @@
   // Durable Object class this Worker has is declared new here. The earlier
   // `v1`..`v3` history (which also registered and then retired `NimbusSession`)
   // belonged to a Worker whose storage no longer exists, and so did the
-  // `ExplorationAgent` class it registered: `SubordinateAgent` hosts every
-  // facet mode now, and a facet class sits in no tag and has no binding
-  // above because it is reached through `subAgent()` rather than by name.
+  // `ExplorationAgent` class it registered. There is no facet class in this
+  // list and never was one — a facet carried no binding and sat in no tag,
+  // because it was reached through `subAgent()` rather than by name — and
+  // there is no facet class in the Worker any longer either: hosted logical
+  // actors need no class of their own, so nothing was removed from this list
+  // and nothing needs adding to it.
   //
   // What an operator does before deploying this configuration: delete the old
   // Worker (its Durable Object namespaces, and every object in them, go with

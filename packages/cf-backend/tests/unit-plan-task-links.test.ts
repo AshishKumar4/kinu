@@ -12,7 +12,7 @@ import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 function fixture() {
   const { rt, db } = createTestRuntime();
   initPlanReviewTable(rt.storage.execRaw);
-  const plans = new PlanReviewStore(rt.storage.sql);
+  const plans = new PlanReviewStore(rt.storage.sql, rt.actor);
   const first = plans.submit('default', [{ start: 1, content: '# Approved work' }]);
   if (!first.ok) throw new Error(first.error);
   const decided = plans.decide(first.plan.id, first.plan.revision, 'approve');
@@ -87,7 +87,7 @@ test('actual owner approval admits the real Think program and attributes its nat
     .run(rt.actor.actorId);
   db.query("INSERT INTO scaffold_versions(actor_id,version,written_at,rationale,status) VALUES(?,1,1,'plan scope regression','current')")
     .run(rt.actor.actorId);
-  const plans = new PlanReviewStore(rt.storage.sql);
+  const plans = new PlanReviewStore(rt.storage.sql, rt.actor);
   const submitted = plans.submit('default', [{ start: 1, content: '# Implement the two tasks' }]);
   if (!submitted.ok) throw new Error(submitted.error);
   const planTasks = async () => {

@@ -8,6 +8,7 @@ import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
   BackgroundJobStore,
+  actorScopedTables,
   backgroundJobWakeTrigger,
   openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
@@ -327,8 +328,6 @@ function makeHost(
   const options: LocalAgentHostOptions = {
     roster: () => refs,
     dbPath: (name) => join(state, name, 'agent.db'),
-    childDbPath: (parentDbPath, child) =>
-      join(dirname(parentDbPath), 'subordinates', child, 'agent.db'),
     open: async (ref, db, dbPath) => {
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
@@ -504,13 +503,20 @@ describe('LocalAgentHost', () => {
     const jobId = 'bgjob-restart';
     const db = new Database(dbPath);
     const sql = makeSql(db);
-    const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
+    const main = openWorkspaceMainActor(sql);
+    const store = new BackgroundJobStore(sql, main);
     const now = Date.now();
     store.create({ id: jobId, kind: 'agents', workMode: 'build', now, label: 'restart proof' });
     store.settle(jobId, 0, JSON.stringify({ done: true }), now + 1);
+    // A fiber is a lane of ONE actor's work, so the orphan is seeded under the
+    // handle whose lane the recovery sweep reads. Under a different actor id it
+    // would be a row nobody owns: the sweep would find nothing, the assertion
+    // below would hold for the wrong reason, and the redrive it is meant to
+    // pin would never have been exercised.
     db.query(
-      'INSERT INTO fibers (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)',
+      'INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, ?, ?)',
     ).run(
+      main.actorId,
       'orphan-fiber',
       `bg:${jobId}`,
       JSON.stringify({ phase: 'running', jobId, kind: 'agents' }),
@@ -576,9 +582,15 @@ describe('LocalAgentHost', () => {
     expect(childTeam.delegation.depth).toBe(1);
     const reference = created.subordinate.actorReference;
     if (!reference) throw new Error('The created subordinate has no actor reference.');
-    const childPath = join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db');
     expect(created.subordinate.status).toBe('idle');
-    expect(existsSync(childPath)).toBe(true);
+    // NO FILE, AND NO DIRECTORY TO PUT ONE IN. A subordinate is a logical
+    // actor of the parent's one database, so the path a per-child store used to
+    // take is never written. Asserted while the child is LIVE rather than after
+    // its dismissal: "the store is gone" that holds because nothing ever
+    // created it is an assertion that cannot fail, and the shape it was
+    // guarding is the one this cutover removed.
+    expect(existsSync(join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db'))).toBe(false);
+    expect(existsSync(join(dirname(dbPath), 'subordinates'))).toBe(false);
 
     const assigned = await team.assign({
       name: 'researcher',
@@ -607,7 +619,16 @@ describe('LocalAgentHost', () => {
 
     await team.dismiss({ name: 'researcher', requestedBy: 'user' });
     expect(await team.list()).toEqual([]);
-    expect(existsSync(childPath)).toBe(true);
+    // A RETAINED dismissal gives up the NAME and keeps the CONVERSATION, and
+    // those are two rows in two places now that a subordinate has no file:
+    // the directory row records the release, and the actor's own rows — the
+    // transcript `existsSync(<child>/agent.db)` used to stand for — stay.
+    expect(actorLifecycle(dbPath, reference.actorId)).toBe('retained');
+    // The task it was assigned, as its own turn read it — the drain wraps the
+    // ingress line around it, so the assignment is a substring of the
+    // transcript rather than a message of its own.
+    expect(userMessages(dbPath, reference.actorId).join('\n'))
+      .toContain('task: Find the root cause and report it.');
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
       .rejects.toThrow('subordinate "researcher" is dismissed');
 
@@ -618,10 +639,18 @@ describe('LocalAgentHost', () => {
     });
     const temporaryReference = temporary.subordinate.actorReference;
     if (!temporaryReference) throw new Error('The created temporary-named subordinate has no actor reference.');
-    const temporaryPath = join(dirname(dbPath), 'subordinates', temporaryReference.actorId, 'agent.db');
-    expect(existsSync(temporaryPath)).toBe(true);
+    // KEPT, THEN PURGED — the transition the per-child directory stood for.
+    // `keepHistory: false` is literal: this actor's rows go from every table
+    // the product's own sweep covers. The directory row is NOT one of them and
+    // stays released either way, which is why the count is what decides here
+    // and the lifecycle is what decided above.
+    expect(actorLifecycle(dbPath, temporaryReference.actorId)).toBe('live');
+    const temporaryRows = actorRowCount(dbPath, temporaryReference.actorId);
+    expect(temporaryRows).toBeGreaterThan(0);
     await team.dismiss({ name: 'temporary', requestedBy: 'user', keepHistory: false });
-    expect(existsSync(dirname(temporaryPath))).toBe(false);
+    expect(actorRowCount(dbPath, temporaryReference.actorId)).toBe(0);
+    // And the retained one was untouched by its sibling's destroy.
+    expect(actorRowCount(dbPath, reference.actorId)).toBeGreaterThan(0);
     await host.close();
   });
 
@@ -669,10 +698,16 @@ describe('LocalAgentHost', () => {
     const agent = v.parse(v.object({ agent: v.string() }), outcome).agent;
     expect(agent).toStartWith('ask-researcher-');
 
-    // It was a REAL actor: its own database exists under this root's children,
-    // and a release keeps it — that file IS the transcript the outcome claims.
-    const childDb = childDatabase(dbPath, agent);
-    expect(existsSync(childDb)).toBe(true);
+    // It was a REAL actor, and the archive KEPT it. Two readers because they
+    // answer two questions: the directory row says the NAME was given up, which
+    // every dismissal does and this rung's `transcript: 'kept'` does not
+    // contradict; `actorRowCount` says the actor's own rows survived it, and
+    // those rows ARE the transcript the outcome claims. Reading the lifecycle
+    // alone would prove nothing about the bytes — `actorScopedTables`
+    // deliberately excludes `workspace_actors` — and a destroy would pass it.
+    const askActorId = childActorId(dbPath, agent);
+    expect(actorLifecycle(dbPath, askActorId)).toBe('retained');
+    expect(actorRowCount(dbPath, askActorId)).toBeGreaterThan(0);
 
     // ONE roster. Released from the working set...
     expect(await team.list()).toEqual([]);
@@ -866,9 +901,9 @@ describe('LocalAgentHost', () => {
       mission: 'Work at the cap.',
     });
     // Put the child AT the cap, the way its parent's seed would at depth 4.
-    const childPath = childDatabase(dbPath, 'deep');
-    const childDb = new Database(childPath);
-    childDb.query(`UPDATE actor_config SET value = ? WHERE key = 'subordinate.depth'`).run(String(DELEGATION_MAX_DEPTH));
+    const childDb = new Database(dbPath);
+    childDb.query(`UPDATE actor_config SET value = ? WHERE actor_id = ? AND key = 'subordinate.depth'`)
+      .run(String(DELEGATION_MAX_DEPTH), childActorId(dbPath, 'deep'));
     childDb.close();
     await host.close();
 
@@ -1146,8 +1181,8 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       await (await host.team('beta')).create({
         name: 'auditor', role: 'auditor', mission: 'Check the parser.',
       });
-      expect(existsSync(childDatabase(alphaDb, 'scout'))).toBe(true);
-      expect(existsSync(childDatabase(betaDb, 'auditor'))).toBe(true);
+      expect(actorLifecycle(alphaDb, childActorId(alphaDb, 'scout'))).toBe('live');
+      expect(actorLifecycle(betaDb, childActorId(betaDb, 'auditor'))).toBe('live');
       expect((await host.team('alpha/scout')).delegation.depth).toBe(1);
 
       // A subordinate holds no peer transport at all, so there is no action for
@@ -1277,8 +1312,10 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       await (await host.acquire('alpha')).send('only alpha said this');
       expect(userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
       expect(userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
-      expect(userMessages(childDatabase(join(state, 'alpha', 'agent.db'), 'scout')))
-        .not.toContain('only alpha said this');
+      expect(userMessages(
+        join(state, 'alpha', 'agent.db'),
+        childActorId(join(state, 'alpha', 'agent.db'), 'scout'),
+      )).not.toContain('only alpha said this');
     } finally {
       await host.close();
     }
@@ -1292,18 +1329,83 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
   )).join('\n');
 }
 
-function childDatabase(parent: string, name: string): string {
+/**
+ * The ACTOR ID one child was hired under, read from its parent's roster.
+ *
+ * There is no child database to name any more: a subordinate is a row set in
+ * its parent's one file, keyed by this id. Every assertion that used to prove
+ * "the child's file exists" now proves "the child's actor exists and its rows
+ * are its own", which is the property that survived the cutover.
+ */
+function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
   try {
-    const reference = new SubordinateRosterStore(makeSqlExec(db)).get(name)?.actorReference;
+    const sql = makeSql(db);
+    const reference = new SubordinateRosterStore(makeSqlExec(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
     if (!reference) throw new Error('The child has no recorded actor identity.');
-    return join(dirname(parent), 'subordinates', reference.actorId, 'agent.db');
+    return reference.actorId;
   } finally { db.close(); }
 }
 
-function userMessages(dbPath: string): string[] {
+/**
+ * One actor's lifecycle in this workspace's directory — the one-database
+ * replacement for `existsSync(<child>/agent.db)`.
+ *
+ * "Released" and "destroyed" are NOT one question, and reading them as one is
+ * how a retained dismissal came to look like a destroyed actor: `deleted_at`
+ * records the NAME being given up, which EVERY dismissal does, while only a
+ * destroy purges the actor's rows. The directory row is NOT among those: the
+ * directory owns its lifecycle, so it survives a destroy in the released state
+ * too, and how much of the actor is left is `actorRowCount` below.
+ *
+ * Takes an actor id rather than a roster name, because the destroyed case has
+ * no name left to resolve through.
+ */
+function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 'retained' | null {
+  const db = new Database(parent, { readonly: true });
+  try {
+    const row = makeSql(db)<{ retiring_at: number | null; deleted_at: number | null }>`
+      SELECT retiring_at, deleted_at FROM workspace_actors WHERE actor_id = ${actorId}`[0];
+    if (!row) return null;
+    if (row.deleted_at !== null) return 'retained';
+    return row.retiring_at === null ? 'live' : 'retiring';
+  } finally { db.close(); }
+}
+
+/**
+ * Every row this workspace holds for one actor, over the tables the PRODUCT
+ * itself sweeps.
+ *
+ * `actorScopedTables` is the same read `retire({ destroy: true })` purges
+ * through, so this counts exactly what `keepHistory: false` is a promise
+ * about. It deliberately excludes `workspace_actors` — the directory owns that
+ * row's lifecycle — which is why the DIRECTORY state above and the DATA here
+ * are two separate questions: every dismissal releases the name, and only a
+ * destroy takes the rows.
+ */
+function actorRowCount(parent: string, actorId: string): number {
+  const db = new Database(parent, { readonly: true });
+  try {
+    let total = 0;
+    for (const table of actorScopedTables(makeSql(db))) {
+      total += db.query<{ c: number }, [string]>(
+        `SELECT COUNT(*) AS c FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`,
+      ).get(actorId)?.c ?? 0;
+    }
+    return total;
+  } finally { db.close(); }
+}
+
+function userMessages(dbPath: string, actorId?: string): string[] {
   const db = new Database(dbPath, { readonly: true });
   try {
+    // ACTOR-SCOPED when asked. One database holds every actor's transcript, so
+    // "what did THIS agent hear" is a predicate now rather than a file choice.
+    if (actorId !== undefined) {
+      return db.query<{ content: string }, [string]>(
+        "SELECT content FROM messages WHERE role = 'user' AND actor_id = ?",
+      ).all(actorId).map((row) => row.content);
+    }
     return db.query<{ content: string }, []>(
       "SELECT content FROM messages WHERE role = 'user'",
     ).all().map((row) => row.content);
@@ -1318,7 +1420,7 @@ function userMessages(dbPath: string): string[] {
 async function scheduleTimer(dbPath: string, label: string, atMs: number): Promise<void> {
   const db = new Database(dbPath);
   try {
-    const registry = new TriggerRegistry(makeSqlExec(db), { scheduleAt: async () => {} });
+    const registry = new TriggerRegistry(makeSqlExec(db), openWorkspaceMainActor(makeSql(db)), { scheduleAt: async () => {} });
     await createTimerTrigger(registry, { atMs, label, trust: 'owner' }, Date.now());
   } finally {
     db.close();

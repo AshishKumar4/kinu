@@ -1,5 +1,5 @@
 // Pure helpers for building a head's report summary — extracted from
-// SubordinateAgent.runAsHead so the capture logic is unit-testable and shared
+// the hosted head runner so the capture logic is unit-testable and shared
 // by both backends (the cf Facet head + the CLI subprocess head).
 //
 // The bug they fix: ai-SDK v6 `result.text` returns only the LAST step's text,

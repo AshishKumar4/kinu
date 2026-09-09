@@ -19,7 +19,6 @@ afterAll(() => {
   parentDb.close();
   rmSync(dir, { recursive: true, force: true });
   rmSync(parentDbPath, { force: true });
-  rmSync(`${dir}/branches`, { recursive: true, force: true });
 });
 
 const LANGUAGES: [string, ...string[]] = ['typescript'];
@@ -60,7 +59,11 @@ test('concurrent explores resolve to their own results', async () => {
     headers: { Authorization: 'Bearer branch-rpc' },
     model: 'test-model',
   };
-  const { spawn } = createBranchSpawner(dir, { llm, parent: parentRuntime.actor });
+  // The spawner is handed the workspace's ONE database, not a base path it
+  // decorates: `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued
+  // bootstrap does not name, so a fixture that passes anything else gets a
+  // child that exits before `ready` and a startup rejection instead of a reply.
+  const { spawn } = createBranchSpawner(parentDbPath, { llm, parent: parentRuntime.actor });
   const handle = await spawn('rpc-correlation');
   try {
     const first = handle.explore([{ role: 'user', content: 'first task' }], [], LANGUAGES, 'plan', []);

@@ -7,6 +7,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { testActorHandle } from '@kinu.run/test-utils';
+import type { ActorHandle } from '../src/state/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import {
   initTurnOutcomeTables, recordTurnOutcome, recordOutcomeLabels, recordEnsembleLabels,
@@ -41,17 +43,21 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
-  return { db, sql };
+  // A real bound handle: the ledger is actor-scoped, so a fixture that could
+  // not fail `assertCurrent` would not be exercising the store these tests read.
+  return { db, sql, actor: testActorHandle(sql) };
 }
 
 /** A ledger shaped like a real one: mostly accepted, a minority corrected, a
  *  few frustrated. Turn ids are recoverable from the message text so a scripted
  *  judge can answer per turn without ever being told which turn it is. */
-function seedLedger(sql: Sql, spec: { accepted?: number; corrected?: number; frustrated?: number }): void {
+function seedLedger(
+  sql: Sql, actor: ActorHandle, spec: { accepted?: number; corrected?: number; frustrated?: number },
+): void {
   let n = 0;
   for (const outcome of ['accepted', 'corrected', 'frustrated'] as const) {
     for (let i = 0; i < (spec[outcome] ?? 0); i++) {
-      recordTurnOutcome(sql, {
+      recordTurnOutcome(sql, actor, {
         turnId: `turn-${outcome}-${i}`,
         outcome,
         confidence: 0.8,
@@ -74,8 +80,8 @@ function rows(sql: Sql): LedgerRow[] {
 }
 
 /** Hand-label every turn, choosing each verdict from the classifier's own. */
-function labelAll(sql: Sql, choose: (row: LedgerRow, i: number) => OutcomeLabel): void {
-  recordOutcomeLabels(sql, {
+function labelAll(sql: Sql, actor: ActorHandle, choose: (row: LedgerRow, i: number) => OutcomeLabel): void {
+  recordOutcomeLabels(sql, actor, {
     labeler: 'owner',
     labels: rows(sql).map((row, i) => ({ outcomeId: row.id, label: choose(row, i) })),
     now: 1_700_100_000_000,
@@ -138,14 +144,14 @@ describe('the judging prompt', () => {
     // differently. Identical prompts is the structural proof of blindness:
     // there is no path from either verdict into the text.
     const build = (outcome: TurnOutcome, label: OutcomeLabel): string => {
-      const { sql } = setup();
-      recordTurnOutcome(sql, {
+      const { sql, actor } = setup();
+      recordTurnOutcome(sql, actor, {
         turnId: 't', outcome, confidence: 0.8, source: 'classifier',
         userMessage: item.userMessage, assistantResponse: item.assistantResponse,
         followup: item.followup, scaffoldVersion: 1, now: item.createdAt,
       });
       const id = rows(sql)[0].id;
-      recordOutcomeLabels(sql, { labeler: 'owner', labels: [{ outcomeId: id, label }], now: 1 });
+      recordOutcomeLabels(sql, actor, { labeler: 'owner', labels: [{ outcomeId: id, label }], now: 1 });
       return buildEnsembleJudgePrompt({ ...item, outcomeId: id });
     };
     expect(build('accepted', 'accepted')).toBe(build('frustrated', 'corrected'));
@@ -184,9 +190,9 @@ describe('running the panel', () => {
   const always = (spec: string, label: OutcomeLabel): EnsembleJudge => judge(spec, () => label);
 
   test('refuses without hand labels, and names the steps that produce them', async () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 10, corrected: 4 });
-    const { run, gap } = await runEnsemble(sql, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]));
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 10, corrected: 4 });
+    const { run, gap } = await runEnsemble(sql, actor, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]));
     expect(run).toBeNull();
     expect(gap?.kind).toBe('no_gold_labels');
     const said = describeEnsembleGap(gap!);
@@ -195,96 +201,96 @@ describe('running the panel', () => {
   });
 
   test('refuses on an empty ledger, and refuses to be a panel of one', async () => {
-    const { sql } = setup();
-    expect((await runEnsemble(sql, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]))).gap?.kind)
+    const { sql, actor } = setup();
+    expect((await runEnsemble(sql, actor, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]))).gap?.kind)
       .toBe('no_population');
-    seedLedger(sql, { accepted: 4 });
-    labelAll(sql, () => 'accepted');
-    const { gap } = await runEnsemble(sql, panelOf([always('a/1', 'accepted')]));
+    seedLedger(sql, actor, { accepted: 4 });
+    labelAll(sql, actor, () => 'accepted');
+    const { gap } = await runEnsemble(sql, actor, panelOf([always('a/1', 'accepted')]));
     expect(gap?.kind).toBe('too_few_judges');
     expect(describeEnsembleGap(gap!)).toContain('two models from different vendors');
-    expect(ensembleLabels(sql)).toHaveLength(0);
+    expect(ensembleLabels(sql, actor)).toHaveLength(0);
   });
 
   test('judges every hand-labeled turn once per model, and tops up rather than repeating', async () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 6, corrected: 3 });
-    labelAll(sql, () => 'accepted');
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 6, corrected: 3 });
+    labelAll(sql, actor, () => 'accepted');
     const judges = [always('a/1', 'accepted'), always('b/1', 'accepted')];
 
-    const first = await runEnsemble(sql, panelOf(judges));
+    const first = await runEnsemble(sql, actor, panelOf(judges));
     expect(first.run?.turns).toBe(9);
     expect(first.run?.judged).toEqual([
       { model: 'a/1', stored: 9, failed: 0 },
       { model: 'b/1', stored: 9, failed: 0 },
     ]);
-    expect(ensembleLabels(sql)).toHaveLength(18);
+    expect(ensembleLabels(sql, actor)).toHaveLength(18);
 
     // Nothing new to say about turns already judged.
-    const again = await runEnsemble(sql, panelOf(judges));
+    const again = await runEnsemble(sql, actor, panelOf(judges));
     expect(again.run?.alreadyJudged).toBe(18);
     expect(again.run?.judged.every((j) => j.stored === 0)).toBe(true);
-    expect(ensembleLabels(sql)).toHaveLength(18);
+    expect(ensembleLabels(sql, actor)).toHaveLength(18);
 
     // A fresh labeling pass brings new turns, and only those.
-    seedLedger(sql, { frustrated: 2 });
-    labelAll(sql, () => 'frustrated');
-    const third = await runEnsemble(sql, panelOf(judges));
+    seedLedger(sql, actor, { frustrated: 2 });
+    labelAll(sql, actor, () => 'frustrated');
+    const third = await runEnsemble(sql, actor, panelOf(judges));
     expect(third.run?.judged.every((j) => j.stored === 2)).toBe(true);
   });
 
   test('a judge outage propagates instead of being recorded as unusable answers', async () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 4, corrected: 2 });
-    labelAll(sql, () => 'accepted');
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 4, corrected: 2 });
+    labelAll(sql, actor, () => 'accepted');
     const flaky = judge('b/1', (prompt) => turnOfPrompt(prompt).verdict === 'corrected' ? null : 'accepted');
     // A failed CALL is not a verdict. Counting it as one would report a rate
     // limit as a panel that read every turn and could not make sense of any.
-    await expect(runEnsemble(sql, panelOf([always('a/1', 'accepted'), flaky]))).rejects.toThrow('judge unavailable');
+    await expect(runEnsemble(sql, actor, panelOf([always('a/1', 'accepted'), flaky]))).rejects.toThrow('judge unavailable');
 
     // Every call already paid for is durable, so the next run tops up from here
     // rather than re-billing the whole panel.
-    const stored = ensembleLabels(sql);
+    const stored = ensembleLabels(sql, actor);
     expect(stored.filter((row) => row.model === 'a/1')).toHaveLength(6);
     expect(stored.filter((row) => row.model === 'b/1').length).toBeLessThan(6);
-    expect(ensembleReport(sql).gold).toBe(6);
+    expect(ensembleReport(sql, actor).gold).toBe(6);
   });
 
   test('an unusable answer is not stored as a guess', async () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 3 });
-    labelAll(sql, () => 'accepted');
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 3 });
+    labelAll(sql, actor, () => 'accepted');
     const babbling: EnsembleJudge = {
       spec: 'b/1',
       llm: { async *stream() { yield ''; }, async complete() { return 'it seemed fine to me'; } },
     };
-    const { run } = await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), babbling]));
+    const { run } = await runEnsemble(sql, actor, panelOf([judge('a/1', () => 'accepted'), babbling]));
     expect(run?.judged[1]).toEqual({ model: 'b/1', stored: 0, failed: 3 });
-    expect(ensembleLabels(sql).every((row) => row.model === 'a/1')).toBe(true);
+    expect(ensembleLabels(sql, actor).every((row) => row.model === 'a/1')).toBe(true);
   });
 
   test('writes each verdict as it lands, not in a batch at the end', async () => {
     // Two hundred model calls is a real bill. A pass that dies partway must
     // keep what it paid for, which it only does if the writes are incremental.
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 5 });
-    labelAll(sql, () => 'accepted');
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 5 });
+    labelAll(sql, actor, () => 'accepted');
     const seenMidRun: number[] = [];
     const watcher = judge('b/1', () => {
-      seenMidRun.push(ensembleLabels(sql).filter((row) => row.model === 'b/1').length);
+      seenMidRun.push(ensembleLabels(sql, actor).filter((row) => row.model === 'b/1').length);
       return 'accepted';
     });
-    await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), watcher]));
+    await runEnsemble(sql, actor, panelOf([judge('a/1', () => 'accepted'), watcher]));
     // Each of b's calls sees every verdict b gave before it.
     expect(seenMidRun).toEqual([0, 1, 2, 3, 4]);
   });
 
   test('stores one dated row per model per turn, append-only', async () => {
-    const { sql } = setup();
-    seedLedger(sql, { accepted: 2 });
-    labelAll(sql, () => 'accepted');
-    await runEnsemble(sql, panelOf([judge('a/1', () => 'accepted'), judge('b/1', () => 'corrected')]), { now: 5 });
-    expect(ensembleLabels(sql).map((r) => ({ model: r.model, label: r.label, createdAt: r.createdAt })).sort(
+    const { sql, actor } = setup();
+    seedLedger(sql, actor, { accepted: 2 });
+    labelAll(sql, actor, () => 'accepted');
+    await runEnsemble(sql, actor, panelOf([judge('a/1', () => 'accepted'), judge('b/1', () => 'corrected')]), { now: 5 });
+    expect(ensembleLabels(sql, actor).map((r) => ({ model: r.model, label: r.label, createdAt: r.createdAt })).sort(
       (x, y) => x.model.localeCompare(y.model) || x.label.localeCompare(y.label),
     )).toEqual([
       { model: 'a/1', label: 'accepted', createdAt: 5 },
@@ -295,8 +301,8 @@ describe('running the panel', () => {
 
     // A later pass wins without erasing the earlier one.
     const id = rows(sql)[0].id;
-    recordEnsembleLabels(sql, { model: 'a/1', labels: [{ outcomeId: id, label: 'frustrated' }], now: 9 });
-    expect(ensembleLabels(sql).find((r) => r.outcomeId === id && r.model === 'a/1')?.label).toBe('frustrated');
+    recordEnsembleLabels(sql, actor, { model: 'a/1', labels: [{ outcomeId: id, label: 'frustrated' }], now: 9 });
+    expect(ensembleLabels(sql, actor).find((r) => r.outcomeId === id && r.model === 'a/1')?.label).toBe('frustrated');
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM outcome_ensemble_labels`[0].n).toBe(5);
   });
 });
@@ -308,25 +314,25 @@ async function panelOver(spec: {
   ledger: { accepted?: number; corrected?: number; frustrated?: number };
   human: (row: LedgerRow, i: number) => OutcomeLabel;
   says: (turn: { verdict: TurnOutcome; index: number }, which: 0 | 1) => OutcomeLabel;
-}): Promise<Sql> {
-  const { sql } = setup();
-  seedLedger(sql, spec.ledger);
-  labelAll(sql, spec.human);
-  await runEnsemble(sql, panelOf([
+}): Promise<{ readonly sql: Sql; readonly actor: ActorHandle }> {
+  const { sql, actor } = setup();
+  seedLedger(sql, actor, spec.ledger);
+  labelAll(sql, actor, spec.human);
+  await runEnsemble(sql, actor, panelOf([
     judge('anthropic/one', (p) => spec.says(turnOfPrompt(p), 0)),
     judge('codex/two', (p) => spec.says(turnOfPrompt(p), 1)),
   ]));
-  return sql;
+  return { sql, actor };
 }
 
 describe('the panel report', () => {
   test('a panel that reproduces the owner exactly clears every condition', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     expect(report.gap).toBeNull();
     expect(report.compared).toBe(300);
     expect(report.split).toBe(0);
@@ -337,12 +343,12 @@ describe('the panel report', () => {
   });
 
   test('a panel that always says "accepted" scores ~0 and is told so plainly', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
       says: () => 'accepted',
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     expect(report.kappa.humanEnsemble?.value).toBeCloseTo(0, 6);
     // It flags nothing, so it catches none of the negatives.
     expect(report.accuracy?.sensitivity.mean).toBeCloseTo(0, 10);
@@ -356,13 +362,13 @@ describe('the panel report', () => {
     // The panel simply echoes the classifier. κ(you↔panel) then equals
     // κ(you↔classifier) exactly, which passes condition 2 by a hair — so the
     // interesting case is the panel that echoes it WORSE.
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       // The owner disagrees with the classifier on a third of the corrections.
       human: (row, i) => row.outcome === 'corrected' && i % 3 === 0 ? 'accepted' : row.outcome,
       says: (turn) => turn.verdict === 'frustrated' ? 'accepted' : turn.verdict,
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     const coherence = report.standIn?.conditions[1];
     expect(coherence?.met).toBe(false);
     expect(coherence?.detail).toContain('panel');
@@ -370,14 +376,14 @@ describe('the panel report', () => {
   });
 
   test('splits become unclear, are counted, and cost the panel its recall', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
       // The two judges never agree about frustration.
       says: (turn, which) =>
         turn.verdict === 'frustrated' && which === 1 ? 'corrected' : turn.verdict,
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     expect(report.split).toBe(40);
     expect(report.confusion).toContainEqual({ ensemble: 'unclear', human: 'frustrated', count: 40 });
     // An abstention on a bad turn is a miss, not a neutral outcome.
@@ -386,12 +392,12 @@ describe('the panel report', () => {
   });
 
   test('the classifier κ is measured over the panel’s own turns, so the two compare', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 120, corrected: 40, frustrated: 20 },
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     // Both raters are perfect on these turns, so both κ are 1 — the point is
     // that they are computed from the same `compared` set.
     expect(report.kappa.humanClassifier?.n).toBe(report.kappa.humanEnsemble?.n);
@@ -400,12 +406,12 @@ describe('the panel report', () => {
   });
 
   test('scores each judge on its own, so a panel worse than its members shows', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
       says: (turn, which) => which === 0 ? turn.verdict : 'accepted',
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     expect(report.members.map((m) => m.model)).toEqual(['anthropic/one', 'codex/two']);
     expect(report.members[0].kappa!.value).toBeCloseTo(1, 10);
     expect(report.members[1].kappa!.value).toBeCloseTo(0, 6);
@@ -417,26 +423,26 @@ describe('the panel report', () => {
 
 describe('an unmeasured panel', () => {
   test('says which step is missing instead of a number', () => {
-    const { sql } = setup();
-    expect(renderEnsembleReport(ensembleReport(sql))).toContain('no classifier-graded turns yet');
+    const { sql, actor } = setup();
+    expect(renderEnsembleReport(ensembleReport(sql, actor))).toContain('no classifier-graded turns yet');
 
-    seedLedger(sql, { accepted: 8, corrected: 2 });
-    expect(renderEnsembleReport(ensembleReport(sql))).toContain('kinu label export');
+    seedLedger(sql, actor, { accepted: 8, corrected: 2 });
+    expect(renderEnsembleReport(ensembleReport(sql, actor))).toContain('kinu label export');
 
-    labelAll(sql, () => 'accepted');
-    const unrun = ensembleReport(sql);
+    labelAll(sql, actor, () => 'accepted');
+    const unrun = ensembleReport(sql, actor);
     expect(unrun.standIn).toBeNull();
     expect(unrun.gap?.kind).toBe('not_run');
     expect(renderEnsembleReport(unrun)).toContain('kinu label ensemble');
   });
 
   test('every turn hand-labeled unclear is named as such, not called a failure', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 6, corrected: 2 },
       human: () => 'unclear',
       says: () => 'accepted',
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     expect(report.covered).toBe(8);
     expect(report.compared).toBe(0);
     expect(report.gap?.kind).toBe('no_usable_labels');
@@ -596,12 +602,12 @@ describe('the bar’s operating characteristic', () => {
 
 describe('the pre-registered bar', () => {
   test('is stated in the conditions it prints, at the values the module fixes', async () => {
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 100, corrected: 30, frustrated: 20 },
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
-    const printed = renderEnsembleReport(ensembleReport(sql));
+    const printed = renderEnsembleReport(ensembleReport(sql, actor));
     expect(printed).toContain(STAND_IN_THRESHOLDS.kappa.toFixed(2));
     expect(printed).toContain(STAND_IN_THRESHOLDS.sensitivity.toFixed(2));
     expect(printed).toContain(STAND_IN_THRESHOLDS.specificity.toFixed(2));
@@ -610,14 +616,14 @@ describe('the pre-registered bar', () => {
   test('a respectable panel still fails on the bound, not on the point estimate', async () => {
     // Catches half the negatives and calls one accepted turn in ten bad.
     // Respectable, and nowhere near good enough to label on the owner's behalf.
-    const sql = await panelOver({
+    const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
       says: (turn) => turn.verdict === 'accepted'
         ? (turn.index % 10 === 0 ? 'corrected' : 'accepted')
         : (turn.index % 2 === 0 ? 'accepted' : turn.verdict),
     });
-    const report = ensembleReport(sql);
+    const report = ensembleReport(sql, actor);
     const recall = report.standIn!.conditions[2];
     expect(recall.met).toBe(false);
     expect(recall.detail).toMatch(/recall ≥ 0\.\d\d, specificity ≥ 0\.\d\d/);

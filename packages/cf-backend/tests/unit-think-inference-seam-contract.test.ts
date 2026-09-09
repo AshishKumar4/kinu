@@ -17,7 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { stepCountIs, type StepResult, type ToolSet } from 'ai';
 import { UNBOUNDED_MAX_STEPS } from '@kinu.run/core';
-import { orchestratorHarness, subordinateHarness } from './helpers/actor-harness';
+import { orchestratorHarness } from './helpers/actor-harness';
 
 const thinkBundle = readFileSync(Bun.resolveSync('@cloudflare/think', import.meta.dir), 'utf8');
 
@@ -145,8 +145,8 @@ describe('the turn loop this actor hands Think carries no step cap the caller ca
     }
   });
 
-  test('every actor kind inherits the override — a subordinate is not capped either', () => {
-    expect(subordinateHarness().agent.maxSteps).toBe(UNBOUNDED_MAX_STEPS);
+  test('the workspace root inherits the override — hosted actors have no Think instance to cap', () => {
+    expect(orchestratorHarness().agent.maxSteps).toBe(UNBOUNDED_MAX_STEPS);
   });
 });
 

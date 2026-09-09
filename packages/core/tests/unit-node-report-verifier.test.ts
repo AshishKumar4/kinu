@@ -29,6 +29,7 @@ import { describe, expect, test } from 'bun:test';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadJournal } from '../src/heads/journal';
 import { initHeadsTables } from '../src/heads/schema';
@@ -108,9 +109,12 @@ function fixture(over: {
   readonly model: NodeAgentDeps['model'];
   readonly gradeReport?: NodeAgentDeps['gradeReport'];
 }) {
-  const { rt } = createTestRuntime();
+  const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
+  // The node's turn is a claimed turn on its OWN actor's session: one hosted
+  // actor per node id, over this runtime's one database.
+  const seats = hostedSeatsOver({ rt, db });
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',
@@ -124,7 +128,7 @@ function fixture(over: {
     arbitrate: null,
   };
   const deps: NodeAgentDeps = {
-    rt, model: over.model, journal,
+    hostNode: seats.hostNode, model: over.model, journal,
 
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),

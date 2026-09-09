@@ -214,7 +214,12 @@ describe('craft_tool surface — the agent-authored tool the model writes mid-tu
       memory: rt.memory,
       craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      // BOTH, because `evolution_events` is actor-scoped: the store alone cannot
+      // say whose veto it is, and an executor holding one without the other
+      // refuses the tool but records nothing. This suite asserts the RECORD, so
+      // it has to hand over the actor the record belongs to.
       sql: rt.storage.sql,
+      actor: rt.actor,
     });
     const tool = executor.tools.createTool;
     if (!tool) throw new Error('createTool missing from the inline executor');

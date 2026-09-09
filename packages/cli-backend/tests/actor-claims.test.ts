@@ -71,7 +71,7 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
     const actor: ActorSession = new ActorSession({
       runtime, claims: stores.claims, installedBuild: null,
       orchestration: {
-        engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql),
+        engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
         host: {
           broadcast: () => {},
           enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },

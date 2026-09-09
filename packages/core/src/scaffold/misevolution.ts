@@ -29,6 +29,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 
@@ -168,10 +169,12 @@ export function checkMisevolution(source: string): MisevolutionVerdict {
  */
 export function recordMisevolutionVeto(
   sql: SqlExecutor,
+  actor: ActorHandle,
   args: { surface: MisevolutionSurface; violation: MisevolutionViolation; detail: string },
 ): void {
-  void sql`INSERT INTO evolution_events (type, message, data, created_at)
-      VALUES ('misevolution_veto',
+  actor.assertCurrent();
+  void sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
+      VALUES (${actor.actorId}, 'misevolution_veto',
               ${`Misevolution veto [${args.surface}/${args.violation.criterionId}]: ${args.violation.reason}`},
               ${JSON.stringify({ surface: args.surface, criterionId: args.violation.criterionId, detail: args.detail.slice(0, 500) })},
               ${Date.now()})`;

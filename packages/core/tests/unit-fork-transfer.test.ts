@@ -526,7 +526,7 @@ describe('fork transfer receiver', () => {
       peakRetainedHeapDelta = Math.max(peakRetainedHeapDelta, retainedBytesNow() - baselineRetained);
     };
     for await (const frame of forkTransferFrames({
-      sql: src.sql, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
+      sql: src.sql, actor: bigActor, vfs: plane, untilMessageId: 'm1', transferId: 'tx-256m',
       targetAuthority: 'plain', frameBytes: HUGE_FRAME,
     })) {
       if (frame.kind === 'file') {
@@ -884,7 +884,7 @@ describe('fork transfer receiver', () => {
     let peak = 0;
     let frames = 0;
     for await (const frame of forkTransferFrames({
-      sql: src.sql, vfs: src.vfs, untilMessageId: 'm99', transferId: 'tx-100m',
+      sql: src.sql, actor: bigActor, vfs: src.vfs, untilMessageId: 'm99', transferId: 'tx-100m',
       targetAuthority: 'plain', frameBytes: 1024 * 1024,
     })) {
       await receiver.accept(frame);

@@ -429,8 +429,13 @@ describe('a recovery reads the record, not the session that finds it', () => {
   }
 
   /** The checkpoint a previous process left behind: one advisor lane, stashed and
-   *  then interrupted before it recorded anything. */
-  function stashAdvisorLane(db: Database, opts: { turnId: string; gateOpen: boolean }): void {
+   *  then interrupted before it recorded anything.
+   *
+   *  Written through the runtime's own handle, in the shape `createLinuxFiber`
+   *  writes: `fibers` is keyed `(actor_id, id)` because every agent kind is a
+   *  logical actor of one workspace database, and a row stashed without an owner
+   *  is a lane no recovery could ever claim. */
+  function stashAdvisorLane(rt: CLIRuntime, opts: { turnId: string; gateOpen: boolean }): void {
     const snapshot = {
       turn: {
         userMessage: 'rotate the keys', assistantResponse: 'rotated the staging keys',
@@ -439,8 +444,9 @@ describe('a recovery reads the record, not the session that finds it', () => {
       },
       reachable: [], minSeverity: 'concern', recent: [], gateOpen: opts.gateOpen,
     };
-    db.query(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (?, 'advisor.review', ?, 1)`)
-      .run(`fiber-${opts.turnId}`, JSON.stringify(snapshot));
+    void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
+      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${'advisor.review'},
+              ${JSON.stringify(snapshot)}, 1)`;
   }
 
   const advisorFibers = (rt: CLIRuntime) =>
@@ -455,7 +461,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
     const asked = withAdvisor(rt);
-    stashAdvisorLane(db, { turnId: 'turn-orphan', gateOpen: true });
+    stashAdvisorLane(rt, { turnId: 'turn-orphan', gateOpen: true });
     const { model } = scriptedModel('unused');
     const events: SessionEvent[] = [];
 
@@ -489,7 +495,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     for (const gateOpen of [true, false]) {
       const { db, rt } = workspace();
       const asked = withAdvisor(rt);
-      stashAdvisorLane(db, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
+      stashAdvisorLane(rt, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
       const { model } = scriptedModel('acknowledged');
       const events: SessionEvent[] = [];
 

@@ -976,10 +976,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
     return rpcResult({ ok: true, name, historyKept: true }).json<T>();
   }
-  if (method === "getSubordinateSnapshot") {
-    // The facet's own view. Identity mirrors the roster; the mission stays
+  if (method === "getActorSnapshot") {
+    // The hosted actor's own view, answered by the ROOT now rather than by a
+    // facet over a stub. Identity mirrors the roster; the mission stays
     // internal — the header renders the ROSTER title, never this field.
-    const latest = GALLERY_SUBS.at(-1);
+    const [name] = v.parse(v.tuple([v.string()]), args);
+    const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",

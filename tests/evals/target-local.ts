@@ -46,6 +46,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
+import type { HostedNodeSeat, NodeIdentity } from '../../packages/core/src/index';
 
 import {
   createAgentStores, initWorkspaceSchema, listBackgroundJobs, listForkRuns,
@@ -112,6 +113,17 @@ export interface LocalAgentEvalTarget extends AgentEvalTarget {
   readonly runtime: CLIRuntime;
   /** The store the workspace was opened on, for an arm that reads SQL directly. */
   readonly db: Database;
+  /**
+   * Seat one swarm node as its own actor of this workspace.
+   *
+   * Here because an arm that drives the swarm rung through the agents tool
+   * directly — rather than through {@link AgentEvalTarget.sendTurn} — still
+   * has to give every node a real hosted actor, and local node hosting is
+   * session-bound (`LocalAgentSession.hostNode`). Without it such an arm
+   * would run every node on the CALLER's actor: one claim ledger, one row
+   * set, and a search that cannot be told from a single turn.
+   */
+  hostNode(node: NodeIdentity): Promise<HostedNodeSeat>;
 }
 
 export async function provisionLocalTarget(opts: LocalTargetOptions): Promise<LocalAgentEvalTarget> {
@@ -186,6 +198,26 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
     await session.settleBackgroundWork();
   }
 
+  /**
+   * ONE seating session for the whole target, unlike {@link sendTurn}'s one per
+   * turn: a seat is not a turn. It issues the node's actor row and binds its
+   * stores, and holding one session for that is what keeps every node of a wave
+   * on the same host — a session per seat would give each node its own host and
+   * defeat the release fence the host owns.
+   */
+  hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
+    this.seatingSession ??= new LocalAgentSession({
+      rt: this.runtime,
+      db: this.db,
+      model: this.opts.model,
+      onEvent: () => {},
+      noAutoEvolve: true,
+      oneShot: true,
+    });
+    return this.seatingSession.hostNode(node);
+  }
+  private seatingSession: LocalAgentSession | undefined;
+
   runEvents(): Promise<readonly RunEvent[]> {
     return Promise.resolve(walkRunEvents(this.stores.eventRecorder));
   }
@@ -237,7 +269,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
       searchRuns: this.stores.mctsSearchStore.list(LEDGER_PAGE).length,
       forkRuns: listForkRuns(sql, actor, null, LEDGER_PAGE).items.length,
       canvasNodes: readExplorationCanvas(sql, actor, null, LEDGER_PAGE).items.length,
-      recordObjectives: listRecordObjectives(sql, null, LEDGER_PAGE).items.length,
+      recordObjectives: listRecordObjectives(sql, actor, null, LEDGER_PAGE).items.length,
       backgroundJobs: listBackgroundJobs(this.stores.jobs, LEDGER_PAGE).length,
     });
   }
@@ -257,7 +289,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
    * test before the call was added.
    */
   roster(): Promise<readonly string[]> {
-    const roster = new SubordinateRosterStore(makeSqlExec(this.db));
+    const roster = new SubordinateRosterStore(makeSqlExec(this.db), this.runtime.actor);
     roster.ensureSchema();
     return Promise.resolve(roster.list().map((entry) => entry.name).sort());
   }

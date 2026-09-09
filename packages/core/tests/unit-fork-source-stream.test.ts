@@ -32,8 +32,8 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
     ws.execRaw(SDK_SESSION_DDL);
     for (const message of messages) {
       const content = JSON.stringify({ id: message.id, role: message.role, parts: [{ type: 'text', text: message.text }] });
-      void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
+      void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
     }
   }
   void ws.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
@@ -48,7 +48,11 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
 
 async function framesFor(ws: TestWorkspace, frameBytes = 2048): Promise<ForkFrame[]> {
   return Array.fromAsync(forkTransferFrames({
-    sql: ws.sql, vfs: ws.vfs, untilMessageId: 'm3', transferId: 'transfer',
+    // The OWNER of the conversation being forked: the pane and message rows are
+    // keyed on it, so a snapshot taken under any other handle carries a
+    // sibling's transcript — or, here, none at all.
+    sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.vfs,
+    untilMessageId: 'm3', transferId: 'transfer',
     targetAuthority: 'plain', frameBytes,
   }));
 }
@@ -183,7 +187,8 @@ describe('forkTransferFrames source streamer', () => {
     const missing = createTestWorkspace();
     await seedSource(missing);
     await expect(Array.fromAsync(forkTransferFrames({
-      sql: missing.sql, vfs: missing.vfs, untilMessageId: 'absent', transferId: 'missing', targetAuthority: 'plain', frameBytes: 2048,
+      sql: missing.sql, actor: openWorkspaceMainActor(missing.sql), vfs: missing.vfs,
+      untilMessageId: 'absent', transferId: 'missing', targetAuthority: 'plain', frameBytes: 2048,
     }))).rejects.toThrow('fork point not found: message id "absent" does not exist in source');
 
     const cycle = createTestWorkspace();
@@ -192,7 +197,8 @@ describe('forkTransferFrames source streamer', () => {
       VALUES (${openWorkspaceMainActor(cycle.sql).actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'},
               ${'self-parented'}, ${9})`;
     const frames = await Array.fromAsync(forkTransferFrames({
-      sql: cycle.sql, vfs: cycle.vfs, untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
+      sql: cycle.sql, actor: openWorkspaceMainActor(cycle.sql), vfs: cycle.vfs,
+      untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
     }));
     const messages = frames.filter((frame) => frame.kind === 'messages').flatMap((frame) => frame.rows);
     expect(messages.length).toBeGreaterThan(0);

@@ -37,7 +37,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { createTestActors, scratchDir } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { makeExecRaw, makeSql } from './helpers';
 import { createRecordingLogger } from '../src/obs/index';
@@ -59,6 +59,7 @@ import type {
 import type {
   Floor, FloorBreach, ObjectiveIdentity, PublicationState,
 } from '../src/strategy/objective';
+import type { ActorHandle } from '../src/state/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
 type ArchiveModule = typeof pristineArchive;
@@ -252,11 +253,22 @@ const DEFENDED: readonly Defended[] = [
 
 /* ── Fixtures, the shapes the defended tests use ──────────────────────────── */
 
-function store(records: RecordsModule): SqlExecutor {
+/**
+ * The leaderboard, and the actor it belongs to, as the leading
+ * `(sql, actor)` pair every records/archive call now takes.
+ *
+ * Returned as a spreadable tuple rather than two names: `exploration_records`
+ * is keyed `(actor_id, record_key)`, so a seed and a read under different
+ * handles come back EMPTY — which for `bestInCell` reads as "no incumbent" and
+ * would let a mutant that never admits anything pass every defence below.
+ * One pair, spread into both halves, is what keeps that impossible.
+ */
+function store(records: RecordsModule): [SqlExecutor, ActorHandle] {
   const db = new Database(':memory:');
   const sql = makeSql(db);
-  records.initExplorationRecordsTable(makeExecRaw(db));
-  return sql;
+  const execRaw = makeExecRaw(db);
+  records.initExplorationRecordsTable(execRaw);
+  return [sql, createTestActors(sql, execRaw).main];
 }
 
 const CHEAPER: ObjectiveIdentity = {
@@ -406,17 +418,17 @@ function proposal(width: number): BranchProposal {
 /** {@link THRESHOLD_IS_A_FLOOR}. */
 async function thresholdIsAFloor(archive: ArchiveModule): Promise<void> {
   const permissive = store(pristineRecords);
-  archive.admitToArchive(permissive, { publication: OPEN, write: cellWrite(), novelty: 0 });
-  expect(archive.admitToArchive(permissive, {
+  archive.admitToArchive(...permissive, { publication: OPEN, write: cellWrite(), novelty: 0 });
+  expect(archive.admitToArchive(...permissive, {
     publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0,
   }).kind).toBe('recorded');
 
   const strict = store(pristineRecords);
-  archive.admitToArchive(strict, { publication: OPEN, write: cellWrite(), novelty: 1 });
-  expect(archive.admitToArchive(strict, {
+  archive.admitToArchive(...strict, { publication: OPEN, write: cellWrite(), novelty: 1 });
+  expect(archive.admitToArchive(...strict, {
     publication: OPEN, write: cellWrite({ artifact: FAR, value: 31 }), novelty: 1,
   }).kind).toBe('recorded');
-  expect(archive.admitToArchive(strict, {
+  expect(archive.admitToArchive(...strict, {
     publication: OPEN,
     write: cellWrite({ artifact: `${OCCUPANT} const answer = 42;`, value: 17 }),
     novelty: 1,
@@ -425,17 +437,17 @@ async function thresholdIsAFloor(archive: ArchiveModule): Promise<void> {
 
 /** {@link NEAREST_IS_NAMED}. */
 async function nearestIsNamed(archive: ArchiveModule): Promise<void> {
-  const sql = store(pristineRecords);
-  archive.admitToArchive(sql, {
+  const board = store(pristineRecords);
+  archive.admitToArchive(...board, {
     publication: OPEN, write: cellWrite({ artifact: FAR, value: 11 }), novelty: 0.5,
   });
-  archive.admitToArchive(sql, {
+  archive.admitToArchive(...board, {
     publication: OPEN, write: cellWrite({ artifact: OCCUPANT, value: 40 }), novelty: 0.5,
   });
-  expect(pristineRecords.bestInCell(sql, {
+  expect(pristineRecords.bestInCell(...board, {
     identity: CHEAPER, floor: FLOOR, descriptor: CELL,
   })?.artifact).toBe(FAR);
-  expect(archive.admitToArchive(sql, {
+  expect(archive.admitToArchive(...board, {
     publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
   })).toMatchObject({
     cause: 'too-close',
@@ -445,17 +457,17 @@ async function nearestIsNamed(archive: ArchiveModule): Promise<void> {
 
 /** {@link DIRECTION_DECIDES}. */
 async function directionDecides(records: RecordsModule): Promise<void> {
-  const sql = store(records);
-  records.recordExploration(sql, {
+  const board = store(records);
+  records.recordExploration(...board, {
     publication: OPEN, write: write({ identity: HIGHER, value: 0.6 }),
   });
-  expect(records.recordExploration(sql, {
+  expect(records.recordExploration(...board, {
     publication: OPEN, write: write({ identity: HIGHER, value: 0.4 }),
   })).toEqual({ kind: 'refused', cause: 'not-better' });
-  expect(records.recordExploration(sql, {
+  expect(records.recordExploration(...board, {
     publication: OPEN, write: write({ identity: HIGHER, value: 0.9 }),
   }).kind).toBe('recorded');
-  expect(records.bestInCell(sql, {
+  expect(records.bestInCell(...board, {
     identity: HIGHER, floor: FLOOR, descriptor: null,
   })?.value).toBe(0.9);
 }
@@ -476,19 +488,19 @@ async function paretoDirectionDecides(objective: ObjectiveModule): Promise<void>
 
 /** {@link TIE_DOES_NOT_DISPLACE}. */
 async function tieDoesNotDisplace(records: RecordsModule): Promise<void> {
-  const sql = store(records);
-  records.recordExploration(sql, { publication: OPEN, write: write() });
-  expect(records.recordExploration(sql, { publication: OPEN, write: write() }))
+  const board = store(records);
+  records.recordExploration(...board, { publication: OPEN, write: write() });
+  expect(records.recordExploration(...board, { publication: OPEN, write: write() }))
     .toEqual({ kind: 'refused', cause: 'not-better' });
-  expect(records.recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+  expect(records.recordsFor(...board, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
 }
 
 /** {@link SEAL_WRITES_NOTHING}. */
 async function sealWritesNothing(records: RecordsModule): Promise<void> {
-  const sql = store(records);
-  expect(records.recordExploration(sql, { publication: SEALED, write: write() }))
+  const board = store(records);
+  expect(records.recordExploration(...board, { publication: SEALED, write: write() }))
     .toEqual({ kind: 'refused', cause: 'sealed' });
-  expect(records.recordsFor(sql, { identity: CHEAPER, floor: FLOOR })).toHaveLength(0);
+  expect(records.recordsFor(...board, { identity: CHEAPER, floor: FLOOR })).toHaveLength(0);
 }
 
 /** {@link POLICY_FROM_SETTLE}. */

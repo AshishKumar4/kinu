@@ -196,11 +196,15 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
     expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
     // Tickets remain scoped to one workspace. They admit its root and one
-    // direct additional-agent facet, but never a nested or foreign namespace.
+    // hosted actor beneath it, but never a nested or foreign namespace — the
+    // `/sub/` facet hop names nothing any more.
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
-      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher',
+      '/agents/orchestrator-agent/workspace/actor/researcher',
     )).toBe('workspace');
+    expect(extractTicketOrchestratorAgentName(
+      '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher',
+    )).toBeNull();
     expect(extractTicketOrchestratorAgentName(
       '/agents/orchestrator-agent/workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested',
     )).toBeNull();

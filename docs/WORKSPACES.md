@@ -19,7 +19,7 @@ actors that work inside it.
 │   exec plane ExecutionRouter: every environment keeps its native path:   │
 │                sandbox.*   full Linux container   (when configured)      │
 │                laptop.*    the user's own machine  (connect + consent)   │
-│                parent.*    a facet's view of its parent workspace        │
+│                parent.*    a hosted head's view of its hiring workspace  │
 │   state      conversations · SOUL.md · memory · scaffold · craft store · │
 │              evolution ledgers · triggers · release changes              │
 │                                                                          │
@@ -28,7 +28,7 @@ actors that work inside it.
 │   │   orchestrator: the DEFAULT agent, always present. Answers        │  │
 │   │     chat, runs tools, evolves the workspace.                      │  │
 │   │   subordinates: DURABLE teammates hired by `agents`.              │  │
-│   │     Each is its own facet running the full turn loop on an        │  │
+│   │     Each is its own hosted actor running the full turn loop on an │  │
 │   │     independent workstream, sharing the workspace's canonical     │  │
 │   │     files and reporting assigned work back as events.             │  │
 │   │   swarm nodes: EPHEMERAL agents of one configured tree search.    │  │
@@ -86,7 +86,25 @@ actors that work inside it.
   both planes are the one in-SQLite tree an isolated fixture or eval episode
   gets. Relative paths resolve at `/home/user` (`WORKSPACE_ROOT`,
   `core/src/vfs/workspace-path.ts:2`). The mount table adds a connected device
-  at `/pc` and a container at `/sandbox`. Reads and writes cross through each
+  at `/pc`, a container at `/sandbox`, and each actor's own working context at
+  `/context`. That last one is the only editable surface over an agent's
+  history: `/context/working.jsonl` is writable — line 1 a header naming the
+  actor and the revision the reader observed, then one encoded `ModelMessage`
+  per line — while `/context/claim.json`, `/context/history.json`,
+  `/context/revisions/<N>.json` and `/context/requests/<turnId>/<N>.json` are
+  read-only evidence: the live claim, the change history, each retained working
+  revision, and the exact rendered array a given step consumed. An authorized
+  parent reaches a child's at `/context/agents/<storage-key>/…`, resolved
+  against the actor directory and not against the path, so a sibling's key
+  reads as absent. A write is compare-and-set on the revision in the header
+  (stale is refused and the active version is untouched), is STAGED rather than
+  applied in place so an in-flight request keeps the array it started with, and
+  becomes effective at the next safe step boundary — or at the next turn when
+  none is live. A rollback is a retained revision's bytes written back as a NEW
+  revision: nothing overwrites a rendered request and nothing deletes a
+  superseded one. The loop SOURCE is not here — `scaffold/agent.js[.vN]` stays
+  the one versioned program path, because two writable copies of one thing is
+  the failure this split avoids. Reads and writes cross through each
   executor's own file API and retain its consent and access policy. Inside
   the container the working directory is `/workspace` (`DEVBOX_WORKDIR`,
   `devbox/src/storage.ts`) and every command starts there. The workspace
@@ -107,26 +125,29 @@ actors that work inside it.
     candidates, and judged searches use a model ensemble.
 
     Hosted nodes run over the canonical workspace with actor-private shell
-    state and scaffold. `facetRuntime` gives each one a `node:<name>` shell id
-    and a scaffold at `.kinu/nodes/<name>/scaffold/agent.js` over the
-    PARENT's file plane (`facetRuntime` in `cf-backend/src/subordinate-agent.ts`). MCTS rollouts
-    use the same facet class in a separate toolless mode and acquire no runtime.
+    state and scaffold. Each one is a logical actor of the workspace, acquired
+    from the one `ActorHost` (`core/src/state/actor-host.ts`): its rows are in
+    the workspace's own SQLite under its `actor_id`, its shell id is
+    `node:<name>`, and its scaffold lives at
+    `.kinu/nodes/<name>/scaffold/agent.js` over the PARENT's file plane. MCTS
+    rollouts are actors of kind `branch` on the same database and acquire no
+    runtime beyond it.
 
-    Facet isolation is one contract with one applier. `agentHomeLayout` is
-    the one table that says a facet owns its home at `0o755` and its tmp at
+    Actor isolation is one contract with one applier. `agentHomeLayout` is
+    the one table that says an actor owns its home at `0o755` and its tmp at
     `0o700` (`core/src/vfs/agent-home.ts`). The kind rides in the name:
     `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`. Both backends
     provision any of them through `facetHomeProvisioner` over the three
     host-owned members from `WorkspaceBundle.privileged()`: the local runtime
-    in its own process, the hosted workspace on the orchestrator that owns it
-    (`OrchestratorAgent.provisionFacetHome`), which every facet reaches over
-    one hop because the principal registry has no RPC. A subordinate is
-    provisioned at seeding and released on a wipe; a head provisions itself
-    when it runs and its spawner releases it at settle; a node is provisioned
-    by its search through `AgentsForkDeps.provisionNodeHome` and released by
-    the same search. The `/tmp` rewrites are re-derived from the homes on
-    disk every time the filesystem opens (`restoreAgentTmpConfinements`), so
-    an eviction never leaves a facet with a home and a shared `/tmp`.
+    in its own process, the hosted workspace on the orchestrator that owns it,
+    provisioned in-isolate by the workspace's own host rather than over a hop.
+    A subordinate is provisioned at hire and released on a wipe; a head
+    provisions itself when it runs and its spawner releases it at settle; a
+    node is provisioned by its search through `AgentsForkDeps.provisionNodeHome`
+    and released by the same search. The `/tmp` rewrites are re-derived from
+    the homes on disk every time the filesystem opens
+    (`restoreAgentTmpConfinements`), so an eviction never leaves an actor with
+    a home and a shared `/tmp`.
 
     Both then credential BOTH planes, because a node reaches the tree with
     commands and with file tools. A file plane pinned to the session user
@@ -135,8 +156,8 @@ actors that work inside it.
     and a second `Shell` over the SAME filesystem
     (`WorkspaceBundle.asAgent`). On a hosted session it gets ONE fixed program
     run as the node inside the same session (`nimbusSessionFiles(box, cred)`)
-    plus `withHostedNodeExecution`. `CLIRuntime.nodeRuntime` and a node
-    facet's `HostedNodeHome` are where each backend rebuilds that runtime.
+    plus `withHostedNodeExecution`. `CLIRuntime.nodeRuntime` and a hosted
+    node's `HostedNodeHome` are where each backend rebuilds that runtime.
 
     The hosted program is the session's own `node`, driven by strict JSON. The
     request rides one environment variable and the answer returns on stdout

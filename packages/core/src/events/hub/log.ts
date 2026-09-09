@@ -26,7 +26,11 @@
  *     abort_replan). Each transition writes a `phase` row for audit.
  *
  *   - The dedupe UNIQUE index makes `publish()` idempotent at the storage
- *     level — duplicate idempotency keys return the existing event id.
+ *     level — duplicate idempotency keys return the existing event id. That
+ *     index is `(actor_id, dedupe_key)`: the key is the UPSTREAM ingress's
+ *     identity, so two hosted actors handed the same delivery each own an
+ *     event, and a table-wide index would drop the second as a duplicate of
+ *     the first actor's row.
  */
 
 import * as v from 'valibot';
@@ -36,6 +40,7 @@ import {
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
+import type { ActorHandle } from '../../state/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
 import { deriveFields } from './trust';
@@ -298,7 +303,21 @@ const RevisitConditionSchema = v.variant('kind', [
 ]);
 
 export class EventLog {
-  constructor(private readonly sql: SqlExec) {}
+  private readonly actorId: string;
+
+  /**
+   * Bind the ledger to ONE actor.
+   *
+   * Every logical actor in a workspace has its own inbox: a delegated task
+   * admitted for a hired subordinate is that subordinate's to drain, and the
+   * root must not answer it. `actorId` is captured from the handle once so a
+   * re-pointed handle cannot move a live log onto another actor's rows, and
+   * `assertCurrent()` runs before every statement so a retired actor stops
+   * reading and writing here at the instant its directory row is retired.
+   */
+  constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
+    this.actorId = actor.actorId;
+  }
 
   // ── publish ─────────────────────────────────────────────────────
 
@@ -316,6 +335,7 @@ export class EventLog {
     caused_by?: EventId;
     hmac_secret_for_visibility?: string;
   }): PublishResult {
+    this.actor.assertCurrent();
     const { descriptor: d, now, caused_by, hmac_secret_for_visibility } = opts;
 
     // 1. Derive trust/priority/visibility (pure functions).
@@ -342,10 +362,11 @@ export class EventLog {
 
     this.sql.exec(
       `INSERT INTO agent_log
-         (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+         (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
           schema_version, dedupe_key)
-       VALUES (?, 'event', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, 'event', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      this.actorId,
       placeholderId,
       caused_by ?? null,
       trace_id,
@@ -372,8 +393,9 @@ export class EventLog {
    * recognised as the one already held rather than acted on twice.
    */
   idForDedupeKey(key: string): EventId | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
-      `SELECT id FROM agent_log WHERE dedupe_key = ?`, key,
+      `SELECT id FROM agent_log WHERE actor_id = ? AND dedupe_key = ?`, this.actorId, key,
     ).toArray().map((row) => v.parse(IdRowSchema, row));
     return rows[0]?.id ?? null;
   }
@@ -383,6 +405,7 @@ export class EventLog {
   /** Events not yet bound to a turn. Ordered by priority desc, received_at asc.
    *  Honors deferred-revisit conditions if `resolve_deferred` is passed. */
   pending(filter: PendingFilter = {}): KinuEvent[] {
+    this.actor.assertCurrent();
     // Same invariant as `query`, same reason: `LIMIT -1` reads the whole table
     // and `LIMIT NaN` is a datatype mismatch. The ceiling is the boundary's
     // question, not this read's.
@@ -399,11 +422,12 @@ export class EventLog {
              payload_visibility, payload, received_at, schema_version,
              dedupe_key, step_idx
       FROM agent_log
-      WHERE kind = 'event'
+      WHERE actor_id = ?
+        AND kind = 'event'
         AND turn_id IS NULL
         AND (step_idx IS NULL OR step_idx >= 0)
     `;
-    const bindings: SqlValue[] = [];
+    const bindings: SqlValue[] = [this.actorId];
 
     if (filter.variant) {
       sql += ' AND variant = ?';
@@ -444,14 +468,15 @@ export class EventLog {
     });
 
     // Resolve deferred events: those whose revisit condition is now satisfied.
-    // Deferred state is encoded by `step_idx = -1` (marker) + a JSON
-    // condition stored in `payload_visibility` — but visibility is already
-    // a column. We instead use a separate `deferrals` table for the
-    // condition; markConsumed clears it. For simplicity in v1 we store the
-    // revisit_at as a JSON-encoded blob in step_idx via a dedicated
-    // `defer_until` shadow column we'll add via migration if needed.
-    // For now: deferred events have `step_idx = -1` and are excluded from
-    // `pending()` unless `resolve_deferred` is set.
+    //
+    // A deferral is TWO facts on the event's own row, and no second table:
+    // `step_idx = -1` marks it deferred, and {@link defer} writes the
+    // condition into the payload under `__defer_revisit`, where
+    // {@link deferredRows} parses it back through `RevisitConditionSchema`.
+    // A row whose condition no longer parses is skipped rather than resolved,
+    // so a corrupt payload cannot make an event due forever. Deferred rows are
+    // excluded from `pending()` unless `resolve_deferred` is set, and
+    // `markConsumed` clears the marker by binding a real `step_idx`.
     if (filter.resolve_deferred) {
       const deferred = this.queryDeferred(filter.resolve_deferred);
       events = events.concat(deferred);
@@ -472,12 +497,14 @@ export class EventLog {
    *  due now (`queryDeferred`), and when the next one becomes due
    *  ({@link nextPendingDrainAt}). */
   private deferredRows(): Array<{ event: KinuEvent; cond: RevisitCondition }> {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
               dedupe_key, step_idx
        FROM agent_log
-       WHERE kind = 'event' AND turn_id IS NULL AND step_idx = -1`,
+       WHERE actor_id = ? AND kind = 'event' AND turn_id IS NULL AND step_idx = -1`,
+      this.actorId,
     ).toArray().map((row) => v.parse(EventRowSchema, row));
 
     return rows.flatMap((row) => {
@@ -521,30 +548,33 @@ export class EventLog {
 
   /** Bind an event to the turn that's about to handle it. */
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
+    this.actor.assertCurrent();
     this.sql.exec(
       `UPDATE agent_log SET turn_id = ?, step_idx = ?, consumed_at = ?
-       WHERE id = ? AND kind = 'event'`,
-      turnId, stepIdx, now, eventId,
+       WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      turnId, stepIdx, now, this.actorId, eventId,
     );
   }
 
   /** Close the recovery lease after a drain turn completed. The durable
    *  turn binding remains available for reply dispatch and audit queries. */
   markTurnCompleted(turnId: TurnId): void {
+    this.actor.assertCurrent();
     this.sql.exec(
       `UPDATE agent_log SET consumed_at = NULL
-       WHERE turn_id = ? AND kind = 'event'`,
-      turnId,
+       WHERE actor_id = ? AND turn_id = ? AND kind = 'event'`,
+      this.actorId, turnId,
     );
   }
 
   /** Reverse of `markConsumed` — used by abort_replan to un-bind events so
    *  they re-enter the pending pool. */
   unbind(eventId: EventId): void {
+    this.actor.assertCurrent();
     this.sql.exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE id = ? AND kind = 'event'`,
-      eventId,
+       WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      this.actorId, eventId,
     );
   }
 
@@ -559,18 +589,24 @@ export class EventLog {
    * answer — so this reports, and the caller decides.
    */
   openDrainLeases(): TurnId[] {
+    this.actor.assertCurrent();
     return this.sql.exec(
       `SELECT DISTINCT turn_id FROM agent_log
-       WHERE kind = 'event' AND turn_id LIKE 'evt-%' AND consumed_at IS NOT NULL`,
+       WHERE actor_id = ? AND kind = 'event' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL`,
+      this.actorId,
     ).toArray().map((row) => v.parse(TurnIdRowSchema, row).turn_id);
   }
 
   /** Whether ANY drain lease is open — one indexed LIMIT-1 read, for the
    *  activation-time arm decision that must not materialize the roster. */
   hasOpenDrainLease(): boolean {
+    this.actor.assertCurrent();
     return this.sql.exec(
       `SELECT 1 FROM agent_log
-       WHERE kind = 'event' AND turn_id LIKE 'evt-%' AND consumed_at IS NOT NULL LIMIT 1`,
+       WHERE actor_id = ? AND kind = 'event' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL LIMIT 1`,
+      this.actorId,
     ).toArray().length > 0;
   }
 
@@ -599,6 +635,7 @@ export class EventLog {
     now = Date.now(),
     answered: ReadonlySet<TurnId> = new Set(),
   ): EventId[] {
+    this.actor.assertCurrent();
     const cutoff = now - olderThanMs;
     const keep = [...answered];
     const exclusion = keep.length === 0
@@ -607,14 +644,17 @@ export class EventLog {
     const rows = this.sql.exec(
       `UPDATE agent_log
        SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
-       WHERE id IN (
+       WHERE actor_id = ? AND id IN (
          SELECT id FROM agent_log
-         WHERE kind = 'event'
+         WHERE actor_id = ?
+           AND kind = 'event'
            AND turn_id LIKE 'evt-%'
            AND consumed_at IS NOT NULL
            AND consumed_at <= ?${exclusion}
        )
        RETURNING id`,
+      this.actorId,
+      this.actorId,
       cutoff,
       ...keep,
     ).toArray().map((row) => v.parse(IdRowSchema, row));
@@ -627,15 +667,18 @@ export class EventLog {
    *  payload's `__defer_revisit` field (additive — doesn't alter the user
    *  payload semantically). `step_idx = -1` marks the event as deferred. */
   defer(eventId: EventId, revisitAt: RevisitCondition): void {
+    this.actor.assertCurrent();
     const row = this.sql.exec(
-      `SELECT payload FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
+      `SELECT payload FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      this.actorId, eventId,
     ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
     if (row.length === 0) return;
     const payload = parseJsonObject(row[0].payload);
     payload.__defer_revisit = v.parse(JsonValueSchema, revisitAt);
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
-      JSON.stringify(payload), eventId,
+      `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL, consumed_at = NULL
+       WHERE actor_id = ? AND id = ?`,
+      JSON.stringify(payload), this.actorId, eventId,
     );
   }
 
@@ -644,15 +687,18 @@ export class EventLog {
   /** Explicit drop. Persists the event with `step_idx = -2` (sentinel) so
    *  it's never re-dispatched. The dismissal reason is appended to payload. */
   dismiss(eventId: EventId, reason: string, by: 'reactor' | 'tool' | 'system'): void {
+    this.actor.assertCurrent();
     const row = this.sql.exec(
-      `SELECT payload FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
+      `SELECT payload FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      this.actorId, eventId,
     ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
     if (row.length === 0) return;
     const payload = parseJsonObject(row[0].payload);
     payload.__dismissed = { reason, by, at: Date.now() };
     this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
-      JSON.stringify(payload), eventId,
+      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL
+       WHERE actor_id = ? AND id = ?`,
+      JSON.stringify(payload), this.actorId, eventId,
     );
   }
 
@@ -674,6 +720,7 @@ export class EventLog {
    * boundary.
    */
   query(filter: QueryFilter): KinuEvent[] {
+    this.actor.assertCurrent();
     const limit = boundedInt(
       filter.limit, EVENT_QUERY_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
     );
@@ -682,9 +729,9 @@ export class EventLog {
              payload_visibility, payload, received_at, schema_version,
              dedupe_key, step_idx
       FROM agent_log
-      WHERE kind = 'event'
+      WHERE actor_id = ? AND kind = 'event'
     `;
-    const bindings: SqlValue[] = [];
+    const bindings: SqlValue[] = [this.actorId];
     if (filter.trace_id) { sql += ' AND trace_id = ?'; bindings.push(filter.trace_id); }
     if (filter.turn_id)  { sql += ' AND turn_id = ?';  bindings.push(filter.turn_id); }
     if (filter.variant)  { sql += ' AND variant = ?';  bindings.push(filter.variant); }
@@ -702,12 +749,13 @@ export class EventLog {
 
   /** Single-event read by id. */
   get(eventId: EventId): KinuEvent | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
               dedupe_key, step_idx
        FROM agent_log
-       WHERE kind = 'event' AND id = ?`, eventId,
+       WHERE actor_id = ? AND kind = 'event' AND id = ?`, this.actorId, eventId,
     ).toArray().map((row) => v.parse(EventRowSchema, row));
     return rows.length > 0 ? rowToEvent(rows[0]) : null;
   }
@@ -716,17 +764,21 @@ export class EventLog {
 
   /** Trace id of a referenced event, or null if not found. */
   private lookupTraceId(eventId: EventId): TraceId | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
-      `SELECT trace_id FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
+      `SELECT trace_id FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
+      this.actorId, eventId,
     ).toArray().map((row) => v.parse(TraceRowSchema, row));
     return rows.length > 0 ? rows[0].trace_id : null;
   }
 
   /** Number of events in a trace (used by per-trace budget). */
   traceEventCount(traceId: TraceId): number {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
-      `SELECT COUNT(*) AS n FROM agent_log WHERE trace_id = ? AND kind = 'event'`,
-      traceId,
+      `SELECT COUNT(*) AS n FROM agent_log
+       WHERE actor_id = ? AND trace_id = ? AND kind = 'event'`,
+      this.actorId, traceId,
     ).toArray().map((row) => v.parse(CountRowSchema, row));
     return rows[0]?.n ?? 0;
   }
@@ -747,14 +799,15 @@ export class EventLog {
     payload: Payload;
     now: number;
   }): string {
+    this.actor.assertCurrent();
     const id = ulid();
     this.sql.exec(
       `INSERT INTO agent_log
-         (id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+         (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
           trust, priority, payload_visibility, payload, received_at,
           schema_version, dedupe_key)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, 1, NULL)`,
-      id, opts.kind, opts.turn_id, opts.step_idx, opts.parent_id, opts.trace_id,
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, 1, NULL)`,
+      this.actorId, id, opts.kind, opts.turn_id, opts.step_idx, opts.parent_id, opts.trace_id,
       JSON.stringify(opts.payload), opts.now,
     );
     return id;
@@ -763,11 +816,12 @@ export class EventLog {
   /** The latest phase row for a turn. Orders by received_at desc (strictly
    *  monotonic per write) with id desc as a tiebreaker. */
   currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT payload, received_at FROM agent_log
-       WHERE kind = 'phase' AND turn_id = ?
+       WHERE actor_id = ? AND kind = 'phase' AND turn_id = ?
        ORDER BY received_at DESC, id DESC LIMIT 1`,
-      turn_id,
+      this.actorId, turn_id,
     ).toArray().map((row) => v.parse(PhaseRowSchema, row));
     if (rows.length === 0) return null;
     const payload = parseJsonObject(rows[0].payload);
@@ -778,13 +832,15 @@ export class EventLog {
   /** All step / tool rows of a turn, ordered. Used by reactor snapshot
    *  + recovery + SSE replay. */
   turnSteps(turn_id: TurnId): AgentLogRow[] {
+    this.actor.assertCurrent();
     const rows = this.sql.exec(
       `SELECT id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
               trust, priority, payload_visibility, payload, received_at, schema_version, dedupe_key
        FROM agent_log
-       WHERE turn_id = ? AND kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
+       WHERE actor_id = ? AND turn_id = ?
+         AND kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
        ORDER BY step_idx, id`,
-      turn_id,
+      this.actorId, turn_id,
     ).toArray().map((row) => v.parse(AgentLogRowSchema, row));
     return rows.map((row): AgentLogRow => ({
       ...row,

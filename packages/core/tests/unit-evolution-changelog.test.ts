@@ -186,24 +186,24 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
-    finishGepaRun(sql, {
+    const runId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
+    finishGepaRun(sql, actor, {
       runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
       metricCalls: 12, iterations: 3,
     });
     // An aborted run changed nothing — it must not appear.
-    const abortedId = startGepaRun(sql, { target: 'scaffold', budget: {} });
-    finishGepaRun(sql, {
+    const abortedId = startGepaRun(sql, actor, { target: 'scaffold', budget: {} });
+    finishGepaRun(sql, actor, {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
       metricCalls: 0, iterations: 0,
     });
-    void sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0.25, 0, '[]')`;
-    recordTurnOutcome(sql, {
+    void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${actor.actorId}, 'rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0.25, 0, '[]')`;
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'build it', assistantResponse: 'done',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 0.8, source: 'classifier',
       userMessage: 'fix it', assistantResponse: 'wrong', followup: 'no, the other one',
     });
@@ -237,15 +237,15 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     // `execution` is the runtime's own verdict on a headless turn: no user saw
     // it, let alone followed up. The digest used to report the whole batch as
     // "from real user follow-ups", which invented a person for these two.
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'ship it', assistantResponse: 'shipped',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 1, source: 'execution',
       userMessage: 'again', assistantResponse: 'threw',
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 0.9, source: 'classifier',
       userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
     });
@@ -264,7 +264,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 0.75, source: 'classifier',
       userMessage: 'add pagination to the chat list', assistantResponse: 'done',
       followup: 'no, the other list',
@@ -272,7 +272,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     });
     // No reason on record: the source IS the reason, and the item has to read
     // as one rather than as a verdict with its evidence missing.
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
     });
@@ -326,8 +326,8 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     const now = Date.now();
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
-      void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-          VALUES (${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
+      void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+          VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
     // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
     // this is not a direction and must not be reported as one.
@@ -375,11 +375,11 @@ describe('unseen-count logic (the badge)', () => {
     const sql = rt.storage.sql;
     const actor = rt.actor;
     const now = Date.now();
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'old', assistantResponse: 'old', now: now - 60_000,
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'corrected', confidence: 1, source: 'explicit',
       userMessage: 'new', assistantResponse: 'new', now,
     });
@@ -401,7 +401,7 @@ describe('unseen-count logic (the badge)', () => {
     const { rt, facts } = setup();
     const sql = rt.storage.sql;
     const actor = rt.actor;
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'hi', assistantResponse: 'hello',
     });
@@ -421,7 +421,7 @@ describe('unseen-count logic (the badge)', () => {
    */
   test('the first turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
     const { rt } = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       outcome: 'accepted', confidence: 1, source: 'execution',
       userMessage: 'hi', assistantResponse: 'hello',
     });
@@ -436,8 +436,8 @@ describe('renderChangelogText — the one text form', () => {
   test('numbers entries, shows evidence, marks revertables', () => {
     const { rt, facts } = setup();
     facts.upsert('k', 'v', { confidence: 0.7 });
-    void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES ('rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, 0.1, NULL, '[]')`;
+    void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, 'rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, 0.1, NULL, '[]')`;
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     const text = renderChangelogText(entries, { unseenCount: 2 });
@@ -561,7 +561,7 @@ describe('reverts — real paths only', () => {
 
   test('revertChangelogEntryById: unknown ids and informational entries refuse', async () => {
     const { rt, facts } = setup();
-    recordTurnOutcome(rt.storage.sql, {
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'q', assistantResponse: 'a',
     });
@@ -579,10 +579,6 @@ describe('reverts — real paths only', () => {
 describe('session-end digest — assembled when the window closes', () => {
   test('onSessionComplete emits one changelog_digest covering the window', async () => {
     const { rt, facts } = setup();
-    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS evolution_events (
-      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
-      type TEXT NOT NULL, message TEXT NOT NULL, data TEXT,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
@@ -672,8 +668,8 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
     for (let i = 0; i < 6; i++) {
       void rt.storage.sql`INSERT INTO replay_evals
-        (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0.5, 0, '[]')`;
+        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, ${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0.5, 0, '[]')`;
     }
 
     const entries = buildChangelog(rt.storage.sql, rt.actor, { limit: 3 });
@@ -801,9 +797,9 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
 
   test('a completed GEPA run is dated by when it ENDED', () => {
     const { rt } = setup();
-    const runId = startGepaRun(rt.storage.sql, { target: 'scaffold' });
+    const runId = startGepaRun(rt.storage.sql, rt.actor, { target: 'scaffold' });
     const endedAt = Date.now() + 60_000;
-    finishGepaRun(rt.storage.sql, {
+    finishGepaRun(rt.storage.sql, rt.actor, {
       runId, status: 'completed', stopReason: 'iterations_exhausted',
       winnerId: 'cand-1', metricCalls: 12, iterations: 3,
     });
@@ -822,8 +818,8 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const now = Date.now();
     const row = (id: string, at: number, mean: number) => {
       void rt.storage.sql`INSERT INTO replay_evals
-        (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
-        VALUES (${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
+        (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+        VALUES (${rt.actor.actorId}, ${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
     };
     row('rp-1', now - 2000, 0.30);
     row('rp-2', now - 1000, 0.95);

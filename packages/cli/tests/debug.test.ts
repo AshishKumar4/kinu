@@ -120,12 +120,12 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // depth 0) — exactly what the unscoped client buildTree() would return,
   // discarding every node of the real latest search. ──
   const insertNode = db.query(`INSERT INTO search_nodes
-    (id, parent_id, root_id, task, action, visits, value, depth, status, created_at)
-    VALUES (?, ?, ?, 'investigate', ?, 1, 0.5, ?, 'open', ?)`);
-  insertNode.run('search-old-root', null, 'search-old', 'root', 0, 1000);
-  insertNode.run('search-new-root', null, 'search-new', 'root', 0, 5000);
-  insertNode.run('search-new-c1', 'search-new-root', 'search-new', 'branch a', 1, 5100);
-  insertNode.run('search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
+    (actor_id, id, parent_id, root_id, task, action, visits, value, depth, status, created_at)
+    VALUES (?, ?, ?, ?, 'investigate', ?, 1, 0.5, ?, 'open', ?)`);
+  insertNode.run(actor.actorId, 'search-old-root', null, 'search-old', 'root', 0, 1000);
+  insertNode.run(actor.actorId, 'search-new-root', null, 'search-new', 'root', 0, 5000);
+  insertNode.run(actor.actorId, 'search-new-c1', 'search-new-root', 'search-new', 'branch a', 1, 5100);
+  insertNode.run(actor.actorId, 'search-new-c2', 'search-new-c1', 'search-new', 'branch a.1', 2, 5200);
 
   const mcts = new MctsSearchStore(sql, actor);
   mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
@@ -174,7 +174,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
     scale: 'linear', verifierDigest: 'suite@f00d',
   };
   const record = (over: Partial<ExplorationWrite>): void => {
-    recordExploration(sql, {
+    recordExploration(sql, actor, {
       publication: { kind: 'open' },
       write: {
         identity: CALLS, descriptor: null, artifact: 'solve()', value: 23,

@@ -19,6 +19,7 @@ import {
   bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome, seedSoul,
   type LLMProviderConfig,
 } from '@kinu.run/core';
+import type { ActorHandle } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -83,12 +84,10 @@ async function setup(judge: () => Promise<string>) {
   // reading the database's own filename back, and refuses a runtime whose path
   // does not match it (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('gepa-local', 'agent.db'), { create: true });
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    PRIMARY KEY (actor_id, id))`);
+  // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
+  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // silently pinned a schema nothing else maintains.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, {
     dbPath: db.filename,
     llm: DUMMY_LLM,
@@ -114,14 +113,14 @@ async function setup(judge: () => Promise<string>) {
 
 /** The ledger GEPA draws its split from: failures to optimise toward, plus
  *  accepted turns as regression guards. */
-function seedOutcomes(sql: ReturnType<typeof makeSql>, n = 5): void {
+function seedOutcomes(sql: ReturnType<typeof makeSql>, actor: ActorHandle, n = 5): void {
   for (let i = 0; i < n; i++) {
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: `bad-${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
       userMessage: `summarise report ${i}`, assistantResponse: 'wrong summary',
       followup: 'no, summarise the conclusions', now: 1_000 + i,
     });
-    recordTurnOutcome(sql, {
+    recordTurnOutcome(sql, actor, {
       turnId: `good-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: `list the files in ${i}`, assistantResponse: 'a.txt, b.txt', now: 2_000 + i,
     });
@@ -131,7 +130,7 @@ function seedOutcomes(sql: ReturnType<typeof makeSql>, n = 5): void {
 describe('GEPA runs on the local backend', () => {
   test('a full pass runs, is scored, and is persisted to gepa_runs', async () => {
     const { db, rt, session, judgeCalls } = await setup(risingJudge(4));
-    seedOutcomes(makeSql(db));
+    seedOutcomes(makeSql(db), rt.actor);
 
     const result = await session.runScaffoldGepaOptimization({ maxIterations: 2, evalSize: 8, maxMetricCalls: 200 });
     await session.end();
@@ -146,7 +145,7 @@ describe('GEPA runs on the local backend', () => {
     expect(result.bestScore).toBeDefined();
 
     // The lineage `kinu gepa` and the web surface read.
-    const runs = listGepaRuns(rt.storage.sql, 10);
+    const runs = listGepaRuns(rt.storage.sql, rt.actor, 10);
     expect(runs.length).toBe(1);
     expect(runs[0]!.runId).toBe(result.runId!);
     expect(runs[0]!.status).toBe('completed');
@@ -162,10 +161,10 @@ describe('GEPA runs on the local backend', () => {
   }, 60_000);
 
   test('the pass refuses when the ledger has no failure to optimise toward', async () => {
-    const { db, session } = await setup(risingJudge(0));
+    const { db, rt, session } = await setup(risingJudge(0));
     // Accepted turns only: nothing to select on but judge noise.
     for (let i = 0; i < 4; i++) {
-      recordTurnOutcome(makeSql(db), {
+      recordTurnOutcome(makeSql(db), rt.actor, {
         turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: `q${i}`, assistantResponse: 'a', now: 3_000 + i,
       });

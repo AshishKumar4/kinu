@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { createTestSql } from '@kinu.run/test-utils';
+import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import { createTestRuntime } from './helpers';
 import { modifyScaffold } from '../src/scaffold/modify';
@@ -169,7 +169,9 @@ describe('scaffold host callTool ids', () => {
     // claim IS the row.
     const { sql, execRaw } = createTestSql();
     initToolEffectClaimTable(execRaw);
-    const deps: EffectClaimDeps = { sql, turnId: () => 'turn-1' };
+    const deps: EffectClaimDeps = {
+      sql, actor: createTestActors(sql, execRaw).main, turnId: () => 'turn-1',
+    };
     const calls: string[] = [];
     const entry = tool({
       description: 'send the invoice',

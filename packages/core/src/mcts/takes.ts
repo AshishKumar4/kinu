@@ -96,7 +96,8 @@ export interface TakePickOutcome extends TakePickRecord {
 
 export function initAlternateTakesTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS alternate_takes (
-    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
+    id TEXT NOT NULL,
     turn_id TEXT,
     session_id TEXT,
     task TEXT NOT NULL,
@@ -106,14 +107,19 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     candidates TEXT NOT NULL,
     settlement_key TEXT,
     created_at INTEGER NOT NULL,
-    picked_at INTEGER
+    picked_at INTEGER,
+    PRIMARY KEY (actor_id, id)
   )`);
   // UNIQUE so the invariant is the database's rather than the caller's: a
   // replayed settlement that got past the tombstone read would fail here instead
   // of adding a second set for one branch. SQLite treats NULLs as distinct, so
-  // every unkeyed set is unaffected.
+  // every unkeyed set is unaffected. Keyed by OWNER first: a settlement key is
+  // a branch's identity within its own actor, and a table-wide index would let
+  // one actor's branch settlement collide with a sibling's.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_alternate_takes_settlement
-      ON alternate_takes(settlement_key)`);
+      ON alternate_takes(actor_id, settlement_key)`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_alternate_takes_actor
+      ON alternate_takes(actor_id, created_at DESC, id DESC)`);
   initEffectTombstoneTable(execRaw);
 }
 
@@ -168,11 +174,14 @@ export function findNearTiedRivals(
  */
 export function captureAlternateTakes(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: { rootId: string; task: string; winnerId: string; epsilon: number; now?: number },
 ): string | null {
+  actor.assertCurrent();
   const nodes = sql<SearchNode>`
     SELECT * FROM search_nodes
-    WHERE root_id = ${input.rootId} AND status IN ('terminal', 'open')`;
+    WHERE actor_id = ${actor.actorId} AND root_id = ${input.rootId}
+      AND status IN ('terminal', 'open')`;
   const winner = nodes.find((n) => n.id === input.winnerId);
   if (!winner) return null;
 
@@ -184,9 +193,11 @@ export function captureAlternateTakes(
   });
   const id = `take-${nanoid()}`;
   void sql`INSERT INTO alternate_takes
-        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
+        (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
+         candidates, created_at, picked_at)
       VALUES
-        (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'mcts'}, ${winner.id}, ${null},
+        (${actor.actorId}, ${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'mcts'},
+         ${winner.id}, ${null},
          ${JSON.stringify([toCandidate(winner), ...rivals.map(toCandidate)])},
          ${input.now ?? nowMs()}, ${null})`;
   return id;
@@ -202,6 +213,7 @@ export function captureAlternateTakes(
  */
 export function recordBranchTakeSet(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: {
     task: string; turnId: string; sessionId: string;
     liveText: string; branchText: string; now?: number;
@@ -214,14 +226,16 @@ export function recordBranchTakeSet(
     settlementKey?: string;
   },
 ): AlternateTakeSet | null {
+  actor.assertCurrent();
   const settlementKey = input.settlementKey ?? null;
   if (settlementKey !== null) {
     const stored = sql<RawTakeRow>`
-      SELECT * FROM alternate_takes WHERE settlement_key = ${settlementKey} LIMIT 1`[0];
+      SELECT * FROM alternate_takes
+      WHERE actor_id = ${actor.actorId} AND settlement_key = ${settlementKey} LIMIT 1`[0];
     if (stored) return toTakeSet(stored);
     // The key is recorded but its row is gone. The set existed; re-minting one
     // is exactly the duplicate the key exists to prevent.
-    if (effectAlreadyDone(sql, BRANCH_SCOPE, settlementKey)) return null;
+    if (effectAlreadyDone(sql, actor, BRANCH_SCOPE, settlementKey)) return null;
   }
 
   const liveText = input.liveText.trim();
@@ -235,15 +249,16 @@ export function recordBranchTakeSet(
   ];
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
-        (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
+        (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
          settlement_key, created_at, picked_at)
       VALUES
-        (${id}, ${input.turnId}, ${input.sessionId}, ${input.task.slice(0, 500)}, ${'branch'},
+        (${actor.actorId}, ${id}, ${input.turnId}, ${input.sessionId},
+         ${input.task.slice(0, 500)}, ${'branch'},
          ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now}, ${null})`;
   // Same synchronous pass as the insert: the tombstone is what answers the
   // replay once this row has been retired.
-  if (settlementKey !== null) recordEffectDone(sql, BRANCH_SCOPE, settlementKey, now);
+  if (settlementKey !== null) recordEffectDone(sql, actor, BRANCH_SCOPE, settlementKey, now);
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
     source: 'branch', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
@@ -259,6 +274,7 @@ export function recordBranchTakeSet(
  *  Returns how many sets were claimed. */
 export function claimAlternateTakesForTurn(
   sql: SqlExecutor,
+  actor: ActorHandle,
   input: {
     turnId: string; sessionId: string; startedAt: number;
     /** The takes this turn actually competed against, read when the turn settled.
@@ -271,13 +287,16 @@ export function claimAlternateTakesForTurn(
     takeIds?: readonly string[];
   },
 ): number {
-  void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
+  actor.assertCurrent();
+  const actorId = actor.actorId;
+  void sql`DELETE FROM alternate_takes
+    WHERE actor_id = ${actorId} AND turn_id IS NULL AND created_at < ${input.startedAt}`;
   if (input.takeIds === undefined) {
     // One guarded statement: only rows still unclaimed move, and RETURNING
     // counts exactly the rows this call claimed.
     const claimed = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
-        WHERE turn_id IS NULL RETURNING id`;
+        WHERE actor_id = ${actorId} AND turn_id IS NULL RETURNING id`;
     return claimed.length;
   }
   let claimed = 0;
@@ -287,7 +306,7 @@ export function claimAlternateTakesForTurn(
     // only the row this call actually moved.
     const moved = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
-        WHERE id = ${id} AND turn_id IS NULL RETURNING id`;
+        WHERE actor_id = ${actorId} AND id = ${id} AND turn_id IS NULL RETURNING id`;
     claimed += moved.length;
   }
   return claimed;
@@ -295,8 +314,10 @@ export function claimAlternateTakesForTurn(
 
 /** The unclaimed takes as they stand right now — what a REPLAYABLE claim records
  *  so its retry acts on the set the turn actually competed against. */
-export function unclaimedAlternateTakeIds(sql: SqlExecutor): string[] {
-  return sql<{ id: string }>`SELECT id FROM alternate_takes WHERE turn_id IS NULL`
+export function unclaimedAlternateTakeIds(sql: SqlExecutor, actor: ActorHandle): string[] {
+  actor.assertCurrent();
+  return sql<{ id: string }>`SELECT id FROM alternate_takes
+    WHERE actor_id = ${actor.actorId} AND turn_id IS NULL`
     .map((row) => row.id);
 }
 
@@ -305,17 +326,21 @@ export function unclaimedAlternateTakeIds(sql: SqlExecutor): string[] {
  *  answer that no longer exists, so the next turn must not inherit them. */
 export function purgeUnclaimedAlternateTakes(
   sql: SqlExecutor,
+  actor: ActorHandle,
   /** The takes this turn competed against. Named for the same reason the claim
    *  names them: an unqualified purge on a replay deletes a LATER turn's
    *  captures. */
   takeIds?: readonly string[],
 ): void {
+  actor.assertCurrent();
+  const actorId = actor.actorId;
   if (takeIds === undefined) {
-    void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
+    void sql`DELETE FROM alternate_takes WHERE actor_id = ${actorId} AND turn_id IS NULL`;
     return;
   }
   for (const id of takeIds) {
-    void sql`DELETE FROM alternate_takes WHERE id = ${id} AND turn_id IS NULL`;
+    void sql`DELETE FROM alternate_takes
+      WHERE actor_id = ${actorId} AND id = ${id} AND turn_id IS NULL`;
   }
 }
 
@@ -337,14 +362,18 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
 }
 
 /** Recent take sets, newest first. */
-export function listAlternateTakeSets(sql: SqlExecutor, opts: { limit?: number } = {}): AlternateTakeSet[] {
+export function listAlternateTakeSets(
+  sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
+): AlternateTakeSet[] {
+  actor.assertCurrent();
   return sql<RawTakeRow>`
-    SELECT * FROM alternate_takes ORDER BY created_at DESC, id DESC LIMIT ${opts.limit ?? 50}`
+    SELECT * FROM alternate_takes WHERE actor_id = ${actor.actorId}
+    ORDER BY created_at DESC, id DESC LIMIT ${opts.limit ?? 50}`
     .map(toTakeSet);
 }
 
-export function latestAlternateTakeSet(sql: SqlExecutor): AlternateTakeSet | null {
-  return listAlternateTakeSets(sql, { limit: 1 })[0] ?? null;
+export function latestAlternateTakeSet(sql: SqlExecutor, actor: ActorHandle): AlternateTakeSet | null {
+  return listAlternateTakeSets(sql, actor, { limit: 1 })[0] ?? null;
 }
 
 /**
@@ -362,7 +391,9 @@ export function recordTakePick(
   actor: ActorHandle,
   input: { takeId: string; nodeId: string; scaffoldVersion?: number | null; now?: number },
 ): TakePickRecord {
-  const row = sql<RawTakeRow>`SELECT * FROM alternate_takes WHERE id = ${input.takeId}`[0];
+  actor.assertCurrent();
+  const row = sql<RawTakeRow>`SELECT * FROM alternate_takes
+    WHERE actor_id = ${actor.actorId} AND id = ${input.takeId}`[0];
   if (!row) throw new Error(`Unknown take set "${input.takeId}"`);
   const set = toTakeSet(row);
   const chosen = set.candidates.find((c) => c.nodeId === input.nodeId);
@@ -379,11 +410,11 @@ export function recordTakePick(
         WHEN id = ${set.winnerNodeId} THEN 'pruned'
         WHEN id = ${chosen.nodeId} THEN 'terminal'
         ELSE status END
-      WHERE id IN (${set.winnerNodeId}, ${chosen.nodeId})`;
+      WHERE actor_id = ${actor.actorId} AND id IN (${set.winnerNodeId}, ${chosen.nodeId})`;
   }
   void sql`UPDATE alternate_takes
       SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}
-      WHERE id = ${set.id}`;
+      WHERE actor_id = ${actor.actorId} AND id = ${set.id}`;
 
   // The conversation context behind the ledger row — same lookup the
   // explicit-thumbs path uses, through the canonical conversation store.
@@ -398,7 +429,7 @@ export function recordTakePick(
   }
 
   const outcome = changedAnswer ? 'corrected' : 'accepted';
-  recordTurnOutcome(sql, {
+  recordTurnOutcome(sql, actor, {
     turnId: set.turnId,
     sessionId: set.sessionId ?? 'default',
     outcome,

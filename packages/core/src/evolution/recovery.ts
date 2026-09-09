@@ -57,6 +57,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import { listLessons, recordLesson } from './outcomes';
 
 /**
@@ -96,10 +97,12 @@ export function recoveryFindingText(f: RecoveryFinding): string {
  * Throws only what the ledger throws; callers on the turn path absorb that
  * (a lost finding must never fail the turn that produced it).
  */
-export function recordRecoveryFinding(sql: SqlExecutor, finding: RecoveryFinding, now?: number): boolean {
+export function recordRecoveryFinding(
+  sql: SqlExecutor, actor: ActorHandle, finding: RecoveryFinding, now?: number,
+): boolean {
   const text = recoveryFindingText(finding);
-  if (listRecoveryFindings(sql).includes(text)) return false;
-  recordLesson(sql, {
+  if (listRecoveryFindings(sql, actor).includes(text)) return false;
+  recordLesson(sql, actor, {
     turnIds: [],
     text,
     source: 'execution_recovery',
@@ -113,6 +116,8 @@ export function recordRecoveryFinding(sql: SqlExecutor, finding: RecoveryFinding
  *  reads per step. Empty when nothing has been recorded; `lessons` belongs to
  *  the one workspace schema, so a read that cannot reach it is a fault rather
  *  than a runtime that has learned nothing. */
-export function listRecoveryFindings(sql: SqlExecutor, limit = MAX_RECOVERY_FINDINGS): string[] {
-  return listLessons(sql, { source: 'execution_recovery', limit }).map((lesson) => lesson.text);
+export function listRecoveryFindings(
+  sql: SqlExecutor, actor: ActorHandle, limit = MAX_RECOVERY_FINDINGS,
+): string[] {
+  return listLessons(sql, actor, { source: 'execution_recovery', limit }).map((lesson) => lesson.text);
 }

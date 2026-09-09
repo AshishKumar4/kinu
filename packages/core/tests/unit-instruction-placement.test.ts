@@ -14,7 +14,7 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
 import {
   buildSystemPromptSync,
   renderUnverifiedInstructions,
@@ -37,8 +37,14 @@ const SKILL_PATH = '/workspace/skills/deploy.md';
 
 function store(scope = 'test-scope') {
   const db = new Database(':memory:');
-  initInstructionApprovalsTable(makeExecRaw(db));
-  return new InstructionApprovalStore(makeSql(db), scope, (body) => db.transaction(body)());
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  initInstructionApprovalsTable(execRaw);
+  // `instruction_approvals` is keyed by ACTOR before scope: a subordinate reads
+  // its own instruction files, and an approval given to the root is not one the
+  // temporary it spawned inherits.
+  const actor = createTestActors(sql, execRaw).main;
+  return new InstructionApprovalStore(sql, actor, scope, (body) => db.transaction(body)());
 }
 
 function agentsMd(content: string, trust: 'approved' | 'unverified'): AgentsMdSources {
@@ -274,11 +280,17 @@ describe('placement follows the store, end to end', () => {
 
   test('a second workspace does not inherit the first workspace\'s approval', () => {
     const db = new Database(':memory:');
-    initInstructionApprovalsTable(makeExecRaw(db));
-    new InstructionApprovalStore(makeSql(db), 'cf:workspace-a', (body) => db.transaction(body)())
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    initInstructionApprovalsTable(execRaw);
+    // ONE actor across both stores: the SCOPE is the only thing that differs,
+    // so the isolation this case asserts is the workspace scope's and not the
+    // actor key's — which has its own cases.
+    const actor = createTestActors(sql, execRaw).main;
+    new InstructionApprovalStore(sql, actor, 'cf:workspace-a', (body) => db.transaction(body)())
       .approve(AGENTS_PATH, instructionDigest(DOCTRINE));
 
-    const forked = new InstructionApprovalStore(makeSql(db), 'cf:workspace-b', (body) => db.transaction(body)());
+    const forked = new InstructionApprovalStore(sql, actor, 'cf:workspace-b', (body) => db.transaction(body)());
     expect(forked.trustOf(AGENTS_PATH, DOCTRINE)).toBe('unverified');
     expect(promptFor({ agentsMd: agentsMd(DOCTRINE, forked.trustOf(AGENTS_PATH, DOCTRINE)) }))
       .not.toContain(DOCTRINE);

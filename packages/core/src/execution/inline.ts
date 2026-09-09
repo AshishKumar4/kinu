@@ -17,13 +17,14 @@
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../state/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
-import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
+import { diagnostics, ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
@@ -73,6 +74,10 @@ export interface InlineExecutorDeps {
   resourceLimits?: ResourceLimits;
   /** Optional — used to look up crafted-tool quality columns for listTools(). */
   sql?: SqlExecutor;
+  /** Whose executor. Present exactly when `sql` is: the misevolution veto this
+   *  writes lands in `evolution_events`, which is actor-scoped, so a veto with
+   *  no owner would be filed against whoever read the stream next. */
+  actor?: ActorHandle;
   /**
    * Optional mid-turn notification — fires synchronously from workspace.createTool
    * after a successful create/update. The hosted sandbox does not need it
@@ -96,7 +101,7 @@ export interface InlineExecutorDeps {
    * any tool here actually runs, a turn has always already begun.
    *
    * Returns `undefined`, not omitted, for an actor that has no turn-scoped
-   * ledger at all (SubordinateAgent in head mode or node mode): the caller can supply
+   * ledger at all (a hosted head or swarm node): the caller can supply
    * the thunk unconditionally without itself touching whatever lazily-built
    * state decides the answer, which is what keeps this safe to wire from
    * inside another lazy getter's own construction. Undefined (from the
@@ -148,7 +153,7 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
 }
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
-  const { vfs, memory, craftStore, shell, sql, resourceLimits, onToolRegistered } = deps;
+  const { vfs, memory, craftStore, shell, sql, actor, resourceLimits, onToolRegistered } = deps;
   // Private fallback for callers that share no turn-scoped ledger (tests, the
   // identity bootstrap path) — stable across calls, so it still behaves like
   // ONE ledger for THIS executor's lifetime even though it is not turn-shared.
@@ -359,11 +364,24 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // rollout knobs, the gate entry points, or the consent settings.
           const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
           if (!misevolution.ok) {
-            if (sql) {
-              recordMisevolutionVeto(sql, {
+            if (sql && actor) {
+              recordMisevolutionVeto(sql, actor, {
                 surface: 'craft_tool', violation: misevolution,
                 detail: `workspace.createTool("${toolName}") rejected`,
               });
+            }
+            else {
+              // REPORTED, never dropped. `evolution_events` is actor-scoped, so
+              // recording a veto needs both the store and the actor whose row it
+              // is; an executor built with one and not the other cannot write it.
+              // Silence here would be the worst arm available: the gate fires,
+              // the tool is refused, and the workspace's own audit of what its
+              // gates refused has a hole in it that nothing reports. The refusal
+              // below is unaffected — this says only that the RECORD is missing.
+              diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
+                'unavailable',
+                'a misevolution veto fired with no actor-scoped store to record it against',
+              ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
             }
             // `denied`, which is the one code that exists for this: a GATE
             // refused and the work correctly never ran. It reached the census as
