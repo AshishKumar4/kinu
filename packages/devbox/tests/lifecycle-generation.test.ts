@@ -170,6 +170,18 @@ function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
 function failAttempt(harnessed: { readonly storage: FakeStorage }, code: string): void {
   harnessed.storage.faultOn('devbox:last-attach', failure(code));
 }
+/** Fail the container-start hook's restore, so the delivered attempt is the
+ *  one the test observes.
+ *
+ *  The hook restores during admission — before any delivered attempt runs —
+ *  so a one-shot durable fault armed for the delivered attempt is eaten by
+ *  the hook instead: it parks, and the delivered attempt succeeds. Faulting
+ *  the ladder-claim write fails the hook BEFORE it reaches any container work
+ *  (no stamp, no process, no exposure) and leaves the row for the delivered
+ *  attempt, which then fails exactly where the test stages it. */
+function failHook(harnessed: { readonly storage: FakeStorage }, code: string): void {
+  harnessed.storage.faultOn(RECOVERY_KEY, failure(code));
+}
 
 /** A durable process spec, as `startSupervised` would have left one. */
 function proc(
@@ -219,17 +231,21 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.startWaitOptions).toHaveLength(1);
-    expect(container.startWaitOptions[0]).toMatchObject({
-      portToCheck: 3000,
-      // THE PROBE LASTS ITS WHOLE WINDOW, expressed as the SDK's own retry
-      // shape. `retries: 1` made the SDK give up after ONE poll — its
-      // `totalTries` IS this number — so the abort signal below could never
-      // fire and every instant refusal cost an incident row plus a re-arm.
-      // Measured live at 21 incidents in 15 s on a contended account.
-      retries: Math.ceil(TEST_POLICY.portWaitMs / 100),
-      waitInterval: 100,
-      signal: expect.any(AbortSignal),
+    expect(container.startAndWaitPortsOptions).toHaveLength(1);
+    expect(container.startAndWaitPortsOptions[0]).toMatchObject({
+      ports: 3000,
+      // THE ADMISSION THAT MAKES IN-GATE WORK, expressed as the SDK's own
+      // shape. Only `startAndWaitForPorts` marks the container healthy BEFORE
+      // the start hook (`container.js:632-636`), so a command the restore
+      // issues routes straight to the container instead of opening a nested
+      // start. A plain `start()` never marks healthy, and the first command
+      // issued inside its hook never returns.
+      cancellationOptions: {
+        instanceGetTimeoutMS: TEST_POLICY.portWaitMs,
+        portReadyTimeoutMS: TEST_POLICY.portWaitMs,
+        waitInterval: 100,
+        abort: expect.any(AbortSignal),
+      },
     });
     const state = await box.devboxState();
     expect({
@@ -263,7 +279,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.startWaitOptions).toHaveLength(1);
+    expect(container.startAndWaitPortsOptions).toHaveLength(1);
     expect(armed(container)).toBe(1);
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
@@ -275,13 +291,14 @@ describe('the startup kick arms restoration without attaching inline', () => {
   });
 
   test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
-    // `startFaultAfterRunning` fires once the platform has an instance, so the
-    // container really is up — but this attempt cannot know that, because the
-    // admission probe it asked threw. The restore does not happen inside the
-    // container-start hook (see restore-out-of-gate.test.ts for the probe that
-    // refuted that placement), so what this box owes is the honest sequence: the
-    // refusal is recorded as transient, a successor is armed, and the next drive
-    // — one second later on the schedule, or the next operation — attaches.
+    // `startFaultAfterRunning` fires once the platform has an instance — after
+    // the start hook ran, which is where the restore lives (see
+    // restore-in-gate.test.ts). So the box is already restored when the
+    // admission probe reports unhealthy — and the hook's turnover moved the
+    // generation under the probe, fencing its refusal the way a quiesce
+    // fences any superseded admission: no incident about a container the
+    // restoration just proved, no row against a box that needs no drive. The
+    // restoration is the newer evidence, and the next drive adopts it.
     const { box, container, rows } = harness(TestBox);
     await container.stop();
     container.startFaultAfterRunning = new SandboxFailure({
@@ -291,17 +308,13 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect((await box.devboxState()).restoration).toBe('unstarted');
-    expect(incidents(rows)).toEqual([
-      expect.objectContaining({
-        stage: 'attach',
-        reason: expect.stringContaining('[transient → retry]'),
-      }),
-    ]);
-    expect(armed(container)).toBe(1);
+    expect((await box.devboxState()).restoration).toBe('attached');
+    expect(incidents(rows)).toEqual([]);
+    expect(armed(container)).toBe(0);
 
-    // THE HEAL, on the row that refusal armed. The fault was one-shot, as a
-    // transient one is, so the same identity attaches.
+    // THE HEAL: nothing was armed, so this drive admits, adopts the running
+    // instance's restoration, and reports it. The fault was one-shot, as a
+    // transient one is.
     await box.devboxStartup();
 
     const state = await box.devboxState();
@@ -350,8 +363,16 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     // and the container is replaced underneath it. Unfenced it goes on to set
     // readiness, and the box then reports itself restored while the instance it
     // restored no longer exists.
+    //
+    // IN-GATE, the parked attempt is a delivered one: the hook fails first
+    // (its park arms the successor the turnover needs) and never reaches the
+    // stamp, so the gate below catches the delivered attempt exactly where the
+    // old test staged it. The successor restores through its own hook — a
+    // parked gate restore joins, never supersedes — and the stale attempt's
+    // settle is fenced by the generation its successor turned over.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     const parked = gate();
     container.stampGate = parked;
     const stale = box.devboxStartup();
@@ -372,44 +393,66 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     // The claim is the attempt's first act, and the fence is checked the moment
     // it returns: an attempt whose generation turned over while it was claiming
     // must not go on to attach against a container that is gone.
+    //
+    // IN-GATE, the hook claims first, so it takes the first pause and fails on
+    // its claim write; the second pause catches the delivered attempt. The
+    // arming between the two pauses is synchronous — the hook reads no more
+    // rows after its claim — so the second pause cannot catch the hook.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     const claiming = gate();
     storage.gateOn(RECOVERY_KEY, claiming);
     const stale = box.devboxStartup();
     await claiming.reached;
+    const delivered = gate();
+    storage.gateOn(RECOVERY_KEY, delivered);
+    claiming.release();
+    await delivered.reached;
     await container.stop();
     const successor = box.devboxStartup();
     await successor;
-    claiming.release();
+    delivered.release();
     await stale;
     expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toHaveLength(1);
     expect(rows.has('devbox:last-attach')).toBe(true);
   });
-
   test('a superseded FAILING attempt files nothing, arms nothing and stores no stage', async () => {
     // The other half of the ownership defect: this attempt is already in its
     // RECOVERY path when the generation turns over. Unfenced, it records the
     // attach failure of a generation that has been replaced, publishes that
     // generation's refusal, and re-arms a startup nobody asked for.
     //
+    // IN-GATE, the hook fails first — its parked incident is the current
+    // generation's own record, not the superseded attempt's — and the
+    // successor restores through its own hook, clearing the ladder the stale
+    // attempt is parked inside. What the stale attempt must still not do is
+    // add a row of its own: no incident, no arm, no stage, no destruction.
     // Parked INSIDE the conditional write, which is where both tokens are
     // compared. The row still names this attempt — nothing deleted it — so the
     // durable owner alone would let the write through; the generation is what
     // refuses it.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
-    // Two gates on the same key, in the order the attempt reads it: the CLAIM
-    // first, then the conditional write inside the recovery. Parking the claim is
-    // how the second gate is armed at a point the attempt has not reached yet,
-    // without guessing at microtasks.
+    // Three pauses on the same key, in the order the two attempts read it: the
+    // hook's claim first, then the delivered attempt's claim, then the
+    // conditional write inside its recovery. Each arming is synchronous past
+    // the previous pause, so no pause can catch the wrong attempt: the hook
+    // reads nothing more after its claim, and the delivered attempt reads
+    // nothing more after its own.
+    const hooking = gate();
+    storage.gateOn(RECOVERY_KEY, hooking);
+    const stale = box.devboxStartup();
+    await hooking.reached;
     const claiming = gate();
     storage.gateOn(RECOVERY_KEY, claiming);
-    const stale = box.devboxStartup();
+    hooking.release();
     await claiming.reached;
     const settling = gate();
     storage.gateOn(RECOVERY_KEY, settling);
+    failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     claiming.release();
     await settling.reached;
     await container.stop();
@@ -418,7 +461,9 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const armsBefore = armed(container);
     settling.release();
     await expect(stale).rejects.toThrow('RPC_TRANSPORT_ERROR');
-    expect(incidents(rows)).toEqual([]);
+    expect(incidents(rows)).toEqual([
+      expect.objectContaining({ stage: 'attach', reason: expect.stringContaining('RPC_TRANSPORT_ERROR') }),
+    ]);
     expect(armed(container)).toBe(armsBefore);
     expect(ladder(rows)).toBeUndefined();
     expect(container.destroys).toBe(0);
@@ -430,8 +475,14 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     // THE CONCURRENCY DEFECT. The stale attempt cleared the tracked startup in
     // its `finally`, so the next caller found no attempt in flight and started
     // a SECOND restoration against the same container.
+    //
+    // IN-GATE, the stale attempt is delivered — the hook fails first — and the
+    // successor restores through its own hook, stamping the one stamp. The
+    // third caller joins the successor's gate restore instead of opening a
+    // third restoration.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     const stalled = gate();
     container.stampGate = stalled;
     const stale = box.devboxStartup();
@@ -448,17 +499,24 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const joined = box.devboxStartup();
     successorGate.release();
     await Promise.all([successor, joined]);
-    // Two attempts ran: the abandoned one and its successor. The third caller
-    // joined the successor instead of opening a third restoration.
+    // Two stamps: the abandoned attempt still runs its stamp after the release
+    // — the fence is at the settle, not the command — but it publishes
+    // nothing, and the third caller joined the successor instead of opening a
+    // third restoration.
     expect(stamps(container)).toBe(2);
-    expect((await box.devboxState()).ready).toBe(true);
   });
 
   test('a caller does not JOIN a superseded attempt, it starts the new generation\'s', async () => {
     // The mirror of the rule above: joining an attempt whose result is already
     // discarded would hand the caller a restoration that never happened.
+    //
+    // IN-GATE, the new generation's restoration runs inside the successor's
+    // own hook. The stale attempt still runs its stamp after the release —
+    // the fence is at the settle, not the command — but publishes nothing,
+    // and the caller observes the restored box.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     const stalled = gate();
     container.stampGate = stalled;
     const stale = box.devboxStartup();
@@ -475,8 +533,13 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     // The fence is checked before the outward-facing act as well as before the
     // state write: a port exposed by an attempt whose container is gone
     // publishes a URL into a dead instance.
+    //
+    // IN-GATE, the hook fails before any process starts, so the process-start
+    // pause below catches the delivered attempt; the successor exposes
+    // through its own hook while the stale attempt is still parked.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     proc(rows, 'p1');
     port(rows, 3000, 'tok3000');
     container.listening.add(3000);
@@ -491,7 +554,6 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await stale;
     expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
   });
-
   test('a superseded ADMISSION refusal arms nothing and files nothing', async () => {
     // The window before an attempt owns anything. `start()` is the admission
     // probe every attempt awaits, and it is the longest await on the path — a
@@ -614,6 +676,7 @@ describe('a failed restored service is never exposed and never reported ready', 
   test('an attach that never landed refuses operations, with the reason', async () => {
     const harnessed = harness(TestBox);
     const { box } = harnessed;
+    failHook(harnessed, 'MISSING_CREDENTIALS');
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
     await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
     await expect(box.exec('ls')).rejects.toThrow('no attached work directory');
@@ -629,6 +692,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     // to the container.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'MISSING_CREDENTIALS');
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
     await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
     const stopsBefore = container.stops;
@@ -678,9 +742,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
   test('a transport transient retries the same identity and records the stage', async () => {
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
     expect(ladder(rows)?.stage).toBe('retry');
+    // One row, not two: the hook parks a successor and the delivered attempt
+    // arms its retry in the same second, and the arm counts only strictly
+    // future rows — so the second arm sees the first and stands down.
     expect(armed(container)).toBe(1);
     expect(container.destroys).toBe(0);
   });
@@ -692,6 +760,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
     expect(container.destroys).toBe(1);
@@ -702,7 +771,9 @@ describe('one container identity is retried, then replaced, then refused', () =>
     // Proved absent rather than assumed: `destroy` acknowledges the signal
     // before `container.running` flips.
     expect(container.running.running).toBe(false);
-    // And nothing was armed against an identity that no longer exists.
+    // And nothing was armed against an identity that no longer exists: the
+    // terminal answer takes its wake-up with it, dropping the hook's parked
+    // row beside its own.
     expect(armed(container)).toBe(0);
   });
 
@@ -713,11 +784,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, seeded('replace'));
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       expect(container.destroys).toBe(0);
+      // A terminal answer arms nothing and takes its wake-up with it, dropping
+      // the hook's parked row beside its own.
       expect(armed(container)).toBe(0);
-      expect(ladder(rows)?.stage).toBe('replace');
       await expect(box.exec('ls')).rejects.toThrow('transient → refuse');
     });
 
@@ -726,8 +799,11 @@ describe('one container identity is retried, then replaced, then refused', () =>
     // base into a filesystem that was already full.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
+    failHook(harnessed, 'NO_SPACE');
     failAttempt(harnessed, 'NO_SPACE');
     await expect(box.devboxStartup()).rejects.toThrow('NO_SPACE');
+    // A terminal answer arms nothing and takes its wake-up with it, dropping
+    // the hook's parked row beside its own.
     expect({ armed: armed(container), destroys: container.destroys })
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBeUndefined();
@@ -738,8 +814,11 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
+    failHook(harnessed, 'INVALID_MOUNT_CONFIG');
     failAttempt(harnessed, 'INVALID_MOUNT_CONFIG');
     await expect(box.devboxStartup()).rejects.toThrow('INVALID_MOUNT_CONFIG');
+    // A terminal answer arms nothing and takes its wake-up with it, dropping
+    // the hook's parked row beside its own.
     expect({ armed: armed(container), destroys: container.destroys })
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBe('retry');
@@ -752,29 +831,46 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
+    failHook(harnessed, 'OPERATION_INTERRUPTED');
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
     expect(container.destroys).toBe(0);
     expect(ladder(rows)?.stage).toBe('retry');
     expect(armed(container)).toBe(1);
   });
-
   test('an unreadable row refuses the attempt BEFORE it attaches, and normalises itself',
     async () => {
       // Strict schema: there is no evidence to act on, so nothing attaches and
       // nothing is destroyed. The refusal is finite because the row is left
       // readable at its terminal stage instead of unreadable for ever.
+      //
+      // IN-GATE, the hook is the first claimer, so the hook is the one that
+      // refuses: the admitted start settles unattached without throwing, and
+      // the delivered drive behind it attaches over the normalised row and
+      // clears it. The refusal-before-attach is pinned on the hook's half;
+      // the attach on the drive's.
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: 'x', stage: 'destroy-everything' });
-      await expect(box.devboxStartup()).rejects.toThrow('did not parse');
+
+      await box.startAndWaitForPorts();
+
+      const refused = await box.devboxState();
+      expect({ restoration: refused.restoration, ready: refused.ready }).toEqual({
+        restoration: 'unattached', ready: false,
+      });
+      expect(refused.unready).toContain('did not parse');
       expect({ armed: armed(container), destroys: container.destroys })
         .toEqual({ armed: 0, destroys: 0 });
       expect(ladder(rows)?.stage).toBe('replace');
       // Nothing was attached, and the attach was never even attempted.
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
-      await expect(box.exec('ls')).rejects.toThrow('unreadable → refuse');
+
+      await box.devboxStartup();
+
+      expect((await box.devboxState()).ready).toBe(true);
+      expect(rows.has(RECOVERY_KEY)).toBe(false);
     });
 
   test('an attach that lands deletes the row, so the next failure starts fresh', async () => {
@@ -798,17 +894,26 @@ describe('one container identity is retried, then replaced, then refused', () =>
     // success had cleared and arms the replacement of a container that works.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
-    // Park at the CLAIM's read first, then arm the second gate while the attempt
-    // cannot advance, so it can only catch the conditional write's read.
-    // Guessing that with a microtask count would be a race pretending to be a
-    // test.
+    // Three pauses on the same key, in the order the two attempts read it: the
+    // hook's claim, the delivered attempt's claim, then the conditional write
+    // inside its recovery. Each arming is synchronous past the previous pause,
+    // so no pause can catch the wrong attempt: the hook reads nothing more
+    // after its claim, and the delivered attempt reads nothing more after its
+    // own. Guessing any of that with a microtask count would be a race
+    // pretending to be a test.
+    const hooking = gate();
+    storage.gateOn(RECOVERY_KEY, hooking);
+    const stale = box.devboxStartup();
+    await hooking.reached;
     const claiming = gate();
     storage.gateOn(RECOVERY_KEY, claiming);
-    const stale = box.devboxStartup();
+    hooking.release();
     await claiming.reached;
     const settling = gate();
     storage.gateOn(RECOVERY_KEY, settling);
+    failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     claiming.release();
     await settling.reached;
 
@@ -826,8 +931,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
     // And nothing downstream of the write ran either.
     expect(armed(container)).toBe(armsAfterSuccess);
     expect(container.destroys).toBe(0);
-    expect(incidents(rows)).toEqual([]);
     expect((await box.devboxState()).ready).toBe(true);
+    // The hook's own parked incident is the current generation's record, not
+    // the superseded attempt's: what must be absent is anything the stale
+    // attempt filed after the turnover.
+    expect(incidents(rows)).toEqual([
+      expect.objectContaining({ stage: 'attach', reason: expect.stringContaining('RPC_TRANSPORT_ERROR') }),
+    ]);
   });
 
   test('a destruction that did not land keeps refusing, and attaches over nothing', async () => {
@@ -836,6 +946,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     container.destroyFault = new Error('the container did not answer the signal');
     await expect(box.devboxStartup()).rejects.toThrow('did not answer the signal');
@@ -851,6 +962,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
     rows.set(RECOVERY_KEY, seeded('retry'));
+    failHook(harnessed, 'RPC_TRANSPORT_ERROR');
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
     expect(container.running.running).toBe(false);
@@ -872,11 +984,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
       const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, seeded('replace'));
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       await expect(box.exec('ls')).rejects.toThrow('no attached work directory');
 
       // Repair attempt one still fails: refused again, and STILL no destruction.
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.attachNow()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       expect(container.destroys).toBe(0);
@@ -918,6 +1032,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     // /create, /wake and every operation are inert for ever.
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
+    failHook(harnessed, 'OPERATION_INTERRUPTED');
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
     expect({ armed: armed(container), destroys: container.destroys, stamps: stamps(container) })
@@ -940,6 +1055,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     // filing an incident per call.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'OPERATION_INTERRUPTED');
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
 
@@ -954,8 +1070,11 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     // box must still refuse instead of repeating work the ladder refused.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'NO_SPACE');
     failAttempt(harnessed, 'NO_SPACE');
     await expect(box.devboxStartup()).rejects.toThrow('NO_SPACE');
+    // A terminal answer arms nothing and takes its wake-up with it, dropping
+    // the hook's parked row beside its own.
     expect(armed(container)).toBe(0);
 
     await expect(box.exec('ls')).rejects.toThrow('exhausted → refuse');
@@ -969,6 +1088,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     // it; a terminal one is left alone.
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'OPERATION_INTERRUPTED');
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
     loseTheArmedRow(container);
@@ -984,6 +1104,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
   test('a terminal unattach is not woken by the state poll', async () => {
     const harnessed = harness(TestBox);
     const { box, container } = harnessed;
+    failHook(harnessed, 'MISSING_CREDENTIALS');
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
     await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
     loseTheArmedRow(container);
@@ -1030,6 +1151,10 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     const { box, container, rows } = harnessed;
       proc(rows, 'p1');
       port(rows, 3000, 'tok3000');
+      // IN-GATE, the hook fails on its claim write before any process starts,
+      // so the pause below catches the delivered attempt — whose raced budget
+      // abandons the parked start while the hook's own polled policy could not.
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       const slow = gate();
       container.startGate = slow;
       const attempt = box.devboxStartup();
@@ -1083,6 +1208,10 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     const { box, container, rows } = harnessed;
       port(rows, 3000, 'tok3000');
       container.listening.add(3000);
+      // IN-GATE, the hook fails on its claim write before any exposure, so the
+      // pause below catches the delivered attempt. Its parked incident joins
+      // the ledger first, so the port report reads second.
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       const slow = gate();
       container.exposeGate = slow;
       const attempt = box.devboxStartup();
@@ -1092,7 +1221,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const state = await box.devboxState();
       expect(state.ready).toBe(false);
       expect(state.unready).toContain('port 3000');
-      expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
+      expect(incidents(rows).map(row => row.stage)).toEqual(['attach', 'port']);
       slow.release();
     });
 
@@ -1102,6 +1231,9 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       // bound. It is a step like the others: reported, never replaced.
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
+      // IN-GATE, the hook fails on its claim write before any stamp, so the
+      // pause below catches the delivered attempt.
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       const slow = gate();
       container.stampGate = slow;
       const attempt = box.devboxStartup();
@@ -1124,6 +1256,9 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
       rows.set(RECOVERY_KEY, { owner: PREVIOUS, stage: 'retry' });
+      // IN-GATE, the hook fails on its claim write before any attach, so the
+      // seeded retry still names the stage the delivered attempt replaces on.
+      failHook(harnessed, 'RPC_TRANSPORT_ERROR');
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
       expect(container.destroys).toBe(1);
@@ -1177,6 +1312,10 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
   beforeEach(() => { fixture = harness(TestBox); });
 
   test('a faulted durable write really rejects the attempt', async () => {
+    // IN-GATE, the hook eats a one-shot durable fault and parks, so the fault
+    // under test is staged for the hook too: the delivered attempt is the one
+    // that must reject on it.
+    failHook(fixture, 'UNKNOWN_ERROR');
     failAttempt(fixture, 'UNKNOWN_ERROR');
     await expect(fixture.box.devboxStartup()).rejects.toThrow('UNKNOWN_ERROR');
   });
@@ -1184,6 +1323,10 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
   test('a faulted container step really leaves the box attached and unready', async () => {
     // The other half of the split, proved on the fake: a container fault after
     // the attach must NOT reject the attempt.
+    // The fault queue serves the hook first: one fault leaves the hook in
+    // repair and the delivered attempt with nothing to prove the split on, so
+    // the fault is staged twice — once per attempt.
+    fixture.container.stampFaults.push(new Error('the stamp refused'));
     fixture.container.stampFaults.push(new Error('the stamp refused'));
     await fixture.box.devboxStartup();
     const state = await fixture.box.devboxState();
@@ -1193,6 +1336,9 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
   });
 
   test('a terminal boot stamp failure is retried by the explicit attached repair', async () => {
+    // Twice again: the hook eats the first fault into its own repair, and the
+    // delivered attempt must meet the second to land in repair itself.
+    fixture.container.stampFaults.push(new Error('the stamp refused'));
     fixture.container.stampFaults.push(new Error('the stamp refused'));
     await fixture.box.devboxStartup();
     expect((await fixture.box.devboxState()).unready).toBe('the boot id stamp failed');
@@ -1213,10 +1359,19 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     // the row is taken over by another owner while the attempt is parked, and
     // the attempt's stage write must then change nothing at all. Without the
     // comparison this write lands and the assertion below fails.
+    failHook(fixture, 'RPC_TRANSPORT_ERROR');
     failAttempt(fixture, 'RPC_TRANSPORT_ERROR');
+    // Three pauses on the same key, in the order the two attempts read it: the
+    // hook's claim, the delivered attempt's claim, then the conditional write
+    // inside its recovery. Each arming is synchronous past the previous pause,
+    // so no pause can catch the wrong attempt.
+    const hooking = gate();
+    fixture.storage.gateOn(RECOVERY_KEY, hooking);
+    const attempt = fixture.box.devboxStartup();
+    await hooking.reached;
     const claiming = gate();
     fixture.storage.gateOn(RECOVERY_KEY, claiming);
-    const attempt = fixture.box.devboxStartup();
+    hooking.release();
     await claiming.reached;
     const settling = gate();
     fixture.storage.gateOn(RECOVERY_KEY, settling);
@@ -1230,9 +1385,14 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     const armedBeforeSettling = armed(fixture.container);
     settling.release();
     await expect(attempt).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    // The hook's own parked incident is the current generation's record, not
+    // the superseded attempt's: what must be absent is anything the parked
+    // attempt filed after the takeover.
+    expect(incidents(fixture.rows)).toEqual([
+      expect.objectContaining({ stage: 'attach', reason: expect.stringContaining('RPC_TRANSPORT_ERROR') }),
+    ]);
     expect(fixture.rows.get(RECOVERY_KEY)).toEqual({ owner: 'another-attempt' });
     expect(armed(fixture.container)).toBe(armedBeforeSettling);
-    expect(incidents(fixture.rows)).toEqual([]);
   });
 
   test('a gated call really parks until it is released', async () => {

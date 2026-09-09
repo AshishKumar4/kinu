@@ -48,9 +48,10 @@ interface DevboxStorage {
 }
 ```
 
-`attach()` takes no deadline. The container-start hook owns the budget and
-`withContainerStartDeadline` wraps the whole attach. No strategy would use
-a deadline argument.
+`attach()` takes no deadline. The container-start hook owns the budget: the
+restoration runs inside the gate under a polled budget, and a failure parks
+to the `devboxStartup` schedule row, whose delivered frame continues it where
+timers fire. No strategy would use a deadline argument.
 
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
 so tests can pin the reasoning without the platform.
@@ -146,13 +147,14 @@ shipped image, and against a FUSE fixture that refuses it to prove the case can
 go red.
 
 ## Platform constraints
-
 `onStart` runs inside `blockConcurrencyWhile`. I measured a deployed Worker
 where its first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
 The call was canceled and the Durable Object was reset.` A timer inside that
-block cannot fire until the block releases, so `withContainerStartDeadline`
-could not help. Attach runs in the `devboxStartup` schedule row instead.
+block cannot fire until the block releases, so the in-gate budget is polled,
+not raced. The box is admitted only through `startAndWaitForPorts`, which
+marks the container healthy before the hook — so a command the restore issues
+routes straight to the container instead of opening a nested start.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and

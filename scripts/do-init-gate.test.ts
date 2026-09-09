@@ -146,7 +146,7 @@ describe('DO init-gate purity — container-start hook', () => {
     // that refuses every OTHER await by name.
     const widened = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
         await this.warmTheCaches();
       }
     }`;
@@ -161,7 +161,7 @@ describe('DO init-gate purity — container-start hook', () => {
     // restore instead of this class hoping a promise is joined.
     const admitted = `export class KinuSandbox extends Sandbox<Env> {
       override async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
     }`;
     expect(reasons(admitted)).toEqual([]);
@@ -174,7 +174,7 @@ describe('DO init-gate purity — container-start hook', () => {
     const looping = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
         for (const _ of this.generations()) {
-          await this.#armContainerSchedules();
+          await this.#restoreInStartGate();
         }
       }
     }`;
@@ -185,7 +185,7 @@ describe('DO init-gate purity — container-start hook', () => {
   test('the admitted restore may not also claim a timer bound — it cannot fire here', () => {
     const papered = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
         void withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
     }`;
@@ -197,7 +197,7 @@ describe('DO init-gate purity — container-start hook', () => {
     const mismarked = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
         void BOUNDED_STORAGE_ONLY;
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
     }`;
     expect(reasons(mismarked))
@@ -211,15 +211,20 @@ describe('DO init-gate purity — container-start hook', () => {
     // platform cancels it and RESETS the object.
     const sleeping = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
-      async #armContainerSchedules(): Promise<void> {
+      async #restoreInStartGate(): Promise<void> {
         while (!this.attached) await scheduler.wait(100);
       }
     }`;
     const found = reasons(sleeping);
-    expect(found).toEqual([expect.stringContaining('WEDGES the activation')]);
-    expect(found[0]).toContain('scheduler.wait'.split('.')[1]);
+    // Both fires: the wedge, and the stub behind it — a loop that sleeps
+    // restores nothing either.
+    expect(found).toEqual([
+      expect.stringContaining('reaches no container and drives no'),
+      expect.stringContaining('WEDGES the activation'),
+    ]);
+    expect(found[1]).toContain('scheduler.wait'.split('.')[1]);
   });
 
   test('a timer inside a function the pinned restore SPAWNS is refused too', () => {
@@ -229,28 +234,34 @@ describe('DO init-gate purity — container-start hook', () => {
     // is held.
     const nested = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
-      async #armContainerSchedules(): Promise<void> {
+      async #restoreInStartGate(): Promise<void> {
         await this.ctx.storage.put('k', 1);
         void (async () => { await scheduler.wait(50); })();
       }
     }`;
     expect(reasons(nested))
-      .toEqual([expect.stringContaining('WEDGES the activation')]);
+      .toEqual([
+        expect.stringContaining('reaches no container and drives no'),
+        expect.stringContaining('WEDGES the activation'),
+      ]);
   });
 
   test('the pinned restore may not carry the paper bound either', () => {
     const wrapped = `export class KinuSandbox extends Sandbox<Env> {
       async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
-      async #armContainerSchedules(): Promise<void> {
+      async #restoreInStartGate(): Promise<void> {
         await withContainerStartDeadline('x', 1, () => this.ctx.storage.put('k', 1), () => {});
       }
     }`;
     expect(reasons(wrapped))
-      .toEqual([expect.stringContaining('Poll the budget instead')]);
+      .toEqual([
+        expect.stringContaining('polled, not raced'),
+        expect.stringContaining('reaches no container and drives no'),
+      ]);
   });
 
   test('the narrowing is keyed on the base class, not on the file or the name', () => {
@@ -315,32 +326,44 @@ describe('DO init-gate purity — container-start hook', () => {
 // bodies only, printed `ok` over a hook that awaited an advisor model call, a
 // session-evolution pass, a settled job's turn-awaiting wake and a terminal
 // replay of SMTP round trips.
-describe('DO init-gate purity — what the admitted arming await may do', () => {
+describe('DO init-gate purity — what the admitted restore may do', () => {
   // BOTH WAYS, because a rule that only ever goes green is a rule nobody has
-  // seen work. Deployed probe gp0902011918 measured the red case live: the first
-  // container command issued inside the block never returned, the activation
-  // reached the ~30 s cap, and the Durable Object was reset every 31 s.
-  const arming = (body: string): string => `export class KinuSandbox extends Sandbox<Env> {
+  // seen work. The red direction flipped with the mechanism: a container call
+  // inside the gate used to be the nested-start deadlock (deployed probe
+  // gp0902011918 measured the first command never returning and the object
+  // reset every 31 s), and every reach failed by name. Under the
+  // healthy-before-hook ordering the reach completes, so the red case is now
+  // the opposite shape — an admitted restore that restores nothing.
+  const restoring = (body: string): string => `export class KinuSandbox extends Sandbox<Env> {
       override async onStart(): Promise<void> {
-        await this.#armContainerSchedules();
+        await this.#restoreInStartGate();
       }
-      async #armContainerSchedules(): Promise<void> {
+      async #restoreInStartGate(): Promise<void> {
 ${body}
       }
     }`;
 
-  test('a container call inside the admitted await is refused by name', () => {
-    const reached = reasons(arming("        await this.exec('cat /proc/mounts');"));
-    expect(reached).toEqual([expect.stringContaining('reaches `exec`')]);
-    expect(reached[0]).toContain('NEVER RETURNS');
+  test('a container call inside the admitted restore passes — it is the restore\'s job', () => {
+    const reached = reasons(restoring("        await this.exec('cat /proc/mounts');"));
+    expect(reached).toEqual([]);
   });
 
-  test('the schedule writes pass', () => {
-    expect(reasons(arming(
+  test('driving the attempt passes with no container call of its own', () => {
+    // The shipped shape: `#restoreInStartGate` reaches the container
+    // transitively, through the attempt it names.
+    expect(reasons(restoring('        await this.#gateRestoreAttempt();'))).toEqual([]);
+  });
+
+  test('an admitted restore that restores nothing is refused by name', () => {
+    // The arm-only stub wearing the admitted spelling: it reaches no
+    // container and drives no attempt, so the hook would hold the gate for
+    // work that restores nothing and every box would wake unrestored.
+    const stub = reasons(restoring(
       "        await this.#arm('devboxStartup', 1);\n"
       + "        await this.#arm('devboxCheckpoint', 300);\n"
       + "        await this.#arm('devboxHeartbeat', 60);",
-    ))).toEqual([]);
+    ));
+    expect(stub).toEqual([expect.stringContaining('reaches no container and drives no')]);
   });
 });
 
@@ -756,6 +779,7 @@ export class A extends Agent {
       line: expect.any(Number),
       deadlineWrapped: false,
       timers: [],
+      drivesAttempt: true,
     });
   });
 
@@ -768,7 +792,7 @@ export class A extends Agent {
     expect(real).toBeDefined();
 
     const renamed = real!.replace(
-      '    await this.#armContainerSchedules();',
+      '    await this.#restoreInStartGate();',
       '    await this.restoreEverythingNow();',
     );
     expect(renamed).not.toBe(real);
@@ -784,12 +808,12 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const slept = real!.replace(
-      '    await this.kickStartup();',
-      '    await this.kickStartup();\n    await scheduler.wait(100);',
+      '    const run = this.#gateRestoreAttempt();',
+      '    await scheduler.wait(100);\n    const run = this.#gateRestoreAttempt();',
     );
     expect(slept).not.toBe(real);
     const { violations } = auditFile(file, slept);
-    expect(violations.map((v) => v.member)).toEqual(['armContainerSchedules']);
+    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
     expect(violations[0]!.reason).toContain('WEDGES the activation');
   });
 
@@ -797,13 +821,13 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const papered = real!.replace(
-      '    await this.#arm(HEARTBEAT_CALLBACK, this.policy.heartbeatSeconds);',
-      '    await withContainerStartDeadline(\'x\', 1, () => this.#arm(HEARTBEAT_CALLBACK, 1), () => {});',
+      '    const run = this.#gateRestoreAttempt();',
+      '    await withContainerStartDeadline(\'x\', 1, () => this.start(), () => {});\n    const run = this.#gateRestoreAttempt();',
     );
     expect(papered).not.toBe(real);
     const { violations } = auditFile(file, papered);
-    expect(violations.map((v) => v.member)).toEqual(['armContainerSchedules']);
-    expect(violations[0]!.reason).toContain('Poll the budget instead');
+    expect(violations.map((v) => v.member)).toEqual(['restoreInStartGate']);
+    expect(violations[0]!.reason).toContain('polled, not raced');
   });
 
   test('cut the wire: detaching the real container hook goes red twice', () => {
@@ -815,8 +839,8 @@ export class A extends Agent {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
     const detached = real!.replace(
-      '  override async onStart(): Promise<void> {\n    await this.#armContainerSchedules();',
-      '  override onStart(): void {\n    void this.#armContainerSchedules();',
+      '  override async onStart(): Promise<void> {\n    await this.#restoreInStartGate();',
+      '  override onStart(): void {\n    void this.#restoreInStartGate();',
     );
     expect(detached).not.toBe(real);
     const { violations } = auditFile(file, detached);
