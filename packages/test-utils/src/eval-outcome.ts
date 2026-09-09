@@ -32,6 +32,7 @@
  * it is checkable.
  */
 import * as v from 'valibot';
+import { OUTPUT_LIMIT_REACHED } from '@kinu.run/core';
 import type { EvalBudget, ExecOutcome, VFS } from '@kinu.run/core';
 import type { EvalScoreRow } from './eval-run';
 
@@ -335,4 +336,85 @@ export function measuredToolErrorRate(rows: readonly EvalScoreRow[]): number | n
   const row = rows.find((candidate) => candidate.name === 'tool_outcomes');
   if (row === undefined || row.eligible === 0 || row.rate === null) return null;
   return 1 - row.rate;
+}
+
+/**
+ * The output-cap covariate's row name.
+ *
+ * A covariate, like {@link BUDGET_ADHERENCE}, because {@link isCovariateRow} is
+ * total and only `task_outcome` is the metric. That is the right classification
+ * on its own terms too: whether the provider cut the answer EXPLAINS an
+ * outcome, it is never the outcome. An episode cut at the limit that still
+ * satisfied the ground truth satisfied it.
+ */
+export const OUTPUT_CAP = 'output_cap';
+
+/**
+ * Whether the PROVIDER ended this episode's last step at its output limit.
+ *
+ * WHY THIS ROW EXISTS. Anthropic's cost guidance treats the output cap as a
+ * first-order lever and reports it in exactly this shape: a 16,384-token cap
+ * ended 15% of one model's attempts and 43% of another's, and since a capped
+ * attempt spends its tokens and buys no solve, cost per SOLVED task did not
+ * improve. The number that decides whether a cap is costing anything is
+ * therefore the SHARE OF ATTEMPTS IT ENDED — and this tier could not report it,
+ * because no eval arm read a finish reason at all. A capped attempt was graded
+ * against ground truth over a truncated answer and read as an ordinary
+ * behavioural miss.
+ *
+ * SO IT IS NAMED, AND IT IS A FAILURE. Named, because a truncated answer is a
+ * fact about the REQUEST rather than about the agent, and a reader sent hunting
+ * a prompt regression by one is sent to the wrong place — the distinction
+ * `INFRA_FAILURE_MARKER` draws between the environment and the episode, one
+ * step further in. A failure, because the guidance's rule for this state is to
+ * treat it as one: the model had more to say and was not allowed to say it, so
+ * whatever the reply holds is not the answer the episode set out to measure.
+ *
+ * A ROW RATHER THAN A THROW, and the argument is {@link budgetRow}'s. The
+ * statistic is a RATE over attempts, so one capped attempt has to leave the
+ * denominator standing; a throw would take the arm down and destroy the count
+ * that says whether the cap matters at all. Over budget is a measurement and so
+ * is this. Only a malformed verdict is a defect in the instrument, which is
+ * what {@link outcomeRow} throws on.
+ *
+ * `reason` is the SDK-mapped finish reason off the episode's LAST `step_finish`
+ * row (`StepBoundEvidence.lastStepReason`), never a provider payload string:
+ * the adapter normalizes `max_tokens`, `MAX_TOKENS` and `length` onto core's
+ * one {@link OUTPUT_LIMIT_REACHED} word, so this compares against that constant
+ * rather than matching on an endpoint's own prose. It is the LAST step's on
+ * purpose — both turn loops answer a cut answer with exactly one continuation,
+ * so an earlier `length` is ordinary and only a final one is an attempt that
+ * ended truncated.
+ *
+ * A null `reason` is `eligible: 0` and a null rate. An episode that closed no
+ * step has no last reason to read, which is absent rather than uncapped — the
+ * rule the tool-error-rate ceiling follows, for the same reason: a `1` here
+ * would report a clean cap verdict for an episode nobody measured.
+ */
+export function outputCapRow(reason: string | null): EvalScoreRow {
+  const asserts = 'the provider did not end the episode at its output limit';
+  if (reason === null) {
+    return {
+      name: OUTPUT_CAP,
+      asserts,
+      eligible: 0,
+      passed: 0,
+      rate: null,
+      detail: 'UNMEASURED — the episode closed no step, so it has no last finish reason to read',
+    };
+  }
+  const capped = reason === OUTPUT_LIMIT_REACHED;
+  return {
+    name: OUTPUT_CAP,
+    asserts,
+    eligible: 1,
+    passed: capped ? 0 : 1,
+    rate: capped ? 0 : 1,
+    detail: capped
+      ? `CUT AT THE OUTPUT LIMIT — the last step finished '${OUTPUT_LIMIT_REACHED}', so the `
+        + 'answer this episode is graded on is the part the provider allowed rather than the '
+        + 'part the model had. Read it as the request bounding the attempt, never as the agent '
+        + 'choosing to stop'
+      : `ok — the last step finished '${reason}', which is the model ending its own answer`,
+  };
 }

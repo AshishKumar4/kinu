@@ -63,11 +63,11 @@ import { openWorkspaceMainActor } from '../../packages/core/src/index';
 import { connectMcpServers } from '../../packages/cli-backend/src/mcp';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
-import { readLedgerTotals } from './harness';
+import { readLedgerTotals, readRunEvents } from './harness';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE,
-  liveModelTarget, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
-  subgoalOutcome, outcomeRow, UNCONFIGURED_LLM,
+  liveModelTarget, outputCapRow, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
+  stepBoundEvidence, subgoalOutcome, outcomeRow, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
@@ -307,6 +307,8 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     const sql = makeSql(db);
     recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
     const totals = readLedgerTotals(db);
+    const bound = stepBoundEvidence(readRunEvents(db));
+    const cap = outputCapRow(bound.lastStepReason);
     const sourceCalls = totals.toolNames.filter((name) => name.startsWith(`mcp_${SERVER_NAME}_`));
 
     // EVERY verdict, computed before ANY assertion throws.
@@ -340,6 +342,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
         detail: `${String(sourceCalls.length)} archive call(s) of ${String(totals.toolCalls)} tool calls`,
         measured: { archiveCalls: sourceCalls.length, toolCalls: totals.toolCalls },
       },
+      cap,
     ];
     // The observation FIRST, so a failed retrieval still reaches the record
     // with what it did retrieve.
@@ -370,6 +373,11 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
       + 'is told to parse is torn')
       .toEqual([]);
     expect(totals.turns, 'the episode closed no turn — nothing ran').toBeGreaterThan(0);
+    // WHETHER THE PROVIDER CUT THE ANSWER. Read off the last `step_finish`
+    // reason, beside the child's exit status and for the same reason: an attempt
+    // the output limit ended is graded over the part the request allowed, so
+    // holding it to the reply contract would report an agent failure for a request one.
+    expect(cap.passed, `${RESEARCH_TASK_ID}: ${cap.detail}`).toBe(cap.eligible);
     expect(sourceCalls.length,
       'the agent never called the controlled archive — whatever the answer says, it was not research'
       + (totals.failures.length > 0 ? ` (recorded failures: ${totals.failures.join(' | ')})` : ''))
