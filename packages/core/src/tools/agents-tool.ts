@@ -1198,12 +1198,14 @@ function recordDroppedFields<T>(
  * that could not be re-driven after an eviction must never be detached into a job.
  * One predicate at both ends — a detachable call with no resume is how work is lost.
  *
- * Rows are TRANSLATED rather than validated as a model call would be. A row is
- * recorded verbatim from whatever the model sent (jobs/runner.ts stores the raw
- * input), so a stored row can carry fields this surface refuses and can name an
- * ACTION the enum does not hold — and a row is re-driven, not answered, so a
- * refusal there is work lost to a spelling nobody can correct any more. A stored
- * row is history, not a prompt.
+ * Rows are TRANSLATED rather than validated as a model call would be. Durable
+ * job input can outlive the tool vocabulary that accepted it
+ * (jobs/runner.ts stores the raw input), so a stored row's verbatim input may
+ * carry fields this surface refuses and name an ACTION the enum does not hold
+ * — and a row is re-driven, not answered, so a refusal there is work lost to
+ * a spelling nobody can correct any more. Replay translates that stored
+ * contract because no caller is present to correct a refusal. A stored row is
+ * history, not a prompt.
  *
  * WHAT TRANSLATES, and every translation names what it could not carry:
  *
@@ -1213,9 +1215,9 @@ function recordDroppedFields<T>(
  *   the merge are the loss, and the drop line names them. `preset:'ideate'` runs
  *   without an invented objective, and the settlement loss rides the drop line.
  *
- *   `settle` — a field on a still older row, which reached a judged tree from
- *   inside that rung. Same translation: the field is not an entry here, so it
- *   arrives as an unknown key and is named in the same line.
+ *   `settle` — a stored field identifying a judged-tree request within the
+ *   stored fork shape. Same translation: the field is not an entry here, so
+ *   it arrives as an unknown key and is reported as an unsupported field.
  */
 export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind !== 'agents') return null;

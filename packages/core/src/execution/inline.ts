@@ -331,11 +331,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
-        // Admission BEFORE any write: the source is normalized to one expression
-        // and proven to parse, so a `const name = …` body cannot be stored
-        // verbatim and turn every later program in the workspace into a
-        // SyntaxError. What parses but does not evaluate to a function is caught
-        // per tool at load, and blamed on that tool alone.
+        // Admission precedes every write: normalize the source to one
+        // expression and prove that it parses. The per-tool loader checks that
+        // the expression evaluates to a function and attributes a load failure
+        // to that tool.
         const admitted = admitCraftedSource(code, toolName);
         if (!admitted.ok) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',

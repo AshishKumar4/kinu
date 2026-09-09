@@ -437,10 +437,11 @@ export async function readExecutorFile(
  * Write one uploaded file into an executor — binary-safe through the same raw
  * handle the reads use.
  *
- * Raw bytes, and no size cap. Uploads arrive over a transport with no frame
- * ceiling and need no encoding, and the workspace VFS chunks what it stores —
- * so there is nothing left for an app-level limit to protect, and one here
- * would sit ABOVE the transport's real ceiling anyway.
+ * Raw bytes, and no size cap at this layer. The transfer envelope bounds what
+ * reaches here — `ExecutorFileUpload` refuses an over-limit chunk and an
+ * over-limit total before it ever assembles — so a second cap on the
+ * assembled write would protect nothing the envelope does not already refuse
+ * earlier.
  */
 export async function writeExecutorFileOp(
   router: ExecutorFileLookup,
