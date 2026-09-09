@@ -1,9 +1,9 @@
 /**
  * The per-turn capability surface — which skills are active this turn and how
  * they restrict the tool surface, plus the facts block that rides the
- * volatile turn context. One implementation for both backends (each
- * previously carried its own copy of the resolution gate, the union
- * filtering, the SkillsVfs shim, and the facts rendering).
+ * volatile turn context. One implementation for both backends: the resolution
+ * gate, the union filtering, the SkillsVfs adapter and the facts rendering have
+ * one definition each.
  */
 
 import type { ToolSet } from 'ai';
@@ -19,7 +19,7 @@ import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import type { VFS } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
 
-/** Passthrough SkillsVfs shim over the runtime's Storage.vfs. */
+/** Passthrough SkillsVfs adapter over the runtime's Storage.vfs. */
 export function skillsVfsOver(vfs: VFS): SkillsVfs {
   return {
     exists: (p) => vfs.exists(p),

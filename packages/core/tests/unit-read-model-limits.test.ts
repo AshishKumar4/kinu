@@ -53,8 +53,8 @@ describe('the run list page is closed against every caller value', () => {
 
   test('an unparseable limit means unstated and takes the default', () => {
     const { recorder } = seededRuns(5);
-    // `Number('abc')` is NaN. The route used to compute Math.max(1, NaN), which
-    // is NaN, and bind it — a datatype mismatch rather than a page.
+    // `Number('abc')` is NaN. `Math.max(1, NaN)` is NaN, and binding that is a
+    // datatype mismatch rather than a page.
     expect(listRuns(recorder, null, Number.NaN).items.length).toBe(5);
     expect(listRuns(recorder, null, Number.POSITIVE_INFINITY).items.length).toBe(5);
   });

@@ -263,7 +263,7 @@ const TEST_MODIFIERS: ReadonlySet<string> = new Set([
  * in, which is the ratchet's unit.
  *
  * A test must be handed a BODY. `test.each(TABLE)` is a factory whose call
- * carries the table and no function, and counting it as a test reported every
+ * carries the table and no function, and counting it as a test reports every
  * table-driven suite in cf-backend as assertion-free. `test.todo('name')` is the
  * one bodyless form that is really a test, and it is a finding by definition.
  */
@@ -336,12 +336,12 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
  * The repository file a path literal names, or `undefined` when it names none.
  *
  * RESOLVED, NEVER PATTERN-MATCHED, and that is a set-equality rule rather than
- * a preference. This used to be a private regex — `(^|\/)(src|scripts)\/…` —
- * which is exactly the shape `gate:set-equality` refuses: a second spelling of
- * "a source file" beside the one in `sources.ts`, free to drift narrower than
- * the set it reports on. Only a path the ENUMERATION holds counts now, and what
- * counts as source is asked of the named predicates — so a path that is not in
- * the tree can no longer be reported as read, which the pattern could.
+ * a preference. A private regex — `(^|\/)(src|scripts)\/…` — is exactly the
+ * shape `gate:set-equality` refuses: a second spelling of "a source file"
+ * beside the one in `sources.ts`, free to drift narrower than the set it
+ * reports on. Only a path the ENUMERATION holds counts, and what counts as
+ * source is asked of the named predicates — so a path that is not in the tree
+ * cannot be reported as read, which a pattern match would allow.
  *
  * EVERY ANCESTOR, because the literal is rarely the whole path. The two live
  * shapes are `join(import.meta.dir, '..', 'src/user/user-do.ts')` and
@@ -349,7 +349,7 @@ const SOURCE_HELPERS: ReadonlySet<string> = new Set(['memberBody', 'anchor', 'be
  * root rather than to the suite's own directory, and `join(repositoryRoot,
  * path)`, where it is repo-relative. Resolving against the suite's directory
  * alone lost 20 real findings across six cf-backend suites — measured
- * 2026-09-01 — so the climb is what keeps this as wide as the pattern was.
+ * 2026-09-01 — so the climb is what keeps this as wide as a pattern match.
  *
  * `isParseable` OR `isStylesheet`, AND NOT `isTestFile`, rather than
  * `isProductSource`: this census's own gate reads `scripts/ladder.ts`, and a
@@ -427,12 +427,12 @@ function functionName(node: SyntaxNode): string | undefined {
 /**
  * Which of a file's own functions assert, and which return source text.
  *
- * Both are transitive closures over local calls, and both exist because the
- * first draft of this census got them wrong in the same way: it looked for the
- * SHAPE at the call site instead of following the file's own helper. 167
- * assertion-free tests became 15, and the source-text signal moved from "a
- * string that also occurs in src" (a majority-false-positive heuristic) to "the
- * asserted value came out of a file read".
+ * Both are transitive closures over local calls, because looking for the SHAPE
+ * at the call site instead of following the file's own helper gets both wrong in
+ * the same way: it counts 167 assertion-free tests where the closure finds 15,
+ * and it reduces the source-text signal to "a string that also occurs in src" (a
+ * majority-false-positive heuristic) rather than "the asserted value came out of
+ * a file read".
  */
 function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFacts {
   interface Fn { readonly direct: boolean; readonly reads: boolean; readonly calls: Set<string> }

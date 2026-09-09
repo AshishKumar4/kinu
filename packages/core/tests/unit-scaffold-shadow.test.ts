@@ -248,11 +248,10 @@ describe('decidePromotion', () => {
 
 describe('applyPromotionDecision — closes the proposal→promote loop', () => {
   test('promote copies the versioned pending code into the live file', async () => {
-    // Regression for `kinu-scaffold-gap`: the pending used to be written
-    // to the live file at proposal time, so promote was a SQL flag flip with
-    // no on-disk effect. After the fix, the pending lives in
-    // scaffold/agent.js.v{N}; promote is a real file swap. This test exercises
-    // the full proposal → promote round-trip.
+    // Regression for `kinu-scaffold-gap`: the pending lives in
+    // scaffold/agent.js.v{N}, never in the live file at proposal time, so
+    // promote is a real file swap and not a SQL flag flip with no on-disk
+    // effect. This test exercises the full proposal → promote round-trip.
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);

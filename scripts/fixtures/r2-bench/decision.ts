@@ -54,7 +54,7 @@ export interface TickRecord {
   readonly bytesPut: number | null;
   /** Cumulative durable bytes HELD after the tick. A different quantity: it can
    *  FALL across a fold or rebase, which is why differencing it is invalid and why
-   *  this benchmark no longer derives a per-tick cost from it. */
+   *  this benchmark derives no per-tick cost from it. */
   readonly heldBytes: number | null;
   /** Whether this tick could answer at all. False mirrors `bytesPut === null`. */
   readonly movedReported: boolean;

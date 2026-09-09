@@ -2,10 +2,11 @@
  * The outcome contract's own tests.
  *
  * Every case here is one of three shapes, the same three the scorer suite uses:
- * a verdict that scores, a verdict that is REFUSED, and the degenerate verdict
- * that used to be silently accepted. The refusals matter most — this row is the
- * primary metric now, so a verifier bug has to surface as a red run rather than
- * as a plausible number nobody can re-derive.
+ * a verdict that scores, a verdict that is REFUSED, and the degenerate verdict a
+ * lenient row would silently accept — a zero denominator, a ratio above 1, a
+ * NaN. The refusals matter most — this row is the primary metric, so a verifier
+ * bug has to surface as a red run rather than as a plausible number nobody can
+ * re-derive.
  */
 import { describe, test, expect } from 'bun:test';
 import {
@@ -96,7 +97,7 @@ describe('the bar against promotion is mechanical', () => {
   });
 });
 
-describe('admissibility now rests on the outcome, not on mechanism coverage', () => {
+describe('admissibility rests on the outcome, not on mechanism coverage', () => {
   const behaved = {
     turns: 3, toolCalls: 9, toolNames: ['run', 'file'], tokensIn: 100, tokensOut: 10, ms: 1,
   };
@@ -124,9 +125,9 @@ describe('admissibility now rests on the outcome, not on mechanism coverage', ()
     expect(verdict.outcomesScored).toBe(1);
   });
 
-  test('every mechanism absent no longer makes a run inadmissible', () => {
-    // The retired condition. An outcome was measured, so the run is evidence
-    // about task performance even though not one mechanism had a denominator.
+  test('a measured outcome with every mechanism absent is still admissible', () => {
+    // An outcome was measured, so the run is evidence about task performance
+    // even though not one mechanism had a denominator.
     const obs: EvalObservation[] = [{
       taskId: 't', repetition: 0, outcome: 'scored',
       scores: [row(TASK_OUTCOME, 2, 1), ...BEHAVIOUR_SCORERS.map((s) => row(s.name, 0, 0))],

@@ -239,9 +239,10 @@ describe('what the container is configured with', () => {
       // Per-host handlers take precedence over the catch-all, so binding the
       // catch-all first would leave a window in which a container event went to
       // the egress handler, found no placeholder in it, and was forwarded to a
-      // `.internal` name that resolves nowhere. Read from the source of the one
-      // writer: this ordering used to exist in TWO places, and the one the live
-      // path actually called was the one that did not pin the workspace name.
+      // `.internal` name that resolves nowhere. Read from the source of the ONE
+      // writer: with this ordering spelled in TWO places, the live path calls
+      // whichever copy it happens to reach, including one that never pins the
+      // workspace name.
       const sandbox = read('src/kinu-sandbox.ts');
       const body = sandbox.slice(sandbox.indexOf('async configureEgress('));
       expect(body.indexOf('setOutboundByHost')).toBeLessThan(body.indexOf('setOutboundHandler'));
@@ -371,11 +372,11 @@ describe('the posture the whole design rests on', () => {
 // fourth, `runtime.ts`'s `rootView`, is the same pattern and was never observed
 // firing.
 //
-// A source-level detector used to live here, scoped to two files by regex. The
-// `anti-slop/no-copy-rpc-stub` oxlint rule replaced it: same defect, matched on
-// the AST across the whole repo and gated by `bun run lint`. What stays here is
-// the one thing a linter cannot assert — that the double these tests run
-// against really does behave like a stub.
+// The detector for this is the `anti-slop/no-copy-rpc-stub` oxlint rule: matched
+// on the AST across the whole repo and gated by `bun run lint`, rather than a
+// source-level regex scoped to two files. What stays here is the one thing a
+// linter cannot assert — that the double these tests run against really does
+// behave like a stub.
 describe('a stub is used, never copied', () => {
   test('the double is faithful in the way that matters: copying it loses everything', () => {
     // The premise, asserted rather than described. If a future runtime made

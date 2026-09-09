@@ -13,9 +13,9 @@ describe('createLocalModelResolver', () => {
    * An output cap is not a field this seam sets: completion length is the
    * model's, bounded by the provider. Neither lane may carry one, and the
    * endpoint config is not a source for one either — the only shape a cap can
-   * still arrive in is an object built before the field was deleted, and it
-   * has to be inert. Both lanes are driven because the cap used to be applied
-   * in each of them separately.
+   * arrive in is a config object that still carries the field, and it has to be
+   * inert. Both lanes are driven because a cap would have to be applied in each
+   * of them separately.
    */
   test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];

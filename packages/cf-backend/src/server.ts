@@ -87,9 +87,9 @@ import { installAnalyticsDiagnostics } from "./analytics/install";
 // workspace — the main actor, a hired subordinate, an ask-by-role temporary, a
 // branching head, a swarm node, an MCTS rollout branch — is hosted by this one
 // object over its one SQLite. There is no second exported agent class and no
-// facet class: `SubordinateAgent` existed only to give a child its own
-// database, and with the database gone the class, its worker registration and
-// its migration-tag-free facet registration go with it.
+// facet class: a child gets no database of its own, so there is nothing left
+// for a second class, a second worker registration or a facet registration to
+// carry.
 export { OrchestratorAgent } from "./orchestrator";
 export { KinuSandbox } from "./kinu-sandbox";
 // The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
@@ -653,12 +653,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // 1 MiB frame ceiling, and PTY bytes are neither.
     const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
     if (terminalResp) return terminalResp;
-    // A hosted actor's chat is checked here and routed UNCHANGED. The old shape
-    // rewrote the path — substituting the facet's physical storage key into the
-    // SDK's `/sub/{class}/{key}` hop — because the target was a different
-    // Durable Object. It is the same object now, so the only thing left to do
-    // before handing the request over is refuse a name this workspace does not
-    // host, which keeps a 404/403 at the edge instead of inside the actor.
+    // A hosted actor's chat is checked here and routed UNCHANGED: the target is
+    // this same object, so nothing rewrites the path and no facet storage key is
+    // substituted into the SDK's `/sub/{class}/{key}` hop. The only thing left
+    // to do before handing the request over is refuse a name this workspace does
+    // not host, which keeps a 404/403 at the edge instead of inside the actor.
     const hosted = hostedActorRoute(url.pathname);
     if (hosted) {
       const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));

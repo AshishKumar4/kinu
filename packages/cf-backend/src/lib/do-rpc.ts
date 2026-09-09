@@ -139,9 +139,9 @@ const MAX_ATTEMPTS = 3;
 /** Full-jitter exponential backoff, in the shape the SDK itself uses. Kept short
  *  because every caller is on a request's critical path: at MAX_ATTEMPTS the only
  *  delays ever computed are 2¹·60 = 120 ms and 2²·60 = 240 ms, because attempt 3's
- *  failure throws before a third delay exists. There is no ceiling constant — the
- *  400 ms one that used to sit here could not bind at any attempt count this
- *  module allows, so it was a bound that could not fail. */
+ *  failure throws before a third delay exists. There is no ceiling constant — a
+ *  400 ms one could not bind at any attempt count this module allows, so it
+ *  would be a bound that cannot fail. */
 const BASE_DELAY_MS = 60;
 
 /**

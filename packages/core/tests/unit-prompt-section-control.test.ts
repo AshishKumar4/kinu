@@ -322,12 +322,12 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
 /**
  * The rotation, and why it is derived.
  *
- * It used to be a Durable Object field. Measured on the real actor: the cursor
- * advanced on ticks 25, 50 and 75 of one activation and appeared in no durable
- * table — `actor_config` held one key, the cadence — so every activation
- * restarted at the first section. Against a joint idle-eviction window measured
- * at 2-5 minutes, `guidance/operating` received every pass and the other eight
- * needed 225 consecutive turns without a pause.
+ * A Durable Object field cannot carry it. Measured on the real actor: a cursor
+ * held in memory advanced on ticks 25, 50 and 75 of one activation and appeared
+ * in no durable table — `actor_config` held one key, the cadence — so every
+ * activation restarted at the first section. Against a joint idle-eviction
+ * window measured at 2-5 minutes, `guidance/operating` received every pass and
+ * the other eight needed 225 consecutive turns without a pause.
  *
  * Driven through the lane, so each step is a real pass: the tie-scored judge
  * keeps every pass proposal-free, and it is the `gepa_runs` row the pass

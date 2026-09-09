@@ -219,7 +219,7 @@ function fixture(): Fixture {
   initRefinementTables(rt.storage.execRaw);
   const facts = createFactsStore(rt.storage.sql, rt.actor);
   const approvals = new InstructionApprovalStore(
-    rt.storage.sql, rt.actor, 'test-workspace', (body) => body(),
+    rt.storage.sql, rt.actor, 'test-workspace',
   );
   return {
     rt,

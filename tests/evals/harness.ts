@@ -95,24 +95,23 @@ export type { LedgerTotals };
  * `LocalAgentSession` — the evolution proof, which needs a turn boundary it
  * controls so it can fire `reviewTurn` per challenge, and the exploration eval,
  * which measures whether the model REACHES for delegation. Both therefore build
- * the surface themselves, and both used to build a DIFFERENT one from the
- * product:
+ * the surface themselves, and a surface assembled by hand diverges from the
+ * product in three ways that each corrupt a score silently:
  *
- *   - the tools came from `buildBuiltinTools`, which by construction cannot
- *     hold `agents` (tools/actor-tools.ts: the delegation tool's implementation
- *     IS the search engine, so the factory that emits a node's own surface
- *     cannot register it). The product's actor root is `buildActorTools`. So
- *     every eval that asked "did the model delegate?" asked a model that had no
- *     delegation tool, and a zero was unreadable: model declined, or nothing to
- *     decline?
- *   - the prompt came from a hand-assembled `buildSystemPromptSync` option set.
- *     `agentsActions` was never passed and `agents` was never on
- *     `availableTools`, so `renderAgentStateSection` (prompt.ts:236) skipped the
- *     whole delegation ladder. The model was not shown the surface it was being
- *     scored on reaching for.
- *   - the codemode namespaces production wires as `extraProviders` (`agents.*`,
- *     `web.*`, `memory.*`, `tasks.*`) were absent, so `execute_tools` code the
- *     prompt teaches threw `not a function` inside the eval only.
+ *   - `buildBuiltinTools` by construction cannot hold `agents`
+ *     (tools/actor-tools.ts: the delegation tool's implementation IS the search
+ *     engine, so the factory that emits a node's own surface cannot register
+ *     it). The product's actor root is `buildActorTools`. Ask "did the model
+ *     delegate?" of a model that has no delegation tool and the zero is
+ *     unreadable: model declined, or nothing to decline?
+ *   - a hand-assembled `buildSystemPromptSync` option set that passes no
+ *     `agentsActions` and leaves `agents` off `availableTools` makes
+ *     `renderAgentStateSection` (prompt.ts:236) skip the whole delegation
+ *     ladder. The model is then not shown the surface it is being scored on
+ *     reaching for.
+ *   - without the codemode namespaces production wires as `extraProviders`
+ *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `execute_tools` code the
+ *     prompt teaches throws `not a function` inside the eval only.
  *
  * This builds BOTH from the roots `rebuildModelBoundState`
  * (cli-backend/src/local-session.ts:2822) and the turn assembly
@@ -181,7 +180,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // rather than returning something. An arm that means to drive the swarm rung
   // has a target and passes `target.hostNode` (see `swarm.eval.ts`); one that
   // reaches it through this surface would otherwise run every node on the
-  // caller's own actor, which is the failure this cutover exists to remove.
+  // caller's own actor, which is the failure this refusal prevents.
   const fork: AgentsForkDeps = {
     rt,
     model,
@@ -318,8 +317,8 @@ export function makeSessionWriter(): SessionWriter {
  * applied every filter and serialised the schemas. That is a different fact from
  * `Object.keys(tools)` at the call site: the call site is what the harness
  * INTENDED to offer, this is what the model WAS offered. A run reporting zero
- * delegation calls now carries the evidence that separates "declined" from "was
- * never asked", and the two stop being the same observation.
+ * delegation calls carries the evidence that separates "declined" from "was
+ * never asked", so the two are not one observation.
  */
 export interface RequestSurfaceEvidence {
   /** Provider calls observed. Zero means the episode never reached the model,
@@ -522,12 +521,12 @@ export interface BehaviourOutput {
  * Project the persisted rows onto the wire shape. Fresh literals, so the
  * index-signature target is satisfied without a cast.
  *
- * `measured` IS carried, and that is not cosmetic. This projection originally
- * dropped it, so the raw counts behind every ratio — the reference the candidate
- * was divided by, the target, the floor — reached the run record only inside the
- * `detail` STRING. The first live pilot's numbers had to be recovered by parsing
- * English out of a sentence. A ratio whose baseline does not survive beside it is
- * a ratio nobody can re-derive, which is the whole reason `measured` exists.
+ * `measured` IS carried, and that is not cosmetic. Without it the raw counts
+ * behind every ratio — the reference the candidate was divided by, the target,
+ * the floor — reach the run record only inside the `detail` STRING, and the
+ * numbers have to be recovered by parsing English out of a sentence. A ratio
+ * whose baseline does not survive beside it is a ratio nobody can re-derive,
+ * which is the whole reason `measured` exists.
  */
 function toScoreJson(rows: readonly EvalScoreRow[]): BehaviourScoreJson[] {
   return rows.map((row) => {
@@ -581,13 +580,12 @@ export async function seedWorkspaceTree(rt: AgentRuntime): Promise<void> {
 /**
  * What one episode's ledger says it did, off a LOCAL store.
  *
- * ONE REDUCER AND ONE WALK, both the seam's. This function used to declare its
- * own `LedgerTotals` interface and its own field-for-field copy of
- * `walkRunEvents` + `ledgerTotalsFromEvents` — two reducers feeding every
- * denominator in the corpus, which is exactly the drift the seam was written to
- * remove, and the copies had already diverged in their commentary. The
- * store-to-events step is the only thing that was ever local, so it is the only
- * thing left here.
+ * ONE REDUCER AND ONE WALK, both the seam's. A local `LedgerTotals` interface
+ * and a local field-for-field copy of `walkRunEvents` +
+ * `ledgerTotalsFromEvents` would be two reducers feeding every denominator in
+ * the corpus, which is exactly the drift the seam exists to remove — and copies
+ * diverge in their commentary first. The store-to-events step is the only local
+ * thing, so it is the only thing here.
  *
  * `LedgerTotals` is re-exported rather than redeclared because the research and
  * optimization families import it from this module.
@@ -614,11 +612,10 @@ export function readRunEvents(db: Database): RunEvent[] {
  * The episode's raw run-event trail off a LOCAL store, as the wire shape a judge
  * receives.
  *
- * WHY AT ALL. The published observation used to carry aggregates only — counts
- * with no order, no tool names beyond the flat list, no failure classes — so a
- * reader of the record asking "what did this attempt actually DO" had to reopen
- * the SQLite store named in `transcripts`, and after any retention sweep could
- * not answer at all.
+ * WHY AT ALL. Aggregates alone — counts with no order, no tool names beyond the
+ * flat list, no failure classes — leave a reader of the record asking "what did
+ * this attempt actually DO" to reopen the SQLite store named in `transcripts`,
+ * and after any retention sweep unable to answer at all.
  *
  * The projection itself — what is kept, what is dropped, the bound — is
  * `projectRunEventProvenance`, shared with the public-plane families; this is
@@ -774,8 +771,8 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * 395-420). A runtime with no profile and no resolver leaves all three lanes
  * undefined and throws on the fourth.
  *
- * THAT HOLE IS NOW CLOSED IN THE PRODUCT, and this function is no longer what
- * keeps a lane alive. `createCLIRuntime` installs its own authority
+ * THE PRODUCT CLOSES THAT HOLE ITSELF, so this function is not what keeps a
+ * lane alive. `createCLIRuntime` installs its own authority
  * (cli-backend/src/profile-authority.ts, wired at runtime.ts:405-426), so every
  * runtime from `openWorkspaceCLI` routes by default and `setProfileResolver` has
  * ZERO callers in the product — it survives on `CLIRuntime` as this override.
@@ -969,8 +966,8 @@ export async function runBehaviourTask(
   // the same lie in a smaller font. This suite drives a session rather than
   // calling `generateText`, so the store is the only place its usage exists —
   // `recordLiveModelEpisode` reads it through the workspace-spend seam, which is
-  // why the behavioural tier no longer reports `0 model call(s)` over an episode
-  // that spent hundreds of thousands of neurons.
+  // what keeps the behavioural tier from reporting `0 model call(s)` over an
+  // episode that spent hundreds of thousands of neurons.
   recordLiveModelEpisode(makeSql(db), rt.actor);
 
   // ONE walk of the log, reduced three ways. The totals, the step-bound

@@ -74,8 +74,8 @@ export const CATALOG_SOURCE_ID = 'catalog';
 
 /** A provider failure's whole chain, and never the empty string: a catalog row
  *  reading "" is indistinguishable from one that did not fail. The chain, not the
- *  outermost message, because a 401 wrapped in "models.dev fetch failed" used to
- *  arrive as the wrapper alone. */
+ *  outermost message, because a 401 wrapped in "models.dev fetch failed" would
+ *  otherwise arrive as the wrapper alone. */
 export function providerFailureReason({ error }: { error: unknown }): string {
   return renderThrownChain({ cause: error }).trim() || 'unknown error';
 }
@@ -121,11 +121,10 @@ export function createProviderRegistry(): ProviderRegistry {
    * Probe every provider AT ONCE, isolate each failure, and answer in
    * REGISTRATION ORDER.
    *
-   * The listing methods below used to await each provider in a `for` loop, so
-   * one slow vendor added its whole latency to every provider behind it — and
-   * this call now sits in front of a turn's first token, where that sum is
-   * time the user spends watching nothing. The probes are independent: no
-   * provider's availability or model list is an input to another's.
+   * Awaiting each provider in a `for` loop adds one slow vendor's whole latency to
+   * every provider behind it — and this call sits in front of a turn's first token,
+   * where that sum is time the user spends watching nothing. The probes are
+   * independent: no provider's availability or model list is an input to another's.
    *
    * ORDER COMES FROM THE INPUT, NEVER FROM COMPLETION. `Promise.all` resolves
    * positionally, so the fast provider that finished first does not overtake

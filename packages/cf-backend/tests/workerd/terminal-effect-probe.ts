@@ -7,9 +7,9 @@
  * a real alarm as its wake, driven across `abortAllDurableObjects()`: an isolate
  * death, not a simulated one. That means the in-activation guard, the durable
  * claim, the roster freeze, `resumeAll`, the close gate and the recovery arming
- * are all the shipped implementations. This file used to reimplement each of
- * them, so the real-isolate suite stayed green for defects in the lifecycle and
- * proved only the ledger underneath it.
+ * are all the shipped implementations. A probe that reimplemented any of them
+ * would keep the real-isolate suite green for defects in the lifecycle and
+ * prove only the ledger underneath it.
  *
  * The schema comes from `initTerminalEffectTable` and `initToolEffectClaimTable`,
  * so a probe cannot pass against a table production has drifted away from.

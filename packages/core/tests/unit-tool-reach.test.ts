@@ -1,15 +1,15 @@
 /**
  * The reach axis — TOOL_REACH, and the two directions that keep it honest.
  *
- * How the model reaches a capability used to be emergent rather than declared:
- * native meant "whichever names buildBuiltinTools happened to emit", codemode
- * meant "whichever createXCodemodeProvider some backend actor class happened to
- * call", and the Tools panel guessed `nativeNames.has(name) ? 'native' :
- * 'codemode'` — a binary with no way to say "neither", which is why the one
- * deps-gated builtin (`report`) rendered as codemode-only on an orchestrator,
+ * How the model reaches a capability is DECLARED, not emergent. Left emergent,
+ * native means "whichever names buildBuiltinTools happened to emit", codemode
+ * means "whichever createXCodemodeProvider some backend actor class happened to
+ * call", and the Tools panel guesses `nativeNames.has(name) ? 'native' :
+ * 'codemode'` — a binary with no way to say "neither", which is how the one
+ * deps-gated builtin (`report`) renders as codemode-only on an orchestrator,
  * an actor that has it on no surface at all.
  *
- * Every codemode factory now takes its provider `name` straight from the table,
+ * Every codemode factory takes its provider `name` straight from the table,
  * so a namespace the table stops declaring fails to COMPILE. What a test still
  * has to catch is the reverse: a row added to the table with nothing built for
  * it — a capability declared reachable that the model can never call, which is

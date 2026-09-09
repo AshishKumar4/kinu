@@ -483,9 +483,9 @@ export interface AdvisorLaneDeps {
  * Everything one review needs, durably.
  *
  * The advisor lane's input is the completed turn plus three decisions taken at
- * turn end, and none of it was recoverable: a lane interrupted by eviction used
- * to terminalize as lost, so a turn that happened to end near a deploy silently
- * got no advice. This is the snapshot that makes it re-enterable.
+ * turn end, and this is the snapshot that makes the lane re-enterable. Without
+ * it an eviction terminalizes the lane as lost, so a turn that happened to end
+ * near a deploy silently gets no advice.
  *
  * A MIRROR OF THE LANE'S OWN DEPS, field for field, and that is deliberate: a
  * snapshot carrying anything less would re-run the review against different

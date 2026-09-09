@@ -98,9 +98,9 @@ describe('cloud fork ownership transaction', () => {
   });
 
   test('each staged frame renews the reservation, so a live transfer keeps its name', async () => {
-    // The reservation is what a source-side eviction used to strand: the loop
-    // holding it lives in the sender's memory, so nothing reported that the
-    // transfer had stopped. The renewals are that report.
+    // A source-side eviction is what strands the reservation: the loop holding
+    // it lives in the sender's memory, so nothing else can report that the
+    // transfer has stopped. The renewals are that report.
     const src = await source();
     const h = harness();
     await deliverCloudFork({

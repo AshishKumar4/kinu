@@ -206,9 +206,8 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  *
  * No backend conditional on the separate-machines line: the workspace
  * filesystem is the same durable component everywhere, and every other runtime
- * is a different machine. That used to be untrue on cli-local, where the
- * workspace and laptop executors shared one host shell, and the prompt had to
- * carry the exception.
+ * is a different machine on every backend. So the line is unconditional and the
+ * prompt carries no per-backend exception.
  *
  * The file doctrine states the mount table: a live environment's files appear
  * in the agent's own plane under its mount point (`/pc`, `/sandbox` —
@@ -218,22 +217,22 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * stays a shell over workspace bytes only — commands do not see mount points,
  * and that limit is stated so the model routes commands by namespace.
  *
- * It is stated ONCE. Two paragraphs used to carry it — one gated on
- * `manyRuntimes`, one on `hasDevices` — and they restated the same three facts
- * (separate machines, commands through their own namespace, mounts showing
- * native paths) in different words, 724 chars for 600 chars of content. The
- * surviving gate is `hasDevices`, which is the WEAKER condition and therefore
- * loses no surface: `manyRuntimes` was `executors.length > 1`, and with two or
- * more executors at most one is `workspace`, so a device always remained —
- * manyRuntimes implied hasDevices. The reverse does not hold, so a lone
- * non-workspace executor (a sandbox with no workspace beside it) now reads the
- * doctrine it used to miss.
+ * It is stated ONCE, under ONE gate — `hasDevices`. Two paragraphs saying the
+ * same three facts (separate machines, commands through their own namespace,
+ * mounts showing native paths) in different words are free to disagree with
+ * each other, and cost tokens twice: the recorded comparison is 724 characters
+ * for 600 of content when the three facts are worded in separate paragraphs.
+ * `hasDevices` is deliberately the WEAKER condition: `executors.length > 1`
+ * implies it — with two or more executors at most one is `workspace`, so a
+ * device is always among them — and not the
+ * reverse, so gating on it loses no surface and a lone non-workspace executor
+ * (a sandbox with no workspace beside it) reads the doctrine too.
  *
- * The approvals doctrine is stated ONCE, and only on turns that have a shell. A
- * parked tool result used to repeat all of it on every call (222 tokens each);
- * it is a standing fact about this surface, so it lives here and the result is
- * now one line (safety/deferred-approval.ts). It names no executor: which ones
- * exist this turn is the list above.
+ * The approvals doctrine is stated ONCE, and only on turns that have a shell.
+ * It is a standing fact about this surface, so it lives here and the parked
+ * tool result is one line (safety/deferred-approval.ts) instead of 222 tokens
+ * of the same doctrine on every call. It names no executor: which ones exist
+ * this turn is the list above.
  */
 export const EXECUTORS_SECTION = definePromptSection(
   'executors/section',
@@ -265,37 +264,23 @@ Scaffold versions and recorded self-changes can be inspected through the availab
 );
 
 /**
- * The scaffold self-provider ships on both backends since the shared-spine
- * parity, so `agent.*` needs no gate here.
+ * The scaffold self-provider ships on both backends, so `agent.*` needs no
+ * gate here.
  *
- * The six `agent.*` API bullets that used to be here are GONE, and this is the
- * SWARM_PRESET_DOCTRINE lesson applied a second time: prose describing a
- * declaration it cannot read is free to disagree with it, and did. Every one of
- * those symbols — proposeCurriculum, listCurriculum, acceptCurriculumTask,
- * proposeScaffold, scaffoldVersions, schedule, budget, jobResult,
- * backgroundJobs, compactNow — is declared WITH ITS DOC COMMENT in the
- * `agent.*` codemode type block (tools/agent-self.ts TYPES), and that block
- * ships to the model in the same request, inside the execute_tools description
- * (registry.ts renderExecuteToolsDescription). So this section was a second,
- * hand-maintained copy, 1,250 chars of it.
+ * This section does NOT enumerate the `agent.*` API: prose describing a
+ * declaration it cannot read is free to disagree with it. The codemode
+ * declarations own that documentation — every symbol with its doc comment in
+ * the `agent.*` type block (tools/agent-self.ts TYPES), shipped to the model
+ * in the same request inside the execute_tools description
+ * (registry.ts renderExecuteToolsDescription), including scaffold gates,
+ * export shape, host-bridge restriction and rationale floor — and are emitted
+ * only for wired providers. Both backends wire agent-self today (cf
+ * orchestrator.ts, cli local-session.ts). A duplicate bullet list here would
+ * add 1,250 hand-maintained characters outside that declaration gate.
  *
- * It was also the WEAKER copy, which is what makes deleting it a fix rather
- * than a saving: the bullet for `proposeScaffold` said it "must pass the
- * validation gates and win shadow evaluation", while the declaration it
- * shadowed also names the misevolution gate, the required
- * `async function* run(rt, task)` export, the host-bridge restriction and the
- * 50-char rationale floor — the parts a model actually gets wrong.
- *
- * And the copy was UNGATED where the declaration is not: these bullets
- * advertised `agent.*` on any surface holding execute_tools, while the type
- * block is assembled from the providers a backend really wired. Both backends
- * do wire agent-self unconditionally today (cf orchestrator.ts, cli
- * local-session.ts), so nothing is lost now, and a backend that stops wiring it
- * can no longer leave the prompt lying.
- *
- * What stays is the half no declaration carries: the two HABITS (look before
- * building, save what you built), and one pointer at the namespace so the model
- * knows where the contracts are.
+ * What this section states is the half no declaration carries: the two HABITS
+ * (look before building, save what you built), and one pointer at the namespace
+ * so the model knows where the contracts are.
  */
 export const CODE_EXECUTION_SECTION = definePromptSection(
   'state/code-execution',

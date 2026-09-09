@@ -26,10 +26,10 @@
  * ── Cancellation reaches the process, not the wait ────────────────
  * The process lane is also what makes an abort mean something. A background
  * process has an ID, and an ID has `killProcess`, so a cancelled exec kills the
- * command and waits for its exit code before it reports anything. What core used
- * to do was race the signal against the wait and return, which told the agent
- * "the command may still finish inside the container" — a turn moving on while
- * an unwatched build kept writing to /workspace. See `SandboxHandle.exec`.
+ * command and waits for its exit code before it reports anything. Racing the
+ * signal against the wait and returning instead tells the agent "the command
+ * may still finish inside the container" — a turn moving on while an unwatched
+ * build keeps writing to /workspace. See `SandboxHandle.exec`.
  */
 
 import type { Process } from "@cloudflare/sandbox";
@@ -56,13 +56,13 @@ const PREVIEWS_UNPUBLISHABLE =
  * The container control-plane transport EVERY `getSandbox` call site passes, and
  * the one value telemetry may report for it.
  *
- * It is a constant rather than a per-call literal for two reasons, one of them a
- * bug this replaced. The SDK persists transport in the sandbox object's own
- * storage and drops in-flight requests when the value changes mid-life for an
- * id, so the call sites MUST agree; and `sandbox.executor_registered` used to
- * report a hardcoded `'websocket'` next to a `getSandbox(… transport: "rpc")`
- * three lines above it, which is a metric that says the opposite of what the
- * process did. Reading both from here makes the report true by construction.
+ * It is a constant rather than a per-call literal for two reasons. The SDK
+ * persists transport in the sandbox object's own storage and drops in-flight
+ * requests when the value changes mid-life for an id, so the call sites MUST
+ * agree; and a per-call literal lets `sandbox.executor_registered` report a
+ * hardcoded `'websocket'` next to a `getSandbox(… transport: "rpc")` three
+ * lines above it, which is a metric that says the opposite of what the process
+ * did. Reading both from here makes the report true by construction.
  *
  * `rpc` — one capnweb RPC session over a WebSocket, against the container's own
  * control plane — and NOT the `http`/`websocket` route-based compatibility
@@ -125,7 +125,7 @@ async function observeExit(handle: KinuSandbox, started: Process): Promise<numbe
  *
  *   the kill FAILS — the caller hears that instead, immediately, because a
  *   process that could not be killed is still running and reporting
- *   `cancelled` over it would be the defect this replaced.
+ *   `cancelled` over it would be the defect.
  */
 async function execWithoutDeadline(
   handle: KinuSandbox,
@@ -170,21 +170,15 @@ async function execWithoutDeadline(
 /**
  * WHERE THE CONFLICT QUEUE IS, AND WHY IT IS NOT HERE.
  *
- * This adapter used to hold one: a keyed FIFO ordering two writes to a path, an
- * exposure against its own un-exposure, a token against the removal of its row.
- * It ordered the wrong population. Each facet of a workspace — a head, a
- * subordinate, an exploration branch — is a separate Durable Object with its own
- * isolate and therefore its own copy of this adapter, and every one of them
- * addresses the SAME container, because `sandboxId` is `kinu-<workspaceName>` for
- * a facet and for its root alike. A queue built here orders one facet's calls and
- * lets two facets interleave on the same path, which is the defect it was written
- * to fix.
- *
- * So the claim lives in the object all of them reach: `Devbox` (see
- * `createResourceLane` and the "one caller at a time, per resource" section in
- * @kinu.run/devbox). Everything below calls ordinary methods and keeps no queue,
- * no scope table and no copy of the method list — one authority, and it is the
- * owner.
+ * Resource conflicts are serialized by `Devbox`, the object that owns the
+ * container: writes to a path, exposure changes and token-row changes all
+ * claim their resource there (`createResourceLane`, and the "one caller at a
+ * time, per resource" section in @kinu.run/devbox). A queue here would order
+ * only this adapter's callers, and every caller of that container does not
+ * pass through one adapter — an adapter-local queue cannot establish ordering
+ * across all of them, which is the very defect a conflict queue exists to
+ * fix. Everything below calls ordinary methods and keeps no queue, no scope
+ * table and no copy of the method list — one authority, and it is the owner.
  */
 
 /**
@@ -194,7 +188,7 @@ async function execWithoutDeadline(
  *
  * ── The preflight, and why it is ONE list ─────────────────────────
  * Two things must be true before an operation can touch the container, in this
- * order, and both used to be enforced somewhere else:
+ * order:
  *
  *   Egress interception must be installed, because the Container base re-applies
  *   its persisted outbound configuration immediately before `container.start()`
@@ -209,11 +203,11 @@ async function execWithoutDeadline(
  *   lands before the attach is hidden under the overlay a moment later — written
  *   by the caller, invisible to the caller and to every checkpoint after it.
  *
- * They were two wrappers with two hand-maintained method lists, and the second
- * list did not have the file lanes on it. One list, here, beside the lane
- * decision it belongs with: a method that reaches the container goes through
- * `onContainer`, and a method that only writes this Durable Object's own rows
- * does not.
+ * ONE list, here, beside the lane decision it belongs with: a method that
+ * reaches the container goes through `onContainer`, and a method that only
+ * writes this Durable Object's own rows does not. Two wrappers with two
+ * hand-maintained method lists is how a list comes to be missing the file
+ * lanes.
  */
 export function adaptCloudflareSandbox(
   handle: KinuSandbox,

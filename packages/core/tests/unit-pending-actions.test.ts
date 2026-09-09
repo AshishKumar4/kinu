@@ -1,13 +1,13 @@
 /**
  * The needs-you queue.
  *
- * Two claims are worth pinning. First, what counts as pending: a release
- * approval awaiting a decision used to badge NOTHING while a running job —
- * which needs no one — carried a number, so the one thing blocking the agent
- * on its owner was invisible from the tab strip. Second, the containment: this
- * queue must never become a data source an agent-authored view can read, or a
- * view could draw a convincing fake of the surface an owner reads right before
- * authorising a deploy.
+ * Two claims are worth pinning. First, what counts as pending: badge a running
+ * job — which needs no one — and leave a release approval awaiting a decision
+ * badging NOTHING, and the one thing blocking the agent on its owner is
+ * invisible from the tab strip. Second, the containment: this queue must never
+ * become a data source an agent-authored view can read, or a view could draw a
+ * convincing fake of the surface an owner reads right before authorising a
+ * deploy.
  */
 
 import { describe, test, expect } from 'bun:test';

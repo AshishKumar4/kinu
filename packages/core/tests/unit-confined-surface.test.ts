@@ -189,8 +189,8 @@ describe('node proposal merges after the execute_tools finish', () => {
     };
     const deps: NodeAgentDeps = {
       // One seat for this node, over the caller's own database — `rt` is not a
-      // node dep any more, because a shared handle would give every node of a
-      // wave one actor.
+      // node dep, because a shared handle would give every node of a wave one
+      // actor.
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model,
       journal,

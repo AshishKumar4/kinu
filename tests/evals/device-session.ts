@@ -229,7 +229,7 @@ export async function grantDeviceConsent(
 /**
  * Bind a workspace to a machine, by driving the consent flow the product runs.
  *
- * There is deliberately no PUT /devices/:id/consent any more (b2ceb2e7c): a
+ * There is deliberately no PUT /devices/:id/consent (b2ceb2e7c): a
  * binding is created by the FIRST device call a workspace makes, which raises
  * the card on the workspace, and only `always` is remembered — so the way an
  * owner grants a machine is the same whether it is a person clicking or this

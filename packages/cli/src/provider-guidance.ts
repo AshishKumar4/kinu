@@ -1,17 +1,17 @@
 /**
  * One place that turns a failure into something a user can act on.
  *
- * Every CLI surface used to render `err.message` and stop there, so a provider
- * rejection arrived as whatever the endpoint happened to say — often a JSON
- * body with no hint of which Kinu command fixes it. This module keeps the
- * provider's own words (they are the evidence) and appends the exact next
- * command for the failure class it recognises.
+ * Rendering `err.message` and stopping there hands the user whatever the
+ * endpoint happened to say — often a JSON body with no hint of which Kinu
+ * command fixes it. This module keeps the provider's own words (they are the
+ * evidence) and appends the exact next command for the failure class it
+ * recognises.
  *
  * It classifies the FACTS the provider boundary preserved — the HTTP status and
  * the provider's own stable code — and only falls back to matching wording for
- * the classes no status distinguishes. Matching prose alone was the whole
+ * the classes no status distinguishes. Matching prose alone is the whole
  * defect: a 401 and a 402 read as the same sentence on one gateway and as two
- * different sentences on the next, and every rewording silently dropped a hint.
+ * different sentences on the next, and every rewording silently drops a hint.
  */
 
 import { describeProviderError, providerFailureFacts } from '@kinu.run/core';

@@ -170,12 +170,10 @@ export type SurfaceVariant = 'bare' | 'glossed' | 'zoo';
 /** Verbatim from `SwarmInput.models` — the field the spec `ObjectiveSpec` was
  *  authoring — because a paraphrase would test my wording rather than theirs.
  *  Naming the declaration rather than its author is what makes the claim checkable
- *  at all, and the marker STAYS even though it no longer resolves: `SwarmInput` has
- *  since dropped `models` as accepted-and-ignored (see the note on
- *  `SwarmConfig` in `packages/core/src/strategy/swarm.ts`), so this copy is the
- *  pre-registered surface rather than a live quotation. Dropping the marker would
- *  hide that from the citation gate, which counts it and names it on the green path
- *  as a target this tree does not declare. */
+ *  at all, and the marker STAYS: this copy is the PRE-REGISTERED surface, frozen at
+ *  the wording the run was designed around, so a later edit to the declaration's
+ *  own prose cannot silently rewrite what the models were shown. Dropping the marker
+ *  would hide the claim from the citation gate, which counts every one of them. */
 export const MODELS_FIELD_DESCRIPTION =
   'Per-node model variation, for CAPABILITY AND COST ROUTING — a cheap model for recon, a '
   + 'strong one for synthesis. Available on EVERY preset. NOT for diversity: Self-MoA '

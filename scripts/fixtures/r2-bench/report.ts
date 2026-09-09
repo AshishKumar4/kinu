@@ -210,10 +210,10 @@ export interface SyncOutcome {
  *
  * A scalar, a list of scalars, or ONE level of nested scalars. All three occur:
  * `noop` is a boolean, `invalidatedPaths` is a list, and the sibling CLI reports
- * its per-call R2 counters under a nested `store` object. The driver used to
- * assume number-or-string, which admitted the boolean by accident and rendered
- * the whole `store` object as `[object Object]` — eight R2 operation counts
- * erased from the report of a benchmark whose subject is R2 operation counts.
+ * its per-call R2 counters under a nested `store` object. Assuming
+ * number-or-string instead admits the boolean by accident and renders the whole
+ * `store` object as `[object Object]` — eight R2 operation counts erased from
+ * the report of a benchmark whose subject is R2 operation counts.
  */
 const SyncScalarSchema = v.union([v.number(), v.string(), v.boolean()]);
 const SyncPayloadSchema = v.record(
@@ -221,8 +221,8 @@ const SyncPayloadSchema = v.record(
   v.union([SyncScalarSchema, v.array(SyncScalarSchema), v.record(v.string(), SyncScalarSchema)]),
 );
 
-/** A list renders as its comma-join, which is what the previous reader printed
- *  for the same value. A nested group renders as one dotted line per counter. */
+/** A list renders as its comma-join, one line for the whole list. A nested group
+ *  renders as one dotted line per counter. */
 function tagScalar(name: string, value: number | string | boolean): SyncMeasurement {
   return v.is(v.number(), value)
     ? { name, kind: 'count', count: value }

@@ -231,8 +231,8 @@ function comments(text: string): string {
  *     for paragraphs naming no author; the passage that set REACH did exactly that
  *     for four. So it carries forward, is reset by a heading, and expires at REACH.
  *
- * A RENDERED LITERAL IS NOT A THIRD CASE, and the first draft's mistake is worth
- * recording: it read the whole expression as one window, on the argument that a
+ * A RENDERED LITERAL IS NOT A THIRD CASE, and the mistake it forecloses is worth
+ * recording: reading the whole expression as one window, on the argument that a
  * model receives all of it at once. That confuses two things. Where the unit ENDS is
  * the literal's own contribution and `auditFile` enforces it — eleven unrelated
  * strings in a `messages` array are eleven units and pool nothing. How far a

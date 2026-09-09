@@ -3,23 +3,15 @@
 // phase is `ORDER BY received_at DESC, id DESC LIMIT 1` and a step trace is
 // `ORDER BY step_idx, id` — hub/log.ts:572,589).
 import { describe, test, expect } from 'bun:test';
-import { isUlid, ulid, ulidTime, ulidCompare } from '../src/events/hub/ulid';
+import { isUlid, ulid } from '../src/events/hub/ulid';
 
 describe('ulid', () => {
   test('a same-millisecond burst stays strictly increasing', () => {
     const ids = Array.from({ length: 2000 }, () => ulid());
-    for (let i = 1; i < ids.length; i++) {
-      expect(ulidCompare(ids[i - 1], ids[i])).toBe(-1);
-    }
+    expect(ids).toEqual([...ids].sort());
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
-  test('encodes the creation timestamp', () => {
-    const before = Date.now();
-    const id = ulid();
-    const after = Date.now();
-    expect(ulidTime(id)).toBeGreaterThanOrEqual(before);
-    expect(ulidTime(id)).toBeLessThanOrEqual(after);
-  });
 });
 
 /** `isUlid` gates a security decision — the signed webhook delivery path

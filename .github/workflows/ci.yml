@@ -2,14 +2,14 @@ name: CI
 
 # This workflow deliberately enumerates NO suites and NO gates.
 #
-# It used to. Measured 2026-08-17 at 5183d69d, its hand-written step list ran 339
-# of the repository's 400 tracked test files while `scripts/deploy.sh` ran 395 —
-# it skipped packages/compaction (95 tests), agent-utils (12), pc-agent (6), 41
-# of 42 `cli` files, the whole root `tests/` directory, and `bun run layergate`
-# entirely. None of that was visible from a green badge, and one of the
-# exclusions ("the full packages/cli suite stays out of CI for now because its
-# PTY tests need a terminal") was simply stale: the suite runs headless at 295
-# pass / 0 fail in 96s.
+# A hand-written step list here drifts from `scripts/deploy.sh` and a green
+# badge hides the drift. Measured 2026-08-17 at 5183d69d, one ran 339 of the
+# repository's 400 tracked test files while deploy.sh ran 395 — skipping
+# packages/compaction (95 tests), agent-utils (12), pc-agent (6), 41 of 42
+# `cli` files, the whole root `tests/` directory, and `bun run layergate`
+# entirely. The written reasons rot with it: PTY tests needing a terminal keep
+# the whole packages/cli suite out, and that suite runs headless at 295 pass /
+# 0 fail in 96s.
 #
 # Three lists that can disagree is the defect. So there is one:
 # `scripts/ladder.ts`, whose deploy tier is parsed out of deploy.sh and whose

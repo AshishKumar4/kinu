@@ -100,12 +100,11 @@ describe('DeviceConsentRegistry', () => {
 });
 
 /**
- * One logical grant is one card. The registry used to mint a fresh consentId on
- * every call, so a retry re-asking the identical question produced a second
- * card — and no surface could collapse the two, because every surface dedups on
- * consentId and the two ids differ. The provisioning card carried its own
- * caller-side version of this check, for one method, as a check-then-act across
- * two RPCs.
+ * One logical grant is one card. A fresh consentId per call gives a retry
+ * re-asking the identical question a second card, and no surface can collapse
+ * the two: every surface dedups on consentId, and the two ids differ. So the
+ * registry decides identity, rather than each caller carrying its own
+ * check-then-act across two RPCs.
  */
 describe('DeviceConsentRegistry identity', () => {
   test('an identical re-ask joins the waiting prompt: one id, one card, one answer', async () => {
@@ -160,8 +159,9 @@ describe('DeviceConsentRegistry identity', () => {
   });
 
   test('an answer arriving with the raised notice is accepted, not called unknown', async () => {
-    // A surface that resolves synchronously on the notice used to be told the
-    // id was unknown: the announce ran before the id could be answered.
+    // A surface that resolves synchronously on the notice must not be told the
+    // id is unknown, which is what announcing before the id can be answered
+    // would do.
     const answered: boolean[] = [];
     const reg = new DeviceConsentRegistry({
       announce: (notice) => {
@@ -201,14 +201,10 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
   });
 
   test('an always grant settles every other prompt for that machine, whatever the command', async () => {
-    // The vocabulary this replaces: two prompts on one device used to settle
-    // differently depending on their consent SCOPE — a base-tier grant left a
-    // `full_filesystem` prompt waiting, and a full grant settled the narrower
-    // ones under it. There is one binding now and no scope to compare, so the
-    // property those two cases pinned no longer exists: `DeviceConsentRequest`
-    // has no `scope` field, and `consentScopeCovers`, `parseConsentScope` and
-    // `mergeConsentScope` are gone from the tree (grepped: no callers). What
-    // replaces them is one rule — same machine, same workspace, one answer.
+    // ONE rule: same machine, same workspace, one answer — whatever the command
+    // or the method. There is no consent SCOPE to compare, so a `full_filesystem`
+    // prompt cannot be left waiting behind a base-tier grant, and a narrow
+    // prompt cannot be settled by a wide grant it never asked about.
     const { reg } = registry();
     const asked = reg.request(REQUEST);
     const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow' });

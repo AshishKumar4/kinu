@@ -1,8 +1,9 @@
-// KINU-048. Turn admission used to run on catalog metadata: the resolved
-// model's `contextWindow` is a fact about the MODEL, and the context meter's
-// chars/4 scale says of itself that it is an estimate, so an oversized request
-// passed locally and was refused remotely — and the one forced-compaction
-// recovery then ran without ever proving the compacted request fits.
+// KINU-048. Turn admission runs on a COUNTED request, never on catalog metadata:
+// the resolved model's `contextWindow` is a fact about the MODEL, and the context
+// meter's chars/4 scale says of itself that it is an estimate, so admitting on
+// those lets an oversized request pass locally and be refused remotely — with the
+// one forced-compaction recovery then running without ever proving the compacted
+// request fits.
 //
 // These tests drive the shared assembly (`assembleTurnMessages`, the ONE
 // ordering both backends run) with a provider counter, and pin the whole

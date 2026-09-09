@@ -314,9 +314,8 @@ function readDarwinIdentity(pid: number): ProcessIdentityProbe {
  * `breakAbandonedLock` reclaims a lock whose owner the kernel proves gone, and
  * every other holder is one that will release. So a blocked acquisition polls
  * until it gets the lock, and the operator ends it by stopping this process.
- * The 30_000 ms that used to end it refused a config write that would have
- * succeeded, and a config write that gives up part-way through a queue is a
- * lost write.
+ * A 30_000 ms deadline would refuse a config write that would have succeeded,
+ * and a config write that gives up part-way through a queue is a lost write.
  *
  * One wait cannot end that way, and it is the one this function refuses: a take
  * of a path THIS CALL already holds, on either path. The holder's `finally`

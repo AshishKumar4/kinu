@@ -327,16 +327,16 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    * The window between a PERSISTED ANSWER and the claim that makes its effects
    * recoverable.
    *
-   * Think commits the assistant message before it calls `onChatResponse`, and the
-   * hook used to await the response-to-model-message conversion before any claim
-   * existed. A conversion that throws — or an eviction inside it — therefore left
-   * a durable answer with no incomplete transition, so `resumeAll()` found nothing
-   * and every effect the turn owed was lost. The conversion now runs inside the
-   * `turn_end_extensions` body, where the claim already exists.
+   * Think commits the assistant message before it calls `onChatResponse`, so the
+   * response-to-model-message conversion runs inside the `turn_end_extensions`
+   * body, where the claim already exists. Awaiting that conversion before any
+   * claim exists would let a conversion that throws — or an eviction inside it —
+   * leave a durable answer with no incomplete transition, so `resumeAll()` finds
+   * nothing and every effect the turn owed is lost.
    *
-   * The oracle is a message the conversion CANNOT read. Before the move it took
-   * the whole sequence with it and left no row at all; now the roster is claimed,
-   * every other effect runs, and only that one effect records the refusal.
+   * The oracle is a message the conversion CANNOT read. The roster is claimed,
+   * every other effect runs, and only that one effect records the refusal,
+   * instead of the whole sequence going with it and leaving no row at all.
    */
   test('a message the conversion cannot read costs that effect and no others', async () => {
     const harness = orchestratorHarness();
@@ -372,13 +372,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The instant that used to be unrecoverable, on the effect where repeating is
-   * worst.
+   * The hardest instant to recover, on the effect where repeating is worst.
    *
    * The extension emit fired and then the isolate died before anything recorded
-   * that. The earlier design REFUSED this row on every recovery, which also
-   * dropped it when the interruption had come BEFORE the emit — so the answer is
-   * not to refuse but to make the boundary idempotent and replay it. The oracle
+   * that. Recovery cannot tell that apart from an interruption BEFORE the emit,
+   * so REFUSING this row would also drop the pre-emit case — the answer is not
+   * to refuse but to make the boundary idempotent and replay it. The oracle
    * is the evolution window: its append is keyed on the turn's own identity, so a
    * recording that ran twice for one answer would still be ONE row, and a
    * recording that never ran would be zero.
@@ -412,10 +411,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    * The fact update and its tombstone, as ONE unit.
    *
    * `applySleepTimeUpdate` commits several upserts and several CUMULATIVE
-   * confidence decays, and the tombstone used to be a statement after all of
-   * them. A termination in between left the whole update retryable with a prefix
-   * already applied, so a replay took another 0.2 off a fact it had already
-   * decayed — 0.4 for one turn's decision.
+   * confidence decays, and the tombstone rolls back with them as ONE unit. A
+   * tombstone stated separately after them leaves a termination in between with
+   * the whole update retryable over a prefix already applied, so a replay takes
+   * another 0.2 off a fact it had already decayed — 0.4 for one turn's decision.
    *
    * The injected failure is the exact instant the defect names: the fact writes
    * have landed and the tombstone write throws. Rolled back, the retry applies the
@@ -501,11 +500,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   /**
    * The review obligation, at both instants.
    *
-   * `turn_record` writes the window row AND the review it owes. Those used to be
-   * two writes with a dispatch between them, so a cut after the insert lost the
-   * review while a replay ran it twice. One insert now carries both, so the
-   * oracle is the row's own review state: exactly one queued review, whichever
-   * side of the effect the interruption landed on.
+   * `turn_record` writes the window row AND the review it owes in ONE insert.
+   * Two writes with a dispatch between them would let a cut after the insert
+   * lose the review while a replay ran it twice. The oracle is the row's own
+   * review state: exactly one queued review, whichever side of the effect the
+   * interruption landed on.
    */
   test('a cut around the turn recording leaves exactly one owed review', async () => {
     const before = orchestratorHarness();
@@ -590,11 +589,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The take set, at the instant that used to double it.
+   * The take set, at the instant that would double it.
    *
    * A branch reaches `completed` in the journal when its report lands, which is
-   * BEFORE the comparison writes its take set — so a replay that keyed only on
-   * head status wrote a second set. The settlement key is what closes it, and the
+   * BEFORE the comparison writes its take set — so a replay keyed only on head
+   * status writes a second set. The settlement key is what closes it, and the
    * oracle is the table the sets live in.
    */
   test('a branch settled twice writes one take set', async () => {
@@ -663,11 +662,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    *
    * A failed branch has no answer to compare, so it writes no take set — which is
    * why the take table cannot tell a settled refusal from a dropped one, and why
-   * this reads what the settlement TOLD the workspace instead. The replay used to
-   * look the head up under the RUN's id, find nothing (a branch's head is
-   * journalled under a derived id), and report `completed` with "the journal holds
-   * no such branch head": the row was pruned, nothing was said, and the only
-   * record of why the user's redirect produced no take was gone.
+   * this reads what the settlement TOLD the workspace instead. The replay looks
+   * the head up under the DERIVED id a branch's head is journalled under; under
+   * the RUN's id it finds nothing and reports `completed` with "the journal holds
+   * no such branch head", so the row is pruned, nothing is said, and the only
+   * record of why the user's redirect produced no take is gone.
    *
    * `errored` is not a hypothetical here: it is what `reconcileOrphanedBranches`
    * stamps onto every reportless branch head at the START of the very activation
@@ -826,14 +825,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   });
 
   /**
-   * The other half of that trade, which the abandonment used to lose outright.
+   * The other half of that trade: the tick the abandonment must not lose.
    *
-   * The marker was written BEFORE the pass was called, so a cut in between
-   * abandoned a tick whose pass had not run a single statement — an idle
-   * workspace simply never ran the cadence work that tick owed, and no future
-   * turn is a recovery carrier for it. The marker now says ENTERED: it is written
-   * in the same synchronous slice as the call, so the pass's own opening writes
-   * and it reach storage together.
+   * The marker says ENTERED — it is written in the same synchronous slice as the
+   * call, so the pass's own opening writes and it reach storage together. A
+   * marker written BEFORE the pass was called would let a cut in between abandon
+   * a tick whose pass had not run a single statement, and an idle workspace
+   * simply never runs the cadence work that tick owed: no future turn is a
+   * recovery carrier for it.
    */
   test('the tick marker says entered, not armed', async () => {
     const harness = orchestratorHarness();
@@ -1097,9 +1096,9 @@ describe('a turn releases its tool claims only when no response can still run', 
   /**
    * The defect. The isolate died while an auto-continuation was executing a
    * claimed tool, so the fresh activation resuming the EARLIER response has
-   * `_inFlight` clear while `active_durable_turn` still names the turn. Its
-   * close used to delete the continuation's claim, and chat recovery then
-   * replayed the continuation with nothing left to refuse the second call.
+   * `_inFlight` clear while `active_durable_turn` still names the turn. A close
+   * that deleted the continuation's claim there leaves chat recovery replaying
+   * the continuation with nothing left to refuse the second call.
    */
   test('cold recovery keeps the claims of a continuation it has not replayed yet', async () => {
     const harness = orchestratorHarness();

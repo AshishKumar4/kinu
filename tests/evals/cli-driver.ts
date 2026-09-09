@@ -29,7 +29,7 @@
  * one-shot eval that leaves a daemon behind per run is a process leak, not an
  * agent behaviour. The child's CWD is scratch too, for the reason
  * {@link childProjectRoot} records: it is where the child's host executor gets
- * rooted, and it used to be this repository.
+ * rooted, and this repository must not be it.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -80,23 +80,23 @@ export interface CreateSandboxOptions {
  * Give the sandbox a node_modules whose third-party deps are shared read-only
  * but whose workspace packages resolve into THIS copy.
  *
- * Symlinking the whole directory would be cheaper and is what this used to do,
- * but bun hoists the workspace links to the root, so `@kinu.run/core` ->
- * `../../packages/core` then resolved relative to the REAL repo's node_modules
- * — every workspace import inside a sandbox read pristine code, and a solver's
- * cross-package edits were graded as if they had never been made.
+ * Symlinking the whole directory would be cheaper, but bun hoists the workspace
+ * links to the root, so `@kinu.run/core` -> `../../packages/core` then resolves
+ * relative to the REAL repo's node_modules — every workspace import inside a
+ * sandbox reads pristine code, and a solver's cross-package edits are graded as
+ * if they had never been made.
  *
  * EVERY WORKSPACE PACKAGE THE TREE DECLARES, from `workspacePackages` — the same
  * enumeration `tests/workspace-resolution.test.ts` then judges the result by.
- * This used to re-point the one scope `sources.ts:workspaceScope()` returns,
- * which is the PRODUCT scope and by construction cannot name the vendored
+ * Re-pointing only the one scope `sources.ts:workspaceScope()` returns is not
+ * enough: that is the PRODUCT scope and by construction cannot name the vendored
  * `@agent-core` one (sources.ts skips its manifest to stay singular). That scope
- * was therefore mirrored as an absolute link to the DONOR's directory, its own
- * `core -> ../../packages/agent-core` resolved from there, and every sandbox —
- * every scored bench attempt included — imported the donor checkout's
- * agent-core while reporting on the copy. A builder reading one list and the
- * guard reading another is this repo's set-equality defect; there is one list
- * now, so a scope the guard checks cannot be a scope the sandbox skipped.
+ * would be mirrored as an absolute link to the DONOR's directory, its own
+ * `core -> ../../packages/agent-core` would resolve from there, and every
+ * sandbox — every scored bench attempt included — would import the donor
+ * checkout's agent-core while reporting on the copy. A builder reading one list
+ * and the guard reading another is this repo's set-equality defect; there is one
+ * list, so a scope the guard checks cannot be a scope the sandbox skips.
  *
  * Built from the TREE's manifests, never from what the donor happens to have
  * installed, for the reason `setup-worktree.sh` records against the same

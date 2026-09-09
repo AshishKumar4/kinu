@@ -875,7 +875,7 @@ describe('CLI TUI layout', () => {
       expect(observed.afterArrowDown).toBe(observed.listed[1]);
       expect(observed.finalAction).toEqual({ type: 'exit' });
       // The home header renders the one VERSION, which is why the version test
-      // no longer greps home-app.tsx for the literal.
+      // asserts this header instead of grepping home-app.tsx for the literal.
       expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
     } finally {
       rmSync(run.home, { recursive: true, force: true });

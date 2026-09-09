@@ -4,8 +4,8 @@
 // with no rows never ran, rather than a producer nobody wired. That inference is
 // only sound while every model-invoking seam actually reports, and the two are
 // indistinguishable from the outside exactly when it matters most — a newly
-// unwired spender makes the total look correct while under-counting it, which is
-// the reassuring-but-wrong number this whole change exists to remove.
+// unwired spender makes the total look correct while under-counting it, and a
+// reassuring number that is wrong is the worst answer this total can give.
 //
 // A comment cannot hold that invariant. This does: it finds every file in the
 // repo that invokes a model, and asserts each one either accepts a
@@ -51,13 +51,11 @@ const INVOCATIONS = [
 const EXEMPT = {
   // A hand-rolled LanguageModelV2 transport needs no entry here and must not get
   // one: it never names an AI-SDK entry point, so the scan does not see it, and
-  // the caller that drives it is the producer. `claude-cli-provider.ts` was
-  // listed here until this test's own stale-exemption check rejected it.
-  // `heads/head-inference.ts` was listed here and no longer is: it stopped
-  // invoking a model at all when the fork/node loop was collapsed onto the turn
-  // loop below, so it is out of this gate's scope rather than excused by it. Head
-  // usage is still aggregated from `head_journal`, which is still its one durable
-  // record.
+  // the caller that drives it is the producer — `claude-cli-provider.ts` is one,
+  // and the stale-exemption check below rejects an entry for it. A file that
+  // invokes no model at all is out of this gate's scope rather than excused by
+  // it: `heads/head-inference.ts` runs through the turn loop below, and head
+  // usage is aggregated from `head_journal`, its one durable record.
   // THE turn loop. Its spend reaches the same log as `step_finish`, which the
   // total reads as the `agent` producer — a `model_call` row here would count
   // every step twice, and would drop a judge's cold prompt into the prefix-cache

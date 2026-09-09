@@ -175,10 +175,9 @@ export function useLiveForkRuns(
  * branches — the search rows of a competition, the journalled heads of a merge —
  * so the canvas cannot draw a tree for a fork the list does not have, label a
  * fork with another's parameters, or show a merged fork as empty because its
- * branches were in a separately bounded read. All of that used to arrive as
- * parallel collections re-associated here by root id, bounded separately, which
- * is exactly how the canvas came to draw a listed fork with no tree beside a
- * tree for a fork it had not listed.
+ * branches were in a separately bounded read. Parallel collections re-associated
+ * here by root id, each bounded separately, are exactly how a canvas draws a
+ * listed fork with no tree beside a tree for a fork it never listed.
  *
  * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over both
  * polled projections for the searches they cover: a running search pushes a tree
@@ -197,10 +196,10 @@ export function useExplorationCanvas(
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
   // One read per page, both halves of every fork on it. The canvas draws EVERY
   // fork, and a merged fork keeps its branches in the journal rather than in
-  // `search_nodes`, so the missing half used to be fetched separately — per band
-  // (N requests growing with the workspace's history), then as one bounded
-  // `getHeadRuns` beside a paginated list, which left page two's merged forks
-  // outside the window. `readExplorationCanvas` carries both.
+  // `search_nodes`. Fetching that half separately costs one request per band (N
+  // growing with the workspace's history); fetching it as one bounded
+  // `getHeadRuns` beside a paginated list leaves page two's merged forks outside
+  // the window. `readExplorationCanvas` carries both.
   const load = useCallback(
     () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],

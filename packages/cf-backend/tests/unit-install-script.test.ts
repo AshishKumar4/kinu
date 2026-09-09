@@ -272,11 +272,11 @@ describe('install.sh terminal handling', () => {
     expect(result.exitCode).toBe(0);
   }, 30_000);
 
-  // The command handed to a user is one pipeline. It used to carry a
-  // `KINU_PARENT_ACTIVATES=1` prefix and an `&& export PATH=…` tail, which is
-  // how the calling shell got `kinu` — and which is why the string on the site
-  // was three commands wide. The script owns that concern now: it says the
-  // export line out loud, and that line is what the user runs.
+  // The command handed to a user is one pipeline. Getting `kinu` onto the
+  // calling shell with a `KINU_PARENT_ACTIVATES=1` prefix and an
+  // `&& export PATH=…` tail is what makes the string on the site three commands
+  // wide. The script owns that concern: it says the export line out loud, and
+  // that line is what the user runs.
   test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
     const script = await installScript();
     const { home, stubBin } = makeSandbox();
@@ -320,7 +320,8 @@ describe('install.sh terminal handling', () => {
     const script = await installScript();
     expect(script).not.toContain('KINU_PARENT_ACTIVATES');
     expect(script).not.toContain('PARENT_ACTIVATES');
-    // The branch it used to gate still exists, and is now unconditional.
+    // The branch is gated on the script's OWN PATH check, not on anything the
+    // caller sets.
     expect(script).toContain('if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then');
   });
 
@@ -409,11 +410,11 @@ describe('install.sh terminal handling', () => {
 });
 
 /**
- * The install used to be a source checkout plus `bun install --frozen-lockfile`
- * of the whole monorepo. Measured cold on 2026-09-01: 13.35 s of a 16.08 s
- * install, 950 packages, 105,648 files, 1.9 GB of the user's disk, and the
- * workerd postinstall shelling out to `npm install` for a binary. The CLI is
- * built at deploy time now, so the user's machine resolves nothing.
+ * The CLI is built at deploy time, so the user's machine resolves nothing. A
+ * source checkout plus `bun install --frozen-lockfile` of the whole monorepo
+ * measured cold on 2026-09-01: 13.35 s of a 16.08 s install, 950 packages,
+ * 105,648 files, 1.9 GB of the user's disk, and the workerd postinstall
+ * shelling out to `npm install` for a binary.
  */
 describe('the CLI installs as a prebuilt artifact', () => {
   test('the launcher unpacks published builds and runs no package manager', async () => {
@@ -667,7 +668,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(install.exitCode).toBe(0);
 
     // A brand-new shell. Nothing sourced a profile, and no bun is on PATH —
-    // exactly the shell that used to be told "Bun is required."
+    // exactly the shell a PATH-resolved Bun would tell "Bun is required."
     const later = spawnSync(join(home, '.kinu/bin/kinu'), ['--help'], {
       encoding: 'utf8',
       timeout: 30_000,

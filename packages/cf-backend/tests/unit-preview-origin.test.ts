@@ -46,9 +46,9 @@ let sdkRequest: Request | null = null;
 // AFTER. Empty means every forward gets `sdkResponse`.
 let sdkQueue: Response[] = [];
 let sdkForwards = 0;
-// What the repair path did. `getSandbox` used to throw here because nothing in
-// this suite reached it; the stale-preview repair does, and WHICH object it
-// reaches is the property that matters most.
+// What the repair path did. The stale-preview repair is the one caller in this
+// suite that reaches `getSandbox`, and WHICH object it reaches is the property
+// that matters most.
 /** The id the repair addressed and the options it passed. Every Kinu call
  *  site passes the same ones or the SDK drops in-flight requests for that id. */
 let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
@@ -958,8 +958,8 @@ describe('worker wiring', () => {
       .toBeLessThan(server.indexOf('handlePcRequest(request, env)'));
   });
 
-  test('no route on the app host serves previews any more', () => {
-    // The path-style proxy bypassed the auth gate by design; nothing may.
+  test('no route on the app host serves previews', () => {
+    // A path-style proxy there bypasses the auth gate by design; nothing may.
     expect(source('src/auth/session.ts')).not.toContain('_preview');
     expect(server).not.toContain('_preview');
   });

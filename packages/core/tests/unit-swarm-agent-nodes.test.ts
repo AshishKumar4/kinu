@@ -543,11 +543,11 @@ describe('the run a reader gets back', () => {
     expect(entry.tree).toHaveLength(nodes.length);
     expect(entry.head?.heads.length).toBe(journalled);
     // The TASK, not `label` — which is `agent-nodes` here and is what `recordSplit`
-    // stamps into `head_runs.rationale`, the column the list used to read as the task.
+    // stamps into `head_runs.rationale`, a column that names the split, not the task.
     expect(entry.run.task).toContain('opaque tokens');
     expect(entry.run.task).not.toBe('agent-nodes');
     expect(entry.head?.rationale).toBe('agent-nodes');
-    // REAL PARAMS, from a ledger row the swarm path used to write nowhere at all.
+    // REAL PARAMS, from the ledger row the swarm path writes for exactly this.
     expect(entry.params?.search).toMatchObject({
       branches: 2, maxDepth: 2, budget: 4, mode: 'build',
     });

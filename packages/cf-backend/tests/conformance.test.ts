@@ -81,9 +81,9 @@ describe('cf backend conformance', () => {
     expect(report.unmeasured).toEqual([]);
   });
 
-  // Guards the guard, once per root rather than once in total. The floor used
-  // to be asserted for the orchestrator alone, so the SUBORDINATE's
-  // magnitudes were unverified: a harness that drifted to a thin fake there
+  // Guards the guard, once per root rather than once in total. A floor
+  // asserted for the orchestrator alone leaves the SUBORDINATE's
+  // magnitudes unverified: a harness that drifted to a thin fake there
   // would still fail on capabilities the manifest declares `wired`, but
   // everything it declares `absent` would look conformant against a world
   // that was never built. Same roots as above, so a third root added later is

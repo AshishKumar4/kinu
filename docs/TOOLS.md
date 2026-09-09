@@ -39,12 +39,12 @@ execute_tools: { native: true, codemode: null }  // native only; it IS the sandb
 | --- | --- |
 | `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly-native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
 | every `*-codemode.ts` factory | takes its provider `name` straight from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently. Deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
-| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. This was previously a hardcoded `name === 'run'` branch, with the other seven reported as unreachable from inside execute_tools. That report was false for all of them |
+| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. It reads the declaration for all eight rather than hardcoding one name, so no capability is reported unreachable from inside execute_tools when it is not |
 | `getToolDescriptions` (cf) | reports it to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
 
 Reach says what a surface exposes. Deps say what an actor gets. The UI receives
 `exposure` and `wired`. An orchestrator is the `report` sink with neither
-surface, while the old guess showed codemode-only.
+surface, which the `nativeNames` guess would report as codemode-only.
 `packages/core/tests/unit-tool-reach.test.ts` pins names, count, and namespace
 factories.
 
@@ -90,7 +90,7 @@ turns and durable jobs enter with their own admitted/recorded mode, so a queued
 Build turn is not trapped in an earlier Plan callback, and delayed Plan work does
 not borrow a later Build turn's authority. Role-imposed Plan is captured before
 terminal effects and suppresses automatic project-changing improvement lanes.
-There is no second approval queue or persisted-format migration.
+Plan adds no second approval queue and no new persisted format.
 
 ## file: the file plane
 
@@ -144,8 +144,8 @@ direct answer, or a command the user asked you to run.
 
 Until 2026-08-17, leading with serial work made uncertainty classify as serial.
 The doctrine converted 0% of eligible turns where a mechanical nudge in
-`orchestrator/turn-steering.ts` converted 24%. That nudge is gone. The system
-no longer steers a turn toward delegating, and the doctrine above is the whole
+`orchestrator/turn-steering.ts` converted 24%. That nudge is gone. Nothing
+steers a turn toward delegating, and the doctrine above is the whole
 of the ask. `turn-steering.ts` keeps the three loop-detection steers only:
 `repeated_call`, `repeated_failure`, `no_progress`.
 
@@ -338,10 +338,11 @@ either, `execute_tools` returns "not configured" instead of `new Function()`.
 
 `renderExecuteToolsDescription(typeBlock)` gives both backends the registry
 spec, sandbox facts, and declarations. CF substitutes `{{types}}`. The CLI
-joins declared `types`. CF once shipped only `"Execute code to achieve a goal."`
-with incompatible `codemode.searchWeb({...})`. The CLI omitted live
-`memory.*`, `tasks.*`, `agents.*`, `web.*`, and `llm.*`. `web` once declared
-object-argument `search` beside positional prose, producing `"[object Object]"`.
+joins declared `types`. Neither writes its own text: a backend-written
+description reaches the model with none of the spec, omits live namespaces, and
+names `codemode.<name>` calls the dispatcher throws on. A declaration whose
+prose disagrees with its arguments is how an object argument arrives as
+`"[object Object]"`.
 
 Crafted tools are defined by the `tools` provider prelude
 (`renderToolsPrelude`, `cf-backend/src/codemode-sandbox.ts`), one guarded
@@ -407,9 +408,8 @@ defines axes, presets, `custom`, nodes, and legal calls.
 `experience` is owner-facing, not a tool or namespace. The owner drives it
 through the core `runExperienceAction` over the capability-gated, `full`-tier
 UserDO library. Shared workspaces get neither `experience.*`
-capability. The workspace-side `experienceAction` RPC that used to front it
-had no caller on any transport and was deleted. The engine and the library
-stay, driven directly.
+capability. No workspace-side RPC fronts it on any transport: the engine and
+the library are driven directly.
 
 `publish` needs real uses plus injection score for crafted tools, corroborated
 lessons, confident facts, or a live scaffold with passing `decidePromotion`,

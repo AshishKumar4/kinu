@@ -169,10 +169,10 @@ export type ArchiveCursor = ArchiveSqlCursor | ArchiveFilesCursor;
 
 /**
  * The ONE wire schema for a cursor that crosses an RPC — the orchestrator
- * route, the browser export page and the CLI all parse with this. Each used
- * to spell its own `v.object`, and valibot's object EXCLUDES unknown keys: the
- * two copies that never learned `tables` silently stripped the pinned set on
- * every round trip, which is how a drift-proof pin dies without an error.
+ * route, the browser export page and the CLI all parse with this, and none of
+ * them spells its own `v.object`. valibot's object EXCLUDES unknown keys, so a
+ * copy that never learned `tables` strips the pinned set on every round trip
+ * with no error at all, which is how a drift-proof pin dies.
  */
 export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
   v.object({

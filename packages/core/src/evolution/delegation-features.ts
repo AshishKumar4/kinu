@@ -243,12 +243,12 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
 /**
  * What a reader of the evidence above is asked to DO with it.
  *
- * Both readers of {@link renderDelegationFeatures} state this rubric — the turn
- * reflection (evolution/engine.ts) and the GEPA reflector (gepa/mutate.ts) — and
- * they used to state it in two independently-edited sentences that had already
- * drifted into two vocabularies for one ladder: `team`/`think`/`heads` in one and
- * `hire`/`search` in the other, neither of them the words the evidence line above
- * actually prints. One string, printed beside the counts it reads.
+ * ONE string, printed beside the counts it reads, and stated by both readers of
+ * {@link renderDelegationFeatures} — the turn reflection (evolution/engine.ts)
+ * and the GEPA reflector (gepa/mutate.ts). Two independently-edited sentences
+ * drift into two vocabularies for one ladder — `team`/`think`/`heads` against
+ * `hire`/`search` — and neither vocabulary is what the evidence line above
+ * actually prints.
  *
  * One clause per line, because they are three separate rules keyed on three
  * different turn outcomes. Fused into one sentence, a reader looking for the rule

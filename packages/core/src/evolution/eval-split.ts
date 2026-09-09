@@ -84,8 +84,8 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
 
 /** Reconstruct non-scoring process evidence from the existing message + run
  *  ledgers. Both tables are created by `initWorkspaceSchema` on every backend,
- *  so a failed read here is a real fault and is not reported as "this turn ran
- *  no tools" — the shape a blanket catch used to give it. */
+ *  so a failed read here is a real fault and is NOT caught: a blanket catch
+ *  would report it as "this turn ran no tools". */
 function turnProcessEvidence(
   sql: SqlExecutor, actor: ActorHandle, turnId: string | null,
 ): string | undefined {
@@ -187,9 +187,9 @@ function flattenAdvisorTexts(row: RawAdvisorRow): RawAdvisorRow {
  *
  * The payload goes through the schema its own writer types against
  * (`AdvisorRowDataSchema`), so a row that fails to parse is corruption and
- * throws, exactly as `toLessonRow` treats a malformed `turn_ids`. A row written
- * before the payload carried a turn id cannot reach the parse at all — the join
- * drops it first.
+ * throws, exactly as `toLessonRow` treats a malformed `turn_ids`. A row whose
+ * payload carries no turn id cannot reach the parse at all — the join drops it
+ * first.
  */
 function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): AdvisorNegativeRow[] {
   if (limit <= 0) return [];
@@ -198,11 +198,11 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
   // rows where the backend keeps one, plain `messages` otherwise — the same
   // authority every other conversational reader answers from.
   //
-  // BOTH arms carry the actor predicate. The pane store used to be the agents
-  // SDK's own table with no `actor_id` column; the host owns that definition now
-  // (identity/fork.ts `ensurePaneTable`) and keys it `(actor_id, id)` for the
-  // same reason `messages` is keyed that way — a pane message id is minted per
-  // actor and the ancestry walk climbs `parent_id` to `id`.
+  // BOTH arms carry the actor predicate. The host owns the pane table's
+  // definition (identity/fork.ts `ensurePaneTable`) and keys it
+  // `(actor_id, id)` for the same reason `messages` is keyed that way — a pane
+  // message id is minted per actor and the ancestry walk climbs `parent_id` to
+  // `id`.
   const rows = hasPaneStore(sql)
     ? sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,

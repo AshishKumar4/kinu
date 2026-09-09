@@ -1,14 +1,16 @@
 /**
  * The failure classification, and the one error that carries it.
  *
- * What this replaces: an executor tool that could not do what it was asked
- * returned a descriptive STRING. The string is accurate and unusable — it
- * carries no cause chain and no class, so a caller cannot tell a timeout from a
- * denial from an OOM, and every reader that needs the distinction re-derives it
- * by matching prose. There are already two such matchers in this codebase
+ * `KinuError` carries a failure classification and cause chain, and executor
+ * boundaries render it as a structured refusal (`refusalOf`/`refusalText`) that
+ * the tool RETURNS. A descriptive STRING carries neither, and
+ * that is accurate and unusable: a caller cannot tell a timeout from a denial
+ * from an OOM, so every reader that needs the distinction re-derives it by
+ * matching prose. There are already two such matchers in this codebase
  * (`read-models/tool-failures.ts` reading an `Error (exit N)` prefix,
  * `execution/exec-result.ts` reading a `{"error":` head), and prose is what they
- * agree on rather than a fact either of them was told.
+ * agree on rather than a fact either of them was told. The class travels as a
+ * field, so nothing here has to become a third matcher.
  *
  * Three constraints shaped this, and each one rules out an obvious design:
  *
@@ -279,8 +281,8 @@ export function renderCauseChain(error: Error): string {
  * a tool call's, which is the distinction doing work.
  *
  * For an `Error` with no `cause` the answer is byte-identical to `error.message`,
- * so replacing a copy changes nothing until there IS a chain, which is exactly
- * when the old answer was wrong.
+ * so calling this where a bare `message` read would do costs nothing until
+ * there IS a chain — which is exactly when a bare `message` is wrong.
  */
 export function renderThrownChain(input: { cause: unknown }): string {
   return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);

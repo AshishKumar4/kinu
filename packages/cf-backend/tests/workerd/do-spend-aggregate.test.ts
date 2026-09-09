@@ -28,13 +28,13 @@ const bySource = (rows: ProbeTally[]) =>
   Object.fromEntries(rows.map((row) => [row.source, row]));
 
 describe('the workspace spend aggregate on Durable Object SQLite', () => {
-  it('sums every row of a log longer than any window it used to be read over', async () => {
+  it('sums every row of a log longer than any window a reader bounds it by', async () => {
     const subject = open('over-window');
 
     // 2600 + 600 + 40. Past `readRecentByType`'s 200-row default, past this
-    // backend's own ACTIVITY_STEP_WINDOW of 400, and past the CLI's former
-    // SPEND_WINDOW of 2000. Under the windowed fold the agent row came back as
-    // 2000 calls here and the panel called that the workspace total.
+    // backend's own ACTIVITY_STEP_WINDOW of 400, and past 2000 — larger than any
+    // bound a spend reader applies. Under a windowed fold the agent row comes
+    // back as 2000 calls here and the panel calls that the workspace total.
     const rows = await subject.measure(2600, 600, 40);
     expect(await subject.rows()).toBe(3240);
 

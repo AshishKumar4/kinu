@@ -244,7 +244,7 @@ describe('EventLog.traceEventCount', () => {
 // `?? 100`, which catches null and undefined and nothing else, so a caller's
 // `-1` reached SQLite as `LIMIT -1` — no limit at all.
 //
-// Measured against this file's own storage before the fix, 700 rows seeded and
+// Measured against this file's own storage with no bound, 700 rows seeded and
 // a default page of 100: `query({ limit: -1 })` returned 700, `pending({ limit:
 // -1 })` returned 700, raw `LIMIT -1` returned 700, `LIMIT 0` returned 0, and
 // `LIMIT NaN` threw 'datatype mismatch'.
@@ -393,7 +393,7 @@ describe('EventLog skips corrupt payload rows', () => {
     const rec = createRecordingLogger();
     const restore = setDiagnosticsSink(rec);
     try {
-      // Either read alone used to throw the whole drain away with it.
+      // Both reads, because either one throwing takes the whole drain with it.
       expect(log.pending().map((event) => event.id)).toEqual([good]);
       expect(log.query({}).map((event) => event.id)).toEqual([good]);
     } finally {

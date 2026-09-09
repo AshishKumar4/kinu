@@ -13,11 +13,11 @@
  * bucket and temp build directory are each probed absent.
  *
  * The probe makes no product change. It measures the SHIPPED daemon against
- * the same filesystem without FUSE. The four knob builds this file used to
- * compile from an anchor-transformed source are retired: their question —
- * which read and WAL settings to keep — is answered, the answers are the
- * shipped defaults, and the passthrough arm measured a configuration that
- * cannot ship (see MEASUREMENTS.md, the passthrough correction).
+ * the same filesystem without FUSE. It compiles no knob builds from an
+ * anchor-transformed source: that question — which read and WAL settings to
+ * keep — is answered, the answers are the shipped defaults, and the
+ * passthrough arm measured a configuration that cannot ship (see
+ * MEASUREMENTS.md, the passthrough correction).
  */
 
 import { execFileSync } from 'node:child_process';

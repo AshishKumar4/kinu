@@ -1,16 +1,16 @@
 // What the workspace spent, and what it could not account for.
 //
-// The defect this replaces was not a wrong number, it was a number with an
-// undeclared scope: the panel showed the orchestrator's own turns and read as
+// The defect this suite exists for is not a wrong number, it is a number with an
+// undeclared scope: a panel that shows the orchestrator's own turns and reads as
 // the whole workspace. So much of what is asserted here is about the SHAPE OF
 // THE ADMISSION — that a silent producer is visible as unmeasured rather than
 // free, and that an unpriced call keeps the dollar figure a floor.
 //
-// The second defect was a CEILING on the answer: the producer totals were folded
-// over a bounded recent-rows read, so a workspace whose log outgrew the window
-// had its total silently replaced by a floor. `a total is not bounded by any
-// window' below is that defect's regression test and it is the point of the
-// suite: it seeds more rows than any window this repo ever used.
+// The second defect is a CEILING on the answer: producer totals folded over a
+// bounded recent-rows read silently replace the total of a workspace whose log
+// outgrew the window with a floor. `a total is not bounded by any window' below
+// is that defect's regression test and it is the point of the suite: it seeds
+// more rows than any window this repo ever used.
 //
 // The production schema, via `createTestWorkspace`: `head_journal` is one of the
 // three stores this reads, and a harness that created fewer tables than a real
@@ -28,7 +28,7 @@ import { createTestWorkspace } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 /** Big enough for the run-list read below, and deliberately NOT a bound on any
- *  spend figure — nothing here passes a window to `workspaceSpend` any more. */
+ *  spend figure — nothing here passes a window to `workspaceSpend`. */
 const RUN_LIST_LIMIT = 50;
 
 function rig() {
@@ -189,19 +189,19 @@ describe('workspaceSpend', () => {
   test('a total is not bounded by any window, however long the log gets', () => {
     const { ws, events, actor } = rig();
     // WHAT THIS DEFENDS, measured rather than reasoned about. On a synthetic log
-    // of 8,000 turn steps and 2,000 judge calls, the shipped fold at the CLI's
-    // own SPEND_WINDOW of 2000 returned 2,001 of the 8,000 agent steps and
-    // printed the result as the workspace total: a 4x under-count on the row the
-    // owner reads first. Driven end to end against a real local workspace, a
-    // 2,600-step log reported 4,080,000 tokens and $4.20 where the truth was
-    // 5,304,000 and $5.46 — 20.8% of the tokens and 23% of the dollars behind a
-    // one-line caveat. The aggregate that replaced it costs 62 ms against 55 ms
-    // for those two windowed reads, so completeness was never the expensive
-    // option; it was only the un-asked-for one.
+    // of 8,000 turn steps and 2,000 judge calls, a fold at the CLI's own
+    // SPEND_WINDOW of 2000 returns 2,001 of the 8,000 agent steps and prints the
+    // result as the workspace total: a 4x under-count on the row the owner reads
+    // first. Driven end to end against a real local workspace, a 2,600-step log
+    // reported 4,080,000 tokens and $4.20 where the truth was 5,304,000 and
+    // $5.46 — 20.8% of the tokens and 23% of the dollars behind a one-line
+    // caveat. The unbounded aggregate costs 62 ms against 55 ms for those two
+    // windowed reads, so completeness was never the expensive option; it was
+    // only the un-asked-for one.
     //
     // 450 steps here: past `readRecentByType`'s 200-row default, past the cloud
     // eval arm's 400 and the deployed panel's ACTIVITY_STEP_WINDOW. Every one of
-    // those numbers used to turn this total into a floor.
+    // those numbers turns this total into a floor if the read is folded over it.
     for (let i = 0; i < 450; i++) step(events, { input: 10, output: 1 }, 0.001);
     for (let i = 0; i < 300; i++) {
       events.emit(WORKSPACE_RUN_ID, {
@@ -213,9 +213,9 @@ describe('workspaceSpend', () => {
     const agent = spend.producers.find((p) => p.source === 'agent');
     const judge = spend.producers.find((p) => p.source === 'judge');
 
-    // Every row, not the newest window of them. Under the windowed fold this
-    // read 200 agent calls and 200 judge calls at the default, or 50 and 50 at
-    // the bound this suite used to pass around.
+    // Every row, not the newest window of them. A windowed fold reads 200 agent
+    // calls and 200 judge calls at the default, or 50 and 50 at the bound this
+    // suite's own rig would impose.
     //
     // The assertions are on the AGENT row as much as the total: the failure was
     // per-producer, and a total that happened to be right while one row was

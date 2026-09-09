@@ -132,10 +132,10 @@ function gatedFirstModel(): GatedModel {
 /** A subordinate that answers its assignment with a TERMINAL report: one
  *  `report` tool call declaring `completed`, then its closing text.
  *
- *  The status is the child's own word, which is the whole point. `relayToParent`
- *  used to hardcode `'progress'`, so every local subordinate stayed permanently
- *  `working` in its parent's eyes whatever it said, and the tool the cloud
- *  backend gives a child was not wired here at all. */
+ *  The status is the child's own word, which is the whole point. A
+ *  `relayToParent` that hardcodes `'progress'` leaves every local subordinate
+ *  permanently `working` in its parent's eyes whatever it said, with the tool
+ *  the cloud backend gives a child not wired here at all. */
 function reportingChildModel(content: string) {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -583,11 +583,11 @@ describe('LocalAgentHost', () => {
     if (!reference) throw new Error('The created subordinate has no actor reference.');
     expect(created.subordinate.status).toBe('idle');
     // NO FILE, AND NO DIRECTORY TO PUT ONE IN. A subordinate is a logical
-    // actor of the parent's one database, so the path a per-child store used to
+    // actor of the parent's one database, so the path a per-child store would
     // take is never written. Asserted while the child is LIVE rather than after
     // its dismissal: "the store is gone" that holds because nothing ever
-    // created it is an assertion that cannot fail, and the shape it was
-    // guarding is the one this cutover removed.
+    // created it is an assertion that cannot fail, while this one fails the
+    // moment a per-child store appears.
     expect(existsSync(join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db'))).toBe(false);
     expect(existsSync(join(dirname(dbPath), 'subordinates'))).toBe(false);
 
@@ -619,9 +619,9 @@ describe('LocalAgentHost', () => {
     await team.dismiss({ name: 'researcher', requestedBy: 'user' });
     expect(await team.list()).toEqual([]);
     // A RETAINED dismissal gives up the NAME and keeps the CONVERSATION, and
-    // those are two rows in two places now that a subordinate has no file:
-    // the directory row records the release, and the actor's own rows — the
-    // transcript `existsSync(<child>/agent.db)` used to stand for — stay.
+    // those are two rows in two places because a subordinate has no file: the
+    // directory row records the release, and the actor's own rows — the
+    // transcript itself — stay.
     expect(actorLifecycle(dbPath, reference.actorId)).toBe('retained');
     // The task it was assigned, as its own turn read it — the drain wraps the
     // ingress line around it, so the assignment is a substring of the
@@ -1331,10 +1331,9 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
 /**
  * The ACTOR ID one child was hired under, read from its parent's roster.
  *
- * There is no child database to name any more: a subordinate is a row set in
- * its parent's one file, keyed by this id. Every assertion that used to prove
- * "the child's file exists" now proves "the child's actor exists and its rows
- * are its own", which is the property that survived the cutover.
+ * There is no child database to name: a subordinate is a row set in its
+ * parent's one file, keyed by this id. The property every assertion here
+ * proves is "the child's actor exists and its rows are its own".
  */
 function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
@@ -1348,10 +1347,10 @@ function childActorId(parent: string, name: string): string {
 
 /**
  * One actor's lifecycle in this workspace's directory — the one-database
- * replacement for `existsSync(<child>/agent.db)`.
+ * answer to "does this child still exist, and how much of it".
  *
- * "Released" and "destroyed" are NOT one question, and reading them as one is
- * how a retained dismissal came to look like a destroyed actor: `deleted_at`
+ * "Released" and "destroyed" are NOT one question, and reading them as one
+ * makes a retained dismissal look like a destroyed actor: `deleted_at`
  * records the NAME being given up, which EVERY dismissal does, while only a
  * destroy purges the actor's rows. The directory row is NOT among those: the
  * directory owns its lifecycle, so it survives a destroy in the released state
@@ -1526,9 +1525,9 @@ describe('LocalAgentHost — the driver lease', () => {
       // longer exists, so nothing owns its conversation.
       expect(holderAt(dbPath)).toBeNull();
 
-      // The same host retries against a fresh Database. Before the fix it
-      // reused the memoized hold over the handle the failed open closed and
-      // threw `Database has closed` here.
+      // The same host retries against a fresh Database. A memoized hold over
+      // the handle the failed open closed would throw `Database has closed`
+      // here.
       expect(await host.acquire('root')).toBeInstanceOf(LocalAgentSession);
       expect(holderAt(dbPath)?.kind).toBe('interactive');
     } finally {

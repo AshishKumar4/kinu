@@ -376,9 +376,9 @@ type RefinerAnswer =
  *  (`identity/create.ts`: `memory/MEMORY.md`); `AGENTS.md` exists only in a
  *  workspace whose owner wrote one. The port refuses an absent path BY NAME
  *  rather than truncating, so a candidate is offered only after this
- *  workspace's own filesystem says it is there — the lane used to name
- *  `MEMORY.md` at the root and `AGENTS.md` unconditionally, and every automatic
- *  refinement in a standard workspace was refused before the refiner started. */
+ *  workspace's own filesystem says it is there. Naming `MEMORY.md` at the root
+ *  or `AGENTS.md` unconditionally instead would refuse every automatic
+ *  refinement in a standard workspace before the refiner started. */
 const REFINER_CONTEXT_CANDIDATES: readonly string[] = ['memory/MEMORY.md', 'AGENTS.md'];
 
 async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {

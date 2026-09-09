@@ -297,10 +297,9 @@ describe('composePrepareStep with pruning', () => {
   });
 });
 
-// KINU-045. The admission used to keep a flat 0.7 share of the window
-// (STEP_CONTEXT_BUDGET_RATIO), a number nobody could point at a fact for.
-// It now reserves the resolved model's own answer allowance, bounded by the
-// only split the window can guarantee both claimants.
+// KINU-045. The admission reserves the resolved model's own answer allowance,
+// bounded by the only split the window can guarantee both claimants — never a
+// flat share of the window, a number nobody can point at a fact for.
 describe('outputReserveTokens', () => {
   // Pairs read from models.dev/api.json for the exact models this repo
   // resolves: the first two publish an allowance well under half their window,

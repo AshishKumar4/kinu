@@ -862,7 +862,7 @@ describe('the rung is structural, and so is its absence', () => {
 });
 
 describe('the standalone recursive-LM namespace is gone', () => {
-  test('nothing declares an `rlm` reach any more', () => {
+  test('no tool declares an `rlm` reach', () => {
     expect(Object.keys(TOOL_REACH)).not.toContain('rlm');
     expect(Object.values(TOOL_REACH).map((reach) => reach.codemode)).not.toContain('rlm');
   });

@@ -27,11 +27,11 @@ interface InspectionFixture {
 /**
  * One workspace database, one directory, and real actor handles.
  *
- * The old fixture gave every actor its own database and reached the next hop
- * through a per-child RPC port, with SDK parent-path rows deciding whether the
- * traversal was allowed. That transport is gone: every actor's rows live in
- * this one database, and the directory walk is the only authority. A fixture
- * that kept the ports would be testing a boundary the product no longer has.
+ * Every actor's rows live in this one database, and the directory walk is the
+ * only traversal authority. A fixture that gave each actor its own database and
+ * reached the next hop through a per-child RPC port — SDK parent-path rows
+ * deciding whether the traversal was allowed — would be testing a boundary the
+ * product does not have.
  */
 function workspaceFixture(): InspectionFixture {
   const created = createTestWorkspace();

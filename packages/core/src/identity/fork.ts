@@ -202,9 +202,10 @@ export interface ForkResult {
  *
  * Throws if `untilMessageId` is not a node of the source's session tree — the
  * one failure worth surfacing before a target workspace is created, and the
- * failure the operator hit: the id came from the chat pane, and the table this
- * resolved against was a turn-end summary that had never recorded it; the cut
- * now reads the store the pane renders, directly, and needs no projection.
+ * failure the operator hit. The cut resolves the id against the store the chat
+ * pane renders, directly, and needs no projection: the operator's id comes from
+ * that pane, and resolving it against a turn-end summary instead misses every
+ * id the summary never recorded.
  */
 export async function snapshotWorkspaceForFork(
   source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
@@ -241,8 +242,9 @@ export async function snapshotWorkspaceForFork(
   // The FTS content table (agent-utils MemoryStore), created for every
   // workspace by initWorkspaceSchema. Carrying it is an optimization — the text
   // is in the memory/*.md FILES above, and a fork with no chunks reindexes via
-  // FTS5 'rebuild' on its next write — but it is carried, because framing
-  // removed the budget that used to make dropping it the cheaper answer.
+  // FTS5 'rebuild' on its next write. The framed transfer has no total
+  // snapshot-size cap, so retaining `memory_chunks` avoids reindexing without
+  // competing for a snapshot budget.
   const memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
     SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
   `;
@@ -797,8 +799,8 @@ export interface ForkLineageRow {
 /** Read the single-row fork_lineage. Returns null when not a fork.
  *
  *  `fork_lineage` is created by initAllTables on every workspace, and an empty
- *  result already says "not a fork" — so there was never a condition for the
- *  catch that used to wrap this, only the ability to report a broken read as a
+ *  result already says "not a fork" — so this read is uncaught. A catch would
+ *  have no condition to handle, only the ability to report a broken read as a
  *  workspace with no parent. */
 export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   const rows = sql<{

@@ -280,20 +280,20 @@ export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;
  * directory and `bun run test:anti-slop` is the runner.
  *
  * The ladder's denominator for that runner, and it needs to be TOTAL rather than
- * a directory excuse: the ladder used to exempt this prefix outright, which
- * claimed every future file under it on the strength of one witness. Measured
- * 2026-08-30, the 41 suites here are the disjoint union of 12 named on the
- * `test:anti-slop` command line and 29 the aggregator discovers — and a new
- * top-level `tools/oxlint/anti-slop/<name>.test.ts` would have been claimed by the
- * prefix and executed by neither.
+ * a directory excuse: exempting this prefix outright claims every future file
+ * under it on the strength of one witness. Measured 2026-08-30, the 41 suites
+ * here are the disjoint union of 12 named on the `test:anti-slop` command line
+ * and 29 the aggregator discovers — and a new top-level
+ * `tools/oxlint/anti-slop/<name>.test.ts` would be claimed by the prefix and
+ * executed by neither.
  */
 export const isAntiSlopSuite = (file: string): boolean =>
   file.startsWith(ANTI_SLOP_ROOT) && isRunnableSuite(file);
 
 /** The per-rule suites `rules.test.ts` aggregates by dynamic import. Exported
- *  so the aggregator and the ladder ask the same question: the aggregator held
- *  its own `startsWith` copy, which is the second spelling this module exists to
- *  prevent. */
+ *  so the aggregator and the ladder ask the same question rather than each
+ *  holding its own `startsWith` copy, which is the second spelling this module
+ *  exists to prevent. */
 export const isAntiSlopRuleSuite = (file: string): boolean =>
   file.startsWith(ANTI_SLOP_RULES) && isRunnableSuite(file);
 

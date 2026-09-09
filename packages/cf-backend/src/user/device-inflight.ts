@@ -236,8 +236,8 @@ export class DeviceRequestLedger {
    * stores `terminated` through `settleUnclaimed` while the sweep is still
    * waiting, and the sweep's own later answer is `unknown` because the daemon
    * no longer holds a control entry for a command that is already dead. Writing
-   * unconditionally replaced a confirmed kill with a guess, so the owner was
-   * told a dead command only "may have" stopped. Returning the stored answer
+   * unconditionally would replace a confirmed kill with a guess, telling the
+   * owner a dead command only "may have" stopped. Returning the stored answer
    * rather than the caller's keeps one statement authoritative for both the
    * write and what gets reported.
    */

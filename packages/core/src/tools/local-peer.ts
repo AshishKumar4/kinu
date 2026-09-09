@@ -188,7 +188,7 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
       // The ref that makes an agent addressable lives in the user's config and
       // the host is HANDED the refs it may bind. Refused with the command that
       // does it rather than half-done here: an agent.db with no ref is exactly
-      // the db-existence inference this cutover removes.
+      // the db-existence inference this endpoint refuses to make.
       spawnWorkspace: async ({ name }): Promise<PeerSpawnOutcome> => ({
         agent: name ?? '',
         created: false,

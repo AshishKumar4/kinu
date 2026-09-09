@@ -179,13 +179,13 @@ export interface HeadStep {
  * holds once a report has landed.
  *
  * A LIST and not just a union, because two readers outside this module have to
- * ask a `TEXT` column which of these it holds, and both used to answer with a
- * hand-written subset that named `completed` and treated the rest as one lump.
- * The exploration-facet sweep classified a facet terminal on `completed` or
- * `aborted` alone, so a head that THREW or blew its budget kept its facet for the
- * life of the workspace; the cold branch settle reported every non-`completed`
- * status as `errored`, so a branch that ran out of wall clock was recorded as
- * having thrown. Four statuses, none of them a lump.
+ * ask a `TEXT` column which of these it holds, and a hand-written subset in either
+ * of them names `completed` and treats the rest as one lump. Let the
+ * exploration-facet sweep classify a facet terminal on `completed` or `aborted`
+ * alone and a head that THREW or blew its budget keeps its facet for the life of
+ * the workspace; let the cold branch settle report every non-`completed` status as
+ * `errored` and a branch that ran out of wall clock is recorded as having thrown.
+ * Four statuses, none of them a lump.
  */
 const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
 export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];

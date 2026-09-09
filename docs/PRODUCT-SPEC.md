@@ -68,7 +68,7 @@ It also does not turn the earlier agent-core architecture investigation into a w
 | **Agent loop** | The code and configuration that drive model steps, tool use and completion. Kinu currently uses the term **scaffold** for versioned loop source. |
 | **Capability binding** | A specific operation surface supplied to code under an actor's effective authority. Possessing a workspace address does not grant every capability. |
 | **Slate** | An authored client/server project that presents a live UI and can compose admitted capabilities. It is not a JSON widget vocabulary. |
-| **SDK facet** | A Cloudflare Agents hosting mechanism used by the current implementation. It is not automatically an agent-core Facet contract. |
+| **SDK facet** | A Cloudflare Agents hosting mechanism Kinu used before the one-store cutover. It is not automatically an agent-core Facet contract. |
 | **Workspace fork** | A new workspace ownership boundary created from a defined snapshot. |
 | **Context fork** | A new actor context derived from a particular parent context revision. It does not imply a new workspace or copied file plane. |
 
@@ -97,21 +97,17 @@ These requirements govern every later feature and interaction.
 
 ### 4.1 Current hosted architecture
 
-The current hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace and the main agent's state. Additional agents run as SDK facets and share the canonical files through the workspace owner.
+The current hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace and every actor's state: the main agent, its hires, its ask-by-role temporaries, its heads, its swarm nodes and its MCTS branches are logical actors bound by one `ActorHost` over that one database, with `actor_id` leading the key of every actor-owned row. A database export is therefore a snapshot of every retained actor, not of the main one.
 
-Those facets have **separate actor-local SQLite storage**. Their conversations and execution records are not all rows in the root's database. A root database export must therefore not be described as a complete snapshot of every retained actor merely because the filesystem is shared.
+![Current workspace ownership with one shared actor store](diagrams/product-workspace-current.svg)
 
-![Current workspace ownership and separate actor stores](diagrams/product-workspace-current.svg)
+One root actor directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `subordinate_identity`. The root directory uses `workspace_actors`.
 
-This is a real mismatch with the owner's latest shared-SQLite requirement. It must remain visible in the implementation comparison.
-
-One root actor directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `actor_identity`. The root directory uses `workspace_actors`. Hosted and local child runtime storage remains separate.
-
-On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases after removal of the obsolete legacy-root contract. These are local proofs. No deployment is claimed.
+On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases. These are local proofs. No deployment is claimed.
 
 Retained dismissal keeps the logical name reserved. Successful destructive retirement removes only the roster row that matches its captured actor reference. Interrupted retirement keeps its intent in the directory and roster.
 
-### 4.2 Required shared-SQLite target
+### 4.2 What the shared store does and does not promise
 
 For the cloud product, one workspace Durable Object owns:
 
@@ -122,13 +118,11 @@ For the cloud product, one workspace Durable Object owns:
 
 The workspace can contain **N** subordinate or exploration actors. Their logical independence does not require separate authoritative databases. They keep distinct identities, contexts, roles, queues and records within the shared storage boundary.
 
-![Target workspace with one shared state owner](diagrams/product-workspace-target.svg)
-
 Account-level services remain separate where their ownership differs. The user registry, provider credentials, operator control plane and external machines do not become agent-editable workspace data.
 
 Execution may use isolated workers, containers or connected devices. Those execution resources must not become a second owner of the agent's durable conversation or the canonical workspace files.
 
-The target does not promise unlimited simultaneous CPU or memory inside one isolate. Concurrency must be scheduled against real resources and declared budgets. Resource exhaustion must be observable; it must not be disguised as successful delegation.
+The design does not promise unlimited simultaneous CPU or memory inside one isolate. Concurrency must be scheduled against real resources and declared budgets. Resource exhaustion must be observable; it must not be disguised as successful delegation.
 
 ### 4.3 Local adaptation
 
@@ -174,7 +168,7 @@ The product has five inference tiers: `tiny`, `fast`, `default`, `slow` and `dee
 
 The requested default model for a new user or a user with no default override is **GLM 5.3 on Workers AI** (message 851; current model ID `@cf/zai-org/glm-5.3`). Existing user overrides must not be replaced. Missing credentials must produce an actionable availability state, not an unannounced alternative model.
 
-The current backend already consolidates full facet behavior in `SubordinateAgent` and shared `ActorAgent`/core code. The storage and lifecycle hosting arrangement remains different from the requested single-store target.
+The current backend runs every full agent — main, subordinate, temporary and tool-using exploration actors — on shared `ActorAgent`/core code, with storage and lifecycle hosted as logical actors on the one workspace store (§4).
 
 ![Agent lifecycle and retained terminal state](diagrams/product-agent-lifecycle.svg)
 
@@ -283,18 +277,18 @@ This is the source inventory for the reviewed revision, not a proposed schema an
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
-| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | Each Think actor's own SQLite. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
+| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace's one SQLite, keyed by actor. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
 | Local conversation/search | `messages`, `conversation_fts`, `conversation_fts_state` | Current actor database. The search index is derived; it is not another authoritative conversation. Hosted readers select the pane store when present. |
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
-| SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs, fibers, facet runs and sub-agent registry | SDK actor storage, with root coordination where the SDK requires it. Child identity/version information is SDK-owned. |
-| Think lifecycle | `think_config`, tool-child runs, action ledgers, approvals, submissions and workflow notifications | Actor-local SDK state. Session-scoping messages alone would not partition these records or the in-memory queues. |
-| Kinu identity/roster | `workspace_identity`, `agent_config`, `subordinate_identity`, `workspace_subordinates`, `facet_identity`, `facet_activation` | Root or actor-local store. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
+| SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
+| Think lifecycle | `think_config`, tool-child runs, action ledgers, approvals, submissions and workflow notifications | State in the workspace database, keyed by actor. Session-scoping messages alone would not partition these records or the in-memory queues. |
+| Kinu identity/roster | `workspace_identity`, `agent_config`, `subordinate_identity`, `workspace_subordinates` | Root or actor-local store. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
 | Program state | `codemode_state` | Actor-local JSON key/value state today. This is not a general SQLite binding. |
-| Admitted work/effects | `pending_steers`, `active_durable_turn`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
+| Admitted work/effects | `pending_steers`, `actor_turn_claims`, `actor_context_revisions`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
 | Compaction/prompt versions | `compaction_state`, `compaction_archive`, `prompt_section_versions`, `prompt_section_evaluations` | Actor/session-scoped context planning, recall locations and prompt trials. |
 | Scaffold/learning | `scaffold_versions`, regression fixtures, trials, evaluations, completed turns, evolution events, outcomes, lessons, labels and GEPA records | Actor-local version pointers and learning evidence. Source bytes and execution evidence have different owners. |
-| Exploration | `search_nodes`, `mcts_search_runs`, `swarm_node_records`, exploration records, head runs/journal/evidence/steps/merge results | Search/controller-owned durable results. Facet-local traces and model-operation outboxes are additional records; a search vertex is not a conversation. |
+| Exploration | `search_nodes`, `mcts_search_runs`, `swarm_node_records`, exploration records, head runs/journal/evidence/steps/merge results | Search/controller-owned durable results. Head, node and branch traces and model-operation outboxes are additional records; a search vertex is not a conversation. |
 | Memory/tasks/permissions | Memory chunks/FTS, `agent_facts`, `agent_tasks`, plan reviews and instruction approvals | The scope supplied by the actor/root adapter. An instruction's approval is not equivalent to permission to write its file. |
 | Nimbus file storage | `inodes`, `file_chunks`, content lifecycle and append receipt/writer/revocation records | Root Nimbus SQLite VFS. These tables store files; they do not automatically project arbitrary conversation tables as files. |
 
@@ -302,9 +296,9 @@ Relevant implementations are `identity/conversation-store.ts`, `config/conversat
 
 ### 7.1 State that is not a conversation table
 
-The SDK also keeps facet identity and parent-path information in durable KV. Nimbus keeps shell cwd/exported environment per shell identity. Runtime instances hold a turn accumulator, dynamic-context ledger, steering drain, message/leaf caches, queues, continuations and stream controllers.
+Nimbus keeps shell cwd/exported environment per shell identity. Runtime instances hold a per-actor turn accumulator, dynamic-context ledger, steering drain, message/leaf caches, queues, continuations and stream controllers.
 
-These are not all one serializable prompt file. Consolidating storage requires a rule for reconstructing each mutable runtime object for the correct agent. Reusing one object across actors would mix their contexts or authority even if their SQL rows were correctly keyed.
+These are not all one serializable prompt file. Each mutable runtime object is reconstructed for its actor: reusing one object across actors would mix their contexts or authority even though their SQL rows are correctly keyed.
 
 ### 7.2 Current VFS paths and their actual effect
 
@@ -314,7 +308,7 @@ These are not all one serializable prompt file. Consolidating storage requires a
 | `SOUL.md` | Owner-editable workspace identity/purpose prose. | Permission for an agent to rewrite owner policy. |
 | `memory/MEMORY.md`, `memory/*` | Durable notes and indexed memory. | The exact active conversation. |
 | `scaffold/agent.js`, `scaffold/agent.js.vN` | Main scaffold view and version source. SQL selects the current/promoted version. | That any arbitrary file overwrite automatically changes an in-flight loop. |
-| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Subordinate scaffold source in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias. | Shared physical agent SQLite. |
+| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Subordinate scaffold source in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias. | That the scaffold file itself carries authority; the version decision lives in that actor's SQL rows. |
 | `.kinu/heads/<storage-key>/scaffold/agent.js`, `.kinu/nodes/<storage-key>/scaffold/agent.js` | Exploration runtime paths use the issued physical actor key. Graph IDs remain logical search identities. | Complete common-loop or consumed-version provenance acceptance. |
 | Actor homes and temporary roots | Credentialed homes/shell identities within the canonical workspace. | Unrestricted access to every actor's private state. |
 | `.kinu/compaction/<session>/<range>.md` | Recall text for a compacted range, cited by SQL archive records. | A writable projection of the current working conversation. |
@@ -322,23 +316,19 @@ These are not all one serializable prompt file. Consolidating storage requires a
 | `AGENTS.md` and skill files | Instruction source whose system placement follows approved content identity. | That file write access automatically grants trusted instruction authority. |
 | `/pc`, `/sandbox` | Mounted views of available external machines. | That the workspace shell runs on those machines or shares their native paths. |
 
-### 7.3 What the shared-SQLite change actually requires
+### 7.3 What the shared store required
 
-The literal target is **logical agents inside the one workspace state owner**. A facet's synchronous SQL interface cannot be replaced by an asynchronous RPC and still be called synchronous SQLite.
+The design is **logical agents inside the one workspace state owner**. Hosted actors are acquired from one `ActorHost` over the workspace's SQLite; there is no per-actor database and no RPC standing in for synchronous SQL.
 
-The implementation must address all of these together:
+The cutover addressed all of these together:
 
 - actor keys for conversations, configuration, loop pointers, state keys and read models;
 - actor/session identity in queues, durable submissions, fibers and effect records;
 - per-actor mutable runtime objects, not one workspace-wide active-context singleton;
 - scoped cursor and index reads, including rejection of another actor's cursor;
-- one scheduler with explicit ownership of admitted work;
-- complete export/restore of retained actor state and lineage;
-- data preservation from the current separate stores before their execution path is removed.
+- one scheduler with explicit ownership of admitted work.
 
-The SDK's `Session.forSession` can help partition messages. It does not by itself partition every Kinu/SDK table or in-memory state object.
-
-Keeping compute facets while forwarding selected state through root RPC is a different design. It retains facet-local SDK storage and asynchronous consistency boundaries. It must not be described as satisfying the literal one-SQLite request unless the owner explicitly changes that requirement.
+What remains is proof, not design: complete export/restore of retained actor state and lineage (§15.2, §19.3), and a stated disposition for any state retained in pre-cutover facet-local stores.
 
 ## 8. The common agentic turn
 
@@ -538,7 +528,7 @@ Namespace, read-model, MCP and app bindings must reuse the existing operation po
 
 MCP `isError` is a protocol outcome. A successful MCP/read-model value that contains `reason` or `error` remains application data.
 
-Server outbound access must use the existing destination policy for its captured mode. A restrictive caller must not reuse a permissive resident. Worker loader identity must distinguish the mediated runtime from a cached legacy image; a changed configuration is not applied when a loader callback is skipped on a cache hit.
+Server outbound access must use the existing destination policy for its captured mode. A restrictive caller must not reuse a permissive resident. Worker loader identity must distinguish the mediated runtime from a cached image built under an earlier configuration; a changed configuration is not applied when a loader callback is skipped on a cache hit.
 
 Preview isolation must prevent the authored application from gaining the parent UI's origin or credentials. Literal-destination and redirect checks do not prove every DNS resolution or networking API is safe. Those residuals must stay named.
 
@@ -670,23 +660,23 @@ An external service may complete an effect before its response is lost. Kinu mus
 
 ### 15.2 Shared-store acceptance
 
-The requested shared SQLite design must make actor ownership explicit in both writes and reads. Pagination, counts, search, compaction, context selection and export must not accidentally read every actor merely because they share a table.
+The shared SQLite design makes actor ownership explicit in both writes and reads. Pagination, counts, search, compaction, context selection and export must not accidentally read every actor merely because they share a table.
 
-The transition from current facet-local stores must preserve their retained histories and pending state. A root-only export is insufficient evidence when the omitted state still lives in facets.
+Any state retained in pre-cutover facet-local stores must be preserved or explicitly excluded with its coverage stated. A root-only export is insufficient evidence when omitted actor state still lives elsewhere.
 
-The cutover must define how current and staged context/loop versions are reconstructed, how actor queues resume, how cancelled/terminal work stays terminal, and how a missing imported actor is reported. It must not emulate synchronous SQLite across RPC or create untracked copies as a compatibility mechanism.
+Export and restore must cover every retained actor: how current and staged context/loop versions are reconstructed, how actor queues resume, how cancelled/terminal work stays terminal, and how a missing imported actor is reported. No RPC may emulate synchronous SQLite, and no untracked copies may stand in as a compatibility mechanism.
 
-### 15.3 Devbox is a separate storage programme
+### 15.3 Devbox ships one storage strategy
 
-The workspace's canonical Nimbus storage and an experimental container-storage candidate are not the same acceptance claim.
+The workspace's canonical Nimbus storage and the container's snapshot-chain storage are not the same acceptance claim. On 2026-09-09 the container programme deleted every candidate but snapshot-chain — one immutable base plus one cumulative delta, both squashfs archives in R2 — so there is no comparison left to run, only the shipped chain left to prove.
 
-A candidate must preserve namespace/metadata/data semantics across restore, mutation, publication, interruption, restart and GC. A namespace index that pages lazily does not prove that the mounted filesystem can read file data lazily.
+The shipped chain must preserve namespace/metadata/data semantics across restore, mutation, publication, interruption, restart and GC. A namespace index that pages lazily does not prove that the mounted filesystem can read file data lazily.
 
 The real native path must distinguish absent bytes from sparse holes; cache fills from user writes; written bytes from resize coverage; observed completion from an unjudged cut; and an immutable origin from a mutable pathname.
 
 Performance measurements must cover metadata decoding, requests/bytes, staging/hashing, touched data and startup/restore work. Uploading a small delta does not prove the entire operation is proportional to the change.
 
-Failed, missing, duplicate or malformed required cells must prevent admission. A one-repetition diagnostic pilot cannot support a statistical winner. Existing refused reports remain unchanged; a corrected interpretation is a separate record.
+Failed, missing, duplicate or malformed required cells must prevent admission. Existing refused reports remain unchanged; a corrected interpretation is a separate record.
 
 ## 16. Evals, service identities and acceptance evidence
 
@@ -726,7 +716,7 @@ Every measured attempt must retain its source revision, target, actor/model sett
 
 Opening/setup failure is still an attempted run. Its unavailable channels and unmeasured spend must be recorded without fabricated zeroes. A failed assertion must not erase the attempt or cause its spend to be counted twice.
 
-Tool success rates and failure classes come from recorded invocation outcomes. Explicit legacy diagnostics may be retained as diagnostics; they must not be parsed into invented modern provenance. Missing historical outcomes remain unmeasured.
+Tool success rates and failure classes come from recorded invocation outcomes. A diagnostic recorded without provenance fields may be retained as a diagnostic; it must not be parsed into provenance it never carried. Missing historical outcomes remain unmeasured.
 
 Recovery checks must verify the requested recovery behavior. Unrelated `false` and `true` commands do not establish that an authored test failed and was rerun successfully.
 
@@ -798,9 +788,8 @@ A reduction in capability must apply before a newly admitted effect. Cached tool
 
 ### I. Export and restore the whole declared scope
 
-Create root and child conversations, memory, loop versions, files and pending/terminal work. Export under a stated consistency boundary, restore into a new workspace and compare every included category.
+If the exporter omits actor-scoped state, credentials or concurrent mutations, it must say so. An export must include all actor-scoped state it claims to govern while re-establishing protected authority safely.
 
-If the exporter omits facet storage, credentials or concurrent mutations, it must say so. A future one-store export must include all actor-scoped state it claims to govern while re-establishing protected authority safely.
 
 ### J. Recover and compare durable storage
 
@@ -815,16 +804,13 @@ The 39 groups below organize the recorded product criteria. They do not replace 
 **A group status does not close every historical bug mapped to it.** An individual fix still needs its own acceptance evidence. “Partial” and “source-defined” deliberately distinguish visible mechanisms from complete deployed journeys.
 
 | Criterion group | Required acceptance behavior | Current comparison | Source/evidence entry point |
-|---|---|---|---|
-| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Missing target**. Current SDK facets have separate SQLite. Shared files do not meet the new physical-store requirement. | §4, §7; createHostedWorkspace/createCFRuntime; messages 975, 818, 842 |
+| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Cut over in source.** Logical actors share the workspace's one SQLite under actor-led keys, with unit proof for colliding-key isolation. Snapshot/restore across all actors still owes its stated end-to-end proof, as does the disposition of pre-cutover facet-local state. | §4, §7; actor-host.ts; subordinate/exploration-hosting; messages 975, 818, 842 |
 | <a id='accept-workspace-identity'></a>**workspace-identity** | Start the first agent turn from the creation mission without reprompting; cold-open the generated title; rename without changing routing identity; reject invalid addresses before resource creation. | **Production proof, scoped**. Title/address cases passed. Initial-turn and complete creation-journey acceptance must be checked separately. | workspace-title and preview-address first-run receipts; messages 58, 186, 267, 972 |
-| <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One facet class and substantial shared core exist. Promoted-loop execution and state hosting still diverge. | ActorAgent/SubordinateAgent; runChat/runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
-| <a id="accept-delegation-contract"></a>**delegation-contract** | Ask an existing actor without spawning; ask by role as a real temporary actor; inspect actual nested context-reference reads and retained outcomes. | **Implemented paths; live acceptance incomplete**. Core behavior and owner inspection have local proof. A completed live recursive journey is not claimed. | temporary.ts; retained-facet Worker tier; owner inspection; messages 724, 741, 748, 749, 750 |
+| <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One `ActorAgent` base and substantial shared core exist; no facet class remains. Promoted-loop execution and state hosting still diverge. | ActorAgent; runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
+| <a id="accept-delegation-contract"></a>**delegation-contract** | Ask an existing actor without spawning; ask by role as a real temporary actor; inspect actual nested context-reference reads and retained outcomes. | **Implemented paths; live acceptance incomplete**. Core behavior and owner inspection have local proof. A completed live recursive journey is not claimed. | temporary.ts; eval tier; owner inspection; messages 724, 741, 748, 749, 750 |
 | <a id="accept-fork-semantics"></a>**fork-semantics** | Compare fresh, inherited-prefix and workspace-fork cases; preserve lineage and task on re-entry; prove no unintended file copy or parent-context mutation. | **Source-defined; acceptance partial**. Hire uses a bounded parent digest. Swarm fork/fresh is a context choice. Workspace forks are separate. | subordinates/support.ts; swarm-expansion.ts; identity/fork-driver.ts; messages 282, 387, 724, 975 |
 | <a id="accept-context-editability"></a>**context-editability** | Read the actual active context/loop through VFS; edit with expected revision; observe the next request change; reject stale/invalid/unauthorized edits and retain prior evidence. | **Missing/partial target**. Scaffold versions cover part of loop editing. Canonical editable context/history projections and exploration-loop activation are missing. | §6–7; scaffold/surface.ts; conversation-store.ts; messages 41, 141, 491, 975 |
 | <a id="accept-context-engineering"></a>**context-engineering** | Preserve stable prefixes, update volatile facts at the next step, verify actual submitted requests/counters, and retain recall through compaction and context edits. | **Implemented parts; full target pending**. Preparation, typed-error projection, pruning and recall exist. Editable-context invalidation is not implemented as one contract. | prepare-step.ts; tool-error-feedback.ts; compaction stores; messages 35, 154, 164, 165, 724 |
-| <a id="accept-termination"></a>**termination** | Let useful work exceed former arbitrary deadlines; cancel owned work/children explicitly; retain results through detach/restart; let an exhausted leaf finish its own work. | **Repairs verified; audit remains**. Specific deadline, cancellation and leaf fixes exist. Remaining recursion/app-hop and boundary claims need explicit disposition. | work-mode/cancellation tests; terminal effects; bound audit; messages 181, 427, 440, 536, 613, 942, 964 |
-| <a id="accept-codemode-capabilities"></a>**codemode-capabilities** | Exercise native and namespace equivalents, real FS/MCP access, handled refusals and successful error-shaped data; verify a future db binding denies protected state. | **Partial target**. FS/MCP/state and typed outcome paths exist. db/env.db does not. Local and hosted isolation differ. | §9; execute-tools.ts; state-codemode.ts; sandbox-contract.ts; messages 197, 749, 909, 910, 956, 957, 975 |
 | <a id="accept-crafted-tools"></a>**crafted-tools** | Author a real callable tool, validate it, invoke it on the actual backend, rediscover it next step and reject malformed or failing source without poisoning other calls. | **Mechanisms present; model journey incomplete**. Persistence, invocation and fitness mechanisms exist. Curated fixtures do not establish every model-authored workflow. | craft/execution paths; codemode-craft first-run; messages 724, 904, 905, 906, 910 |
 | <a id="accept-filesystem"></a>**filesystem** | Cross actor/file/shell views, binary/range reads, private-write denial, mounted paths, stale edits and I/O failures; verify index/content agreement. | **Substantial implementation; scoped proof**. One canonical hosted base tree and gated mounts exist. Target context projections are separate unfinished work. | file-plane layer; VFS and workspace-plane proofs; messages 31, 92, 387, 617, 709, 975 |
 | <a id="accept-execution"></a>**execution** | Run each advertised capability on its actual machine; detach/reconnect/cancel real processes; expose a port that serves the authored response. | **Implemented environments with explicit limits**. Supported workspace/container/device paths exist. Hosted arbitrary Node execution and absent executors must remain explicit refusals. | execution providers; process/port and first-run suites; messages 32, 231, 232, 259, 292, 942 |
@@ -836,7 +822,7 @@ The 39 groups below organize the recorded product criteria. They do not replace 
 | <a id="accept-self-evolution"></a>**self-evolution** | Propose/evaluate/promote/revert a real change; verify consumed version and outcome provenance; keep invalid candidates inactive across restart. | **Partial; benefit unproved**. Root/subordinate scaffold mechanisms exist. Full exploration-loop editability and measured improvement remain open. | scaffold/evolution stores; active inference paths; messages 140, 141, 220, 489, 490, 491, 626, 975 |
 | <a id="accept-memory"></a>**memory** | Save/search/edit notes and keyed facts, verify scope/index consistency, and recall a compacted range without replacing the active conversation silently. | **Implemented stores; scoped acceptance**. Notes, facts, retrieval and recall exist. They are not writable canonical context/history projections. | MemoryStore, facts, conversation search and compaction stores; messages 35, 141, 164, 165, 267 |
 | <a id="accept-slates"></a>**slates** | Use real JS-family client/server source, interactive browser behavior, server/file effects, source commit/fork/restore and real preview HTTP. | **Hosted proof; journeys remain**. Hosted authored examples and 15 operator checks passed. Strict model-authored and outer browser-session journeys remain unverified. | LIVE-UI; production714 first-run receipts; messages 165, 171, 935, 942, 943, 947, 951 |
-| <a id="accept-slate-authority"></a>**slate-authority** | Deny missing capabilities and literal/redirect escapes; preserve MCP data; isolate Plan and Build; prevent legacy cached authority reuse and parent-origin access. | **Local security fix; rollout pending**. Reviewed egress/cache fixes are in the source candidate, not production714. DNS/raw networking residuals stay unmeasured. | slate-egress Worker proofs; preview-origin evidence; messages 936, 943, 948 |
+| <a id="accept-slate-authority"></a>**slate-authority** | Deny missing capabilities and literal/redirect escapes; preserve MCP data; isolate Plan and Build; prevent reuse of authority cached under an earlier configuration, and parent-origin access. | **Local security fix; rollout pending**. Reviewed egress/cache fixes are in the source candidate, not production714. DNS/raw networking residuals stay unmeasured. | slate-egress Worker proofs; preview-origin evidence; messages 936, 943, 948 |
 | <a id="accept-agent-core-study"></a>**agent-core-study** | Identify real adopted implementations and unadopted contracts; distinguish SDK facets from agent-core facets; answer the Node/Vite question accurately. | **Investigation/notice completed, bounded**. The notice is deliberately uncommitted as requested. Broader composition remains a what-if, not automatic authorization to rewrite Kinu. | AGENT-CORE-ALIGNMENT; messages942/944/945/948; messages 944, 945, 948 |
 | <a id='accept-web-chat'></a>**web-chat** | Keep web user bubbles right-aligned and TUI user bubbles left-aligned; exercise send/steer/stop, long drafts/attachments, intentional scroll, streaming and code copy/colors in responsive themes. | **Specific fixes deployed; broader journey partial**. The latest title/timestamp/syntax fixes are deployed. Their proof does not close all historical chat/UI asks. | chat-and-files UX; workspace-title first-run; messages 1, 7, 181, 193, 267, 724, 972 |
 | <a id="accept-web-workspace"></a>**web-workspace** | Switch workspaces/agents, open files/environments, act on Work decisions, hide irrelevant tabs and recover failed reads after reconnect. | **Specific fixes deployed; broader journey partial**. Implemented surfaces and individual regressions exist; full end-to-end UI acceptance remains distinct. | WorkspacePage, Work/Files/Environment and reconnect tests; messages 193, 208, 210, 268, 724, 943, 972 |
@@ -844,8 +830,8 @@ The 39 groups below organize the recorded product criteria. They do not replace 
 | <a id="accept-landing"></a>**landing** | Preserve authored copy/layout, verify actual responsive mocks and only adopt new effects after visual acceptance. | **Rollback verified; new design paused**. The rejected polish was rolled back. The vGPU/richer-mock direction was paused, not cancelled. | Production rollback/browser proof; messages956/969; messages 581, 956, 969 |
 | <a id="accept-security"></a>**security** | Reject cross-owner/scope/role/cursor abuse, retain consent/revocation, protect secrets/audit from editable state, and test actual claimed sandbox boundaries. | **Layered mechanisms; specific proof only**. Substantial controls exist. Raw database and broader context-editing authority still need implementation; no perfect-security claim. | CLI/actor/RPC/capability tests; §14; messages 24, 162, 171, 292, 724, 861 |
 | <a id="accept-admin"></a>**admin** | Keep public access separate from operator control, paginate real records, redact before screenshot capture and require authority for destructive actions. | **Implemented surface; scoped verification**. Control/feedback paths exist. Their local tests are not a blanket deployed authorization audit. | ControlPlane, feedback and access-token route tests; messages 818, 842 |
-| <a id="accept-storage"></a>**storage** | Restore exact native namespace/metadata/data, preserve sparse/link/open-handle semantics and verify publication, interruption, restart and GC. | **Experimental, not admitted**. The real v3 pilot was refused. Native demand work is in progress; normal restore remains eager until full acceptance. | Immutable pilot20260907120000 and separate local native receipts; messages 274, 292, 633, 634, 702, 712, 860 |
-| <a id="accept-storage-comparison"></a>**storage-comparison** | Compare equal successful durable work; measure metadata/payload/CPU/staging costs, retain failed cells and satisfy all repetitions/admission rules. | **Unadmitted**. No replacement default or across-the-board winner is established. Correcting G6 does not retroactively admit the old pilot. | Storage admission/decision tests; G0–G9 reports; messages 658, 665, 702, 719, 842, 891, 935, 960 |
+| <a id="accept-storage"></a>**storage** | Restore exact native namespace/metadata/data, preserve sparse/link/open-handle semantics and verify publication, interruption, restart and GC. | **One shipped strategy; acceptance open**. Snapshot-chain is the only container strategy since 2026-09-09. The refused v3 pilot (immutable pilot20260907120000) stays refused; the chain still owes the semantics, interruption, restart and GC proofs. | Snapshot-chain suite and conformance; messages 274, 292, 633, 634, 702, 712, 860 |
+| <a id="accept-storage-comparison"></a>**storage-comparison** | Compare equal successful durable work; measure metadata/payload/CPU/staging costs, retain failed cells and satisfy all repetitions/admission rules. | **Retired with the deleted arms**. The candidate comparison ended when the other strategies were deleted; no across-the-board winner was established. The shipped chain carries its own cost proofs. | Storage admission/decision tests; G0–G9 reports; messages 658, 665, 702, 719, 842, 891, 935, 960 |
 | <a id="accept-evals"></a>**evals** | Exercise actual adapters/oracles, retain setup and failed attempts, identify models/settings/source, and keep missing outcomes/usage unmeasured. | **Reliability repairs verified; runs still needed**. Major evidence defects were repaired. Protocol controls and one pilot are not a full benchmark campaign. | eval-run, public-session, bench adapters and retained records; messages 303, 448, 835, 965 |
 | <a id="accept-optimization"></a>**optimization** | Preregister a controlled alternative and compare matched settings/targets/tasks with retained results and appropriate uncertainty. | **No validated improvement**. Service inference access is now available. A controlled optimization win has not been demonstrated. | Service-auth receipt; sealed benchmark/comparison requirements; messages 965, 975 |
 | <a id="accept-quality"></a>**quality** | Prove gates fail in their claimed directions, keep measured/governed sets equal, reuse established packages and remove obsolete code without suppressions. | **Active controls; ongoing acceptance**. Strict gates exist and have exposed real defects. Their green result is bounded by the set they measure. | check, layergate, wiring/corpus and targeted negative fixtures; messages 422, 764, 782, 798, 807, 822, 835, 845, 956, 957, 964 |
@@ -859,8 +845,7 @@ The 39 groups below organize the recorded product criteria. They do not replace 
 ### 18.1 The five largest direct mismatches in the latest request
 
 | Latest requested target | Current implementation | Required change |
-|---|---|---|
-| All workspace agents share one SQLite | Root and SDK facets have separate stores. | Root-owned logical actors and explicit actor/session scoping across stores, readers, queues and runtime objects. |
+| All workspace agents share one SQLite | One workspace SQLite with actor-led keys, cut over in source. | Snapshot/restore proof across all actors; stated disposition of pre-cutover facet-local state. |
 | Explicit SQLite `db` code capability | FS/MCP and actor JSON state exist; no `db`/`env.db`. | Define and implement an enforceable admitted SQL/data scope, without exposing protected internal authority. |
 | Editable actual context/history through VFS | SQL conversation, readonly history inspection and recall files; no supported write-through working-context projection. | Revision-checked managed VFS views, ancestry/tool-pairing rules, safe activation and index/cache invalidation. |
 | Editable/evolving actual loop for every full agent kind | Root/subordinate promoted scaffold path exists; head/node inference does not use that transform. | One common full-agent loop/version contract, with appropriate narrow role/lifetime wrappers. |
@@ -875,7 +860,7 @@ The comparison preserves these later decisions:
 - Messages 748–750 define recursive existing/temporary `agents.ask` and persistent `agents.hire`; the requirement is not unspecified and must not be replaced by a standalone `rlm.query`.
 - Message 822 rejects doc-claim gates. This specification is not permission to add one.
 - Message 969 reverses the rejected landing polish **for now**. It does not cancel the underlying future design request.
-- Message 975 explicitly requests the shared-SQLite and editable actual context/loop target. The current separate-facet design must not be relabelled to claim compliance.
+- Message 975 explicitly requests the shared-SQLite and editable actual context/loop target. The shared-SQLite half is cut over in source (§4); only the rows this catalogue still marks open may be claimed, never the whole target by relabelling.
 - The recovered calibration assent approves measured ensemble governance after a human reference, not AI-generated labels presented as human truth.
 
 ### 18.3 Audit coverage and limits
@@ -890,7 +875,7 @@ The current-source map checks the cited runtime paths and distinguishes SQL, KV,
 
 1. **Keep the contract and audit complete.** Maintain the source-to-criterion map, record later corrections and keep each known gap visible. Do not reduce the list by renaming unfinished work.
 2. **Finish the already implemented release fixes.** Deploy owner inspection and slate egress/cache enforcement through the normal release path, then run the relevant owner-client and product journeys. Use the correct deployment identity.
-3. **Implement the shared-store target as a real cutover.** Scope every actor-owned record and runtime object. Preserve/export existing state before removing facet-local canonical storage. Do not imitate synchronous SQL over asynchronous RPC or introduce a permanent dual-owner mode.
+3. **Prove the shared-store cutover end to end.** Snapshot and restore every retained actor together, and state the disposition of any pre-cutover facet-local state. Do not imitate synchronous SQL over asynchronous RPC or introduce a permanent dual-owner mode.
 4. **Implement managed loop/context VFS operations.** Choose the precise paths and revision schemas using existing addressing conventions; prove actual activation, stale-write refusal, authority and rollback across full agent kinds.
 5. **Complete native storage semantics before normal lazy restore.** Finish demand, mutation, capture, crash, restart and GC ownership. Keep cost failures and missing channels visible. Review any G5 criterion correction against actual units before a new admitted comparison.
 6. **Run controlled evaluation and calibration.** Use isolated service authority and preregistered inputs/settings. Distinguish a system comparison from a single-variable optimization. Report rejected ideas and negative results as well as improvements.

@@ -55,10 +55,10 @@ describe('release path safety', () => {
   });
 
   test('secrecy is a decided fact, not a phrase inside the error message', () => {
-    // isSecretReleasePath used to run /secret|config/ over the human-readable
-    // error, so rewording that sentence silently changed the predicate. It now
-    // reads a field, and a rejection for a DIFFERENT reason is not secret even
-    // when its message happens to contain neither word.
+    // isSecretReleasePath reads a decided field, never runs /secret|config/ over
+    // the human-readable error, so rewording that sentence cannot silently change
+    // the predicate. A rejection for a DIFFERENT reason is not secret even when
+    // its message happens to contain neither word.
     expect(isSecretReleasePath('packages/cf-backend/.dev.vars')).toBe(true);
     expect(isSecretReleasePath('.ssh/id_rsa')).toBe(true);
     expect(isSecretReleasePath('packages/core/src/index.ts')).toBe(false);

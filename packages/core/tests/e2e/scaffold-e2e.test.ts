@@ -125,13 +125,12 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     expect(modResult.ok).toBe(true);
     expect(modResult.version).toBe(1);
 
-    // The live file does NOT move on accept. This test used to assert
-    // `read() === validCode`, which was the behaviour before gate 4 started
-    // writing proposals to the versioned path — modify.ts states the reason: a
-    // live file equal to the pending one makes shadow eval compare the new code
-    // to itself, and promotion a flag flip with no on-disk consequence. Because
-    // the whole describe is skipIf(!isE2EConfigured()), nothing ever ran the
-    // stale assertion to say so.
+    // The live file does NOT move on accept: gate 4 writes the proposal to the
+    // versioned path, and modify.ts states the reason — a live file equal to the
+    // pending one makes shadow eval compare the new code to itself, and
+    // promotion a flag flip with no on-disk consequence. Both sides asserted
+    // here because the whole describe is skipIf(!isE2EConfigured()), so an
+    // assertion that drifts out of step with modify.ts fails nowhere.
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
     expect(await rt.storage.vfs.readFile(
       `${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' },

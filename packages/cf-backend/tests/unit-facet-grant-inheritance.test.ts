@@ -58,20 +58,18 @@ describe('reachability of the root policy read', () => {
   /**
    * WHICH ACTOR reaches that read, decided by the actor's registered KIND.
    *
-   * This replaces a case that asserted the source text
-   * `const isRootActor = agent.name === actor.workspaceName` and justified it as
-   * "the same predicate the sandbox handle uses". Both halves are gone. Every
-   * actor of a workspace now rides ONE container (`sandboxIdForWorkspace` is
-   * keyed on `workspaceName`, the same string for all of them), so there is no
-   * container-ownership split left for a grants split to agree with; and the
-   * name comparison is exactly what the cutover had to delete, because hosted in
-   * the root's isolate every actor answers to that same name and a subordinate
-   * would have been handed the root's own recording authority.
+   * Not by a name comparison, and not by container ownership. Every actor of a
+   * workspace rides ONE container (`sandboxIdForWorkspace` is keyed on
+   * `workspaceName`, the same string for all of them), so there is no
+   * container-ownership split for a grants split to agree with; and
+   * `agent.name === actor.workspaceName` cannot decide it either, because
+   * hosted in the root's isolate every actor answers to that same name and a
+   * subordinate would be handed the root's own recording authority.
    *
-   * So the surviving guarantee is stated instead of spelled: a hosted actor that
-   * is not main reaches the ROOT for its answers and can only narrow them. Both
-   * actors below are acquired from one `ActorHost` through one `runtimeFor`, so
-   * the registered kind is the only difference between them — which is the whole
+   * So the guarantee is stated rather than spelled: a hosted actor that is not
+   * main reaches the ROOT for its answers and can only narrow them. Both actors
+   * below are acquired from one `ActorHost` through one `runtimeFor`, so the
+   * registered kind is the only difference between them — which is the whole
    * claim.
    */
   test('a hosted actor reaches the root for its policy; the main actor never does', async () => {

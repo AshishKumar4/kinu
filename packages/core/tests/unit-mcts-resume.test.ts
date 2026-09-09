@@ -120,15 +120,15 @@ describe('MCTS per-iteration checkpoint logging', () => {
     const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
     // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
-    // filter and order on, which the old interpolated `iteration=1/3` string was not.
+    // filter and order on, which an interpolated `iteration=1/3` string is not.
     expect(JSON.parse(checkpointLines[0]!).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
     expect(JSON.parse(checkpointLines[2]!).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
-  // Regression: the heartbeat used to go to stdout, which under
-  // `kinu exec --json` IS the NDJSON event stream — four corrupt,
-  // unparseable lines per run for any CI consumer. Workers Logs capture stderr
-  // just the same, so one channel serves both surfaces.
+  // Regression: a heartbeat on stdout lands in what `kinu exec --json` uses as
+  // the NDJSON event stream — four corrupt, unparseable lines per run for any
+  // CI consumer. Workers Logs capture stderr just the same, so one channel
+  // serves both surfaces.
   test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {
     const { rt, store } = checkpointedRuntime();
     const { stdout } = await captureConsole(() =>
@@ -152,10 +152,10 @@ describe('MCTS per-iteration checkpoint logging', () => {
  * The judge ensemble a run was OBSERVED to sample, folded onto its ledger row.
  *
  * The number exists because the two spend knobs share one per-evaluation call pool, so
- * a request the pool cannot fund is realised lower — and it used to be disclosed once,
- * in the settle report of the call that ran, and persisted nowhere. `fork-params.ts`
- * answered a reader by recomputing the pool's CEILING from the knobs, which is not what
- * a run that short-circuited before judging actually sampled.
+ * a request the pool cannot fund is realised lower. Disclosed once in the settle report
+ * of the call that ran and persisted nowhere, it leaves `fork-params.ts` answering a
+ * reader by recomputing the pool's CEILING from the knobs, which is not what a run that
+ * short-circuited before judging actually sampled.
  */
 describe('the ledger records the ensemble a run was observed to sample', () => {
   function ledger() {
@@ -301,12 +301,10 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
 });
 
 /**
- * The table ships WHOLE. `initMctsSearchTable` used to follow its CREATE with a
- * `reconcileColumns` pass re-adding `engine` and `judge_samples_realised` for a
- * workspace whose table predated them; both sit in the CREATE and `begin` names
- * both, so the pass had nothing left to repair and is gone. These tests are what
- * keeps that true: a column that reaches the writer but not the DDL now fails
- * here instead of being silently re-added on the next boot.
+ * The table ships WHOLE: `engine` and `judge_samples_realised` sit in the CREATE
+ * and `begin` names both, so there is nothing for a `reconcileColumns` pass to
+ * repair. These tests are what keeps that true: a column that reaches the writer
+ * but not the DDL fails here instead of being silently re-added on the next boot.
  */
 describe('the search ledger is created whole', () => {
   function fresh() {

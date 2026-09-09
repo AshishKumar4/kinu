@@ -7,17 +7,18 @@ TypeScript is not importable:
 
 1. IDENTITY. A run authenticates as the ``eval-service`` account, from
    ``$KINU_EVAL_TOKEN``. It never reads the signed-in session in
-   ``~/.kinu/config.json``. It used to, and that is how twenty-two ``drill*``
-   workspaces and a ``settle-probe`` came to sit on the owner's PRODUCTION
-   account among his own twenty-eight, with nothing on the account able to say
-   which harness made them.
+   ``~/.kinu/config.json``. Borrowing that session puts benchmark artifacts on
+   whatever account the operator is signed into — twenty-two ``drill*``
+   workspaces and a ``settle-probe`` on the owner's PRODUCTION account among
+   his own twenty-eight, with nothing on the account able to say which harness
+   made them.
 2. TARGET. A run reaches the staging deployment or a loopback dev server.
    Production is refused unless ``KINU_EVAL_ALLOW_PROD=1`` names the
-   exception. The default target used to BE production, so a benchmark that
-   named no origin measured the live system by default.
+   exception. A default target of production means a benchmark that names no
+   origin measures the live system.
 
 The target rule is an allowlist. A denylist of production hostnames permits
-every origin nobody has thought of yet, which is the mistake being repaired.
+every origin nobody has thought of yet.
 """
 
 from __future__ import annotations
@@ -185,11 +186,11 @@ def resolve_bearer_token(
         return _required_env(env, api_key_env, base_url)
 
     if _is_product_proxy(base_url):
-        # $KINU_EVAL_TOKEN and NOTHING ELSE. This branch used to fall back to
-        # ``accessToken`` in ~/.kinu/config.json — the operator's own signed-in
-        # session — which made every scored run act as him on whatever account
-        # that session belonged to. The stored session is not read here at all
-        # now, so there is no path by which a benchmark becomes a person.
+        # $KINU_EVAL_TOKEN and NOTHING ELSE. ``accessToken`` in
+        # ~/.kinu/config.json is the operator's own signed-in session, and a
+        # fallback to it makes every scored run act as him on whatever account
+        # that session belongs to. The stored session is not read here at all,
+        # so there is no path by which a benchmark becomes a person.
         token = env.get(EVAL_TOKEN_ENV, "").strip()
         if token:
             return token

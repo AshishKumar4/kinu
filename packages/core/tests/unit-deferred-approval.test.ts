@@ -58,7 +58,8 @@ type RunTool = { execute: (args: { command: string; runtime?: string }) => Promi
 function setup(opts: {
   mode?: 'strict' | 'allow_all' | 'deny_all';
   approve?: () => Promise<ShellApprovalOutcome | null>;
-  /** Omit the queue entirely — the pre-deferral world, which must be unchanged. */
+  /** Omit the queue entirely — the no-queue path, which must behave as if
+   *  deferral did not exist. */
   noQueue?: boolean;
 } = {}) {
   const { sql, actor } = approvalsDb();

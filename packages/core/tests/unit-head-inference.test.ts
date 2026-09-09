@@ -1,7 +1,7 @@
 // runHeadInference — the backend-agnostic head loop (re-arch P6b). Drives the
 // real generateText loop with a fake v2 model so the status/summary/usage/steps
-// assembly that used to live inside the cf Facet is locked behind a test both
-// backends rely on.
+// assembly is locked behind ONE test both backends rely on, rather than sitting
+// inside one backend's host where only that backend could prove it.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
@@ -58,11 +58,10 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
 /**
  * A head's deps, over a REAL hosted seat.
  *
- * A head IS a logical actor of the workspace now, so its handle, its run id,
- * its profile resolution and its own live block all come from the seat the host
- * issues. The bare `runtime` this took before is exactly the state the cutover
- * removed: a full kind taking model and tool effects under no identity, with no
- * claim to record them against.
+ * A head IS a logical actor of the workspace, so its handle, its run id, its
+ * profile resolution and its own live block all come from the seat the host
+ * issues. A bare `runtime` here would be a full kind taking model and tool
+ * effects under no identity, with no claim to record them against.
  */
 const deps = async (
   model: LanguageModel,

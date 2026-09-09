@@ -28,8 +28,8 @@ describe('device consent prompt data', () => {
   test('an unanswered prompt does not read as a refusal', () => {
     // Both are failures, but they mean opposite things to an agent running
     // unattended: a refusal is policy and should stop it asking, while an
-    // expired prompt only means nobody was at the keyboard. They used to be
-    // the same sentence, so an AFK moment became a permanent capability loss.
+    // expired prompt only means nobody was at the keyboard. One sentence for
+    // both turns an AFK moment into a permanent capability loss.
     expect(DEVICE_CONSENT_UNANSWERED).not.toBe(DEVICE_CONSENT_DENIED);
     expect(DEVICE_CONSENT_UNANSWERED).toContain('nobody decided');
     expect(DEVICE_CONSENT_UNANSWERED).toContain('ask again later');
@@ -39,9 +39,9 @@ describe('device consent prompt data', () => {
 
   test('the connect disclosure states the sandbox and where the switch is', () => {
     // The disclosure is what a person reads BEFORE the daemon is installed, so
-    // it has to describe what actually happens now: a sandbox by default, and
-    // one switch that turns it off. It said "run commands, read and write
-    // files here, as you" — true only with the sandbox off.
+    // it has to describe what actually happens: a sandbox by default, and one
+    // switch that turns it off. "Run commands, read and write files here, as
+    // you" is true only with the sandbox off.
     const text = DEVICE_CONNECT_DISCLOSURE.join(' ');
     expect(text).toContain('sandbox');
     expect(text).toContain('Sandbox switch');
@@ -153,10 +153,10 @@ describe('the device Sandbox route', () => {
 
   test('the consent-tier PUT is gone, not merely unused', async () => {
     const { call, calls } = deviceRoutesSetup();
-    const legacy = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
+    const answer = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
     // No route matches, so the user router falls through to its own 404 or
     // answers nothing at all. Either way, nothing reached the UserDO.
-    expect(legacy === null || legacy === undefined || legacy.status === 404).toBe(true);
+    expect(answer === null || answer === undefined || answer.status === 404).toBe(true);
     expect(calls).toEqual([]);
   });
 });

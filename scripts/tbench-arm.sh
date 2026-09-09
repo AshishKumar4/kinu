@@ -21,10 +21,10 @@ CONCURRENCY="${5:?concurrent trials}"
 
 WORKTREE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Where the corpus is, in the one place `.gitignore` and `bench/harbor/kinu_agent.py`
-# already say it is: the repository root. This line used to name an absolute path
-# under the operator's checkout directory, and the rename to Kinu rewrote the
-# directory name inside it, so it pointed at nothing from that commit onward. A
-# path spelled relative to the tree cannot be broken by renaming the product.
+# already say it is: the repository root. Spelled relative to the tree, because an
+# absolute path under the operator's checkout directory is broken by renaming the
+# product — the rename rewrites the directory name inside it and the path then
+# points at nothing.
 # TBENCH_CORPUS points at a shared copy, which is how one 60 MB fetch serves
 # several worktrees.
 CORPUS="${TBENCH_CORPUS:-$WORKTREE/terminal-bench-2.1}"
@@ -57,9 +57,9 @@ done
 
 # The corpus, checked here rather than through the sampler below. Two reasons and
 # both are about the failure being readable. The sampler's FileNotFoundError goes
-# into a pipe, so an absent corpus used to surface as "the sample returned 0
-# tasks" — a message that names the count and hides the cause, and it hid a corpus
-# path that had been dead since the rename. And this check sits ABOVE the
+# into a pipe, so an absent corpus surfaces there as "the sample returned 0
+# tasks" — a message that names the count and hides the cause, including a corpus
+# path that points at nothing. And this check sits ABOVE the
 # credential one because the corpus is free and public: an operator can prove this
 # refusal fires without holding a token, where a check reachable only with a
 # credential is a check nobody exercises.
@@ -76,10 +76,10 @@ if [ ! -d "$CORPUS" ]; then
   exit 2
 fi
 
-# The eval-service credential, from a file only this operator can read. It used
-# to be exported as KINU_TOKEN, which the CLI also reads as a SIGNED-IN
-# SESSION — so whichever account minted the file became the account every scored
-# run acted as. The eval identity has its own variable so that cannot recur, and
+# The eval-service credential, from a file only this operator can read. It is NOT
+# exported as KINU_TOKEN: the CLI reads that as a SIGNED-IN SESSION, so whichever
+# account minted the file would become the account every scored run acted as. The
+# eval identity has its own variable so that cannot happen, and
 # `bench/model_endpoint.py` reads no other.
 EVAL_TOKEN_FILE="$HOME/.config/kinu/eval-service-token"
 if [ ! -r "$EVAL_TOKEN_FILE" ]; then

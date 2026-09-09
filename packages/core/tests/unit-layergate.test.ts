@@ -68,9 +68,9 @@ function importsOf(file: string): Import[] {
 function resolveImport(from: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
   // One spelling: a relative specifier under Bun names the module without an
-  // extension, so the module is `<spec>.ts` or the directory's barrel. This used
-  // to rewrite a trailing `.js` and returned null for every extensionless
-  // specifier, which walks no edges and finds no subject reachable at all.
+  // extension, so the module is `<spec>.ts` or the directory's barrel. Rewriting
+  // a trailing `.js` instead returns null for every extensionless specifier,
+  // which walks no edges and finds no subject reachable at all.
   const base = resolve(dirname(from), spec);
   return [`${base}.ts`, `${base}/index.ts`].find((path) => existsSync(path)) ?? null;
 }

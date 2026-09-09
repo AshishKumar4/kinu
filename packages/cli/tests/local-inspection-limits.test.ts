@@ -60,8 +60,8 @@ function seed(rows: number): void {
 describe('listLocalTimeline closes the operator flag before it reaches SQL', () => {
   test('a negative limit reads one span, not two whole tables', () => {
     seed(30);
-    // Two failures at once before the fix: LIMIT -1 on agent_log and
-    // evolution_events read everything, and `slice(0, -1)` then dropped the LAST
+    // Two failures a raw -1 would cause at once: `LIMIT -1` on agent_log and
+    // evolution_events reads everything, and `slice(0, -1)` then drops the LAST
     // row of whatever survived.
     expect(listLocalTimeline(AGENT, -1).length).toBe(1);
   });

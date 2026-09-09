@@ -118,7 +118,7 @@ function seedSearchRun(
  *
  * The owner's report: the tree drew `(root)` and the index rows drew truncated
  * task text, so two searches of one repository were told apart by reading two
- * paragraphs. A run now carries a name: what the caller gave the `agents` tool,
+ * paragraphs. A run carries a name: what the caller gave the `agents` tool,
  * which the engine writes as the root node's own label, and a derivation from
  * the task where nothing was given.
  */
@@ -409,11 +409,10 @@ describe('the run list is folded per actor, not per database', () => {
  * `mcts_search_runs.status='running'` is a lease, not an observation. The engine
  * closes the tree BEFORE recording an outcome (`mcts/engine.ts`) precisely so a
  * crash between the two leaves a closed tree with a still-`running` row, which
- * that file calls inert: nothing is selectable. The list used to read the column
- * and report those runs as running for as long as the row survived — the report
+ * that file calls inert: nothing is selectable. The TREE answers the question,
+ * over the frontier `mcts/frontier.ts` selects from. Reading the column instead
+ * reports those runs as running for as long as the row survives — the report
  * *"this run had 2 reported and rest stopped … still it says 'running'?"*.
- *
- * The tree answers it now, over the frontier `mcts/frontier.ts` selects from.
  */
 describe('a stale running lease', () => {
   /** One tree with the statuses named, and the ledger row left as given. Raw
@@ -480,10 +479,10 @@ describe('a stale running lease', () => {
 
   test('an expanded parent left open is not a frontier', () => {
     // `frontier.ts` selects `status='open' AND NOT EXISTS (children)`. Counting a
-    // bare open node instead would make every legacy tree whose settle left its
-    // root open read as running forever.
+    // bare open node instead would make every tree whose settle left its root
+    // open read as running forever.
     const { db, sql, actor, actorId } = freshDb();
-    seedTree(db, actorId, { rootId: 'r-legacy', root: 'open', branches: ['pruned', 'pruned'] });
+    seedTree(db, actorId, { rootId: 'r-open-root', root: 'open', branches: ['pruned', 'pruned'] });
     expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
   });
 });
@@ -498,7 +497,7 @@ describe('a run that wrote both stores', () => {
   const PRESET = 'optimise';
 
   /** One root, both halves — the shape a swarm leaves behind. The journal starts
-   *  AFTER the tree, which is what made the tree-less half sort newer. */
+   *  AFTER the tree, which is what makes the tree-less half sort newer. */
   function seedSwarmRun(db: Database, actorId: string, rootId = 'swarm-1'): void {
     seedSearchRun(db, actorId, { rootId, task: TASK, at: 1000, branches: 3, winner: 0.71, ledger: 'converged' });
     seedJournalledRun(db, actorId, {
@@ -536,9 +535,9 @@ describe('a run that wrote both stores', () => {
   test('reports the task it ran, never the preset name in the split rationale', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSwarmRun(db, actorId);
-    // `recordSplit` stamps `label ?? preset` into `head_runs.rationale`, and the
-    // list used to read that column as the run's task because a swarm journals no
-    // row for its root. The tree's root node holds the real task.
+    // `recordSplit` stamps `label ?? preset` into `head_runs.rationale`, and a
+    // swarm journals no row for its root — so reading that column as the run's
+    // task reports the preset name. The tree's root node holds the real task.
     expect(listForkRuns(sql, actor).items[0]!.task).toBe(TASK);
     expect(listForkRuns(sql, actor).items[0]!.task).not.toBe(PRESET);
   });

@@ -380,7 +380,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
 function runnerOf(command: string): string {
   const program = command.slice('node -e '.length);
   if (!program.startsWith("'") || !program.endsWith("'")) {
-    throw new Error(`the plane no longer sends a quoted program: ${command.slice(0, 40)}`);
+    throw new Error(`the plane did not send a quoted program: ${command.slice(0, 40)}`);
   }
   return program.slice(1, -1).replaceAll("'\\''", "'");
 }

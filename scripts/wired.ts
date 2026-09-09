@@ -219,10 +219,10 @@ const SubpathSchema = v.object({ exports: v.optional(v.record(v.string(), v.stri
 
 /** A package's declared path aliases. `packages/cf-backend` declares
  *  `"@/*": ["./src/*"]`, and the whole frontend imports through it: 33 of
- *  `WorkspacePage.tsx`'s specifiers, of which a resolver that knew only
- *  relative paths and `@kinu.run/*` resolved 3. Measured before this rule
- *  existed, that one gap produced 95 phantom findings — every React component in
- *  the tree, reported as unreached. */
+ *  `WorkspacePage.tsx`'s specifiers, of which a resolver that knows only
+ *  relative paths and `@kinu.run/*` resolves 3. Without this rule that one gap
+ *  costs 95 phantom findings — every React component in the tree, reported as
+ *  unreached. */
 const AliasSchema = v.object({
   compilerOptions: v.optional(v.object({
     paths: v.optional(v.record(v.string(), v.array(v.string())), {}),
@@ -438,12 +438,12 @@ export interface Entrypoint {
  * The model's callable surface, read from the registry's reach table so the set
  * the gate roots on is the set the model is handed.
  *
- * It used to read the `BUILTIN_TOOLS` array literal. That literal is gone: the
- * eight names are now DERIVED from `TOOL_REACH`'s `native: true` rows, because a
- * hand list beside the table was membership-checked and not exhaustiveness-
- * checked. So this reads the same rows the derivation does, one AST level up. A
- * gate reading a spelling the source no longer has would measure nothing, which
- * `assertMeasured` turns into a failure rather than a pass.
+ * The eight names are DERIVED from `TOOL_REACH`'s `native: true` rows rather
+ * than from a hand list beside the table, which would be membership-checked and
+ * not exhaustiveness-checked. So this reads the same rows the derivation does,
+ * one AST level up. A gate reading a spelling the source does not have would
+ * measure nothing, which `assertMeasured` turns into a failure rather than a
+ * pass.
  */
 export function builtinToolNames(modules: ReadonlyMap<string, Module>,
   read: (file: string) => string): Set<string> {

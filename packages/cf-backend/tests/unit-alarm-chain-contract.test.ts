@@ -95,10 +95,10 @@ describe('the Kinu timer rides the SDK scheduler', () => {
 
   test('trigger, peer-outbox and email-outbox wakes all arm the one timer row, awaited', () => {
     // The three seams hand `armTimer` straight to their consumer, which awaits it.
-    // They used to go through a void-returning `scheduleTimerAt` that passed the
-    // promise to `ctx.waitUntil` — a no-op in a Durable Object, so the arm of the
-    // object's OWN wake-up could be cancelled by an eviction and nothing would say
-    // so. A void-returning wrapper here is the defect, hence the negative assertion.
+    // A void-returning wrapper that handed the promise to `ctx.waitUntil` is the
+    // defect the negative assertions close: `waitUntil` is a no-op in a Durable
+    // Object, so the arm of the object's OWN wake-up could be cancelled by an
+    // eviction and nothing would say so.
     expect(orchestrator).toContain('scheduleAt: (ts: number) => this.armTimer(ts)');
     expect(orchestrator).toContain('scheduleDispatch: (at) => this.armTimer(at)');
     expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at))');

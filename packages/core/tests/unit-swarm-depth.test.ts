@@ -617,8 +617,8 @@ async function run(input: {
 describe('a swarm at depth 2 expands, and its tree is measured', () => {
   test('depth 2 is REACHED, every node is derived from its parent, and the cap holds', async () => {
     const { nodes, result, logger } = await run({ depth: 2, branches: 2, proposeWidth: null });
-    // Not a refusal any more. This is the whole ticket: the same call was
-    // `unsupported` because no engine here scored nodes against the caller's metric.
+    // Not a refusal. This is the whole ticket: nothing answers `unsupported`
+    // here, because an engine scores nodes against the caller's metric.
     expect('reason' in result).toBe(false);
     if ('reason' in result) return;
 
@@ -1060,13 +1060,12 @@ describe('the records store: what one run reached, the next one starts from', ()
 // the median. These prove the swarm path REACHES it, and that the ensemble validity
 // admitted is the ensemble that runs.
 //
-// THESE THREE USED TO PIN THE OPPOSITE. They asserted `{requested: 20, realised: 3}` and
-// a `swarm.judge_ensemble_clamped` event, because the judged path handed the evaluator
+// THE POOL IS DERIVED FROM THE REQUEST (`judgeCallPool`), never from
 // `DEFAULT_CONFIG.mcts.maxEvalLLMCalls` — the MCTS engine's dial, 4, sized for that
-// engine's own `judgeSamples: 3`. So a judged tree was admitted at the marginalisation
-// floor of 20 and executed at 3, disclosed and non-functional. The pool is now derived
-// from the request (`judgeCallPool`), the floor is untouched, and the clamp event is
-// gone because it can no longer bind.
+// engine's own `judgeSamples: 3`. Handing the evaluator that dial admits a judged tree
+// at the marginalisation floor of 20 and executes it at 3: disclosed and
+// non-functional, `{requested: 20, realised: 3}` with a clamp event to announce it.
+// The floor is untouched and nothing can bind a clamp.
 describe("score:'judge' reaches the ensemble the tree already owns", () => {
   test('A JUDGED TREE RUNS at the ensemble it was admitted at', async () => {
     const { result } = await run({
@@ -1089,12 +1088,12 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('the realised ensemble is PERSISTED, so a reader can state it once the call has returned', async () => {
-    // The figure was computed, disclosed in the settle report, and written nowhere — so
-    // no surface could show it however well rendered, which is the accepted-and-ignored
-    // shape *Accepted and ignored* refuses: a measurement taken and dropped. It is
-    // folded onto the run's own ledger row as the smallest ensemble any candidate
-    // reached, and it is worth keeping now that it equals the request: the row is the
-    // evidence that the pool held, not a record of a downgrade.
+    // A figure computed, disclosed in the settle report and written nowhere is one no
+    // surface can show however well rendered — the accepted-and-ignored shape
+    // *Accepted and ignored* refuses: a measurement taken and dropped. It is folded
+    // onto the run's own ledger row as the smallest ensemble any candidate reached,
+    // and it is worth keeping when it equals the request: the row is the evidence that
+    // the pool held, not a record of a downgrade.
     const { rt } = createTestRuntime();
     const { result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
@@ -1107,8 +1106,8 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
     const entry = page.items[0]!;
-    // The knobs this run ran under, from a ledger row the swarm path used to write not at
-    // all: `readForkRunParams` answered a swarm with the transcript half alone.
+    // The knobs this run ran under, from the ledger row the swarm path writes: without
+    // it, `readForkRunParams` answers a swarm with the transcript half alone.
     expect(entry.params?.search).toMatchObject({
       budget: 2, branches: 2, maxDepth: 1, mode: 'build',
       judgeSamplesRequested: 20, judgeSamplesRealised: 20,
@@ -1128,10 +1127,10 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('no clamp is disclosed, because none can bind', async () => {
-    // The inverse of the assertion this replaces. `swarm.judge_ensemble_clamped` was
-    // emitted once per distinct realised size below the request; with the pool sized
-    // from the request there is no such size, and a shortfall is now an instrument
-    // fault that fails the run rather than an event on the way past.
+    // `swarm.judge_ensemble_clamped` is emitted once per distinct realised size
+    // below the request. With the pool sized from the request there is no such
+    // size, and a shortfall is an instrument fault that fails the run rather than
+    // an event on the way past.
     const { logger, result } = await run({
       depth: 1, branches: 2, proposeWidth: null,
       config: { score: { kind: 'judge', samples: 20 } },
@@ -1142,11 +1141,11 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
   }, 120_000);
 
   test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
-    // `swarmValidity` already refused this and `runSwarm` did not route through it, so an
-    // in-process caller could run a scorer the measurement says is not worth building —
-    // 28.5% unmarginalised against 30.0% marginalised at fixed node expansions. The
-    // composition is built through the real resolver and past validity deliberately,
-    // because what is under test is the runner's own gate.
+    // `swarmValidity` refuses this and `runSwarm` does not route through it, so without
+    // the runner's own gate an in-process caller runs a scorer the measurement says is
+    // not worth building — 28.5% unmarginalised against 30.0% marginalised at fixed
+    // node expansions. The composition is built through the real resolver and past
+    // validity deliberately, because what is under test is the runner's own gate.
     const call = resolveSwarm({
       preset: 'custom',
       label: 'depth-suite',
@@ -1237,8 +1236,8 @@ describe('merge-back at the settle barrier', () => {
 
   // THE SIZE BOUND, LIVE. The padding is a comment, so the candidate still verifies and
   // still measures the optimal operation count — the only thing that changes is that it no
-  // longer fits one host transaction. Before this wiring the settle write was handed
-  // straight to the substrate at any size.
+  // longer fits one host transaction. The settle write is bounded — nothing hands a
+  // blob to the substrate at any size.
   test('an oversized winner is refused at settle with the bound named', async () => {
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
@@ -1513,9 +1512,9 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
       resolved(1, 3, { expand: 'aggregate' }),
     );
-    // Depth 1 runs one wave off the root, whose level is the root alone. The old refusal
-    // said `aggregate` was unsupported, which is no longer true of anything; this one says
-    // what THIS composition lacks and names the one move that fixes it.
+    // Depth 1 runs one wave off the root, whose level is the root alone. The refusal
+    // names what THIS composition lacks and the one move that fixes it — a blanket
+    // "`aggregate` is unsupported" would be false of every other composition.
     expect('reason' in refusal).toBe(true);
     if (!('reason' in refusal)) return;
     expect(refusal.reason).toBe('bad_input');
@@ -1576,10 +1575,10 @@ const ARCHIVE: Partial<SwarmConfig> = {
 
 describe("advance:'archive' bins a wave into cells, and the next run starts from them", () => {
   test('A REAL RUN FILLS THE CELLS ITS INSTRUMENT WITNESSED, one elite each', async () => {
-    // THE WHOLE TICKET. This composition was `unsupported` — "reports a front or an
-    // archive, and both need a store this run has no writer for" — and the store it named
-    // is the one it now writes: a row per cell, keyed by the descriptor the MEASUREMENT
-    // carried rather than by anything a node said about itself.
+    // THE WHOLE TICKET. This composition is SERVED, not refused with "reports a front
+    // or an archive, and both need a store this run has no writer for" — it WRITES that
+    // store: a row per cell, keyed by the descriptor the MEASUREMENT carried rather
+    // than by anything a node said about itself.
     const { rt } = createTestRuntime();
     const { result, logger } = await run({
       depth: 1, branches: 2, proposeWidth: null, rt, key: 'candOps',
@@ -1739,7 +1738,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
   }, 120_000);
 });
 
-describe("the archive's own region, and the refusal `pareto` now carries alone", () => {
+describe("the archive's own region, and the refusal `pareto` carries alone", () => {
   /** A composition expected to be illegal, through the real resolver and the real
    *  predicate. Returns the refusal's text, or '' when it was legal — which fails an
    *  assertion rather than passing on a string that happens to contain nothing. */
@@ -1890,10 +1889,10 @@ describe("the archive's own region, and the refusal `pareto` now carries alone",
     // `verify` — so only a caller that skips it can arrive here, and this test is
     // that caller.
     //
-    // What it used to get: `pareto` is prepared only for a MEASURING run, so the
-    // selection arm read `pareto === null ? null : select(...)` inside the branch
-    // it had already tested, returned no node on the first iteration, and the run
-    // settled with zero candidates, zero spend and no sentence anywhere in it
+    // THE SETTLEMENT THIS REFUSES: `pareto` is prepared only for a MEASURING run, so a
+    // selection arm reading `pareto === null ? null : select(...)` inside the branch
+    // it has already tested returns no node on the first iteration, and the run
+    // settles with zero candidates, zero spend and no sentence anywhere in it
     // saying the scheduler could not exist.
     const call = resolveSwarm({
       preset: 'custom',

@@ -1,9 +1,9 @@
 /**
  * The Work surface's journal is ONE stream out of three ledgers.
  *
- * Tasks, Jobs and the Evolution Changelog each used to own a tab, which is why
- * "what happened while I was away" cost four clicks and landed on two rooms
- * that were mostly air. The merge only buys anything if the three actually
+ * Tasks, Jobs and the Evolution Changelog share it, because a tab each puts
+ * "what happened while I was away" four clicks away and lands the reader in two
+ * rooms that are mostly air. The merge only buys anything if the three actually
  * interleave by time — three blocks stacked under one heading would be the
  * same four rooms with the walls painted over.
  */
@@ -71,12 +71,12 @@ describe('the work journal', () => {
 });
 
 /**
- * The needs-you queue and the journal beneath it render the SAME ledger. The
- * queue is polled by the surface's own live-data tick; the digest used to load
- * exactly once, at mount. Work is the surface a workspace opens on, so the
- * first turn's self-change landed in a queue that re-read and a journal that
- * never did — "1 self-change you have not seen … decide in the journal below"
- * sitting on top of "Nothing has settled yet", permanently.
+ * The needs-you queue and the journal beneath it render the SAME ledger, so the
+ * digest revalidates on the surface's own live-data tick instead of loading
+ * exactly once, at mount. Work is the surface a workspace opens on: a queue
+ * that re-reads over a journal that never does puts "1 self-change you have not
+ * seen … decide in the journal below" on top of "Nothing has settled yet",
+ * permanently.
  */
 describe('the journal reads on the same clock as the queue above it', () => {
   test('the digest revalidates, and no slower than the queue that announces it', () => {

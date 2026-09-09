@@ -38,10 +38,10 @@ it('a Plan caller cannot reuse Build egress, including a captured fetch referenc
 
 it('a cached unmediated loader image cannot satisfy a mediated start for the same source and caller', async () => {
   const subject = env.SLATE_EGRESS_PROBE.get(env.SLATE_EGRESS_PROBE.idFromName('egress-upgrade'));
-  const result = await subject.legacyThenCurrent();
-  expect(JSON.parse(result.legacy)).toMatchObject({ legacy: true, status: 200, body: 'public control' });
-  const current = v.parse(Answer, JSON.parse(result.current));
-  expect(current).toMatchObject({ calls: 1, status: 403 });
-  expect(JSON.parse(current.body ?? '{}')).toMatchObject({ reason: 'denied' });
+  const result = await subject.unmediatedThenMediated();
+  expect(JSON.parse(result.unmediated)).toMatchObject({ unmediated: true, status: 200, body: 'public control' });
+  const mediated = v.parse(Answer, JSON.parse(result.mediated));
+  expect(mediated).toMatchObject({ calls: 1, status: 403 });
+  expect(JSON.parse(mediated.body ?? '{}')).toMatchObject({ reason: 'denied' });
   expect(JSON.parse(result.reused)).toMatchObject({ calls: 2, status: 200, body: 'public control' });
 });

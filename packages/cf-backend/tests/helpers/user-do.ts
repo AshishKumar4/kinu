@@ -344,9 +344,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
    * ONE registry per agent name, because that is what the runtime has: the real
    * `DeviceConsentRegistry` lives on the OrchestratorAgent DO, and it is the
    * authority that decides whether an identical re-ask is a second card or the
-   * same one. A hand-rolled stub that answered every call could not express
-   * that, so the dedupe used to be asserted against a caller-side check the
-   * UserDO no longer performs.
+   * same one. A hand-rolled stub answering every call could not express that,
+   * so the dedupe would end up asserted against a caller-side check the UserDO
+   * does not perform.
    *
    * The card is answered from `announce` — the runtime's own synchronous-answer
    * path — unless `consentDecision` is `hold`, which leaves it waiting so a

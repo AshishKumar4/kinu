@@ -1,11 +1,11 @@
 /**
  * The public webhook delivery route, and the capability that gates it.
  *
- * The defect this pins: `/api/workspaces/<name>/webhook/<trigger>` used to
- * resolve the Orchestrator stub for whatever name the caller typed, before
- * anything knew the workspace or the trigger existed. Naming one was enough to
+ * The defect this pins: `/api/workspaces/<name>/webhook/<trigger>` resolving the
+ * Orchestrator stub for whatever name the caller typed, before anything knows
+ * the workspace or the trigger exists. Naming one would then be enough to
  * ACTIVATE a persistent Durable Object, unauthenticated. The edge knock budget
- * priced that; it did not close it. So most assertions here are about what does
+ * prices that; it does not close it. So most assertions here are about what does
  * NOT happen: no object addressed, no budget spent, no body read, unless the URL
  * carries a capability this deployment minted.
  *
@@ -249,7 +249,7 @@ describe('the delivery route claims exactly its own paths', () => {
     }
   });
 
-  test('the authenticated hub router no longer serves delivery at all', async () => {
+  test('the authenticated hub router does not serve delivery at all', async () => {
     const { env, probe } = harness();
 
     expect(await handleHubRequest(delivery(await mintedPath()), env, WORKSPACE)).toBeNull();

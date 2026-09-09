@@ -280,9 +280,9 @@ describe('discoverAgentsMd — trust classification', () => {
 
 describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
   test('a self-referential AGENTS.md is reported unavailable, not thrown', () => {
-    // One `ln -s AGENTS.md AGENTS.md` used to take the whole turn down: both
-    // statSync and realpathSync throw ELOOP and the throw escaped discovery.
-    // The agent writes this plane, so that was a one-command denial of service.
+    // One `ln -s AGENTS.md AGENTS.md` must not take the whole turn down: both
+    // statSync and realpathSync throw ELOOP, and a throw escaping discovery is
+    // a one-command denial of service on a plane the agent writes.
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     symlinkSync(path, path);

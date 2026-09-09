@@ -37,8 +37,8 @@ function harnessActorId(db: Database): string {
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A schedule write that fails — the storage failure that used to end the
- *  chain, injected where it happens. */
+/** A schedule write that fails — the storage failure that would end the chain,
+ *  injected where it happens. */
 function breakScheduleWrites(agent: HarnessOrchestratorAgent): void {
   Object.defineProperty(agent, 'schedule', {
     configurable: true,
@@ -70,15 +70,15 @@ describe('the workspace keeps exactly one wake row', () => {
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual(['kinu-wake']);
   });
 
-  test('a row whose callback is no longer a method is dropped at any age and type', async () => {
+  test('a row whose callback names no method on the class is dropped at any age and type', async () => {
     // PRODUCTION, 2026-09-01: `wrangler tail` reported `Callback
     // snapshotWorkspaceIfDue not found or is not a function` every few minutes.
     // The framework's alarm loop logs that and CONTINUES without deleting the
     // row, so the same row re-reports on every wake for as long as the object
     // lives. No horizon reaches it either: a recurring row re-dates itself past
-    // any cutoff, and a fresh one is inside it. The method is what left — the
-    // snapshot machinery moved to another package — so nothing makes the row
-    // runnable again.
+    // any cutoff, and a fresh one is inside it. Nothing on the class answers to
+    // `snapshotWorkspaceIfDue` — the snapshot machinery lives in another
+    // package — so nothing can ever make the row runnable.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const insert = db.prepare(
@@ -534,12 +534,13 @@ describe('the workspace keeps exactly one wake row', () => {
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
-    // The race the harness used to hide. `onStart` DETACHES the wake reconcile
-    // (`void this.reconcileTimerRow()`), so an activation reconcile and a
-    // registration arm interleave: every `await` in `armTimer` is a suspension
-    // point, both callers pre-read an EMPTY registry, both write, and a collapse
-    // over each caller's own pre-read set cancels nothing. That left two wake
-    // rows permanently — the one state this whole suite is named against.
+    // The race a serialized harness would hide. `onStart` DETACHES the wake
+    // reconcile (`void this.reconcileTimerRow()`), so an activation reconcile
+    // and a registration arm interleave: every `await` in `armTimer` is a
+    // suspension point, both callers pre-read an EMPTY registry, both write,
+    // and a collapse over each caller's own pre-read set cancels nothing. That
+    // is two wake rows permanently — the one state this whole suite is named
+    // against.
     //
     // Two registrations are the same shape and need no internals: each arms, and
     // the pair must agree on one survivor. It has to be the SOONER wake, because

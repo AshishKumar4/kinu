@@ -910,7 +910,7 @@ function mainActor(db: SqliteDb): ActorHandle | null {
  * being read does NOT establish that the workspace has an identity to name. A
  * read that fell back to "no actor" would return another actor's rows or an
  * empty set indistinguishable from absence — and with every actor's rows in ONE
- * database that is the failure this whole cutover exists to remove. So an
+ * database, that is exactly the failure this refusal prevents. So an
  * inspection of a database with no identity row says so.
  */
 function requireMainActor(db: SqliteDb): ActorHandle {
@@ -960,11 +960,12 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
     const directory = actorDirectory(db);
     if (!directory) return [];
     // The FULL set by default. `list()`'s own default excludes retired rows, so
-    // the previous `opts.retired === undefined ? list() : ...` made this
-    // function's headline claim false: measured against a workspace holding a
-    // main, a hire, a head and one retired hire, it answered three. A lister
-    // that hides retained actors reports the workspace as smaller than its own
-    // archive, which is the one thing this read exists to prevent.
+    // `retired` is passed explicitly on every call rather than left to that
+    // default. Leaving it makes this function's headline claim false: measured
+    // against a workspace holding a main, a hire, a head and one retired hire,
+    // it answers three. A lister that hides retained actors reports the
+    // workspace as smaller than its own archive, which is the one thing this
+    // read exists to prevent.
     const rows = directory.list({ retired: opts.retired ?? true });
     return rows.map((row): LocalActorRow => ({
       actorId: row.actorId,

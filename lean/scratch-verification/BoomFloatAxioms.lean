@@ -7,15 +7,14 @@
   convenient Float axiom and the corpus is inconsistent again — every theorem in
   it becomes vacuously derivable.
 
-  ONE FAMILY PER FILE, and that split is the point. All four counterexamples
-  used to live in `Boom.lean` behind two imports, and
-  `Kinu/Safety/FloatAxioms.lean` no longer exists — so `lake env lean` failed at
-  line 15 resolving that import and checked NOTHING after it. The
-  chunk_reassembly counterexample, whose subject module is still present and
-  still exports a `chunk_reassembly`, had been unreachable ever since: a
-  reintroduced String-based axiom would have derived `False` and the gate would
-  still have reported OK, because the file "did not compile". A negative proof
-  that cannot be reached is not a negative proof.
+  ONE FAMILY PER FILE, and that split is the point. Families sharing one file
+  share its imports, and this file's import does not resolve — the Float axioms
+  it refutes are gone. `lake env lean` fails at that import and
+  checks NOTHING after it, so any family behind it is unreachable. The
+  chunk_reassembly counterexample is one: its subject module is present and
+  still exports a `chunk_reassembly`, so a reintroduced String-based axiom
+  would derive `False` while the gate reported OK, because the file "did not
+  compile". A negative proof that cannot be reached is not a negative proof.
 
   THE EXPECTED FAILURE IS DECLARED, not merely awaited. `check-no-false.sh`
   requires this file to fail AND requires the diagnostic to be the missing

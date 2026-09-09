@@ -6,7 +6,7 @@
  * node, a branch — is a row in `workspace_actors` on that one database, and
  * that row IS its identity. There is no second identity store: nothing seeds a
  * per-actor `actor_identity` row, because such a row can only exist once per
- * FILE and a file now holds every actor a workspace has.
+ * FILE and one file holds every actor a workspace has.
  *
  * So a binding here carries no path. What it carries is the reference the
  * root's directory issued, and the authority to bind a handle to it: the
@@ -135,9 +135,9 @@ export function localActorDirectory(root: ActorHandle) {
  * Who owns this workspace, and what it is called.
  *
  * Read from `workspace_identity` — the one row a local database has — because
- * that is now the only place the pair exists. A subordinate's own descriptor
- * needs both, and it used to read them back off a per-facet identity row that
- * had been seeded from exactly here.
+ * that is the only place the pair exists. A subordinate's own descriptor needs
+ * both and reads them from here, so no per-actor copy seeded from this row can
+ * drift away from it.
  */
 export function localActorOwner(actor: ActorHandle) {
   const scope = scopeFor(actor);
@@ -251,11 +251,10 @@ function requireBinding(binding: LocalActorBinding): LocalActorScope {
 /**
  * Bind a handle to an actor this root issued.
  *
- * The validator is the DIRECTORY ROW and nothing else. It used to also compare
- * a per-facet identity row against the binding, which was a second copy of the
- * same fact living in a table that can hold exactly one actor — so it could
- * not survive N actors sharing one database, and the comparison it performed
- * was between the directory and a mirror the directory had written.
+ * The validator is the DIRECTORY ROW and nothing else. A second copy of the
+ * same fact would have to live in a table that holds exactly one actor, so it
+ * could not survive N actors sharing one database, and checking it would only
+ * compare the directory against a mirror the directory had written.
  */
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = requireBinding(binding);
@@ -296,14 +295,14 @@ export async function retireLocalActor(parent: ActorHandle, name: string, refere
 /**
  * Cancel a birth that FAILED, against the record it was admitted under.
  *
- * `cancelCreation`, never `register`. The compensating path used to register
- * the child and then destroy it, which is wrong twice over: `register` accepts
- * a name, kind or lifetime that does NOT match the admitted creation (the
- * directory's own `cancelCreation` refuses that as `denied`), and the row it
- * writes passes through `active`, so a roster or inspection read landing
- * between the two statements sees a live child that was never born. This
- * returns the reference so the caller can complete the physical half through
- * whichever host owns the actor's runtime objects.
+ * `cancelCreation`, never `register`. Registering the child and then destroying
+ * it is wrong twice over: `register` accepts a name, kind or lifetime that does
+ * NOT match the admitted creation (the directory's own `cancelCreation`
+ * refuses that as `denied`), and the row it writes passes through `active`, so
+ * a roster or inspection read landing between the two statements sees a live
+ * child that was never born. This returns the reference so the caller can
+ * complete the physical half through whichever host owns the actor's runtime
+ * objects.
  */
 export function cancelLocalCreation(
   parent: ActorHandle,

@@ -2,17 +2,13 @@
  * The object that owns one workspace, as the methods a caller in this Worker
  * needs of it.
  *
- * WHAT THIS IS NOT ANY MORE. This file used to be `workspace-box-rpc.ts`, and
- * most of it was a FILE-FORWARDING SHIM: a 25-arm `WorkspaceBoxOp` union, a
- * `WorkspaceBoxResults` map keyed by op name, an `applyWorkspaceBoxOp`
- * dispatcher on the owner and a `createWorkspaceBoxClient` that re-implemented
- * `NimbusSandboxHandle` over one monomorphic RPC. Every byte of it existed
- * because a facet was a SEPARATE Durable Object that shared its parent's tree
- * but could not reach it: `files.read`, `files.write`, `exec`, `ports.expose`
- * all had to cross an isolate boundary. Hosted logical actors share the root's
- * isolate and therefore its box directly — `createCFRuntime` is handed the very
- * handle the workspace composed — so the union, the dispatcher and the client
- * are deleted rather than renamed. Nothing forwards a file operation any more.
+ * WHAT IS NOT HERE. Nothing forwards a file operation: no `WorkspaceBoxOp`
+ * union, no results map keyed by op name, no dispatcher on the owner and no
+ * client re-implementing `NimbusSandboxHandle` over one monomorphic RPC. A
+ * hosted logical actor shares the root's isolate and therefore its box directly
+ * — `createCFRuntime` is handed the very handle the workspace composed — so
+ * `files.read`, `files.write`, `exec` and `ports.expose` cross no isolate
+ * boundary, and there is nothing for a forwarding layer to carry.
  *
  * WHAT REMAINS is genuinely cross-WORKSPACE, which is a different question from
  * cross-actor: a slate binding held by a process in one workspace calling into

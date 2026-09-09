@@ -1,6 +1,6 @@
 /**
- * One cursored-page contract for every read that used to answer with a bare
- * array under a `LIMIT`.
+ * One cursored-page contract, shared by every read that would otherwise answer
+ * with a bare array under a `LIMIT`.
  *
  * ── What this generalises ────────────────────────────────────────────────────
  * `readWorkspaceArchivePage` (identity/archive.ts) already got this right and

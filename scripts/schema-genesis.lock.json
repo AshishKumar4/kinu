@@ -531,10 +531,6 @@
     "imported_at",
     "corroborated_at"
   ],
-  "instruction_approval_migrations@packages/core/src/safety/instruction-trust.ts": [
-    "actor_id",
-    "scope"
-  ],
   "instruction_approvals@packages/core/src/safety/instruction-trust.ts": [
     "actor_id",
     "scope",

@@ -556,8 +556,8 @@ function WorkspaceCreatedCard({ state }: { state: CardState }) {
  *
  * Collapsed, because the words are the harness talking to the model and the
  * owner needs to know one happened far more often than they need to read it.
- * Never a bubble: this row is exactly the population that used to arrive in the
- * owner's own, four lines above things they had actually typed.
+ * Never a bubble: rendering this population in the owner's own would put the
+ * harness's words four lines above things they had actually typed.
  */
 function SystemEventCard({ event, text, state }: {
   event: string; text: string; state: CardState;

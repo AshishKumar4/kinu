@@ -93,17 +93,14 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
   });
 }
 
-// The SIGKILL backstop, and only that. It used to carry the whole leak: the
-// `afterAll` did not exist, `exit` never fires under this runner, so the plain
-// passing path stranded a home every invocation and this sweep was what made
-// that survivable — a self-heal standing in for a release. With the release in
-// place this is what it always claimed to be: the case where no JS can run.
+// The SIGKILL backstop, and only that: the runner's `afterAll` and the signal
+// listeners above release on every path JS can reach, so what is left here is
+// the case where no JS can run.
 //
-// Measured, when it was load-bearing: 3,655 stranded directories took /tmp to
-// 100% of its INODES while 8 GB of bytes were still free, and `mkdtemp` then
-// failed so `bun test` died before collecting a single test — an environment
-// fault that reads as a code defect in whatever change happened to be under
-// test.
+// Measured: 3,655 stranded directories took /tmp to 100% of its INODES while
+// 8 GB of bytes were still free, and `mkdtemp` then failed so `bun test` died
+// before collecting a single test — an environment fault that reads as a code
+// defect in whatever change happened to be under test.
 //
 // The bound is 30 minutes against a `timeout 600` ceiling, which is 3x headroom;
 // the cost is one readdir plus a stat per entry. It covers the suite-minted

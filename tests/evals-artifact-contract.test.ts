@@ -18,10 +18,10 @@
  * reads the report it emits.
  *
  * THE TWO FIXTURES ARE THE CONTROL AND THE CASE, and the control matters as much
- * as the case: an earlier version of this proof had the precondition throw before
- * the judge could run in BOTH fixtures, so "the safe path does not publish" and
- * "the safe path never executed" predicted identical observations. The test could
- * not discriminate. `healthy` therefore exercises the exact write path `degenerate`
+ * as the case: if the precondition threw before the judge could run in BOTH
+ * fixtures, "the safe path does not publish" and "the safe path never executed"
+ * would predict identical observations and the test could not discriminate.
+ * `healthy` therefore exercises the exact write path `degenerate`
  * must avoid, and asserts a score IS present — so `meta.eval: undefined` in the
  * degenerate case is known to mean "withheld" rather than "never wired".
  *
@@ -132,7 +132,7 @@ beforeAll(() => {
   // A non-zero exit is EXPECTED — the degenerate case must fail — so the status
   // is captured rather than allowed to abort. Its stderr is kept and surfaced
   // below: swallowing a child's error is how a check that never ran reports
-  // success, and an earlier version of this test did exactly that.
+  // success.
   let childOutput = '';
   try {
     childOutput = execFileSync('bun', ['--bun', join(REPO_ROOT, 'node_modules/.bin/vitest'),
@@ -145,8 +145,7 @@ beforeAll(() => {
     // property of the thrower rather than something this scope can prove — so it
     // is read through a schema and falls back to the error's own text. Surfacing
     // the child's message is the whole point: swallowing it is how a check that
-    // never ran reports success, which is what an earlier version of this test
-    // did.
+    // never ran reports success.
     const captured = v.safeParse(ChildFailureSchema, error);
     childOutput = captured.success
       ? `${captured.output.stdout ?? ''}\n${captured.output.stderr ?? ''}`

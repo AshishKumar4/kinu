@@ -4,11 +4,10 @@
  * They cannot import `index.css`: they are served by the worker as one
  * self-contained document, with no bundler and no stylesheet link. So the
  * public shell carries a PROJECTION of that palette, and the projection is
- * exactly the drift this file exists to make impossible. The four surfaces
- * previously carried three hand-copied sets of the umber hexes, `index.css`
- * asked for them to "stay identical to it" in a comment, and by the time
- * anyone looked they were not: no light mode at all, a different hairline
- * alpha, three different button heights.
+ * exactly the drift this file exists to make impossible. Hand-copied sets of
+ * the umber hexes across the four surfaces, with `index.css` asking in a
+ * comment that they "stay identical to it", is how that drift lands: no light
+ * mode at all, a different hairline alpha, three different button heights.
  *
  * A comment is not a gate. This is:
  *
@@ -17,7 +16,7 @@
  *     assumed;
  *   · every radius role equals the Tailwind rung `index.css` maps it to;
  *   · the pre-paint theme script resolves the four cases it claims;
- *   · no public page shows the old product name, anywhere in the document.
+ *   · no public page shows the retired product name, anywhere in the document.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -286,7 +285,7 @@ const RETIRED_NAME = ['prot', 'eus'].join('');
 
 describe('public copy', () => {
   for (const [name, html] of Object.entries(DOCUMENTS)) {
-    test(`${name} shows no trace of the old product name`, () => {
+    test(`${name} shows no trace of the retired product name`, () => {
       // Not only the visible text: the repository URL, the icon href and every
       // attribute are the places a rename leaves a survivor behind.
       expect(html.toLowerCase()).not.toContain(RETIRED_NAME);

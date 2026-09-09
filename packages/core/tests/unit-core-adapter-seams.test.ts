@@ -1,8 +1,8 @@
-// The nine core seams that closed measured backend drift (CoreAdapterAudit).
+// The nine core seams where measured backend drift lands (CoreAdapterAudit).
 //
-// Each block below pins the ONE thing the two backends used to disagree about,
-// so a future adapter cannot re-open it silently. Where a test looks trivially
-// true, the drift it prevents is named — that is the point of the assertion.
+// Each block below pins the ONE thing the two backends can disagree about, so
+// an adapter cannot open it silently. Where a test looks trivially true, the
+// drift it prevents is named — that is the point of the assertion.
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -338,8 +338,8 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
   test('a FAILED turn still owes its extension end, and owes it before the recording', () => {
     // Recorded AFTER the hook: the hook's effects (memory writes, compaction
     // state) are part of the turn the review then reads. Both rows are owed on
-    // every status, which is the half that used to be lost — a failed cloud turn
-    // reached neither.
+    // EVERY status — the half easiest to lose, since a failed cloud turn can
+    // reach neither.
     for (const status of RUN_END_REASONS) {
       const owed = roster(status).map((effect) => effect.name);
       expect(owed).toContain('turn_end_extensions');
@@ -636,9 +636,9 @@ describe('craft failure attribution — the same marker in both substrates', () 
 
   // THE HAZARD A SECOND WRAPPER CREATES. buildCraftedTools is the ONE runtime
   // attribution point on every backend, and blame matches on the marker — so a
-  // substrate that wrapped its own compile as well would make one failure read
-  // as several, which is strictly worse than the missing stamp it was meant to
-  // fix. Found when a cutover added exactly that and saw `[crafted:x] [crafted:x]`.
+  // substrate that wraps its own compile as well makes one failure read as
+  // several (`[crafted:x] [crafted:x]`), which is strictly worse than the
+  // missing stamp attribution exists to fix.
   test('attribution stamps exactly once, never twice', async () => {
     const wrapped = attributeCraftedFailure('brokenIt', async () => { throw new Error('nope'); });
     const message = (await rejectionOf(wrapped())).message;
@@ -660,7 +660,7 @@ describe('craft failure attribution — the same marker in both substrates', () 
 
 // ── Seam 7: the remaining literal mirrors ───────────────────────────────────
 
-describe('the declared ids the adapters used to spell by hand', () => {
+describe('the declared ids no adapter spells by hand', () => {
   test('the default role is a declared constant', () => {
     expect(DEFAULT_ROLE_ID).toBe('general');
   });

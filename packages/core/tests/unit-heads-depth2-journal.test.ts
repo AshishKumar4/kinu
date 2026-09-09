@@ -1,19 +1,19 @@
 // C2 — a depth-2 head's journal rows and its step rows must live in ONE store,
 // so the surface can read them.
 //
-// The defect: a recursive split ran its HeadController with a journal built over
-// the INTERMEDIATE facet's own SQLite. A depth-1 head therefore wrote its
-// children's spawn/report rows into its own Durable Object, while the root held
+// The defect: a recursive split that runs its HeadController with a journal
+// built over the INTERMEDIATE facet's own SQLite. A depth-1 head then writes its
+// children's spawn/report rows into its own Durable Object while the root holds
 // the step rows — and `HeadJournal.assembleRun` reads head_journal on the ROOT
 // and joins head_steps to it by head_id. With the two halves one DO apart the
-// join could never match, so a depth-2 head was unreadable from anywhere: the
-// root had steps with no head row, the facet had a head row nobody queried, and
-// the run rendered with the child heads missing.
+// join can never match, so a depth-2 head is unreadable from anywhere: the root
+// has steps with no head row, the facet has a head row nobody queries, and the
+// run renders with the child heads missing.
 //
-// The fix is `HeadJournalPort`: the controller no longer owns a journal, it is
-// handed one, and the CF facet hands it an RPC-backed port aimed at the root.
-// These tests assert the property that fix exists for, and the last one asserts
-// the defect itself so the others cannot pass vacuously.
+// `HeadJournalPort` is why that cannot happen: the controller does not own a
+// journal, it is handed one, and the CF facet hands it an RPC-backed port aimed
+// at the root. These tests assert the property that buys, and the last one
+// asserts the defect itself so the others cannot pass vacuously.
 
 import { describe, expect, test } from 'bun:test';
 import { createTestSql, createTestActorsOver } from '@kinu.run/test-utils';

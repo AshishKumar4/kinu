@@ -62,11 +62,10 @@ export interface ReleaseExec {
    * `SandboxHandle.exec`, which kills the process it started and waits for it
    * to be gone.
    *
-   * The four deadlines this option set used to carry (apply 120s, clone 300s,
-   * check 900s, deploy 600s) killed a running command and recorded `failed`
+   * A per-step deadline here would kill a running command and record `failed`
    * with no exit code, which a reader cannot tell apart from a check that ran
-   * and found a real defect. The check bound was the one measured against
-   * anything, and its own note said the measurement was pending.
+   * and found a real defect. And nothing measures what such a figure should be
+   * for apply, clone, check or deploy, so there is no bound to pick.
    */
   exec(command: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<{
     stdout: string;
@@ -667,12 +666,12 @@ export class ReleaseEngine {
     }
 
     // Digest-bound approval, the same rule `deploy()` already enforces. Without
-    // it `hasApproved` was the whole gate: any approved rollback could be spent
-    // on whatever `opts.command` the caller passed, and the model's release tool
-    // is one of the callers. `platformCommand` is null for a commit target,
-    // which is the same "no command — restore this target with git" the approval
-    // recorded, so a git rollback needs no new ceremony and a platform rollback
-    // must have had ITS command approved.
+    // it `hasApproved` would be the whole gate: any approved rollback could be
+    // spent on whatever `opts.command` the caller passed, and the model's
+    // release tool is one of the callers. `platformCommand` is null for a commit
+    // target, which is the same "no command — restore this target with git" the
+    // approval recorded, so a git rollback needs no new ceremony and a platform
+    // rollback must have had ITS command approved.
     const expectedDigest = deployApprovalDigest({
       approvalType: 'rollback',
       patch: change.patch,

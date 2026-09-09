@@ -106,11 +106,10 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext 
       ORDER BY uses DESC NULLS LAST, name`;
 
   // The durable outcome ledger (evolution/outcomes.ts) — the one record of how
-  // turns landed. This read used to name `completed_turns`, a table no schema
-  // has ever created, under a catch that turned `no such table` into an empty
-  // list: the curriculum has been proposing from crafted skills alone since it
-  // shipped, and its prompt said "(no recent turns)" in a way nothing could
-  // tell apart from a genuinely fresh workspace.
+  // turns landed. Read straight, with no catch turning `no such table` into an
+  // empty list: a swallowed schema error leaves the curriculum proposing from
+  // crafted skills alone while its prompt says "(no recent turns)", which
+  // nothing can tell apart from a genuinely fresh workspace.
   // Abandoned turns carry no verdict (evolution/outcomes.ts scores them neutral),
   // so they stay out of the prompt: listing one as a failure teaches the judge
   // that a dropped topic was a task done badly.

@@ -55,11 +55,11 @@ export interface BackgroundJob {
    * When the attempt CURRENTLY driving this job began — `createdAt` for a first
    * drive, bumped by every {@link BackgroundJobStore.reclaim}.
    *
-   * The job's own lifetime was previously unreadable: `createdAt` says when the work
-   * was first asked for and `settledAt` is null while it runs, so nothing could
-   * answer "how long has this generation been going" and nothing bounded it. A live
-   * job was measured `running` 28 minutes into its third generation with two
-   * completed candidates its caller could not see.
+   * The only column that reads the CURRENT generation's lifetime: `createdAt` says
+   * when the work was first asked for and `settledAt` is null while it runs, so
+   * neither can answer "how long has this generation been going" and neither bounds
+   * it. A live job was measured `running` 28 minutes into its third generation with
+   * two completed candidates its caller could not see.
    */
   attemptStartedAt: number;
   /**

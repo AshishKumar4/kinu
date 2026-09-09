@@ -31,8 +31,8 @@ describe('subordinate wiring', () => {
    *
    * This is the half no parent can do: only the child sees its own turn end. A
    * temporary agent's caller is BLOCKED on one report, so every terminal state
-   * has to produce one — and the endings that previously produced none are
-   * exactly the ones the durable policy withholds.
+   * has to produce one — and the endings the durable policy withholds a report
+   * for are exactly the ones a task lifetime must still report.
    */
   test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
     const { agent } = orchestratorHarness();
@@ -109,8 +109,8 @@ describe('subordinate wiring', () => {
         .toEqual({ name, hit: false });
     }
     // The sandbox factory takes no model registry: nothing in it calls a model
-    // directly any more. Pinned on the options interface's member list, not on
-    // a syllable's absence from the file — `modelSpecForSource` (spend
+    // directly. Pinned on the options interface's member list, not on a
+    // syllable's absence from the file — `modelSpecForSource` (spend
     // attribution) and core's `registry.renderExecuteToolsDescription` (a
     // docstring renderer) legitimately use those syllables elsewhere.
     const options = execTools.slice(

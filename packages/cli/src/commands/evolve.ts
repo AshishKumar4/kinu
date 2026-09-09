@@ -28,8 +28,8 @@ export async function evolveCommand(name: string, opts: {
   name = local.name;
   const dbPath = local.dbPath;
 
-  // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). The CLI
-  // used to half them silently — a weaker search than every other caller ran.
+  // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). A CLI-local
+  // copy would silently run a weaker search than every other caller.
   const budget = opts.budget !== undefined ? parsePositiveInt(opts.budget, 'budget') : DEFAULT_CONFIG.mcts.budget;
   const branches = opts.branches !== undefined ? parsePositiveInt(opts.branches, 'branches') : DEFAULT_CONFIG.mcts.branches;
   const maxCostUSD = opts.maxCost !== undefined ? parsePositiveNumber(opts.maxCost, 'max-cost') : DEFAULT_CONFIG.mcts.maxCostUSD;

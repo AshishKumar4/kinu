@@ -58,17 +58,3 @@ function rollRandom(): number[] {
   for (let i = 0; i < 16; i++) out.push(Math.floor(Math.random() * 32));
   return out;
 }
-
-/** Extract the timestamp (unix-ms) encoded in a ULID. */
-export function ulidTime(id: string): number {
-  let t = 0;
-  for (let i = 0; i < 10; i++) {
-    t = t * 32 + ULID_ALPHABET.indexOf(id[i]);
-  }
-  return t;
-}
-
-/** Compare two ULIDs lexically — equivalent to chronological order. */
-export function ulidCompare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}

@@ -290,10 +290,11 @@ describe('agents tool — registration and dep-gating', () => {
 });
 
 // ── the field contract, at the surface the model actually calls ─────────────
-// The parse used to be a flat `v.object`, which EXCLUDES an unknown entry rather
-// than rejecting it, and the native tool did not parse at all: a field the model
-// misspelled reached the dispatcher and was read by nothing. On a surface whose
-// fields include spend caps, that is a ceiling asked for and never applied.
+// An unknown entry is REFUSED with a message the caller can correct itself from
+// rather than silently excluded, and the native tool parses through the same
+// function: a field the model misspelled must not reach the dispatcher and be
+// read by nothing. On a surface whose fields include spend caps, that is a
+// ceiling asked for and never applied.
 
 describe('agents tool — the field contract', () => {
   const fullDeps = () => withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps });
@@ -353,11 +354,11 @@ describe('agents tool — the field contract', () => {
   }
 
   test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
-    // It used to be four hand-written copies — this property, the missing-`preset`
-    // refusal, the swarm rung and the codemode declaration — and they disagreed:
-    // `prove` was selectable and named in none of them, while research/audit/
-    // redteam went on being described as working after their rows stopped
-    // resolving. One constant, rendered where the field is typed.
+    // ONE constant, rendered where the field is typed. Four hand-written copies
+    // — this property, the missing-`preset` refusal, the swarm rung and the
+    // codemode declaration — disagree instead: a selectable preset like `prove`
+    // ends up named in none of them, and a preset whose rows stopped resolving
+    // goes on being described as working.
     const t = agentsTool({ fork: forkDeps() });
     const preset = propertyDescription({ value: t.inputSchema }, 'preset');
     expect(preset).toContain(SWARM_PRESET_DOCTRINE.join(' '));
@@ -373,8 +374,9 @@ describe('agents tool — the field contract', () => {
     // advance:"pareto" is implemented: instanced/vector evidence is measured per
     // declared axis and the nondominated frontier advances the tree. The
     // description must offer the real contract — front kinds pair with pareto,
-    // every axis must measure finite — and must not carry the old refusal, which
-    // would make the model scalarise a genuinely multi-axis objective.
+    // every axis must measure finite — and must not carry a blanket refusal of
+    // them, which would make the model scalarise a genuinely multi-axis
+    // objective.
     const objective = propertyDescription({ value: agentsTool({ fork: forkDeps() }).inputSchema }, 'objective');
     expect(objective).toContain('run only with advance:"pareto"');
     expect(objective).toContain('{kind:"instanced", metric, unit, direction, scale, target, instances}');
@@ -388,7 +390,7 @@ describe('agents tool — the field contract', () => {
   test('a cap on an action that cannot spend it is refused, not accepted and ignored', async () => {
     // `budget_usd` is real, and only `swarm` reads it: the host meters a search it
     // owns, while a subordinate runs on its own storage and is gated at the spawn
-    // seam instead. Sent to `hire` it parsed cleanly and was then read by nothing
+    // seam instead. Sent to `hire` it parses cleanly and is then read by nothing
     // at all, which is the same silence one layer in.
     const team = makeTeam();
     const t = agentsTool({ team: team.deps });
@@ -627,9 +629,9 @@ describe('agents tool — subordinate actions', () => {
     });
   });
 
-  // The sender used to be told a fixed sentence and nothing else: no id to
-  // correlate the eventual report with, and no way to know whether the
-  // subordinate was mid-work. Both are things admission already knew.
+  // The sender is told what admission already knows: an id to correlate the
+  // eventual report with, and whether the subordinate is mid-work. A fixed
+  // sentence and nothing else leaves both unanswerable.
   test('ask reports the event id, how the work lands, and what the subordinate was doing', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
@@ -880,11 +882,11 @@ describe('agents tool — peer workspace actions', () => {
 
 // ── replaying a stored delegation row ───────────────────────────────────────
 // A durable job row holds whatever the model sent, verbatim (jobs/runner.ts
-// stores the raw tool input), so rows written before today's surface can carry
-// fields it now refuses — and can name an ACTION it no longer has. A row is
-// RE-DRIVEN, not answered: there is no model listening for a correction, and a
-// refusal here is interrupted work lost to a spelling nobody can fix any more.
-// So the filter TRANSLATES, and says what it could not carry.
+// stores the raw tool input), so a row can carry a field the surface refuses —
+// and can name an ACTION the surface does not have. A row is RE-DRIVEN, not
+// answered: there is no model listening for a correction, and a refusal here is
+// interrupted work lost to a spelling nobody can fix any more. So the filter
+// TRANSLATES, and says what it could not carry.
 //
 // The same predicate is the DETACH gate (orchestrator/background-tools.ts), so
 // these tests also pin what `agents` may background at all.

@@ -59,8 +59,8 @@ const PAST_END = 99_999;
 /** A theorem the tree declares, in `ARBITRATION`, at the line the docs cite. */
 const LIVE = `accepted_respects_${'context'}`;
 const LIVE_LINE = 200;
-/** The pre-rename spelling. The axis cutover replaced it, so nothing declares it. */
-const RENAMED = `accepted_respects_${'decorrelate'}`;
+/** A theorem spelling nothing in the tree declares. */
+const UNDECLARED = `accepted_respects_${'decorrelate'}`;
 /** A theorem that exists, but in `STORAGE` rather than in `ARBITRATION`. */
 const ELSEWHERE = `init_${'isolated'}`;
 
@@ -85,14 +85,14 @@ function audit(text: string): string[] {
 
 describe('a theorem name the tree does not declare', () => {
   test('NAME FIRST is caught — the hole this gate was blind to', () => {
-    const findings = audit(nameFirst(RENAMED, `${ARBITRATION}:${String(LIVE_LINE)}`));
+    const findings = audit(nameFirst(UNDECLARED, `${ARBITRATION}:${String(LIVE_LINE)}`));
     expect(findings).toHaveLength(1);
-    expect(findings[0]).toContain(RENAMED);
+    expect(findings[0]).toContain(UNDECLARED);
     expect(findings[0]).toContain('which no Lean source declares');
   });
 
   test('PATH FIRST is still caught, in both spellings — no regression', () => {
-    for (const text of pathFirst(ARBITRATION, RENAMED)) {
+    for (const text of pathFirst(ARBITRATION, UNDECLARED)) {
       const findings = audit(text);
       expect(findings).toHaveLength(1);
       expect(findings[0]).toContain('which no Lean source declares');
@@ -173,7 +173,7 @@ describe('the false positives that shaped the adjacency rule', () => {
   });
 
   test('a name separated from the locator by even one word is not a citation', () => {
-    expect(audit(`\`${RENAMED}\` is discussed in (\`${ARBITRATION}\`) somewhere.`)).toEqual([]);
+    expect(audit(`\`${UNDECLARED}\` is discussed in (\`${ARBITRATION}\`) somewhere.`)).toEqual([]);
   });
 
   test("this gate's own account of the three defects it caught is not a citation", () => {
@@ -225,13 +225,13 @@ describe('the corpus this gate governs', () => {
 describe('the workflow that runs this gate fires on what this gate reads', () => {
   /**
    * `lean-verify.yml` is the ONLY Lean gate a pull request runs — `ci.yml`'s
-   * `verify-lean` job is `push` to `main` only — and it used to carry a `paths:`
-   * filter naming `lean/**` and `packages/**\/src/**\/*.ts`. This gate's corpus is
-   * every tracked TEXT source, and citations really do live outside that filter:
-   * `docs/`, `scripts/`, `packages/core/tests/` and `tests/bench/patches/`. So a
-   * broken citation added to any of them reached `main` with no Lean gate having
-   * run, and `scripts/lean-citations.ts` itself was not a trigger path — editing
-   * the gate did not run it.
+   * `verify-lean` job is `push` to `main` only — so a `paths:` filter naming
+   * `lean/**` and `packages/**\/src/**\/*.ts` does not cover it. This gate's corpus
+   * is every tracked TEXT source, and citations really do live outside that
+   * filter: `docs/`, `scripts/`, `packages/core/tests/` and `tests/bench/patches/`.
+   * A broken citation added to any of them would reach `main` with no Lean gate
+   * having run, and `scripts/lean-citations.ts` itself would not be a trigger
+   * path — editing the gate would not run it.
    *
    * A filter is allowed only if it COVERS the corpus, which is checked here
    * rather than argued in a comment. Enumerating the real union is the same

@@ -147,10 +147,10 @@ describe('listReplayEvals — the quality-panel data series', () => {
     expect(listReplayEvals(sql, actor, 3)).toHaveLength(3);
   });
 
-  test('rows written before the interval columns get theirs reconstructed exactly', () => {
+  test('a row with no stored interval gets one reconstructed exactly', () => {
     const { sql, actor } = setup();
-    // insertReplay writes no score_lo/score_hi — a pre-interval row.
-    insertReplay(sql, actor, { id: 'legacy', ranAt: 100, meanScore: 0.75, scaffoldVersion: null });
+    // insertReplay writes no score_lo/score_hi — the row shape reconstruction covers.
+    insertReplay(sql, actor, { id: 'no-interval', ranAt: 100, meanScore: 0.75, scaffoldVersion: null });
     const [row] = listReplayEvals(sql, actor);
     expect(row.interval).toEqual(wilsonInterval(3, 4)); // mean 0.75 over the row's 4 instances
   });

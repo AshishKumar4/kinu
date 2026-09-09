@@ -228,13 +228,13 @@ export async function runScaffoldOnce(
  * that was not under trial when it ran.
  *
  * The trial itself, a whole candidate turn plus two judge calls, minutes of
- * wall clock, is NOT run here. It used to be, on the turn's own lane, which
- * meant the promotion gate resolved candidates against the user's clock: a
- * `kinu exec` process waited up to its settle bound for a rollout, and a
- * Durable Object ran a full extra inference beside the next request. What runs
- * the queue is the cadence lane ({@link runQueuedShadowTrials}), and until it
- * does the gate has less evidence, which `decidePromotion` already answers with
- * 'continue' and `getShadowStatus` reports as queued rather than as trials.
+ * wall clock, is NOT run here. On the turn's own lane it would resolve the
+ * promotion gate against the user's clock: a `kinu exec` process waiting up to
+ * its settle bound for a rollout, a Durable Object running a full extra
+ * inference beside the next request. What runs the queue is the cadence lane
+ * ({@link runQueuedShadowTrials}), and until it does the gate has less
+ * evidence, which `decidePromotion` already answers with 'continue' and
+ * `getShadowStatus` reports as queued rather than as trials.
  *
  * Whether any of this runs is not decided here: both halves of the loop are
  * reached through the EvolutionEngine, which holds the one auto-evolution gate

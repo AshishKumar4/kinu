@@ -475,8 +475,8 @@ class BenchBox extends Devbox<BenchEnv> {
    *
    * Called as RPC at the END of every instrumented operation, so it executes
    * where the counting happened rather than where the request was served. That
-   * is what makes the count independent of `FLUSH_EVERY`: the threshold stays as
-   * an optimisation WITHIN an operation, and correctness no longer depends on an
+   * is what makes the count independent of `FLUSH_EVERY`: the threshold stays an
+   * optimisation WITHIN an operation, and correctness does not depend on an
    * operation happening to issue 64 calls before it ends.
    */
   async flushOpTally(): Promise<void> {

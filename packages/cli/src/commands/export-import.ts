@@ -28,7 +28,7 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
 import {
-  adoptLegacyLocalAgent, agentDbPath, agentDir, ensureAgentHome,
+  adoptUnplacedLocalAgent, agentDbPath, agentDir, ensureAgentHome,
   requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
 } from '../config';
 import { resolveAgentTarget } from '../agent-target';
@@ -79,8 +79,8 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     printError(`File not found: ${file}`);
     process.exit(1);
   }
-  const legacy = isSqliteDatabaseFile(file);
-  const name = opts.name ?? (legacy ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
+  const bareDatabase = isSqliteDatabaseFile(file);
+  const name = opts.name ?? (bareDatabase ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
   ensureAgentHome();
   const dbPath = agentDbPath(name);
   if (existsSync(dbPath)) {
@@ -95,10 +95,10 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   rmSync(partial, { force: true });
   let restored: RestoredArchiveCounts;
   try {
-    if (legacy) {
-      // A database file from a pre-archive `kinu export`. Copying it is
-      // still the correct restore for those backups, and they are the kind of
-      // file nobody gets to make again.
+    if (bareDatabase) {
+      // A bare SQLite workspace database, not an archive: copying the file IS
+      // the restore. `kinu export` writes archives, so this shape only ever
+      // arrives as a backup somebody already holds.
       copyFileSync(file, partial);
       restored = countRestored(partial);
     } else {
@@ -133,7 +133,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
     return;
   }
-  const placed = adoptLegacyLocalAgent(name);
+  const placed = adoptUnplacedLocalAgent(name);
   console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
 }
 

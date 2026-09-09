@@ -1,9 +1,9 @@
 /**
  * The section registry is the prompt's REPLACEMENT surface.
  *
- * Every line of prose that `prompt.ts` used to push into an array lives in
- * `prompting/section-templates.ts` as one addressable template per section, so
- * that a section becomes a value GEPA can score and swap
+ * Every line of the prompt's prose lives in `prompting/section-templates.ts` as
+ * one addressable template per section, so that a section becomes a value GEPA
+ * can score and swap
  * (`evolution/gepa/section-bridge.ts`). What has to hold is therefore not a
  * historical byte string — the prompt's content is changed deliberately and
  * often — but the ADDRESSING: every registered section reaches a rendered
@@ -150,7 +150,7 @@ describe('the prompt stays inside its byte budget', () => {
     // removed in the same change, so the net is the ~3.7k a rung costs across
     // every surface that renders the ladder, not a duplicate of what went.
     // Lowered 2026-09-03 to 111,800, measured 110,668: the delegation nudge
-    // cutover. The Delegation section is a neutral index now (no shape test,
+    // came out. The Delegation section is a neutral index (no shape test,
     // no triggers, no coordination loop, no artifact trail), the Code-execution
     // section lost its `agents.ask` bullet, the `agents` schema shed the
     // Breadth/Doubt triggers and the payoff framing, and the placeholder

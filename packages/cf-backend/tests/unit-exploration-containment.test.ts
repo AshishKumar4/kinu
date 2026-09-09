@@ -374,13 +374,13 @@ describe('recursive split budget', () => {
 });
 
 describe('the mission ledger bounds a hosted head', () => {
-  // Head execution caps were removed outright (no wall clock, no token pool, no
-  // step guard), which makes the mission budget the only remaining bound on a
-  // fork. It used to reach the head over an RPC to the actor that held the
-  // ledger, and this runner could not exercise a cross-Durable-Object call, so
-  // the wiring was asserted at the source. A hosted head runs in the ledger
-  // holder's own isolate, so the port is a pair of in-process calls and the
-  // seam that builds it can simply be driven.
+  // A head carries no execution cap of its own — no wall clock, no token pool,
+  // no step guard — which makes the mission budget the only bound on a fork. A
+  // hosted head runs in the ledger holder's own isolate, so the port is a pair
+  // of in-process calls and the seam that builds it can simply be driven; an
+  // RPC to the actor that holds the ledger would be a cross-Durable-Object call
+  // this runner cannot exercise, leaving only a source-level assertion of the
+  // wiring.
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
   const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
 
@@ -426,7 +426,7 @@ describe('the mission ledger bounds a hosted head', () => {
     expect(actor).not.toContain("@callable()\n  async missionDebit(");
     // Still allowlisted, and that is not vestigial: a spend ledger must not
     // become writable over the public WS/HTTP transport just because the head
-    // that charges it moved in-process.
+    // that charges it runs in-process.
     expect(surface).toContain("'missionGuard'");
     expect(surface).toContain("'missionDebit'");
   });

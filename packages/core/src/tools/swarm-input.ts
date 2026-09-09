@@ -12,13 +12,14 @@
  * rather than an implementation detail. An `objective` that were the one camelCase
  * island in a snake_case action would make camelCase-for-snake_case the EXPECTED
  * model error rather than an exotic one, on the surface where that error is already
- * measured: a model spelling `budgetUsd` asked for a $5 ceiling and used to get none.
+ * measured: a model spelling `budgetUsd` asked for a $5 ceiling, and a surface
+ * that drops an unrecognised entry hands it none.
  *
  * FOUR NAMES ARE ACTUALLY AFFECTED and the rest of both types is single-word, which
  * is why this file is small: `best_known_honest` on a floor, and
  * `exploration_weight` / `prune_threshold` / `min_visits_for_prune` on a composed
- * configuration. `samples` and `threshold` are already single words because they were
- * moved ONTO the axis values that own them, which is the same decision paying twice.
+ * configuration. `samples` and `threshold` are already single words because they
+ * sit ON the axis values that own them, which is the same decision paying twice.
  *
  * AND ONE PAYLOAD IS DELIBERATELY NOT MAPPED. `verify.spec` crosses untouched. It is
  * opaque to this convention because the convention governs the fields this

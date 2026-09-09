@@ -33,7 +33,7 @@ export interface PagedScroll<Item> {
    * the walk that asked for it, and once this is called that walk is not the
    * current one, so its reply is discarded instead of re-seeding a list the
    * caller just emptied. Clearing a conversation's history while its first page
-   * was in flight used to put that page straight back on screen.
+   * is in flight would otherwise put that page straight back on screen.
    */
   reset: () => void;
 }

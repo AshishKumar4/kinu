@@ -336,17 +336,16 @@ describe('the agent surfaces cannot drift from their classes', () => {
   });
 
   /**
-   * THE SUBORDINATE SNAPSHOT HOP IS NOT HERE ANY MORE, and its absence is a
-   * property rather than a gap.
+   * THERE IS NO SUBORDINATE SNAPSHOT HOP, and its absence is a property rather
+   * than a gap.
    *
-   * A test used to pin `.getSubordinateSnapshot()` being called on a facet stub
-   * AND being carried by `SUBORDINATE_RPC_SURFACE`, because the display name and
-   * the role lived in the child's own database and a name the seal did not carry
-   * cost every roster row its real identity. `subordinateView` now reads them
-   * through `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows
-   * in the one database, no stub, no allowlist entry, nothing to drift. The
-   * behaviour that replaced it is a hosting question and is asserted where the
-   * roster is driven, not against a surface it no longer crosses.
+   * `subordinateView` reads the display name and the role through
+   * `actorHost().bindStores(...).stores.config` — `actor_id`-scoped rows in the
+   * one database, no stub, no allowlist entry, nothing to drift. Reaching them
+   * over a stub instead makes the seal's own list load-bearing for identity: a
+   * name the seal does not carry costs every roster row its real identity. The
+   * behaviour is a hosting question and is asserted where the roster is driven,
+   * not against a surface it does not cross.
    */
 
   test('worker routes call only methods on the orchestrator surface', () => {

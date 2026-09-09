@@ -4,9 +4,9 @@
  * Source of truth is the TABLE, not an in-memory array: after a DO eviction or
  * a CLI process exit, a resumed search re-enters with a fresh session, and
  * getHistory(leafId) must still reconstruct a branch's ancestry from the
- * persisted rows so resumed branches keep their context (B6). The CLI
- * previously walked an in-memory mirror, which lost exactly that ancestry on
- * resume-after-restart — both backends now share this durable writer.
+ * persisted rows so resumed branches keep their context (B6). Both backends
+ * share this durable writer: an in-memory mirror loses exactly that ancestry on
+ * resume-after-restart.
  */
 
 import type { SessionWriter, SessionMessage } from '../mcts/record-node';

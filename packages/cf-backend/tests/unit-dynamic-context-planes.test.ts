@@ -2,13 +2,13 @@
 // its subordinate roster and the two kinds of decision parked on the user —
 // rendered through the ONE shared assembler, not a backend splice.
 //
-// Until this existed, the approvals plane was unreachable on anything but the
-// orchestrator: the base class assembled through `collectDynamicContext` and
-// then hand-spliced `delegates`/`approvals` over the result in an override.
-// A plane added to the shared assembler therefore did not exist for an actor
-// that did not re-splice it — the exact drift the shared assembler exists to
-// close. This pins the cutover: the override is gone, the extras ride typed
-// source callbacks, and the assembled block actually carries them.
+// There is no override that hand-splices `delegates`/`approvals` over the
+// result of `collectDynamicContext`: the extras ride typed source callbacks
+// into the assembler itself. Splicing them on afterwards is what makes a plane
+// added to the shared assembler not exist for an actor that does not re-splice
+// it, and leaves the approvals plane unreachable on anything but the
+// orchestrator — the exact drift the shared assembler exists to close. What is
+// pinned here is that the assembled block actually carries them.
 import { describe, expect, test } from 'bun:test';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 

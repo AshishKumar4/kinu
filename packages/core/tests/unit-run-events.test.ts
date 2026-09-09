@@ -534,8 +534,8 @@ describe('RunEventRecorder.readRecentByType', () => {
 describe('RunEventRecorder.spendByProducer', () => {
   test('sums every row in the log, not a window of them', () => {
     const { recorder } = setup();
-    // Past `readRecentByType`'s 200-row default and past every window this read
-    // used to be folded over. A total is a sum, and a sum has no sample size.
+    // Past `readRecentByType`'s 200-row default and past any window a folded
+    // read would impose. A total is a sum, and a sum has no sample size.
     for (let i = 0; i < 450; i++) {
       recorder.emit('run-1', {
         type: 'step_finish', stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001,
@@ -651,9 +651,9 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
     }
     // A plan turn answers with a plan; it never ticks the improvement lane.
     recorder.emit('run-plan', { type: 'turn_end', turnIndex: 0, workMode: 'plan' });
-    // A row from before the field existed carries no mode and counts nothing:
-    // the denominator starts at the cutover rather than inventing history.
-    recorder.emit('run-legacy', { type: 'turn_end', turnIndex: 0 });
+    // A turn_end row that carries no mode counts nothing: `json_extract`
+    // returns NULL for it, so absence never reads as build.
+    recorder.emit('run-no-mode', { type: 'turn_end', turnIndex: 0 });
 
     expect(recorder.completedWorkTurns(null)).toBe(25);
     expect(recorder.completedWorkTurns(boundary)).toBe(15);

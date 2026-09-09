@@ -242,10 +242,10 @@ theorem a_crash_redoes_at_most_one_batch (p batchSize : Nat) (hb : 0 < batchSize
   batch's last seq, carrying the whole entry array. Every term is
   pending-shaped; none mentions n or c.
 
-  This was ⌈p/64⌉ only after a defect was fixed: the journal used to be
-  one object per ENTRY, which made an npm-shaped tick cost thousands of
-  class-A PUTs. The theorem below was true of that code and the code
-  was wrong, which is the shape a cost model is for. -/
+  The journal term is ⌈p/64⌉ BECAUSE of that batching. One object per
+  ENTRY costs an npm-shaped tick thousands of class-A PUTs, and the
+  theorem below is equally true of it: a cost model can hold over code
+  that is wrong, which is the shape it is for. -/
 
 def tickCost
     (newBlobs headChecks newChunkBytes journalEntries batchSize : Nat) : Cost :=

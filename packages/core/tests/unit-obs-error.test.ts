@@ -72,8 +72,8 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
     // so the errno-style `code` read that identifies a filesystem error cannot
     // tell them apart at all. The NAME is the discriminator, and a remote
     // executor that cannot kill an in-flight command rejects with exactly this
-    // (execution/signal.ts) — which is why the run tool used to report a
-    // cancelled wait and a dead transport identically.
+    // (execution/signal.ts) — so reading `code` there makes the run tool report
+    // a cancelled wait and a dead transport identically.
     const aborted = provokeAbort();
     const timedOut = await provokeTimeout();
     expect(aborted).toBeInstanceOf(Error);
@@ -118,8 +118,8 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
   });
 
   test('a malformed URL is `bad_input`, like malformed JSON', () => {
-    // Provoked: `classify` owns this signature, and this layer used to miss it
-    // while catching the JSON half.
+    // Provoked: `classify` owns this signature, and a layer that catches the
+    // JSON half alone misses it.
     const badUrl = raisedBy(() => { new URL('notaurl'); });
     expect(classifyErrorCode({ cause: badUrl })).toBe('bad_input');
   });

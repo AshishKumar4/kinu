@@ -180,15 +180,16 @@ describe('a re-driven fork job stays one run', () => {
   });
 
   test('N heads requested stays exactly N journal rows through repeated resets', async () => {
-    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. A re-drive used to
-    // reclaim the run id, stamp every unreported row `aborted` with "Interrupted
-    // before it reported. This fork was restarted, and the branches below it are the
-    // retry.", and then mint a FRESH nanoid id per head — so one five-branch request
-    // accumulated five more aborted rows on every re-drive, up to the runner's
-    // attempt cap, and the surface drew every one of them as a failed branch.
+    // THE OWNER'S `Systemfork interrupted` REPORT, as a test. The head id is
+    // derived from the branch point and the slot, so a re-drive re-spawns the
+    // SAME ids and `insertSpawn` re-opens the rows they already have.
     //
-    // The head id is now derived from the branch point and the slot, so a re-drive
-    // re-spawns the SAME ids and `insertSpawn` re-opens the rows they already have.
+    // A re-drive that reclaims the run id, stamps every unreported row `aborted`
+    // with "Interrupted before it reported. This fork was restarted, and the
+    // branches below it are the retry.", and then mints a FRESH nanoid id per
+    // head accumulates five more aborted rows on every re-drive of one
+    // five-branch request, up to the runner's attempt cap — and the surface
+    // draws every one of them as a failed branch.
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
@@ -229,10 +230,10 @@ describe('a re-driven fork job stays one run', () => {
   });
 
   test('two parents splitting at one depth get distinct branch ids', async () => {
-    // The other half of deriving the id. It used to be keyed on the ROOT, so two
-    // parents splitting at the same depth under one root produced the same
-    // `${rootId}-d${depth}-${idx}` prefix and only the random suffix kept them apart.
-    // Keyed on the branch POINT, uniqueness needs no randomness.
+    // The other half of deriving the id. Keyed on the branch POINT, uniqueness
+    // needs no randomness: keyed on the ROOT, two parents splitting at the same
+    // depth under one root produce the same `${rootId}-d${depth}-${idx}` prefix
+    // and only the random suffix keeps them apart.
     const { journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const controller = new HeadController(runtime({ settles: true, spawned }), journal);

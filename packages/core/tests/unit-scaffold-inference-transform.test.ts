@@ -2,8 +2,8 @@
  * The evolved scaffold on the LIVE inference seam (Think 0.8's protected
  * `_transformInferenceResult`) — scaffold/inference-transform.ts.
  *
- * Pins the re-wired contract that used to live on the dead `runStreamText`
- * override (zero callers on think@0.8.2):
+ * Pins the contract this seam carries — `runStreamText` has zero callers on
+ * think@0.8.2, so the transform is the only override that can hold it:
  *   - un-evolved agent (version <= 0): the default result passes through
  *     UNTOUCHED (same object — zero overhead, no wrapper).
  *   - delegating scaffold: `host.defaultInference()` streams the EXACT

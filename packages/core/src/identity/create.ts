@@ -69,13 +69,13 @@ function buildComponents(
      * This runtime does not implement branch spawning, and says so instead of
      * pretending to.
      *
-     * It used to return a handle whose `explore` answered the literal
-     * `'exploration result'` and whose `generateReflection` answered
-     * `'no reflection available'`. No consumer can tell either from a real
-     * result, so every MCTS-shaped measurement taken on this runtime scored a
-     * fabricated string — and two full behavioural eval runs did exactly that
-     * before anyone noticed, because a plausible fake corrupts silently while an
-     * absent implementation is found in seconds.
+     * A handle whose `explore` answers the literal `'exploration result'` and
+     * whose `generateReflection` answers `'no reflection available'` is
+     * indistinguishable from a real result to every consumer, so every
+     * MCTS-shaped measurement taken on this runtime would score a fabricated
+     * string — two full behavioural eval runs did exactly that before anyone
+     * noticed, because a plausible fake corrupts silently while an absent
+     * implementation is found in seconds.
      *
      * `createWorkspace` exists to BIRTH a workspace (cli/src/agent-create.ts
      * calls it once and closes the database); every running surface opens through

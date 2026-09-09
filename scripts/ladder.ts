@@ -734,10 +734,10 @@ export const LADDER: readonly Gate[] = [
       + 'it firing on shapes that are legitimate. 24 cases: RED on each of the five defect '
       + 'shapes actually shipped (a private pattern, a private `git ls-files`, a private walk, '
       + 'a glob scan, a lock published before its measurement), GREEN on their corrected form, '
-      + 'and SILENT on the four its first draft mistook for violations — a URL route, a model '
-      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. That first '
-      + 'draft reported 40 findings of which 38 were `context.report` in an oxlint rule; a gate '
-      + 'whose first run is mostly noise trains people to ignore it.',
+      + 'and SILENT on the four a naive reading mistakes for violations — a URL route, a model '
+      + 'id prefix, a `.replace()` specifier rewrite, and `matchAll` over prose. Without those '
+      + 'four the gate reports 40 findings of which 38 are `context.report` in an oxlint rule; a '
+      + 'gate whose output is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
   },
@@ -771,7 +771,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'push',
     // Re-measured 2026-09-05 on the 24-thread box: 44.4/42.7s, both RED with the same
     // 16 failures (stale prompt goldens, another lane). A red run's cost is still its
-    // cost; re-measure green after the fix lands. Replaces 34s.
+    // cost; re-measure once those 16 are green — the last green figure was 34s.
     seconds: 44,
     catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
       + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
@@ -1051,7 +1051,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
       + 'CLASSES a failure: which census part makes a failed call a product defect, that a '
       + 'correct refusal never enters the worklist, that dispersion counts only inside one '
-      + 'commit and one arm, and — the one that would have mattered most — that a legacy '
+      + 'commit and one arm, and — the one that would have mattered most — that a '
       + '`tool_outcomes` detail carrying a tool USAGE histogram yields no attribution at all. '
       + 'Reading `run×29` as 29 broken calls would have filed the whole baseline corpus as a '
       + 'product defect. All three directions were proven red by mutation. The live-model '
@@ -1062,11 +1062,11 @@ export const LADDER: readonly Gate[] = [
       + 'and an unverified group both print.',
   },
   {
-    // The COMMAND deploy.sh runs, spelled identically. It used to stop at the
-    // `scripts/bench*` glob while deploy.sh also passed the core bench units, so
-    // the wider command matched no LADDER entry, `gatesFor('deploy')` synthesized
-    // it at a declared cost of ZERO, and the four core bench suites were governed
-    // by an entry that did not name them. The durability probe is explicit rather
+    // The COMMAND deploy.sh runs, spelled identically. Stopping at the
+    // `scripts/bench*` glob while deploy.sh also passes the core bench units leaves
+    // the wider command matching no LADDER entry, `gatesFor('deploy')` synthesizes
+    // it at a declared cost of ZERO, and the four core bench suites end up governed
+    // by an entry that does not name them. The durability probe is explicit rather
     // than absorbed by that glob because its name is a contract: a real container
     // measurement that remains only in stdout is not evidence.
     //
@@ -1700,9 +1700,9 @@ export function deployGates(
  * deploy.sh enqueues gates and runs each queue at a `flush_gates` line, so a wave
  * is the run of gates between two flushes and every gate in one wave runs beside
  * the others. That makes "runs alone" a property of this grouping rather than of
- * a log, which matters: the first version of the assertion read the ORDER off a
- * stub log, and deleting a barrier left it green because the scheduler happened
- * to launch index 0 first. A test that cannot fail is not a gate.
+ * a log, which matters: an assertion that reads the ORDER off a stub log stays
+ * green when a barrier is deleted, because the scheduler happens to launch index
+ * 0 first. A test that cannot fail is not a gate.
  *
  * A trailing enqueue with no flush after it is a gate nobody runs, so it comes
  * back as its own final wave and `deploy.test.ts` refuses it.

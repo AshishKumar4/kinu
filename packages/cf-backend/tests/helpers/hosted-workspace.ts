@@ -1,21 +1,20 @@
 /**
  * ONE database, five actors — the fixture that makes open-38 checkable.
  *
- * WHY THIS IS NOT THE OLD HARNESS. `actor-harness.ts` spends most of its length
- * on facet plumbing: a `HarnessSubordinateAgent`, a `subAgent` interception that
- * hands a spawner a real child object, a `parentPath` override so the SDK's
- * lineage matches, a second `Database(':memory:')` per child, and a
- * `FacetIdentity` seed so the child could read its own name back. Every one of
- * those exists to SIMULATE a per-actor database, which is the thing being
- * removed — a fixture that fakes facet storage cannot witness a cutover away
- * from facet storage, it can only agree with whichever side it was built for.
+ * Deliberately small: it opens exactly ONE `bun:sqlite` database, builds
+ * exactly ONE `ActorHost` over it, and acquires every actor from that host.
+ * There is no second `Database` in the file, so "one physical workspace SQLite
+ * for every logical actor" is not asserted, it is the only shape the fixture
+ * can express — and `databasesOpened()` is the witness that stays true only
+ * while that holds.
  *
- * This helper does the opposite and it is deliberately small: it opens exactly
- * ONE `bun:sqlite` database, builds exactly ONE `ActorHost` over it, and
- * acquires every actor from that host. There is no second `Database` in the
- * file, so "one physical workspace SQLite for every logical actor" is not
- * asserted, it is the only shape the fixture can express — and
- * `databasesOpened()` is the witness that stays true only while that holds.
+ * A fixture that stood the actors up itself would have to SIMULATE a per-actor
+ * database: a `subAgent` interception that hands a spawner a real child object,
+ * a `parentPath` override so the SDK's lineage matches, a second
+ * `Database(':memory:')` per child, a `FacetIdentity` seed so the child could
+ * read its own name back. One that fakes facet storage cannot witness one
+ * database serving every actor, it can only agree with whichever side it was
+ * built for.
  */
 
 import { Database } from 'bun:sqlite';
@@ -58,14 +57,13 @@ export function resetDatabases(): void {
  * `SqlExec`. Same database either way — which is the only property these
  * fixtures exist to hold.
  *
- * These used to be hand-rolled here, including a private re-derivation of the
- * Durable Object BLOB convention (the platform answers an ArrayBuffer,
- * `bun:sqlite` a Uint8Array). That copy was the file's single largest source of
- * type assertions, and it was a second answer to a question core's test helpers
- * had already answered: `makeSqlExec` performs exactly that normalization, and
- * `sqlOver` is the tag every actor-backed suite already binds through. Named
- * re-exports rather than wrappers, so a caller reads the same two functions the
- * rest of the repo does.
+ * Named re-exports of core's test helpers rather than wrappers, so a caller
+ * reads the same two functions the rest of the repo does. `makeSqlExec`
+ * performs the Durable Object BLOB normalization (the platform answers an
+ * ArrayBuffer, `bun:sqlite` a Uint8Array) and `sqlOver` is the tag every
+ * actor-backed suite already binds through. A private re-derivation here would
+ * be a second answer to a question core's test helpers answer, and the file's
+ * single largest source of type assertions.
  */
 export const harnessExec: (db: Database) => SqlExec = makeSqlExec;
 export const harnessSql: (db: Database) => SqlExecutor = sqlOver;
@@ -108,13 +106,13 @@ const FIXTURE_AUTHORITY: ProfileAuthorityInputs = {
  * The profile every hosted turn in this fixture resolves under, RESOLVED by the
  * production authority rather than described.
  *
- * It used to be an object literal asserted into `ResolvedTurnProfile`, and the
- * literal was already wrong in three fields — `role` carried a `tools` member
- * the type has no room for, `tier` was missing `source`, and `providerRevision`
- * was a number where the contract declares a string. Nothing caught it, because
- * the assertion was there to stop the compiler from looking. A claim recorded
- * against a profile the authority never produced cannot witness anything about
- * which profile a turn ran under, so the authority produces this one.
+ * A claim recorded against a profile the authority never produced cannot
+ * witness anything about which profile a turn ran under, so the authority
+ * produces this one. An object literal asserted into `ResolvedTurnProfile`
+ * instead buys nothing and hides its own field errors, because the assertion is
+ * there to stop the compiler from looking: a `role` carrying a `tools` member
+ * the type has no room for, a `tier` missing `source`, a `providerRevision`
+ * number where the contract declares a string.
  */
 export function fixtureProfile() {
   return {
@@ -160,7 +158,7 @@ export async function hostedWorkspace(
   // The REAL workspace host, over the SAME one database. Not a fake box: a
   // fixture that stubbed the file plane could not witness a hosted actor's
   // writes landing under its own uid on the shared tree, which is half of what
-  // the cutover claims.
+  // this fixture exists to hold.
   //
   // `ctx` is the one platform surface bun cannot provide — a Durable Object
   // state — and it comes from `actor-harness.ts` rather than being narrowed
@@ -179,13 +177,11 @@ export async function hostedWorkspace(
   // needed a binding the other did not have — the same reason a test helper must
   // not declare a table a production initializer owns.
   const env = makeEnv();
-  // The two optional deps were previously `as never`-ed past, and the cast was
-  // hiding real signature mismatches: `previewUrl` answers a PROMISE of a
-  // preview verdict and `refreshPreview` a promise of void, and this fixture
-  // returned `null` and `undefined` for them. Nothing surfaced because nothing
-  // here exposes a port; the answers are stated properly so that stops being
-  // luck. A workspace with no signing key genuinely has no preview URL, and
-  // `unavailable` is how the contract says so.
+  // Both optional deps are ANSWERED, not cast past: `previewUrl` answers a
+  // PROMISE of a preview verdict and `refreshPreview` a promise of void, and an
+  // `as never` over them hides a signature mismatch nothing here would surface,
+  // because nothing here exposes a port. A workspace with no signing key
+  // genuinely has no preview URL, and `unavailable` is how the contract says so.
   const workspace = createHostedWorkspace({
     ctx, env,
     previewUrl: (port) => Promise.resolve({ unavailable: `port ${String(port)} has no preview host in this fixture` }),

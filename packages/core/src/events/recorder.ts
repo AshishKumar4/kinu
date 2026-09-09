@@ -201,8 +201,8 @@ export const RUN_EVENT_LIMIT_DEFAULT = 200;
 
 /**
  * The ceiling on a read an UNTRUSTED caller asked for — the bound the HTTP route
- * already enforced, applied by {@link boundRunEventQuery} so the route is no
- * longer the only place it holds. The read it is actually about is the SSE
+ * enforces, applied by {@link boundRunEventQuery} so the route is not the only
+ * place it holds. The read it is actually about is the SSE
  * replay at `cf-backend/src/run-events-routes.ts:202`, which asks for it by
  * name.
  *
@@ -477,11 +477,10 @@ export class RunEventRecorder {
    * event. Pushing the predicate into SQL would buy nothing and would still
    * parse every row it kept.
    *
-   * That is a cost argument and no longer a capability one. This method's
-   * docstring used to say no production query had ever depended on SQLite's JSON
-   * functions being available on both SqlExecutors; {@link spendByProducer} now
-   * does, deliberately, and `tests/workerd/do-spend-aggregate.test.ts` runs it on
-   * real Durable Object SQLite so the claim is measured rather than assumed.
+   * That is a cost argument, not a capability one: {@link spendByProducer} depends
+   * on SQLite's JSON functions being available on both SqlExecutors, deliberately,
+   * and `tests/workerd/do-spend-aggregate.test.ts` runs it on real Durable Object
+   * SQLite so the claim is measured rather than assumed.
    */
   runForHeadSplit(rootId: string, window = 500): string | null {
     this.actor.assertCurrent();
@@ -578,12 +577,12 @@ export class RunEventRecorder {
    * This is a SOURCE QUERY, not a counter: the count lives in these rows, so
    * it survives every activation loss that the log survives. `sinceTs` is the
    * timestamp of whatever marks the last GEPA pass (null = count everything).
-   * A row without `workMode` predates the field and counts nothing: the
-   * denominator starts at the cutover rather than inventing history, and
-   * `json_extract` returning NULL for those rows is what makes absence read
-   * as "before it started", never as build. Timestamps are millisecond ISO,
-   * and a turn stamped in the SAME millisecond as the boundary is excluded —
-   * a tie reads as "before", which keeps a re-driven pass from recounting.
+   * A row with no `workMode` counts nothing: the denominator starts where the
+   * field does rather than inventing history, and `json_extract` returning NULL
+   * for those rows is what makes absence read as "before it started", never as
+   * build. Timestamps are millisecond ISO, and a turn stamped in the SAME
+   * millisecond as the boundary is excluded — a tie reads as "before", which
+   * keeps a re-driven pass from recounting.
    */
   completedWorkTurns(sinceTs: string | null): number {
     this.actor.assertCurrent();

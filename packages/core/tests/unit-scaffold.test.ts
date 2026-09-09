@@ -101,11 +101,11 @@ describe('Scaffold modification (4-gate)', () => {
   });
 
   test('pending writes to versioned file, NOT live scaffold/agent.js', async () => {
-    // Closure of `kinu-scaffold-gap`: modifyScaffold used to overwrite the
-    // live file at proposal time, which made shadow eval compare a file to
-    // itself. The fix routes pending into scaffold/agent.js.v{N} only — the
-    // live file remains the current scaffold's content until applyPromotion
-    // runs.
+    // Closure of `kinu-scaffold-gap`: modifyScaffold routes pending into
+    // scaffold/agent.js.v{N} only and never overwrites the live file at
+    // proposal time, which would make shadow eval compare a file to itself.
+    // The live file remains the current scaffold's content until
+    // applyPromotion runs.
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');

@@ -3,9 +3,8 @@
 //
 // Production evidence (owner screenshot, workspace my-ai-engineer-b3b8b792): a
 // tee'd training script through `run` at `runtime: 'sandbox'` returned
-// `CommandError: … Command timeout after 60000ms`. Core no longer sends that
-// number, but removing it is not enough on this SDK, and that is what these
-// tests pin:
+// `CommandError: … Command timeout after 60000ms`. Core sends no such number,
+// and dropping it is not enough on this SDK, which is what these tests pin:
 //
 //   * The SDK's plain `exec` is bounded whether or not we ask. The container
 //     enforces a command deadline, and the request carrying it rides the
@@ -186,10 +185,10 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
   });
 });
 
-// KINU-033. An abort used to stop the WAIT and nothing else: core raced the
-// signal, returned, and told the agent the command "may still finish inside the
-// container" — a turn moving on while an unwatched build kept writing to
-// /workspace. The process lane has an id, and an id has a kill.
+// KINU-033. An abort has to reach the PROCESS, not just the WAIT: a core that
+// races the signal, returns, and tells the agent the command "may still finish
+// inside the container" leaves a turn moving on while an unwatched build keeps
+// writing to /workspace. The process lane has an id, and an id has a kill.
 describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   test("an abort kills THAT process and reports only once it is gone", async () => {
     const box = fakeBox({ holdsUntilKilled: true });
@@ -240,12 +239,11 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
   });
 });
 
-// KINU-034 is NOT tested here any more, and that is the finding's answer rather
-// than a gap. The adapter used to hold a keyed queue and this file used to prove
-// it; the queue ordered one facet's calls while every facet of a workspace has
-// its own copy of this adapter and they all address the same container. The claim
-// moved into the object all of them reach, and its tests moved with it:
-// packages/devbox/tests/resource-lane.test.ts.
+// KINU-034 is not covered here: the claim lives in the object every facet of a
+// workspace reaches, and its tests live with it —
+// packages/devbox/tests/resource-lane.test.ts. A keyed queue held by THIS
+// adapter would order one facet's calls only, and every facet of a workspace
+// has its own copy of this adapter while they all address the same container.
 
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {

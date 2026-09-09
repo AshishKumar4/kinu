@@ -1234,7 +1234,7 @@ export function supplyCensus(
  * obtain, install and rotate something nothing consumes.
  *
  * The needle is the NAME, not `env.<name>`, and that is a correction rather than
- * a shortcut: the first draft searched for `env.<name>` and reported seven live
+ * a shortcut: searching for the spelling `env.<name>` would report seven live
  * values as dead, because this Worker reaches an environment value three
  * different ways — `env.CLOUDFLARE_OAUTH_CLIENT_SECRET` directly,
  * `const { R2_ACCESS_KEY_ID } = this.env` by destructuring, and

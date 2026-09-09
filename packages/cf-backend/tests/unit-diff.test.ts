@@ -157,9 +157,10 @@ describe("parseGitDiff", () => {
   });
 
   test("a file past the row bound still counts every line, and says it was bounded", () => {
-    // The bound used to sit ABOVE the counters, so a large file stopped
-    // counting as well as stopped showing — and then presented the undercount
-    // as the file's +/- totals, with nothing marking it as partial.
+    // The counters run over every line and the bound stops only the BODY: above
+    // them a large file stops counting as well as stops showing, and then
+    // presents the undercount as the file's +/- totals with nothing marking it
+    // as partial.
     const adds = 1_400, dels = 300;
     const raw = [
       "diff --git a/big.txt b/big.txt",

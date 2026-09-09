@@ -161,9 +161,9 @@ class UsageReading(unittest.TestCase):
         self.assertEqual(turn_usage([{"type": "turn_end", "usage": reported}]), reported)
 
     def test_a_turn_that_reported_no_usage_is_not_a_turn_that_reported_zeros(self) -> None:
-        # The inverted invariant. This used to assert three zeros, which is the
-        # defect: it made an unmetered turn indistinguishable from a free one,
-        # and CL-Bench priced the difference.
+        # The inverted invariant. Asserting three zeros here would make an
+        # unmetered turn indistinguishable from a free one, and CL-Bench prices
+        # the difference.
         usage = turn_usage([{"type": "turn_end", "hadError": False}])
         self.assertEqual(usage, {})
         self.assertFalse(usage_reported(usage))
@@ -243,7 +243,7 @@ class UsageReading(unittest.TestCase):
 
     def test_a_run_where_nothing_was_metered_is_distinguishable_from_zeros(self) -> None:
         # What `_record_usage` asks before it prices anything. Nothing to sum is
-        # nothing reported — it used to be three zeros, i.e. a free run.
+        # nothing reported, not three zeros, which price as a free run.
         self.assertEqual(sum_usages([]), {})
         self.assertFalse(usage_reported(sum_usages([{}, {}])))
         self.assertTrue(usage_reported(sum_usages([{"input": 0}])))
@@ -302,12 +302,12 @@ class RunEvents(unittest.TestCase):
 
 
 class ToolOutcomeCensusTest(unittest.TestCase):
-    def test_structural_outcome_wins_and_legacy_payloads_remain_unmeasured(self) -> None:
+    def test_structural_outcome_wins_and_error_shaped_result_text_stays_unmeasured(self) -> None:
         rows = [
             {"type": "tool_call_end", "runId": "r", "eventIndex": 1, "outcome": {"success": True}, "result": {"error": "ordinary successful data"}},
             {"type": "tool_call_end", "runId": "r", "eventIndex": 2, "outcome": {"success": False, "reason": None}, "result": "ok"},
             {"type": "tool_call_end", "runId": "r", "eventIndex": 3, "result": "Error (exit 1)"},
-            {"type": "tool_call_end", "runId": "r", "eventIndex": 4, "error": "legacy explicit failure"},
+            {"type": "tool_call_end", "runId": "r", "eventIndex": 4, "error": "explicit failure, no structured outcome"},
         ]
         stream = [{"type": "run_event", "event": row} for row in rows + rows[:1]]
         before = json.dumps(stream)

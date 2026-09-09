@@ -1,7 +1,7 @@
 // A session cookie is live while ONE row in the signing-in user's own Durable
 // Object says so. These tests read that row through the real UserDO, and read
 // KV through two colos that disagree about a delete for a minute, because the
-// disagreement is what a stolen cookie used to survive on.
+// disagreement is what a stolen cookie would survive on.
 
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO,
@@ -261,8 +261,8 @@ describe('logout ends one session everywhere at once', () => {
 
     await revokeSession(near, session.token);
 
-    // The far colo still HAS the KV record — that is the propagation window the
-    // stolen cookie used to live in — and refuses the cookie anyway.
+    // The far colo still HAS the KV record — the propagation window a stolen
+    // cookie would live in — and refuses the cookie anyway.
     expect(await kv.far.get(`session:${await sha256Hex(session.token)}`)).not.toBeNull();
     expect(await verifySession(far, session.token)).toBeNull();
     expect(await verifySession(near, session.token)).toBeNull();
@@ -558,10 +558,10 @@ describe('expiry needs no sweeper', () => {
 /**
  * The other half of the same propagation window. A KV write is no faster than
  * a KV delete, so the first request after a sign-in redirect can land at a colo
- * that has no record of the session: that used to read as "not signed in", and
- * the browser was sent back to a sign-in whose own write would lose the same
- * race. The row the authority already has to be asked about liveness carries
- * the identity too, so the answer is there in the same round trip.
+ * that has no record of the session — read as "not signed in" that sends the
+ * browser back to a sign-in whose own write loses the same race. The row the
+ * authority already has to be asked about liveness carries the identity too, so
+ * the answer is there in the same round trip.
  */
 describe('a sign-in is usable before its KV projection has replicated', () => {
   test('the first request at a colo the write has not reached is signed in, not sent back to sign in', async () => {
@@ -571,7 +571,7 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
     const cold = envWith(kv.cold, authority.namespace);
 
     // The projection genuinely is not readable there — this is the negative
-    // read the browser used to be bounced on.
+    // read a bounce back to sign-in would come from.
     expect(await kv.cold.get(`session:${await sha256Hex(session.token)}`)).toBeNull();
 
     // What comes back is the row's own copy, and it is the identity the

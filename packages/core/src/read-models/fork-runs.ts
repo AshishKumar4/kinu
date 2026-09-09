@@ -2,10 +2,10 @@
  * Exploration runs — one chronological list of every search this workspace has
  * run, whatever it wrote while running.
  *
- * ONE ROOT ID IS ONE RUN. That is the whole load-bearing property here, and it
- * is what this read model got wrong for a swarm. A run scoped by `root_id` writes
- * up to two stores, and which ones it writes is a fact about its axes rather than
- * a choice between two kinds of run:
+ * ONE ROOT ID IS ONE RUN. That is the whole load-bearing property here, and a
+ * swarm is where it earns its keep. A run scoped by `root_id` writes up to two
+ * stores, and which ones it writes is a fact about its axes rather than a choice
+ * between two kinds of run:
  *
  *   - the SEARCH TREE (`search_nodes`, written only by `mcts/record-node.ts`) —
  *     the structure selection descends and backpropagation walks. Every branch a
@@ -15,11 +15,10 @@
  *
  * A swarm whose `unit` is an agent writes BOTH: `search_nodes` for the tree and
  * `head_journal` for each node's transcript, because a node is a real tool-using
- * agent. It was previously read as TWO runs sharing one id — one tagged `merged`
- * and one tagged `competed`, from the two settlements the removed `fork` verb
- * had — and since the journal half sorts newer than the tree half, the half with
- * no tree won every caller's dedup. A caller that dedups picks a winner, and
- * picking a winner is how four tree rows and a 0.71 winner were discarded.
+ * agent. Reporting those halves as TWO runs sharing one id would force every
+ * caller to dedup, and the journal half sorts newer than the tree half — so the
+ * half with NO TREE wins. Picking a winner between the halves is how four tree
+ * rows and a 0.71 winner get discarded.
  *
  * So the halves are two INDEPENDENT facts on one row ({@link
  * ForkRunSummary.hasSearchTree}, {@link ForkRunSummary.hasNodeTranscripts}), and
@@ -173,12 +172,11 @@ interface RunPosition {
  * that reaches a node writes its tree root either way.
  *
  * BOTH halves are actor-scoped, and the tree half is the one that is easy to
- * miss: `head_journal` has carried an `actor_id` predicate since the journal
- * became actor-private, while `search_nodes` gained its leading `actor_id` in
- * the same cutover and this union kept reading the whole table. Under one
- * database that put every OTHER actor's search roots into this actor's
- * Exploration list, and started them at the earliest `created_at` of the
- * stranger's tree.
+ * miss: `head_journal` carries an `actor_id` predicate because the journal is
+ * actor-private, and `search_nodes` leads with `actor_id` for the same reason.
+ * Reading that table whole, under one database, puts every OTHER actor's search
+ * roots into this actor's Exploration list, and starts them at the earliest
+ * `created_at` of the stranger's tree.
  */
 function queryPositions(
   sql: SqlExecutor,
@@ -298,8 +296,8 @@ interface TreeHalf {
    * *a search is settled exactly when its tree has no open nodes left*.
    *
    * Open nodes that HAVE children are not counted, and must not be: an expanded
-   * parent is not selectable, and a legacy tree whose settle left its root open
-   * would otherwise read as running for as long as the row survives.
+   * parent is not selectable, and a tree whose settle left its root open would
+   * otherwise read as running for as long as the row survives.
    */
   readonly frontier: number;
   readonly terminal: number;
@@ -365,9 +363,9 @@ function queryTreeHalves(
 
 /**
  * The name a run presents: the label its engine wrote for the root, or a
- * derivation from the task when it wrote none — legacy trees, journal-only
- * runs, and callers who named nothing. Total: a surface never falls back to
- * showing a truncated paragraph where a title belongs.
+ * derivation from the task when it wrote none — trees whose root row carries no
+ * label, journal-only runs, and callers who named nothing. Total: a surface
+ * never falls back to showing a truncated paragraph where a title belongs.
  *
  * Exported because the same name has to reach the branch transcript's own
  * breadcrumb: the first crumb IS the run, and labelling it off the raw column
@@ -414,9 +412,9 @@ function shortName(task: string): string {
  * winner it marks terminal; `abandonSearchTree` fails them all).
  *
  * A TERMINAL NODE OUTRANKS THE FRONTIER, because only a settle writes one
- * (`convergence.ts`, `takes.ts`). That is what keeps a legacy tree — settled by
- * an engine that left some node open, its ledger row long since pruned — reading
- * as the completed search it is.
+ * (`convergence.ts`, `takes.ts`). That is what keeps a tree settled with some
+ * node still open, its ledger row long since pruned, reading as the completed
+ * search it is.
  */
 function searchStatus(tree: TreeHalf): ForkRunStatus {
   if (tree.ledgerStatus === 'failed') return 'failed';

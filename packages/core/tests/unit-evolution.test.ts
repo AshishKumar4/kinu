@@ -200,7 +200,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(row!.outcome).toBe('accepted');
     expect(row!.source).toBe('execution');
     expect(row!.followup).toBeNull();
-    // A headless turn can finally earn a positive — the asymmetry is gone.
+    // A headless turn earns a positive from the environment, not only a negative.
     expect(turn.feedback).toBe('positive');
   });
 
@@ -295,14 +295,13 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   /**
    * A SIBLING's thumbs must not grade this actor's turn.
    *
-   * The defect this exists for, found during the one-database cutover: a
-   * message id is minted PER ACTOR — `messages` is `PRIMARY KEY (actor_id,
-   * id)` precisely because two actors of one workspace really do hold the same
-   * id — while `turn_feedback` was `message_id TEXT PRIMARY KEY` and its
-   * writer used `ON CONFLICT(message_id) DO UPDATE`. So one actor's thumbs
-   * silently OVERWROTE its sibling's, and the read that decides a turn's
-   * outcome took whichever row `LIMIT 1` happened to reach — then re-scored
-   * that actor's crafted tools from it.
+   * The defect this exists for: a message id is minted PER ACTOR — `messages`
+   * is `PRIMARY KEY (actor_id, id)` precisely because two actors of one
+   * workspace really do hold the same id — so a `turn_feedback` keyed
+   * `message_id TEXT PRIMARY KEY`, written with `ON CONFLICT(message_id) DO
+   * UPDATE`, lets one actor's thumbs silently OVERWRITE its sibling's, and the
+   * read that decides a turn's outcome takes whichever row `LIMIT 1` happens
+   * to reach — then re-scores that actor's crafted tools from it.
    *
    * Both rows live under the SAME message id on purpose: that collision is the
    * designed case, not a hypothetical, and it is the only shape that can

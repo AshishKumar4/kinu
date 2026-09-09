@@ -455,10 +455,11 @@ export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
  * same accumulator. `recordWorkspaceSpend` is that accumulator, and it is the
  * only place calls, usage and unmeasured episodes are counted.
  *
- * It used to choose a truncation remedy per backend, because the deployed read
- * model was windowed and a bounded total had to be refused rather than published
- * as a floor. `workspaceSpend` now aggregates over the whole log, so there is no
- * window on either target and no remedy to name.
+ * It names no truncation remedy at all: `workspaceSpend` aggregates over the
+ * whole log, so neither target reads through a window and no total comes back
+ * bounded. A per-backend remedy would leave each target deciding on its own
+ * whether a bounded total is refused or published as a floor, which is the one
+ * judgement the ONE meter exists to hold.
  */
 export async function recordTargetEpisodeSpend(target: AgentEvalTarget): Promise<WorkspaceSpend> {
   const spend = await target.spend();

@@ -100,7 +100,7 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
   test('no control on the row hides the slug in a label a reader would hear', () => {
     for (const label of untitled?.labels ?? []) expect(label).not.toContain(SLUG);
     // The rename, settings and remove controls each name the workspace; with an
-    // empty title they used to name nothing at all.
+    // empty title they would otherwise name nothing at all.
     expect(untitled?.labels.some((label) => label.includes(UNTITLED))).toBe(true);
   });
 

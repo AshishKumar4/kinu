@@ -248,8 +248,8 @@ const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(),
  *  Only `spend` is declared — the snapshot's other halves are the web panel's
  *  and parsing them here would be a second mirror of them with no reader.
  *
- *  It lives with the other wire schemas rather than beside the one command that
- *  used to hold it, because there are now two readers of the same RPC: `kinu
+ *  It lives with the other wire schemas rather than beside a single command,
+ *  because two readers parse the same RPC off the wire: `kinu
  *  inspect spend` and the cloud eval target, which reports an episode's cost
  *  through the same meter every other arm uses. Two copies of a
  *  `GenericSchema<WorkspaceSpend>` would compile independently and disagree

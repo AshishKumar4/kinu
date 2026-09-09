@@ -333,9 +333,9 @@ describe('webhook ingress refuses everything else', () => {
       trigger_id, body_text, hmac_timestamp: String(NOW), hmac_signature: await hmacSha256Hex('other', `${NOW}.${body_text}`),
     })).toEqual(rejected('signature mismatch'));
 
-    // A REVOKED secret is now the only way an hmac trigger meets a delivery
-    // with none: registration stores one for every hmac/bearer webhook, so
-    // "created without a secret" is no longer a state that exists.
+    // A REVOKED secret is the only way an hmac trigger meets a delivery with
+    // none: registration stores one for every hmac/bearer webhook, so
+    // "created without a secret" is not a state that exists.
     const revoked = await h.register({ label: 'revoked-secret', auth_mode: 'hmac', secret: 'k' });
     h.secrets.deleteByTrigger(revoked);
     expect(await h.deliver({

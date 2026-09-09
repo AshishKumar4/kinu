@@ -14,14 +14,14 @@
  * produces, because the harness delegates to it and a reducer that quietly
  * counted differently would move every denominator in the corpus.
  *
- * The spend recorder is tested on what it COUNTS, because the thing it used to
- * refuse no longer exists: `workspaceSpend` aggregates over the whole log on both
- * targets, so `complete` and `windowLimit` left the read model and there is no
- * windowed total to refuse. What remains is the accounting a reader depends on —
- * an episode that accounted for nothing counts as UNMEASURED rather than as a
- * silent zero, two episodes accumulate into the one meter both arms report
- * through, and calls the provider never measured are counted apart from the
- * tokens.
+ * The spend recorder is tested on what it COUNTS, because there is nothing left
+ * for it to refuse: `workspaceSpend` aggregates over the whole log on both
+ * targets, so the read model carries no `complete` and no `windowLimit` and no
+ * windowed total can reach it. What it does own is the accounting a reader
+ * depends on — an episode that accounted for nothing counts as UNMEASURED
+ * rather than as a silent zero, two episodes accumulate into the one meter both
+ * arms report through, and calls the provider never measured are counted apart
+ * from the tokens.
  *
  * `probeVerifier` is tested BOTH directions on the shape that shipped broken. It
  * is the one instrument the two arms must run identically, which is why it lives
@@ -158,9 +158,9 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
     const totals = ledgerTotalsFromEvents([
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'success', outcome: { success: true }, error: 'stale error' }),
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 7 } }, error: 'test command failed with useful details' }),
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'legacy', error: 'legacy diagnostic' }),
+      event({ type: 'tool_call_end', name: 'run', toolCallId: 'untyped', error: 'a bare error string, no outcome' }),
     ]);
-    expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: legacy diagnostic']);
+    expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: a bare error string, no outcome']);
   });
 
   test('an empty ledger reports zeroes rather than throwing', () => {

@@ -389,11 +389,11 @@ export function observationKey(o: Pick<EvalObservation, 'taskId' | 'repetition'>
  * says nothing about whether the agent can do the work, whatever else it
  * recorded.
  *
- * `mechanismsExercised` USED TO BE that field, and its removal from the failure
- * list is deliberate. "A scorer had a non-zero denominator" is a fact about what
- * the corpus reached, and treating it as a precondition for evidence made
- * mechanism coverage an end in itself — which is how a delegation rate of 15%
- * came to be reported as a defect when the truth was that the mechanism
+ * `mechanismsExercised` is deliberately NOT that field, and its absence from the
+ * failure list is the point. "A scorer had a non-zero denominator" is a fact
+ * about what the corpus reached, and treating it as a precondition for evidence
+ * makes mechanism coverage an end in itself — which is how a delegation rate of
+ * 15% gets reported as a defect when the truth is that the mechanism
  * converted 4/4 wherever the work was genuinely divisible and 0/21 where it was
  * not. Both fields stay, in full, as TELEMETRY: they are how a moved outcome
  * gets explained after the fact. Neither gates anything.
@@ -466,16 +466,16 @@ export interface EvalRunRecord {
    *
    * Required, like every other provenance field here: an optional evidence
    * pointer is the field that will be missing exactly when someone needs it.
-   * The tier used to write these under `/tmp` and delete them in teardown, so a
-   * published tool-failure count named no call and could not be investigated at
-   * all. `resolveArtifactRoot` (scripts/bench-retention.ts) is what refuses a
-   * swept location, and there is no opt-out.
+   * A swept location — `/tmp`, or anything a teardown deletes — is refused by
+   * `resolveArtifactRoot` (scripts/bench-retention.ts) with no opt-out, because
+   * a published tool-failure count whose trajectories are gone names no call and
+   * cannot be investigated at all.
    *
    * The two stored baselines do not carry it, which is why neither could be
    * upgraded and both were retired: the directory that would explain their one
-   * inert attempt was deleted by the teardown described above. `readRunRecord`
-   * validates the envelope only, so their absence is a value the triage
-   * instrument reports rather than a crash.
+   * inert attempt does not exist. `readRunRecord` validates the envelope only,
+   * so their absence is a value the triage instrument reports rather than a
+   * crash.
    */
   readonly transcripts: string;
 }
@@ -712,8 +712,8 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
  * The destination is `KINU_EVAL_RECORD` when set, and otherwise the run's own
  * transcripts directory — the record beside the trajectories its scores were
  * computed from. `tests/eval/runs/` holds PUBLISHED records, committed
- * deliberately by whoever publishes the number; the default used to point there
- * and one local scripted-model run reached the primary checkout and blocked a
+ * deliberately by whoever publishes the number, and is never a default: a local
+ * scripted-model run landing there reaches the primary checkout and blocks a
  * deploy, because `deploy.sh` correctly refuses a dirty tree.
  *
  * Returns the record it wrote, or null when it wrote nothing.

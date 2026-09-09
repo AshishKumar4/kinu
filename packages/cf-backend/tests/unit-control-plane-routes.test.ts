@@ -631,10 +631,9 @@ describe('mutations', () => {
 
 describe('the audit log is written before the action, not after', () => {
   test('an unavailable audit store runs NOTHING', async () => {
-    // The defect this closes: the row used to be appended after the mutation, and
-    // a failed append was logged and swallowed — so a successful job clear, an
-    // approval decision or a grant revocation could return 200 with no durable
-    // record that anybody had done it.
+    // The defect this closes: appending the row AFTER the mutation and logging a
+    // failed append lets a successful job clear, an approval decision or a grant
+    // revocation return 200 with no durable record that anybody had done it.
     const h = harness({ audit: 'append' });
     const attempts: JsonValue[] = [
       { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'j' },

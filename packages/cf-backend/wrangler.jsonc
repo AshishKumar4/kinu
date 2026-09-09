@@ -109,7 +109,7 @@
       // host namespace the fabric resolves every hosted workspace through
       // (`hostNamespace: 'OrchestratorAgent'` in src/nimbus-programmatic.ts).
       // Rename it and the supervisor entrypoint resolves a namespace that does
-      // not exist. This is now the ONLY actor-bearing class: every logical
+      // not exist. This is the ONLY actor-bearing class: every logical
       // actor in a workspace — the main actor, hired subordinates, ask-by-role
       // temporaries, branching heads, swarm nodes, MCTS rollout branches —
       // lives inside one object of this namespace, over its one SQLite.
@@ -174,25 +174,21 @@
     }
   ],
   // ONE migration: the genesis of a RESET deployment. Every SQLite-backed
-  // Durable Object class this Worker has is declared new here. The earlier
-  // `v1`..`v3` history (which also registered and then retired `NimbusSession`)
-  // belonged to a Worker whose storage no longer exists, and so did the
-  // `ExplorationAgent` class it registered. There is no facet class in this
-  // list and never was one — a facet carried no binding and sat in no tag,
-  // because it was reached through `subAgent()` rather than by name — and
-  // there is no facet class in the Worker any longer either: hosted logical
-  // actors need no class of their own, so nothing was removed from this list
-  // and nothing needs adding to it.
+  // Durable Object class this Worker has is declared new here. Hosted logical
+  // actors need no class of their own — they live inside `OrchestratorAgent`,
+  // carry no binding and sit in no tag, because they are reached by name rather
+  // than through one — so this list does not grow with them.
   //
-  // What an operator does before deploying this configuration: delete the old
-  // Worker (its Durable Object namespaces, and every object in them, go with
-  // it), or deploy under a fresh Worker name. Wrangler does not enforce that
-  // step. Read from node_modules/wrangler (`getMigrationsToUpload`, 2026-09-05):
-  // when the deployed Worker's last tag is missing from this list, wrangler
-  // warns and uploads every step here against that tag, and what the platform
-  // answers to a class declared new a second time is not measured here.
-  // Re-using the old last tag (`v3`) would be worse: wrangler would find it,
-  // send no migration at all, and the deploy would land on the old storage
+  // What an operator does before deploying this configuration: delete the
+  // deployed Worker whose migration history ends at tag `v3` (its Durable
+  // Object namespaces, and every object in them, go with it), or deploy under a
+  // fresh Worker name. Wrangler does not enforce that step. Read from
+  // node_modules/wrangler (`getMigrationsToUpload`, 2026-09-05): when the
+  // deployed Worker's last tag is missing from this list, wrangler warns and
+  // uploads every step here against that tag, and what the platform answers to
+  // a class declared new a second time is not measured here. Re-using `v3` as
+  // this list's last tag would be worse: wrangler would find it, send no
+  // migration at all, and the deploy would land on that Worker's storage
   // with a schema that carries no path from it.
   "migrations": [
     {
@@ -382,9 +378,9 @@
   // read by KinuSandbox. Bucket: `wrangler r2 bucket create kinu-backups`
   // (already created).
   //
-  // DO NOT PUT AN R2 LIFECYCLE RULE ON THE `backups/` SUBTREES. This comment used
-  // to tell an operator to add one "to GC archives past their TTL", and that
-  // instruction destroys live workspaces. `boxes/<box>/backups/<uuid>/` holds
+  // DO NOT PUT AN R2 LIFECYCLE RULE ON THE `backups/` SUBTREES. Adding one "to
+  // GC archives past their TTL" destroys live workspaces.
+  // `boxes/<box>/backups/<uuid>/` holds
   // one box's chain generations (`devbox/src/snapshot-chain.ts`), and
   // a generation's BASE is immutable and referenced for as long as the box
   // exists — a workspace that has not checkpointed in months still restores from
@@ -561,11 +557,11 @@
         { "binding": "FEEDBACK_MARKERS", "dataset": "kinu_feedback_markers_staging" },
         { "binding": "CONTROL_PLANE_OPS", "dataset": "kinu_control_plane_ops_staging" }
       ],
-      // BACKUP_BUCKET is staging's OWN bucket. It used to be production's
-      // `kinu-backups`, which meant every /workspace snapshot an eval's
-      // sandbox took was written into the bucket holding real users' archives —
-      // the same class of leak as running the evals against the production
-      // origin, by a route nobody was looking at.
+      // BACKUP_BUCKET is staging's OWN bucket. Pointing it at production's
+      // `kinu-backups` writes every /workspace snapshot an eval's sandbox takes
+      // into the bucket holding real users' archives — the same class of leak
+      // as running the evals against the production origin, by a route nobody
+      // is looking at.
       //
       // NIMBUS_RUNTIME_CACHE is deliberately still shared: a runtime artifact
       // is content-addressed and immutable, so there is nothing to keep apart,
@@ -584,10 +580,10 @@
       // measuring a different retrieval path than production — the failure this
       // environment exists to catch, not to have.
       //
-      // Both stores are EMPTY AND NEW rather than the pair that predates the
-      // rename. Those held rows keyed to userIds the previous auth store
-      // assigned, and this deployment assigns its own, so every one of them is
-      // an orphan that would skew a staging retrieval measurement.
+      // Both stores are EMPTY AND NEW, never carried over from another
+      // deployment: rows keyed to userIds a different auth store assigned are
+      // orphans against the userIds this deployment assigns, and every one of
+      // them would skew a staging retrieval measurement.
       "vectorize": [
         { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
       ],
@@ -618,7 +614,7 @@
         // this is the second of two locks rather than the only one — but it is
         // the one a reader of this file can check.
         //
-        // It is now the THIRD lock as well, and the reason staging needs no
+        // It is the THIRD lock as well, and the reason staging needs no
         // Cloudflare Access application: with no operators, the two
         // CONTROL_PLANE_ACCESS_* vars are not required here (`requiredIn` in
         // scripts/infra-manifest.ts pairs them with a NON-EMPTY value of this

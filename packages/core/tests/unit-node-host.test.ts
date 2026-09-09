@@ -2,21 +2,18 @@
  * ONE NODE, RUN AS AN AGENT — the loop a search explores with, and the four things
  * its run owes the engine.
  *
- * THE SUITE USED TO BE ABOUT TWO TRANSPORTS. `runNodeLoop` was exported because a
- * Cloudflare `SubordinateAgent` facet in node mode received a `NodeRunSpec` as data,
- * rebuilt the live seams against its own runtime and called exactly that function, so
- * every test here ran the SAME node both ways and compared the reports field by field.
- * That facet is gone (`cf-backend/src/exploration-hosting.ts` records why: a node is a
- * logical actor of the one workspace now, so there is no storage boundary left to buy),
- * nothing supplied `nodeHost` on either backend, and the seam went with it. What was
- * left was a host that only this file could implement — the drift a two-transport proof
- * exists to catch, re-enacted as a fixture proving its own arithmetic.
+ * THE SUBJECT IS ONE PATH, NOT TWO TRANSPORTS. A node is a logical actor of the one
+ * workspace, so there is no storage boundary a second transport could buy
+ * (`cf-backend/src/exploration-hosting.ts` records why) and nothing supplies a
+ * `nodeHost` on either backend. A `runNodeLoop` exported for a second caller, over a
+ * host only this file can implement, is a two-transport proof re-enacted as a fixture
+ * proving its own arithmetic — exactly the drift such a proof exists to catch.
  *
- * So the subject is the ONE path: `runNodeAgent`, which owns the home, the ledger and
- * the node's own runtime, over a loop that owns the inference and nothing else. What is
- * asserted is what a caller can actually see — the report and the candidate the engine
- * measures, the journal rows the search writes, the ledger a budgeted node charges, and
- * the arbiter's build-time exclusion.
+ * So the subject is `runNodeAgent`, which owns the home, the ledger and the node's own
+ * runtime, over a loop that owns the inference and nothing else. What is asserted is
+ * what a caller can actually see — the report and the candidate the engine measures,
+ * the journal rows the search writes, the ledger a budgeted node charges, and the
+ * arbiter's build-time exclusion.
  *
  * The model is scripted, for the reason the sibling suites record: the loop and the
  * seams are the parts under test and the provider is the part under control.

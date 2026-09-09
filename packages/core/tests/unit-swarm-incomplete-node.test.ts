@@ -5,29 +5,27 @@
  * THE DEFECT THIS PINS. An agent node always returns a report, and a report always
  * carries a summary — including when the node was aborted, ran out of steps or errored,
  * in which case the summary is a STATUS LINE (`incompleteHeadSummary`) rather than an
- * answer. The engine took that string as the node's candidate and handed it to the
- * instrument like any other, so an unfinished node's fate was decided by whatever the
- * verifier happened to say about a status line. On the one live swarm run that meant
- * "unmeasurable — no usable solution", which blames the instrument for three nodes the
- * caller's 20-minute deadline stopped mid-step, and left the report with nothing at all
- * to say about the deadline.
+ * answer. Taking that string as the node's candidate and handing it to the instrument
+ * like any other decides an unfinished node's fate by whatever the verifier happens to
+ * say about a status line. On the one live swarm run that meant "unmeasurable — no
+ * usable solution", which blames the instrument for three nodes the caller's 20-minute
+ * deadline stopped mid-step, and leaves the report with nothing at all to say about
+ * the deadline.
  *
  * And where an unfinished node's recorded findings carry a code fence — which is exactly
  * what a node that ran 26 steps and wrote code before being cut leaves behind — the
- * status line IS measurable, so the unfinished node was SCORED. That is the ranking
+ * status line IS measurable, so the unfinished node gets SCORED. That is the ranking
  * measuring the clock, and the second test below is the proof: the aborted node here
  * carries the OPTIMAL program and would otherwise beat the sibling that actually
  * finished.
  *
- * WHY THE REAL LOOP AND NOT AN INJECTED OUTCOME. It used to be a host: `NodeLoopHost`
- * was the seam a Cloudflare `SubordinateAgent` facet in node mode ran a node through, so
- * a host that RETURNED the reports this suite needs made each node's outcome an input.
- * That seam is gone with the facet — nothing supplied `nodeHost` on either backend, and
- * a node is a logical actor of the one workspace now — so the only host left would have
- * been this fixture's own, handing the engine reports no loop had produced. Every
- * outcome below is therefore something a REAL node did: it reported through the real
- * report gate, and then its provider died, or the caller's clock ran out, or the search
- * was cancelled under it. The instrument is real, and so is the report the engine reads.
+ * WHY THE REAL LOOP AND NOT AN INJECTED OUTCOME. A node is a logical actor of the one
+ * workspace and no backend supplies a node host, so the only host a suite could pass is
+ * its own — handing the engine reports no loop produced and making each node's outcome
+ * an input rather than a result. Every outcome below is therefore something a REAL node
+ * did: it reported through the real report gate, and then its provider died, or the
+ * caller's clock ran out, or the search was cancelled under it. The instrument is real,
+ * and so is the report the engine reads.
  *
  * Specified by docs/EXPLORATION.md — "A node is an agent" and "No self-grading".
  */

@@ -60,11 +60,11 @@ describe('createFileCodexAuthStore', () => {
     expect(saved.providers?.codex?.metadata?.accountId).toBe('acct_123');
   });
 
-  // The refresh used to run OUTSIDE the lock: an async callback handed to the
-  // synchronous helper released the lock the moment it returned its pending
-  // Promise, so two callers submitted the same refresh token and raced their
-  // replacements into the file. One of the two rotations then held a token the
-  // provider had already invalidated.
+  // The refresh must run INSIDE the lock: an async callback handed to the
+  // synchronous helper releases the lock the moment it returns its pending
+  // Promise, so two callers submit the same refresh token and race their
+  // replacements into the file. One of the two rotations then holds a token the
+  // provider has already invalidated.
   test('two concurrent refreshes perform one rotation', async () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
@@ -87,7 +87,7 @@ describe('createFileCodexAuthStore', () => {
         submitted.push(String(new URLSearchParams(String(init?.body)).get('refresh_token')));
         midFlight.resolve();
         // Yield before answering, so the refresh is genuinely mid-flight — the
-        // state in which the lock used to be gone already.
+        // state in which a lock released at the callback's first await is gone.
         await Promise.resolve();
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
@@ -97,8 +97,8 @@ describe('createFileCodexAuthStore', () => {
       }),
     });
 
-    // TWO INDEPENDENT CALLERS, which is what concurrent means here. The second
-    // used to be created inside the provider callback, i.e. inside the first
+    // TWO INDEPENDENT CALLERS, which is what concurrent means here. Creating
+    // the second inside the provider callback would put it inside the first
     // caller's own hold: an acquisition nested in the holder's async context is
     // a deadlock, because the hold is released only when that call returns.
     // Started from here it is a real contender — its first attempt is
@@ -122,10 +122,10 @@ describe('createFileCodexAuthStore', () => {
     expect(CODEX_CRED_KEY).toBe('codex.oauth');
   });
 
-  // A config that exists but does not parse used to read as `{}`, which made
-  // `hasCredential()` say "no token stored" and made `save()` write a file
+  // A config that exists but does not parse must not read as `{}`: that makes
+  // `hasCredential()` say "no token stored" and makes `save()` write a file
   // holding ONLY the codex credential — silently deleting every other
-  // provider's key it was supposed to preserve.
+  // provider's key it is supposed to preserve.
   test('an unparseable config is a failure, not an empty one', () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');

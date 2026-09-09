@@ -236,12 +236,13 @@ export class DeviceSocketHub {
    * with no request — the only live one. Null when several are live and none
    * was named.
    *
-   * This used to answer the unnamed case with the FIRST live socket in
-   * `ctx.getWebSockets()` iteration order. With two machines connected that
-   * order is the platform's, and a redial or a wake can change it between two
-   * calls in one turn, so the "connected device" — its name, its toolchain,
-   * its sandbox, the machine a command ran on — took turns being either one.
-   * A fleet of several has no "the"; a caller that needs one names it.
+   * Answering the unnamed case with the FIRST live socket in
+   * `ctx.getWebSockets()` iteration order is not an answer. With two machines
+   * connected that order is the platform's, and a redial or a wake can change
+   * it between two calls in one turn, so the "connected device" — its name, its
+   * toolchain, its sandbox, the machine a command ran on — takes turns being
+   * either one. A fleet of several has no "the"; a caller that needs one names
+   * it.
    */
   connectedDeviceId(deviceId?: string): string | null {
     if (deviceId) return this.isConnected(deviceId) ? deviceId : null;

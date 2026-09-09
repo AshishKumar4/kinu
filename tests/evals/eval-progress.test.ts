@@ -31,7 +31,7 @@ describe('an interrupted case is incomplete, never pass or fail', () => {
   });
 
   /**
-   * The other half of the same rule, and the one that used to be missing.
+   * The other half of the same rule.
    *
    * A case the run never REACHED is reported as `incomplete` too, so a corpus
    * whose repetitions were cut short cannot publish over the shorter

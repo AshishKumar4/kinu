@@ -10,9 +10,8 @@
  * request. A rendered array has been pruned and woven, so its length differs
  * from the raw one by however many `<dynamic_context>` blocks the ledger froze
  * and however many tool outputs the pruner shrank away. Slicing the live raw
- * array at a rendered count is the defect this file's caller used to have: the
- * protected tail then started in the wrong place, and the turn either re-sent
- * the tool call it had already made or dropped it.
+ * array at a rendered count starts the protected tail in the wrong place, and
+ * the turn then either re-sends the tool call it has already made or drops it.
  *
  * TWO THINGS AN EDIT CANNOT TAKE WITH IT:
  *

@@ -4,11 +4,10 @@ import { workspaceOwner } from '../workspace-owner-rpc';
 import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
 
 /** One hop of an actor's root-relative path, as the workspace directory records
- *  it: a registered actor NAME under the workspace root. It used to be an SDK
- *  facet hop — a class name plus a Durable Object key — and the class half was
- *  dropped because a class name was never an identity: every actor is hosted by
- *  the one root object, so what distinguishes two callers is which actor they
- *  are, which is exactly the name the directory holds. */
+ *  it: a registered actor NAME under the workspace root. A class name is not an
+ *  identity — every actor is hosted by the one root object, so what
+ *  distinguishes two callers is which actor they are, which is exactly the name
+ *  the directory holds. */
 export interface SlateCallerHop {
   readonly name: string;
 }

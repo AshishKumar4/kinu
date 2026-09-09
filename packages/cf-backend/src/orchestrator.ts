@@ -85,7 +85,6 @@ import {
   feedbackToQuality,
   // Fork feature
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
-  InstructionApprovalStore,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
@@ -315,10 +314,10 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
 /** How overdue a one-shot schedule row must be before it is unrunnable rather
  *  than late: THE recovery budget, not a copy of it. Past it the framework
  *  stops recovering the fiber a continuation callback would resume, so
- *  dispatching the row can only replay dead work. The number used to be
- *  hand-written here beside the words "mirrors the SDK's default"; it is now
- *  the value `ActorAgent.options` hands the framework (fiber-recovery.ts), so
- *  the sweep and the framework cannot disagree about when a row is dead. */
+ *  dispatching the row can only replay dead work. The number is the value
+ *  `ActorAgent.options` hands the framework (fiber-recovery.ts) rather than one
+ *  hand-written here beside the words "mirrors the SDK's default", so the sweep
+ *  and the framework cannot disagree about when a row is dead. */
 /** The seal's own row budget, SMALLER than {@link SWEEP_MAX_ROWS} because its
  *  per-row cost is different in kind: every sealed head takes a durable report
  *  write and a broadcast, where the other sweeps take one DELETE. A pass that
@@ -369,11 +368,11 @@ const CheckpointAvailabilitySchema = v.object({
   available: v.boolean(), reason: v.optional(v.string()),
 });
 /** The route validator for `?variant=`, built FROM core's array rather than
- *  beside it. The thirteen literals used to be hand-listed here: a fourteenth
- *  variant compiled in core and then silently failed validation on this route,
- *  because a picklist of strings cannot be checked against a union of strings.
- *  `EVENT_VARIANTS` is now the one declaration and `EventVariant` derives from
- *  it, so the two cannot disagree. */
+ *  beside it. Hand-list the literals here and a new variant compiles in core and
+ *  then silently fails validation on this route, because a picklist of strings
+ *  cannot be checked against a union of strings. `EVENT_VARIANTS` is the one
+ *  declaration and `EventVariant` derives from it, so the two cannot
+ *  disagree. */
 const EventVariantSchema = v.picklist(EVENT_VARIANTS);
 /** One row of the events read: the log's row minus its own plumbing
  *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
@@ -539,16 +538,16 @@ export class OrchestratorAgent extends ActorAgent {
    * public transport.
    */
   /**
-   * NOTHING FORWARDS A FILE OPERATION ANY MORE.
+   * NOTHING FORWARDS A FILE OPERATION.
    *
-   * `workspaceBoxOp(shellId, op)` was a monomorphic RPC over a 25-arm operation
-   * union, and it existed for exactly one reason: a facet was a separate
-   * Durable Object that shared its parent's tree but could not reach it, so
-   * `files.read`, `exec` and `ports.expose` all had to cross an isolate
-   * boundary. It was also the single widest thing on this stub transport, since
-   * `NimbusExecOptions.cred` names a uid. Hosted actors are handed the very
-   * handle this workspace composed (`WorkspaceHostSeams.workspaceBox`), so the
-   * union, its dispatcher and its client are gone rather than renamed.
+   * Hosted actors are handed the very handle this workspace composed
+   * (`WorkspaceHostSeams.workspaceBox`), so there is no monomorphic
+   * `workspaceBoxOp(shellId, op)` over a 25-arm operation union, no dispatcher
+   * for it and no client. A forwarder like that exists for exactly one reason —
+   * a facet that is a separate Durable Object sharing its parent's tree without
+   * being able to reach it, so `files.read`, `exec` and `ports.expose` all cross
+   * an isolate boundary — and it would also be the single widest thing on this
+   * stub transport, since `NimbusExecOptions.cred` names a uid.
    */
 
   /**
@@ -754,8 +753,8 @@ export class OrchestratorAgent extends ActorAgent {
       },
       // The splitting head's own actor and runtime are NOT needed here: the
       // journal and the merge model are the workspace's, and the children are
-      // acquired from the same host by id. That is the C2 fix — one journal for
-      // the whole subtree — expressed as an argument this no longer takes.
+      // acquired from the same host by id. One journal for the whole subtree —
+      // the C2 fix — is expressed as an argument this does not take.
       split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
     };
   }
@@ -1029,13 +1028,13 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * A head splitting further, run in this isolate.
    *
-   * The journal is the WORKSPACE's, and that was the C2 defect this fixes
-   * structurally rather than by discipline: a depth-1 head used to write its
-   * children's spawn and report rows into its OWN SQLite while their step rows
-   * were recorded on the root, so the surface's `head_journal` → `head_steps`
-   * join could never match and a depth-2 head was unreadable from anywhere. One
-   * database means one journal; the port below is a set of local calls where it
-   * used to be four cross-Durable-Object RPCs.
+   * The journal is the WORKSPACE's, and that closes the C2 defect structurally
+   * rather than by discipline: a depth-1 head writing its children's spawn and
+   * report rows into its OWN SQLite while their step rows land on the root
+   * leaves the surface's `head_journal` → `head_steps` join unable to match and
+   * a depth-2 head unreadable from anywhere. One database means one journal, and
+   * the port below is a set of local calls rather than four
+   * cross-Durable-Object RPCs.
    */
   private async runHostedSplit(parent: HeadInput, request: HeadSplitRequest): Promise<HeadSplitResult> {
     const journal: HeadJournalPort = {
@@ -1074,17 +1073,14 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * A HOSTED ACTOR'S HOME IS NO LONGER AN RPC.
+   * A HOSTED ACTOR'S HOME IS NOT AN RPC.
    *
-   * `provisionFacetHome(reference)` was `@callable`-adjacent worker-side RPC:
-   * a facet ran in its own isolate, the uid table, the uid-0 view and the
-   * principal registry all live on THIS object, and `confinePrincipal` has no
-   * RPC — so a facet asked the owner for its home and the owner applied it
-   * here. Both halves are in this isolate now: the host provisions each actor's
-   * home from the same three members, keyed on the actor's immutable storage
-   * key, before it builds that actor's runtime
-   * (`actor-hosting.ts` → `hostedActorAgentName`). `facetHomeHost()` above is
-   * what it reaches them through, which is why that one survives.
+   * The uid table, the uid-0 view and the principal registry all live on THIS
+   * object, and `confinePrincipal` has no RPC — so both halves of provisioning
+   * are in this isolate: the host provisions each actor's home from those same
+   * three members, keyed on the actor's immutable storage key, before it builds
+   * that actor's runtime (`actor-hosting.ts` → `hostedActorAgentName`).
+   * `facetHomeHost()` above is what it reaches them through.
    */
 
   /**
@@ -1235,9 +1231,9 @@ export class OrchestratorAgent extends ActorAgent {
    * A hired subordinate is a full actor whose work arrives as a row in its OWN
    * event log — `admitHostedTask` writes it and arms the wake, and that is all
    * admission may do: a turn run inside the admitting request would live
-   * exactly as long as the caller's activation, which is the `waitUntil` shape
-   * this cutover exists to remove. So the runner is here, on the durable wake,
-   * where nothing holds a request open.
+   * exactly as long as the caller's activation, which is a `waitUntil` shape
+   * nothing here may take. So the runner is here, on the durable wake, where
+   * nothing holds a request open.
    *
    * THE DOUBLE-EXECUTION GUARD IS `markConsumed` BEFORE THE `await`. It is
    * synchronous, so it is atomic with respect to the event loop: the row leaves
@@ -1588,8 +1584,8 @@ export class OrchestratorAgent extends ActorAgent {
     // now, so it covers anything due now and re-arming over it would add a
     // second row on every touch. What is new is the other direction — a row
     // still in the FUTURE, later than the wake this workspace actually owes. A
-    // cron six hours out used to count as armed, so a reaction pending right now
-    // waited six hours for it. `armTimer` is soonest-wins and collapses, so
+    // cron six hours out counting as armed leaves a reaction pending right now
+    // waiting six hours for it. `armTimer` is soonest-wins and collapses, so
     // pulling it earlier still leaves exactly one row.
     if (Math.min(...armed) * 1000 <= next) return;
     await this.armTimer(next);
@@ -1736,7 +1732,7 @@ export class OrchestratorAgent extends ActorAgent {
     ).toArray().map(rowidOf));
 
     // THE SECOND CLASS, and it is not a matter of age or type. A row whose
-    // callback is no longer a method of this class cannot run at any date: the
+    // callback is NOT a method of this class cannot run at any date: the
     // alarm loop logs `Callback <name> not found or is not a function` and moves
     // on WITHOUT deleting the row, so it re-reports on every wake for as long as
     // the object exists. Production carries exactly that shape — a snapshot
@@ -1899,10 +1895,10 @@ export class OrchestratorAgent extends ActorAgent {
       // the actor's runtime objects, cuts its `actor_id`-scoped rows inside the
       // retirement transaction, and — only for a destroy — releases the bytes
       // outside SQL (its home on the session, its `.kinu/agents/<key>/`
-      // subtree). What used to be here was two separate teardowns for the two
-      // things a facet owned: `_cf_destroyDescendantFacet` over the SDK's facet
-      // tree for the DATABASE, and a `facetHomeReleaser` for the home. Neither
-      // is reachable and neither has anything left to destroy.
+      // subtree). ONE call, not a teardown apiece for the two things a facet
+      // owned: there is no descendant facet database to destroy over the SDK's
+      // facet tree, and no `facetHomeReleaser` standing apart from the host that
+      // provisioned the home.
       await this.actorHost().retire(caller, {
         reference: input.reference, name: input.name, destroy: true,
       });
@@ -2165,7 +2161,7 @@ export class OrchestratorAgent extends ActorAgent {
     return { owner: current, capabilityHash };
   }
 
-  // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
+  // The reactor (drain-then-stop) lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
   // signal through the core delivery seam). Ingress paths use
   // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
@@ -2415,10 +2411,11 @@ export class OrchestratorAgent extends ActorAgent {
         input: v.object({
           task: v.string(), output: v.string(), toolCalls: JsonValueSchema,
         }),
-        // NOT swallowed. `runSleepTimeCompute` used to catch every import, model
-        // and write failure and resolve normally, so the row recorded `completed`
-        // and was pruned even when no fact update ran. The throw now reaches the
-        // ledger, which keeps the row owed until the compute actually finishes.
+        // NOT swallowed. Catching every import, model and write failure in
+        // `runSleepTimeCompute` and resolving normally lets the row record
+        // `completed` and be pruned even when no fact update ran. The throw
+        // reaches the ledger, which keeps the row owed until the compute
+        // actually finishes.
         run: async ({ task, output, toolCalls }, scope) => {
           // KEYED on the assistant message, and TOMBSTONED: the compute is a
           // model call whose result mutates the fact store, so the answer is
@@ -2482,8 +2479,8 @@ export class OrchestratorAgent extends ActorAgent {
     // assistant message, so an await before the claim exists is a window where a
     // durable answer has no incomplete transition and `resumeAll()` finds nothing
     // to replay — the whole suffix is simply lost. The response-to-model-message
-    // conversion used to sit here and was exactly that window; it is now inside
-    // the `turn_end_extensions` body, where the claim already exists.
+    // conversion therefore sits inside the `turn_end_extensions` body, where the
+    // claim already exists, and not here: here it is exactly that window.
     const transition = this.transitionFor(result);
     const { userText, assistantText } = this.turnTextParts(result, programmaticUserMessage);
     // Read for every status: an aborted turn carries a message too, and its
@@ -2546,8 +2543,8 @@ export class OrchestratorAgent extends ActorAgent {
       if (!this.config.getSleepTimeComputeEnabled()) return;
       // The RECORDED update, when this call is one a terminal effect owes. The
       // model call and the fact mutation are two steps, and an eviction between
-      // them used to mean a replay paid for another call and applied each decay
-      // a second time. Persisting the update first makes the replay apply the
+      // them would otherwise mean a replay paid for another call and applied
+      // each decay twice. Persisting the update first makes the replay apply the
       // SAME answer, and the tombstone below makes it apply it once.
       const stored = key === undefined ? undefined : this.recordedSleepTimeUpdate(key);
       const currentFacts = this.facts.all()
@@ -2597,10 +2594,10 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'unavailable',
       });
       diagnostics.failure('memory.fact_compression_failed', failure);
-      // RETHROWN. This used to resolve normally, so the terminal effect that
-      // drives it recorded `completed` and was pruned even when no fact update
-      // landed — the advertised replay could never see a transient failure. The
-      // named event is the evidence; the throw is what keeps the row owed.
+      // RETHROWN. Resolve normally and the terminal effect that drives this
+      // records `completed` and is pruned even when no fact update landed, so
+      // the advertised replay never sees a transient failure. The named event is
+      // the evidence; the throw is what keeps the row owed.
       throw failure;
     }
   }
@@ -2962,9 +2959,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── DO initialization ──────────────────────────────────────────
 
-  // Device connection moved to the user level (UserDO owns the tunnel socket +
-  // tokens); the laptop executor forwards to it. The old per-agent
-  // verifyPcToken / attachPcSocket / issuePcToken / listPcTokens are gone.
+  // Device connection is user-level: UserDO owns the tunnel socket and the
+  // tokens, and the laptop executor forwards to it. Nothing per-agent verifies,
+  // attaches, issues or lists a device token.
 
   /**
    * Create/migrate every agent table. Idempotent and gated by an in-memory
@@ -3124,29 +3121,26 @@ export class OrchestratorAgent extends ActorAgent {
 
     // A cold activation is the moment the fork journal's `running` heads become
     // provably stale: nothing in this isolate is executing one, and
-    // `head_journal.status` had no writer for that — so `listLive()` kept
-    // feeding "N of M heads running" into every model step's dynamic-context
-    // block for the life of the workspace.
+    // `head_journal.status` has no other writer for that — so a stale `running`
+    // keeps feeding "N of M heads running" into every model step's
+    // dynamic-context block for the life of the workspace.
     //
-    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK, and this used to do
-    // both in one write, unconditionally, as the first thing an activation did.
-    // Meanwhile the only thing that could re-enter an interrupted search —
-    // `recoverOrphans()` — was reachable ONLY from `onFiberRecovered` for a
-    // surviving `bg:*` fiber, and a fiber row can die with the activation that
-    // owned it (that is the case `jobs/runner.ts` documents its registry sweep
-    // for). So the retirement was guaranteed and the re-entry was conditional,
-    // and the retirement won every eviction: five heads of a live search were
-    // recorded `aborted` with "nothing left that could run it" while the durable
-    // job that could run it was still re-drivable, and the agent, told its work
-    // was gone, re-forked by hand.
+    // BUT CORRECTING THAT CLAIM IS NOT RETIRING THE WORK. Fork recovery runs
+    // under the terminal wake (`maintenanceWork` below): it first marks stale
+    // heads interrupted, then offers their roots to the orphan-job recovery
+    // gate, and retires only roots that gate refuses. A fiber row can
+    // disappear with the activation that owned it (that is the case
+    // `jobs/runner.ts` documents its registry sweep for), so recovery cannot
+    // depend solely on a surviving `bg:*` fiber callback or retire work
+    // before offering it for re-entry.
     //
-    // The reconciliation now owns the order. It marks the stale rows
+    // So the reconciliation owns the order. It marks the stale rows
     // `interrupted` — non-terminal, so the roster stops lying without discarding
     // the run — then offers their roots to the job sweep, and retires only what
-    // the sweep refused. The sweep runs HERE rather than only on a fiber
-    // callback, which is what the CLI has always done (`local-session.ts`); it
-    // is idempotent, because every recovery reclaims under a fresh lease and a
-    // job this isolate is already driving is skipped.
+    // the sweep refused. The CLI runs the same sweep at startup
+    // (`local-session.ts`); the sweep is idempotent, because every recovery
+    // reclaims under a fresh lease and a job this isolate is already driving
+    // is skipped.
     //
     // Detached, not awaited: the journal writes are synchronous and land in this
     // method's own frame, but TELLING the agent goes through the signal seam,
@@ -3345,20 +3339,15 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * The lifecycle ledgers are the ONLY status authority — no per-facet copy.
+   * The lifecycle ledgers are the ONLY status authority — no per-actor copy.
    *
-   * A head that REPORTED is finished whatever it reported: `errored` and
-   * `budget_exceeded` are terminal exactly as `completed` and `aborted` are, and
-   * nothing will ever read that facet again. This used to name two of the four by
-   * hand and treat the rest as resumable, so a head that threw or blew its budget
-   * kept its facet — and because the id is never reused, that storage is
-   * abandoned inside the root DO for the life of the workspace, which is the one
-   * leak facet-spawn.ts exists to prevent.
-   *
-   * `resumable` is now exactly the two statuses under which work can still
-   * continue, and a status this journal does not write reads `unknown` rather
-   * than either: the sweep already refuses to guess about an unledgered facet
-   * while exploration is live, and a value nobody wrote is the same question.
+   * `completed`, `aborted`, `errored` and `budget_exceeded` are terminal
+   * report outcomes; `running` and `interrupted` remain resumable. Name two
+   * of the four by hand and treat the rest as resumable, and a head that
+   * threw or blew its budget keeps its actor rows live past the point their
+   * journal says they settled. Unknown or absent journal statuses remain
+   * unknown, so reclamation does not guess about unledgered actors while
+   * exploration is live.
    */
   /** Kept as the one place the head journal's four statuses are read as a
    *  lifecycle verdict; `reclaimSettledExplorationActors` asks the journal the
@@ -3576,11 +3565,11 @@ export class OrchestratorAgent extends ActorAgent {
    * One named run for a permalink, independent of the recent-list window — the SAME
    * composed row {@link getExplorationCanvas} pages.
    *
-   * The composed row rather than the bare summary, because the parameters used to
-   * travel only on the canvas page: the full-screen drill-down that opens one run by
-   * id had no way to read that run's own knobs, so the judge clamp was visible in the
-   * list column and invisible in the view with room to show it. Fetching a page of
-   * thirty runs and their trees to render one is not the answer.
+   * The composed row rather than the bare summary, because parameters that travel
+   * only on the canvas page leave the full-screen drill-down — which opens one run
+   * by id — with no way to read that run's own knobs, so the judge clamp shows in
+   * the list column and vanishes in the view with room to show it. Fetching a page
+   * of thirty runs and their trees to render one is not the answer.
    */
   @callable() async getForkRun(rootId: string): Promise<ExplorationCanvasRun | null> {
     return readExplorationRun(this.boundSql, this.actorHandle(), rootId);
@@ -4031,9 +4020,9 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * The checkpoint store's reachability and what it holds, in one round trip.
    *
-   * Reachability is not optional here. This used to return a bare array and
-   * answer `[]` for "no owner", "no device connected" and "the store is empty"
-   * alike, and the web client turned that into
+   * Reachability is not optional here. A bare array answers `[]` for "no owner",
+   * "no device connected" and "the store is empty" alike, and the web client
+   * turns that into
    * `No file checkpoint for this turn. It changed no device files.` — a claim
    * about the operator's turn built from the absence of a device. Checkpoints
    * cover the device plane only, so a turn that ran on the workspace plane or on
@@ -4412,19 +4401,16 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * `publishHeadStream` — the inbound RPC a FACET called to forward the frames
-   * it was producing — is GONE, and its `rpc-surface.ts` allowlist row with it.
+   * There is no inbound `publishHeadStream` RPC, and no `rpc-surface.ts`
+   * allowlist row for one.
    *
-   * A duplicate rather than an unreached producer, and the difference is what
-   * decided this: at `0b6d36886` it already had no caller in this package
-   * either, because the callers were facets calling inbound over a stub, and
-   * the in-process replacement both EXISTS and is WIRED — `publishHeadStreamFrame`,
-   * reached by `reportNodeDelta` and by `ExplorationHostSeams.publishDelta`. A
-   * live implementation elsewhere is a duplicate; the only implementation with a
-   * departed caller is a producer, and those get wired instead.
-   *
-   * The allowlist row goes with the method deliberately: leaving it would keep
-   * the facet shape REACHABLE for a caller that no longer exists, which is the
+   * Head-stream frames are published in process by `publishHeadStreamFrame`,
+   * reached by `reportNodeDelta` and by `ExplorationHostSeams.publishDelta`. An
+   * inbound RPC a facet called to forward the frames it was producing would be a
+   * DUPLICATE of that, not an unreached producer — a live implementation
+   * elsewhere is a duplicate, while the only implementation with a departed
+   * caller is a producer, and those get wired instead. An allowlist row for it
+   * would keep the facet shape REACHABLE with no caller behind it, which is the
    * fail-closed surface `sealRpcSurface` exists to keep shut.
    */
 
@@ -4488,7 +4474,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  and once its storage is gone nothing knows which R2 objects were its. The
    *  WORKSPACE needs no step of its own — its tables are rows in THIS object, so
    *  `this.destroy()` drops the filesystem, the conversation and the ledgers in
-   *  one teardown. That is why a same-name recreate can no longer find half a
+   *  one teardown. That is why a same-name recreate cannot find half a
    *  workspace: there is no second object to be out of step with.
    *
    *  Deliberately NOT @callable: destruction goes through UserDO's ownership
@@ -4588,18 +4574,14 @@ export class OrchestratorAgent extends ActorAgent {
    * ONE hosted actor's own identity, program and open work, for the tab that is
    * looking at it.
    *
-   * THE MIGRATION OF `getSubordinateSnapshot`, not an addition beside it. That
-   * RPC was on this same allowlist and answered exactly this capability; it
-   * existed as an RPC only because the display name, the role, the plan and the
-   * steers lived in a facet's PRIVATE database and the root could not read
-   * them. They are `actor_id`-scoped rows in the one workspace database now, so
-   * the same question is six local reads. One allowlist row out, one in, for the
-   * same capability — answered in process instead of by a second isolate over a
-   * stub.
+   * ONE allowlist row for this capability, and nothing beside it. The display
+   * name, the role, the plan and the steers are `actor_id`-scoped rows in the one
+   * workspace database, so the question is six local reads answered in process —
+   * a private per-facet database is the only thing that would force an RPC into a
+   * second isolate over a stub for them.
    *
-   * NAMED FOR THE ACTOR, not the kind. Every kind is an actor now, so a
-   * snapshot keyed to `subordinate` would be stale vocabulary on the day it
-   * landed. The SHAPE is honestly subordinate-shaped today and the name does not
+   * NAMED FOR THE ACTOR, not the kind. Every kind is an actor, so a snapshot
+   * keyed to `subordinate` would be stale vocabulary on the day it landed. The SHAPE is honestly subordinate-shaped today and the name does not
    * pretend otherwise: `mission` comes off the hire's birth seed, which a head
    * or a node does not have — they carry a task and a rootId instead. So this
    * serves any actor whose row the directory resolves, and a head asking it
@@ -4693,8 +4675,8 @@ export class OrchestratorAgent extends ActorAgent {
    * the bound comes back on the result so a reader can see what the rates are
    * over. `spend` is a SUM and takes no window at all: it is summed in SQL over
    * every row the log holds, so no `steps` a caller passes can turn the
-   * workspace total into a floor. That used to be possible and it was invisible:
-   * a caller asking for 2000 got 400, and the panel said "newest 400 rows" in
+   * workspace total into a floor. Were that possible it would be invisible: a
+   * caller asking for 2000 gets 400, and the panel says "newest 400 rows" in
    * small text beside a figure the owner decides on.
    *
    * `telemetry` and `spend` answer two different questions and are deliberately
@@ -4881,13 +4863,13 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async getToolDescriptions() {
     // Descriptions AND reach sourced from @kinu.run/core/tools/registry — one
-    // truth for both. Reach used to be guessed here as
-    // `nativeNames.has(name) ? 'native' : 'codemode'`, a binary that cannot
+    // truth for both. Guessing reach here as
+    // `nativeNames.has(name) ? 'native' : 'codemode'` is a binary that cannot
     // express "this actor has it on neither surface": `report` is the one
-    // deps-gated builtin, so on an orchestrator it fell out of the else-branch
-    // and the Tools panel read "code mode" — false twice over, because `report`
+    // deps-gated builtin, so on an orchestrator it falls out of the else-branch
+    // and the Tools panel reads "code mode" — false twice over, because `report`
     // is native wherever it exists and its `report.*` namespace is wired only
-    // on a subordinate. The two facts are now reported separately, because they
+    // on a subordinate. The two facts are reported separately, because they
     // are two facts: what the capability IS (declared) and what this actor
     // WIRES (observed from the ToolSet the turn actually built).
     const wiredNames = new Set(Object.keys(this.getRawTools()));
@@ -5078,17 +5060,16 @@ export class OrchestratorAgent extends ActorAgent {
    * read indistinguishable from a quiet one. Live updates arrive via the
    * granular refresh + events.
    *
-   * TWO FIELDS WERE REMOVED HERE AND NEITHER IS COMING BACK AS A SEED. This
-   * payload used to carry `getExplorationCanvas()` and `getRunTimeline({limit:
-   * 250})`. Measured against production on 2026-08-20, the canvas page was 499
-   * KiB on one workspace and 824 KiB on another — a page composes thirty runs
-   * and every one of their heads — and it seeded exactly one thing: the tree map
-   * the Exploration surface then rebuilds from its OWN `getExplorationCanvas`
-   * read the moment it mounts. The timeline was 250 merged spans that no
-   * component reads at all; `kinu timeline` calls `getRunTimeline` itself.
-   * The chat pane paid both on every workspace open while showing neither. A
-   * surface that is not open does not get to be on the critical path of the one
-   * that is.
+   * NO CANVAS AND NO TIMELINE RIDE HERE, AND NEITHER IS COMING BACK AS A SEED.
+   * Measured against production on 2026-08-20, `getExplorationCanvas()`'s page is
+   * 499 KiB on one workspace and 824 KiB on another — a page composes thirty runs
+   * and every one of their heads — and it would seed exactly one thing: the tree
+   * map the Exploration surface rebuilds from its OWN `getExplorationCanvas` read
+   * the moment it mounts. `getRunTimeline({limit: 250})` is 250 merged spans that
+   * no component reads at all; `kinu timeline` calls `getRunTimeline` itself.
+   * Carrying both would make the chat pane pay for them on every workspace open
+   * while showing neither. A surface that is not open does not get to be on the
+   * critical path of the one that is.
    */
   /** A reset owns no live branch fibers. Before a snapshot can say a branch is
    * running, seal every reportless branch head with one durable error report;
@@ -5670,7 +5651,8 @@ export class OrchestratorAgent extends ActorAgent {
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
     const outcome = await receiver.accept(frame);
     if (outcome.status === 'staged') return { ok: true, status: 'staged' };
-    this.markForkInstructionScopeMigrated(forkName);
+    // Copied approval rows key the source scope, so the target's copied
+    // instruction files start unverified with no marker to write.
     if (outcome.status === 'settled') {
       return {
         ok: true, status: 'published', agentId: this.ctx.id.toString(),
@@ -5685,48 +5667,6 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /**
-   * Forked bytes are copied, but approval rows are not authority that may be
-   * copied. This marker lands before deliverCloudFork publishes the target in
-   * UserDO, so the target's first turn sees copied AGENTS.md and skills as
-   * unverified rather than as a legacy migration baseline.
-   *
-   * ONCE PER ACTOR, and that is new with the one-database cutover. The
-   * migration marker is keyed `(actor_id, scope)`, and a fork copies the source
-   * workspace's database — `workspace_actors` rows included — so the target
-   * hosts every actor the source had, not just a main actor. Marking only one
-   * of them would leave the others to grandfather the target's copied
-   * instruction files on their first `grandfatherExisting`, which is exactly
-   * the "copied paths start unverified" invariant this call exists to hold.
-   *
-   * The LIVE roster only. A retired actor takes no turn, so it grandfathers
-   * nothing; the point at which a restored actor needs its marker is its
-   * restoration, not this publication, and `openFenced` refuses a retired row
-   * anyway — a handle over a retired actor is not authority over anything.
-   *
-   * The fence is the fork name. This runs on the target between accepting the
-   * transfer and publishing it in UserDO, so the one thing that must still be
-   * true of every handle it opens is that this object IS that target: a marker
-   * written after a rename would key an authority decision to a workspace
-   * identity nobody asked about.
-   */
-  private markForkInstructionScopeMigrated(forkName: string): void {
-    const transaction = <Result>(body: () => Result): Result => this.ctx.storage.transactionSync(body);
-    const directory = this.workspaceActors();
-    const requireForkTarget = (): void => {
-      if (this.name !== forkName) {
-        throw new KinuError('denied', 'The fork instruction marker belongs to a workspace this object is not.');
-      }
-    };
-    for (const record of directory.list()) {
-      new InstructionApprovalStore(
-        this.rt.storage.sql,
-        directory.openFenced(record.actorId, requireForkTarget),
-        `cf:${forkName}`,
-        transaction,
-      ).markMigratedEmpty();
-    }
-  }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
 
@@ -5783,7 +5723,8 @@ export class OrchestratorAgent extends ActorAgent {
     const now = Date.now();
     // The secret is core's to decide and to store: an hmac/bearer trigger
     // created without one refuses every delivery for the rest of its life, and
-    // this route used to make exactly that when the caller sent no secret.
+    // this route hands core the secret store rather than minting a row without
+    // one when the caller sends none.
     const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
     return {
       trigger_id: webhook.trigger_id,
@@ -5866,14 +5807,15 @@ export class OrchestratorAgent extends ActorAgent {
       const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
       if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
     }
-    // The prompt-section lane is the ONE automatic lane. The scaffold GEPA pass
-    // that used to share this tick optimised `scaffold/agent.js`, which the
-    // chat turn does not run: the turn is Think's loop over `getSystemPrompt` /
-    // `getTools` / `beforeTurn`, and `runScaffold` is reached only by the MCP
-    // one-shot, the shadow trials and GEPA's own rollouts. Every 25 turns it
-    // spent rollouts and judge calls improving an artifact no user ever saw
-    // answer them (measured 2026-09-03 by grepping `runScaffold(` callers). The
-    // manual `runScaffoldGepaOptimization` RPC stays for the scaffold tooling.
+    // The prompt-section lane is the ONE automatic lane. A scaffold GEPA pass
+    // sharing this tick would optimise `scaffold/agent.js`, which the chat turn
+    // does not run: the turn is Think's loop over `getSystemPrompt` / `getTools`
+    // / `beforeTurn`, and `runScaffold` is reached only by the MCP one-shot, the
+    // shadow trials and GEPA's own rollouts. Every 25 turns it would spend
+    // rollouts and judge calls improving an artifact no user ever saw answer them
+    // (measured 2026-09-03 by grepping `runScaffold(` callers). The manual
+    // `runScaffoldGepaOptimization` RPC is where the scaffold tooling asks for
+    // one.
     const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
     this._gepaTickRunning = true;
     try {

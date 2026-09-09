@@ -2,14 +2,14 @@
 //
 // `rules/no-untyped-console.test.ts` proves the rule function behaves. It does not prove the rule is
 // reachable through the command the repo gates on, and — more importantly for THIS rule — it does not
-// prove the migration the rule protects actually happened.
+// prove the tree the rule protects actually logs through the typed logger.
 //
 // A console ban is the easiest gate in the world to satisfy dishonestly. Three green-for-the-wrong-
 // reason states, each invisible to `oxlint` and to every unit test:
 //
 //   1. NOTHING LOGS. Delete every diagnostic and the ban is satisfied perfectly. This is not a
-//      hypothetical: 650 `console.*` calls were the migration's denominator, and a tree with zero
-//      calls and zero log lines passes the rule while being strictly worse than where it started.
+//      hypothetical: the census denominator is 650 `console.*` calls, and a tree with zero calls
+//      and zero log lines passes the rule while being strictly worse than those 650.
 //   2. ONE GENERIC NAME. `diagnostics.failure('error.occurred', …)` on 168 sites passes the ban and
 //      passes typecheck, and defeats the entire purpose — the NAME is what makes a failure greppable
 //      across Workers Logs and the CLI journal, and one name for 168 outcomes is not greppable, it is
@@ -44,14 +44,14 @@ type LintReport = {
  * The exact shape the census found, 650 times: a `[kinu]` prose prefix, the outcome in English,
  * and a second argument that is an object nobody looked inside. Nothing can key a query on it.
  */
-const HISTORICAL_SHAPE = `declare const outcome: { reason: unknown };
+const UNTYPED_SHAPE = `declare const outcome: { reason: unknown };
 export function scoreHead(): void {
   console.warn('[kinu] head could not be scored — reporting no grounded signal:', outcome.reason);
 }
 `;
 
-/** The same code after the migration: a stable dotted name, a classified error, scalar fields. */
-const MIGRATED_SHAPE = `import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+/** The same code through the typed logger: a stable dotted name, a classified error, scalar fields. */
+const TYPED_SHAPE = `import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 declare const outcome: { reason: unknown };
 declare const headId: string;
@@ -69,7 +69,7 @@ const cases: ReadonlyArray<{
 	readonly bad: string;
 	readonly good: string;
 }> = [
-	{ rule: "no-untyped-console", bad: HISTORICAL_SHAPE, good: MIGRATED_SHAPE },
+	{ rule: "no-untyped-console", bad: UNTYPED_SHAPE, good: TYPED_SHAPE },
 ];
 
 const config = JSON.parse(readFileSync(join(repoRoot, ".oxlintrc.json"), "utf8"));
@@ -205,13 +205,13 @@ assert.ok(
 );
 assert.ok(
 	census.sites > 0,
-	`${String(census.governedFiles)} governed files hold 0 typed-logger calls. The console ban is then satisfied by logging NOTHING, which is worse than the 650 bare calls it replaced`,
+	`${String(census.governedFiles)} governed files hold 0 typed-logger calls. The console ban is then satisfied by logging NOTHING, which is worse than the 650 bare calls the census counted`,
 );
 const byName = new Map<string, number>();
 for (const name of census.names) byName.set(name, (byName.get(name) ?? 0) + 1);
 assert.ok(
 	byName.size > 0,
-	`${String(census.sites)} typed-logger calls carry 0 resolvable event names; a name a query cannot be written against is the defect this migration existed to fix`,
+	`${String(census.sites)} typed-logger calls carry 0 resolvable event names; a name a query cannot be written against is the defect this rule exists to prevent`,
 );
 const worst = [...byName].sort((left, right) => right[1] - left[1]);
 const overused = worst.filter(([, count]) => count > MAX_NAME_REUSE);
@@ -245,8 +245,8 @@ assert.ok(
 const fixtures = mkdtempSync(join(tmpdir(), "kinu-no-untyped-console-gate-"));
 try {
 	// The fixtures carry a governed path SEGMENT (`packages/core/src`), because this rule is
-	// path-scoped and a fixture the rule does not govern proves nothing about it — the first draft
-	// of this gate put them at the temp-dir root and measured 0 findings on a genuine defect.
+	// path-scoped and a fixture the rule does not govern proves nothing about it — fixtures at the
+	// temp-dir root measure 0 findings on a genuine defect.
 	// They sit under the system temp dir rather than the repo root: gates built on
 	// scripts/sources.ts enumerate untracked worktree files on purpose, so repo-root scratch is
 	// visible mid-run to every one of them. `isDiagnosticSource` matches the segment anywhere in
@@ -307,7 +307,7 @@ try {
 		assert.equal(
 			firedIn(green, rule).length,
 			0,
-			`anti-slop/${rule} fires on the migrated form, so the cutover has no green state to reach`,
+			`anti-slop/${rule} fires on the corrected form, so there is no green state to reach`,
 		);
 	}
 

@@ -3,13 +3,13 @@
  * quietly.
  *
  * Every case here is a record shape the real corpus produces or will produce:
- * a legacy detail carrying a usage histogram, an attempt whose turn never closed,
+ * a `tool_outcomes` detail carrying a usage histogram, an attempt whose turn never closed,
  * a failure mix with one key in each census part, two runs of one arm disagreeing,
  * and a stored admissibility verdict that today's policy overturns. The classes
  * are asserted through `triage`, never through a private helper, so a rewrite of
  * the grouping cannot pass this file while changing what a reader is told.
  *
- * The legacy case is the one that matters most. `flash-a`'s `tool_outcomes`
+ * The usage-histogram case is the one that matters most. `flash-a`'s `tool_outcomes`
  * detail reads `103/126 tool calls returned; run×88, file×21` — a USAGE
  * histogram whose keys look exactly like failure keys. An instrument that read it
  * as an attribution would report `run×88` as 88 broken calls and file the whole
@@ -122,9 +122,9 @@ describe('a failure key is classed by the census part it sat in', () => {
   });
 });
 
-describe('a legacy detail carries no attribution and is never read as one', () => {
+describe('a usage histogram carries no attribution and is never read as one', () => {
   const result = triage([loaded({
-    runId: 'legacy',
+    runId: 'usage-histogram',
     observations: [scored('ws-fix-broken', 0, [row({
       name: 'tool_outcomes', eligible: 39, passed: 30,
       detail: '30/39 tool calls returned; run×29, execute_tools×6, file×4',

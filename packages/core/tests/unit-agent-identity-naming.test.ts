@@ -73,7 +73,7 @@ describe('the mission-derived title', () => {
     expect(parseWorkspaceTitle('{"title":"   "}')).toBe(null);
   });
 
-  test('the naming prompt asks for a JSON title, and no longer for a slug', () => {
+  test('the naming prompt asks for a JSON title, not a slug', () => {
     const prompt = workspaceTitlePrompt('Build a durable benchmark runner');
 
     expect(prompt).toContain('Return a concise JSON object');
@@ -83,12 +83,12 @@ describe('the mission-derived title', () => {
   });
 });
 
-// Workspaces created before mission-derived titling carry their raw slug as
-// their display name. planWorkspaceTitle is the single decision behind both
-// the first-turn title and that lazy heal.
+// A workspace whose display name is still its raw slug is titled from its
+// mission the next time it runs. planWorkspaceTitle is the single decision
+// behind both the first-turn title and that lazy heal.
 describe('automatic workspace titling — the decision', () => {
   const MISSION = 'Audit the OAuth callback flow\n\nstart with the token exchange';
-  const legacy: WorkspaceTitleState = {
+  const slugNamed: WorkspaceTitleState = {
     slug: 'workspace-1a4e20',
     displayName: 'workspace-1a4e20',
     nameOrigin: 'auto',
@@ -96,42 +96,42 @@ describe('automatic workspace titling — the decision', () => {
   };
 
   test('a workspace still showing its raw slug is titled from its mission', () => {
-    expect(planWorkspaceTitle(legacy)).toEqual({
+    expect(planWorkspaceTitle(slugNamed)).toEqual({
       provisional: 'Audit the OAuth callback flow',
       mission: MISSION,
     });
-    expect(planWorkspaceTitle({ ...legacy, displayName: '  workspace-1a4e20  ' })?.provisional)
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: '  workspace-1a4e20  ' })?.provisional)
       .toBe('Audit the OAuth callback flow');
-    expect(planWorkspaceTitle({ ...legacy, displayName: null })?.provisional)
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: null })?.provisional)
       .toBe('Audit the OAuth callback flow');
   });
 
   test('a name the operator chose is never touched', () => {
-    expect(planWorkspaceTitle({ ...legacy, nameOrigin: 'user' })).toBe(null);
-    expect(planWorkspaceTitle({ ...legacy, displayName: 'Jarvis', nameOrigin: 'user' })).toBe(null);
-    expect(planWorkspaceTitle({ ...legacy, displayName: null, nameOrigin: 'user' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, nameOrigin: 'user' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: 'Jarvis', nameOrigin: 'user' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: null, nameOrigin: 'user' })).toBe(null);
   });
 
   test('a workspace that already carries a generated title is left alone', () => {
-    expect(planWorkspaceTitle({ ...legacy, displayName: 'OAuth Callback Audit' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit' })).toBe(null);
   });
 
   test('a workspace that was never titled still gets one, without clobbering its shown name first', () => {
-    expect(planWorkspaceTitle({ ...legacy, displayName: 'OAuth Callback Audit', nameOrigin: null }))
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit', nameOrigin: null }))
       .toEqual({ provisional: null, mission: MISSION });
   });
 
   test('no mission to title from is a no-op', () => {
-    expect(planWorkspaceTitle({ ...legacy, mission: '' })).toBe(null);
-    expect(planWorkspaceTitle({ ...legacy, mission: '   \n ' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, mission: '' })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, mission: '   \n ' })).toBe(null);
     // The generic missions seeded for workspaces created without one describe
     // Kinu, not the workspace — titling from them would be noise.
-    expect(planWorkspaceTitle({ ...legacy, mission: summarizeSoul(renderSoulMarkdown({ name: 'Kinu' })) })).toBe(null);
-    expect(planWorkspaceTitle({ ...legacy, mission: summarizeSoul(DEFAULT_SOUL_MD) })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, mission: summarizeSoul(renderSoulMarkdown({ name: 'Kinu' })) })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, mission: summarizeSoul(DEFAULT_SOUL_MD) })).toBe(null);
   });
 
   test('a stated persona wins over the opening sentence', () => {
-    expect(planWorkspaceTitle({ ...legacy, mission: 'You are Jarvis, my personal assistant' })?.provisional)
+    expect(planWorkspaceTitle({ ...slugNamed, mission: 'You are Jarvis, my personal assistant' })?.provisional)
       .toBe('Jarvis');
   });
 });
@@ -238,16 +238,15 @@ describe('automatic workspace titling — applying it', () => {
 });
 
 /**
- * The ONE minting rule both backends call, and the slug bound they used to
- * believe was theirs.
+ * The ONE minting rule both backends call, and the slug bound that belongs to
+ * it alone.
  *
- * Each backend inlined the same slug-and-suffix shape and then disagreed on the
- * suffix — `nanoid(6)` over 36 characters on Cloudflare, six hex digits of a UUID
- * locally — so identical roles minted names of two different collision strengths
- * depending on where the agent ran. Both also cut the slug at 48 AFTER the
- * slugifier had already cut it at 24, so the bound they wrote could never take
- * effect; the slug is module-private now for exactly that reason, and these
- * assertions read it where a caller does.
+ * A backend that inlines the slug-and-suffix shape instead disagrees on the
+ * suffix — `nanoid(6)` over 36 characters on Cloudflare against six hex digits
+ * of a UUID locally — and identical roles then mint names of two different
+ * collision strengths depending on where the agent ran. A caller-side cut at 48
+ * is just as useless, because the slugifier has already cut at 24. So the slug
+ * is module-private, and these assertions read it where a caller does.
  */
 describe('a minted subordinate name', () => {
   /** The slug half, with the random suffix removed. */
@@ -256,8 +255,7 @@ describe('a minted subordinate name', () => {
   test('lowercases, hyphenates, trims and caps the role at 24 characters', () => {
     expect(slugOf(mintSubordinateName('Research Rust Frameworks'))).toBe('research-rust-frameworks');
     expect(slugOf(mintSubordinateName('  Build a Benchmark!!  '))).toBe('build-a-benchmark');
-    // 24, not 48: the bound both call sites wrote after the slugifier was dead
-    // code, and the 24 they were really getting is the 24 they keep.
+    // 24, not 48: the slugifier's own cut is the only one that runs.
     expect(slugOf(mintSubordinateName('A'.repeat(40)))).toBe('a'.repeat(24));
   });
 
@@ -280,7 +278,7 @@ describe('a minted subordinate name', () => {
     const minted = new Set(Array.from({ length: 64 }, () => mintSubordinateName('auditor')));
     expect(minted.size).toBe(64);
     // One entropy source, and it is the 36-character alphabet rather than the
-    // 16 of the hex suffix the local backend used to mint.
+    // 16 of a hex suffix.
     for (const name of minted) expect(name).toMatch(/^auditor-[a-z0-9]{6}$/);
   });
 });

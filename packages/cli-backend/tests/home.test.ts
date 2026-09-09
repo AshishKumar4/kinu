@@ -29,9 +29,9 @@ describe('kinuHome', () => {
 });
 
 describe('checkpoint store isolation', () => {
-  // Regression: the shadow-git store used to hardcode ~/.kinu/checkpoints,
-  // so an isolated KINU_HOME still wrote into the real home. Any harness
-  // that promises a throwaway home depends on this staying fixed.
+  // Regression: a shadow-git store that hardcodes ~/.kinu/checkpoints writes
+  // into the real home even under an isolated KINU_HOME. Any harness that
+  // promises a throwaway home depends on this.
   test('checkpoints land under KINU_HOME, not the real home', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kinu-home-iso-'));
     try {

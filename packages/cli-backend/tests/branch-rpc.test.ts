@@ -1,6 +1,6 @@
 // Two overlapping `explore` RPCs against one branch worker must each resolve
-// to their own result. The parent used to match a reply to a waiter by method
-// name alone, so the first arriving reply settled every same-method waiter.
+// to their own result. Matching a reply to a waiter by method name alone lets
+// the first arriving reply settle every same-method waiter.
 import { test, expect, afterAll } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

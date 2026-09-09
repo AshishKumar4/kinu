@@ -13,7 +13,7 @@ import { deriveUserId } from '../src/auth/store';
  *
  * `routeAgentRequest` (partyserver) maps EVERY Durable Object namespace binding
  * by slug, and userId = sha256(email).slice(0,32) is both derivable and a legal
- * workspace name. Before the fix, an attacker who registered a victim's userId
+ * workspace name. Unguarded, an attacker who registered a victim's userId
  * as a workspace name could reach GET /agents/user-d-o/<victimId> — the victim's
  * UserDO @callable surface (getAuthHeaders / mintCliToken → full account
  * takeover), plus worker-only facet namespaces / KinuSandbox / Nimbus*.
@@ -125,19 +125,19 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
 });
 
 describe('F1 defense 2 — @callable surface reduction (worker-side stubs preserved)', () => {
-  // The exposure half of this defense moved to
+  // The exposure half of this defense lives in
   // `tests/workerd/decorated-agent.test.ts`, which reads the SDK's own callable
   // registry off the real class prototypes after the real transform.
   //
-  // What used to be here was `expect(source('src/user/user-do.ts')).not.toContain('@callable')`
-  // and eleven `expect(src).not.toContain('@callable()\n  async <name>')` checks.
-  // That oracle passed for the wrong reasons. It matched one exact spelling, so
-  // putting the decorator on the same line as the signature, inserting a blank
-  // line or a doc comment between them, or renaming the method all stop the
-  // string from matching while leaving the method exposed. It also could not
-  // fail when a decorator appeared in a shape the pattern did not describe.
-  // KINU-065 made the registry readable in workerd, so the exposure decision is
-  // now asserted where dispatch actually reads it.
+  // A source-text oracle cannot hold it. `not.toContain('@callable')` over
+  // `src/user/user-do.ts`, or a `not.toContain('@callable()\n  async <name>')`
+  // per method, matches one exact spelling — so putting the decorator on the
+  // same line as the signature, inserting a blank line or a doc comment between
+  // them, or renaming the method all stop the string from matching while
+  // leaving the method exposed, and nothing fails when a decorator appears in a
+  // shape the pattern does not describe. KINU-065 made the registry readable in
+  // workerd, so the exposure decision is asserted where dispatch actually reads
+  // it.
   //
   // WHAT STAYS HERE is the half that is not about exposure: these methods must
   // still EXIST, because a worker-side stub holder calls them by name over
