@@ -4,7 +4,7 @@
 //   {"id": "math-001", "task": "What is 17 * 23?", "reference": "391",
 //    "tags": ["math", "trivial"]}
 import * as v from 'valibot';
-import type { EvalCase } from './types';
+import { EvalBudgetSchema, type EvalCase } from './types';
 import { JsonObjectSchema } from '../utils/json';
 
 // `v.object` STRIPS keys it does not declare rather than rejecting them, so a
@@ -19,6 +19,7 @@ const CaseSchema = v.strictObject({
   tags: v.optional(v.array(v.string())),
   env: v.optional(v.string()),
   params: v.optional(JsonObjectSchema),
+  budget: v.optional(EvalBudgetSchema),
 });
 
 export function parseCorpus(jsonl: string): EvalCase[] {
