@@ -111,6 +111,15 @@ export const ALLOWED_PREFIXES: readonly string[] = [
  */
 export const SUBJECT_CEILING = 80;
 
+/**
+ * Non-blank lines a whole message may carry: the subject and at most four more.
+ * The evidence for a change lives in the tree and in the review report; a body
+ * that restates it is written once and read by nobody. Governed from the commit
+ * that introduced the rule (`sizeRuleBoundary`), because the bodies before it
+ * are history and a walk that flagged them would be a gate somebody disabled.
+ */
+export const MESSAGE_LINE_CEILING = 5;
+
 /** Subjects git writes, not a person: a merge, a revert, and the three autosquash
  *  forms. Exempt from the prefix and length rules ONLY — a hand-written merge
  *  body is governed like any other body. Rewording git's own subject would put a
@@ -306,7 +315,7 @@ export const NARRATION: readonly Narration[] = [
   },
 ];
 
-export type Rule = 'subject-prefix' | 'subject-length' | 'named-actor' | 'narration';
+export type Rule = 'subject-prefix' | 'subject-length' | 'message-size' | 'named-actor' | 'narration';
 
 export interface Violation {
   readonly rule: Rule;
@@ -552,6 +561,25 @@ export function inspect(message: string, isCode: (name: string) => boolean): Vio
 }
 
 /**
+ * The size rule, apart from `inspect` because it has its own boundary: `inspect`
+ * governs every commit since the convention landed, this governs every commit
+ * since the rule landed. The hook applies both to the message being written.
+ */
+export function sizeViolations(message: string): Violation[] {
+  const lines = message.trim().split('\n').filter((line) => line.trim().length > 0);
+  if (lines.length <= MESSAGE_LINE_CEILING) return [];
+  return [{
+    rule: 'message-size',
+    line: MESSAGE_LINE_CEILING + 1,
+    quote: lines[MESSAGE_LINE_CEILING] ?? '',
+    invariant: `a message is at most ${String(MESSAGE_LINE_CEILING)} non-blank lines: the subject and up to four more`,
+    silently: `${String(lines.length)} lines. The measurements, the rejected alternative and the proof `
+      + 'are already in the tree and the review; a body that restates them is written once and read by nobody.',
+    fix: 'keep the what and the why in four lines; put the evidence in the review report.',
+  }];
+}
+
+/**
  * A `commit-msg` file as git will store it: comment lines dropped, and
  * everything from the `--verbose` scissors line cut. The hook runs BEFORE git's
  * own cleanup, so a message read raw carries the entire commit template and the
@@ -584,6 +612,21 @@ function git(...args: readonly string[]): string {
 export function conventionBoundary(): string | undefined {
   const log = git('log', 'HEAD', '--diff-filter=A', '--format=%H', '--follow', '--', GATE_PROGRAM);
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
+}
+
+/** The commit that introduced the size rule, in HEAD's ancestry: the oldest one
+ *  whose diff to this file added the rule's name. Undefined before it is
+ *  committed and on a branch without it, both meaning "no commit is sized here". */
+export function sizeRuleBoundary(): string | undefined {
+  const log = git('log', 'HEAD', '--format=%H', "-S'message-size'", '--', GATE_PROGRAM);
+  return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
+}
+
+/** Short SHAs of every commit from `boundary` (inclusive) to HEAD, so the size
+ *  rule can be applied to exactly the commits written under it. */
+export function commitsFrom(boundary: string): ReadonlySet<string> {
+  const log = git('log', '--format=%H', `${boundary}^..HEAD`);
+  return new Set(log.trim().split('\n').filter((line) => line.length > 0).map((sha) => sha.slice(0, 10)));
 }
 
 export interface GovernedCommit {
@@ -683,8 +726,14 @@ if (import.meta.main) {
     ? (boundary === undefined ? [] : governedCommits(boundary))
     : [{ sha: messageFile, message: cleanMessage(readFileSync(messageFile, 'utf8')) }];
 
-  const violations = governed.flatMap((commit) =>
-    inspect(commit.message, isCode).map((violation) => ({ commit, violation })));
+  // The size rule dates from its own commit: in the ladder it reads only the
+  // commits written under it; in the hook it reads the message being written.
+  const sizeBoundary = messageFile === undefined ? sizeRuleBoundary() : undefined;
+  const sized: ReadonlySet<string> = sizeBoundary === undefined ? new Set() : commitsFrom(sizeBoundary);
+  const violations = governed.flatMap((commit) => [
+    ...inspect(commit.message, isCode),
+    ...(messageFile !== undefined || sized.has(commit.sha) ? sizeViolations(commit.message) : []),
+  ].map((violation) => ({ commit, violation })));
 
   if (violations.length === 0) {
     const scope = messageFile === undefined
