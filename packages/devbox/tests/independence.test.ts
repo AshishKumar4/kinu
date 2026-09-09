@@ -11,7 +11,7 @@
 // asserts the absence of every path, which is what the rule actually says.
 //
 // The second boundary below is the same rule pointed at the runtime: the
-// deployed Worker is a Workers isolate and the candidate runner is a bun
+// deployed Worker is a Workers isolate and a container-side runner is a bun
 // process, so what the Worker's module graph may contain is not what the
 // runner's may. That one is answered by BUILDING the graph, because the
 // specifier that breaks a deploy is the one reached through four files of
@@ -134,21 +134,18 @@ async function bundledSpecifiers(entrypoint: string): Promise<readonly string[]>
 
 describe('the Worker admits nothing the Workers runtime cannot load', () => {
   test('the deployed Worker reaches no bun: builtin', async () => {
-    // `bun:ffi` is the one that matters, and it is why `journalDaemonArgv` lives
-    // in `src/capture/journal/command.ts` instead of beside the daemon client
-    // that also needs it. The client opens the native openat2 helper, so a
-    // Worker importing it would carry `bun:ffi` into a runtime that has no such
-    // module — a deploy-time failure for a module nothing in the Worker calls.
+    // `bun:ffi` is the one that matters: a module that opens a native helper
+    // would carry it into a runtime that has no such module — a deploy-time
+    // failure for code nothing in the Worker calls.
     const reached = await bundledSpecifiers(join(PACKAGE_DIR, 'bench', 'worker.ts'));
     expect(reached.filter(name => name.startsWith('bun:'))).toEqual([]);
   });
 
-  test('the container-side runner DOES reach bun:ffi, so the check above is not vacuous',
+  test('the builder resolves what a module really imports, so the check above is not vacuous',
     async () => {
-      // The runner is a bun process and is meant to load the native helper. If
-      // this came back empty, the assertion above would be reading a build that
-      // resolved nothing at all.
-      const entry = join(PACKAGE_DIR, 'bench', 'candidate-runner.ts');
-      expect(await bundledSpecifiers(entry)).toContain('bun:ffi');
+      // If this came back empty, the assertion above would be reading a build
+      // that resolved nothing at all.
+      const entry = join(PACKAGE_DIR, 'bench', 'worker.ts');
+      expect(await bundledSpecifiers(entry)).toContain('valibot');
     });
 });

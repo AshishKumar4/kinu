@@ -41,7 +41,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { request as httpsRequest } from 'node:https';
 import {
-  copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -55,8 +55,8 @@ import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
 import { parseProbeRun, type ProbeRun } from './fixtures/r2-bench/report';
 import {
-  RULE_WORKLOADS, decide, opsAreBlind,
-  sqliteFinding, totalsFor, type DecisionVerdict, type TickRecord,
+  RULE_WORKLOADS, opsAreBlind,
+  sqliteFinding, totalsFor, type TickRecord,
 } from './fixtures/r2-bench/decision';
 import {
   R2_OP_VOCABULARY, cleanupEvidenceFromReport, evaluateRun, expectedCells,
@@ -65,7 +65,6 @@ import {
   type RestoreClaim, type RestoreEvidence, type RunProvenance, type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
 import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
-import { RestoreReceiptSchema, type RestoreReceipt } from '@kinu.run/devbox/candidates/restore-receipt';
 import {
   PublicationCutSchema, publicationWasCut, rendezvousPublicationCut,
 } from '../packages/devbox/bench/publication-cut';
@@ -79,7 +78,6 @@ import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
 import {
   runSecurityFaultCells,
-  securityExclusion,
   securityNonce,
   summarizeSecurity,
   type SecurityCellsObservation,
@@ -94,9 +92,9 @@ import {
  * `rev` is monotonic across both, which is what distinguishes a rebase from a
  * quiesce that wrote nothing.
  *
- * Absent for any arm that is not a chain, which is itself the point: overlay-cas
- * never rebases, so a chain that does is a structural difference between the two
- * that reproduces on every run with this ladder, not a coin flip between runs.
+ * Absent when the box has no generation yet, which is itself the point: a
+ * rebase that fires inside the ladder is a structural difference reproducing on
+ * every run with this ladder, not a coin flip between runs.
  */
 interface ChainGeneration {
   readonly baseId: string | null;
@@ -296,31 +294,8 @@ export const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
 const FIXTURE_BASE = 'kinu-devbox-bench';
 const FIXTURE_CLASS_BY_STRATEGY = {
   'snapshot-chain': 'SnapshotChainBox',
-  r2fs: 'R2fsBox',
-  'overlay-cas': 'OverlayCasBox',
-  'bounded-layers': 'BoundedLayersBox',
-  'merkle-pack': 'MerklePackBox',
 } as const satisfies Record<Strategy, string>;
 const FIXTURE_COUNTER_CLASS = 'BenchOpCounter';
-/**
- * The container classes whose image is the candidate Dockerfile build.
- *
- * `OverlayCasBox` belongs here because `CAS_RUNNER_PATH`
- * (`packages/devbox/src/overlay-cas.ts`) resolves its runner at
- * `/opt/kinu/overlay-cas-runner.bundle.mjs`, and that path exists ONLY inside
- * this image — `candidateImageDockerfile` copies the bundle into it. Left out,
- * the arm ran on the plain sandbox image and every cold attach refused with
- * `Module not found "/opt/kinu/overlay-cas-runner.bundle.mjs"`: measured on the
- * 2026-08-29 01:26 and 02:42 runs, and the reason the 2026-08-26 overlay-cas
- * artifact was REFUSED. The image is built once per run regardless of which
- * arms selected it, so naming a class here costs nothing it did not already pay.
- */
-export const CANDIDATE_CONTAINER_CLASSES: ReadonlySet<string> = new Set([
-  'OverlayCasBox',
-  'BoundedLayersBox',
-  'MerklePackBox',
-]);
-
 export interface FixtureNames {
   readonly worker: string;
   readonly bucket: string;
@@ -328,19 +303,13 @@ export interface FixtureNames {
 }
 
 /**
- * The digest of every input the candidate container image is built from.
+ * The digest of the container image the arms actually RAN on.
  *
- * Recorded because these are what the arms actually RAN. A rebuilt runner
- * bundle or a changed daemon source produces different numbers from the same
- * commit, and a provenance row naming only the commit cannot tell the two runs
- * apart.
+ * Recorded because a provenance row naming only the commit cannot tell two
+ * runs on different images apart.
  */
 interface FixtureImageDigests {
   readonly imageSha256: string;
-  readonly dockerfileSha256: string;
-  readonly candidateRunnerSha256: string;
-  readonly overlayRunnerSha256: string;
-  readonly journalDaemonSha256: string;
 }
 
 /**
@@ -357,11 +326,6 @@ export interface ArmFixture extends FixtureNames {
 
 /**
  * Every arm's deployment, plus the one directory they were generated from.
- *
- * The runner bundles and the candidate Dockerfile are built ONCE and shared as
- * bytes by every arm's config: the image is the same image, so building it per
- * arm would add a container build to every deploy and change nothing about
- * what ran. The digests below are therefore the digests of every arm.
  */
 export interface FixtureResources {
   readonly arms: readonly ArmFixture[];
@@ -430,154 +394,6 @@ export function boxName(runId: string, arm: Strategy): string {
   return `ab-${arm}-${runId}`;
 }
 
-/**
- * The candidate image: the stock sandbox plus the two runner bundles and the
- * mutation-journal daemon the candidate arms capture through.
- *
- * The daemon's build recipe is not restated here. It is the daemon's own
- * Dockerfile, re-used verbatim as a builder stage, so a change to libfuse or to
- * the compile flags cannot leave the benchmark image building a different
- * binary from the one its tests prove. Only the runtime libraries the compiled
- * daemon links against travel to the final stage; the toolchain does not.
- */
-export function candidateImageDockerfile(): string {
-  const recipe = readFileSync(JOURNAL_DAEMON_DOCKERFILE, 'utf8');
-  // The checked-in daemon recipe deliberately stays readable as the versioned
-  // tag humans recognize. The GENERATED benchmark image does not: a tag is a
-  // mutable pointer, so the build starts from the manifest digest it resolved
-  // to before this staging run. Reusing the recipe after its one FROM line
-  // keeps libfuse flags and package steps owned by the daemon Dockerfile.
-  const recipeBase = `FROM ${SANDBOX_IMAGE_TAG}\n`;
-  const pinnedBase = `FROM ${SANDBOX_IMAGE}\n`;
-  if (!recipe.startsWith(recipeBase)) {
-    throw new Error(
-      `journal daemon Dockerfile must start with ${recipeBase.trim()} to be re-used as a builder stage`,
-    );
-  }
-  return `${pinnedBase.trimEnd()} AS journal-daemon\n${recipe.slice(recipeBase.length)}\n`
-    + `FROM ${SANDBOX_IMAGE}\n`
-    + 'COPY --from=journal-daemon /usr/local/bin/kinu-journal-daemon /usr/local/bin/kinu-journal-daemon\n'
-    + 'COPY --from=journal-daemon /usr/local/lib /usr/local/lib\n'
-    + 'RUN ldconfig\n'
-    + 'COPY candidate-runner.bundle.mjs /opt/kinu/candidate-runner.bundle.mjs\n'
-    + 'COPY overlay-cas-runner.bundle.mjs /opt/kinu/overlay-cas-runner.bundle.mjs\n';
-}
-
-/**
- * Every path a Dockerfile expects to find in its build CONTEXT, read out of
- * the Dockerfile itself.
- *
- * WHY THE STAGED SET IS DERIVED RATHER THAN LISTED. The candidate image re-uses
- * the journal daemon's own recipe verbatim as its builder stage, so the files
- * that recipe COPYs are inputs this benchmark must stage — and the recipe is
- * free to change them. It did: the daemon became `journal-daemon.c` plus
- * `journal-delta.c` and its header, the daemon Dockerfile gained the two COPY
- * lines, and the hardcoded copy in staging did not follow. Every arm whose class
- * raises this image then failed its deploy with `Docker build exited with code:
- * 1` over `"/journal-delta.h": not found` — three of five arms in run
- * 20260903131640. A second list beside the recipe is the defect, so there is no
- * second list.
- *
- * `COPY --from=<stage>` is EXCLUDED: it copies out of an earlier build stage
- * rather than the context, so demanding those as context files would refuse
- * every complete build. The JSON array form is REFUSED by name rather than
- * mis-read, because a parser that silently misses a source is how this defect
- * reached a deploy in the first place.
- */
-export function contextCopySources(dockerfile: string): readonly string[] {
-  const sources: string[] = [];
-  // Continuations first: a COPY split over two lines names its sources on the
-  // first and its destination on the second.
-  for (const line of dockerfile.replace(/\\\n/g, ' ').split('\n')) {
-    const copy = /^\s*COPY\s+(\S.*)$/i.exec(line);
-    if (copy === null) continue;
-    const tokens = copy[1].trim().split(/\s+/);
-    if (tokens.some((token) => token.startsWith('--from='))) continue;
-    if (tokens.some((token) => token.startsWith('['))) {
-      throw new Error(`the JSON array form of COPY is not read here: ${line.trim()}`);
-    }
-    // The last token is the destination inside the image; a `--flag=value`
-    // names no file.
-    for (const token of tokens.slice(0, -1)) {
-      if (!token.startsWith('--')) sources.push(token);
-    }
-  }
-  return sources;
-}
-
-/** What staging a build context answers: the daemon sources it copied, and the
- * digest standing for all of them in the artifact's version row. */
-export interface StagedImageContext {
-  /** The recipe-named daemon sources staged, in the order the recipe names
-   * them. The digest is over the sorted set, so this order is for the reader. */
-  readonly daemonSources: readonly string[];
-  readonly journalDaemonSha256: string;
-}
-
-/**
- * Complete the candidate image's build context, and refuse while the run still
- * owns nothing if it cannot be.
- *
- * WHAT IS ALREADY THERE: the runner bundles, written by the caller before this
- * runs. WHAT THIS ADDS: every remaining file the Dockerfile COPYs, from the
- * daemon's own directory — the recipe is the authority on which those are.
- * WHAT IT PROVES: the context holds every COPY source before a single bucket,
- * Worker or container application exists. `docker build` answers a missing
- * context file with a cache-key error and an exit code, and wrangler forwards
- * only `Docker build exited with code: 1`, so an incomplete context is learned
- * once per arm, after the sibling resources are already deployed. That is run
- * 20260903131640: two arms measured, three refused their deploy, and nothing
- * said which file was missing.
- *
- * The caller owns cleanup on refusal: staging may have written files already,
- * and the build directory is the caller's to remove.
- */
-export function stageImageContext(input: {
-  readonly dir: string;
-  readonly dockerfile: string;
-  /** Basenames of the bundle files the caller has already written into `dir`. */
-  readonly written: readonly string[];
-  /** Where recipe-named daemon sources are staged from. */
-  readonly sourceDir: string;
-}): StagedImageContext {
-  const contextSources = contextCopySources(input.dockerfile);
-  const daemonSources = contextSources.filter((source) => !input.written.includes(source));
-  // EVERY RECIPE INPUT CHECKED BEFORE ANY IS COPIED, so a refusal stages
-  // nothing rather than half a context. A missing input is a property of the
-  // recipe, not an order of files within it.
-  const unstaged = daemonSources.filter((source) => !existsSync(join(input.sourceDir, source)));
-  if (unstaged.length > 0) {
-    throw new Error(
-      `the candidate image recipe COPYs ${unstaged.map((source) => `\`${source}\``).join(' and ')} `
-      + `and ${unstaged.map((source) => join(input.sourceDir, source)).join(' and ')} does not exist, `
-      + 'so no context can be staged',
-    );
-  }
-  for (const source of daemonSources) {
-    copyFileSync(join(input.sourceDir, source), join(input.dir, source));
-  }
-  // AND THE CONTEXT IS COMPLETE: every COPY source the recipe names is present
-  // in the directory the build will run from, bundles included.
-  const absent = contextSources.filter((source) => !existsSync(join(input.dir, source)));
-  if (absent.length > 0) {
-    throw new Error(`the candidate image build context is missing ${absent.join(', ')}`);
-  }
-  // DIGESTED FROM THE BYTES THAT WERE STAGED, and over every daemon source the
-  // image compiles rather than the first of them: this stood for
-  // `journal-daemon.c` alone after the daemon was split, so two runs whose
-  // delta code differed recorded identical provenance. Name, byte length and
-  // bytes per input in sorted order: a rename, a byte change and a boundary
-  // shift between two inputs each move the digest.
-  const canonical = [...daemonSources].sort().map((source) => {
-    const bytes = readFileSync(join(input.dir, source), 'utf8');
-    return `${source}\0${String(bytes.length)}\0${bytes}`;
-  }).join('');
-  return {
-    daemonSources,
-    journalDaemonSha256: `sha256:${createHash('sha256').update(canonical).digest('hex')}`,
-  };
-}
-
 /** One Worker, only the selected Durable Object classes, their container-app
  * set and the one bucket that Worker binds. Nothing is shared with another arm
  * or with an earlier run, and teardown can delete the complete deployed set. */
@@ -585,7 +401,6 @@ export function fixtureConfigForArms(
   template: string,
   names: FixtureNames,
   arms: readonly Strategy[],
-  dockerfilePath: string,
 ): string {
   const config = parseJsonc(template, FixtureConfigSchema, 'benchmark config');
   const deployedClasses = [...fixtureClasses(arms), FIXTURE_COUNTER_CLASS];
@@ -611,9 +426,7 @@ export function fixtureConfigForArms(
       .filter((migration) => migration.new_sqlite_classes.length > 0),
     containers: config.containers
       .filter((container) => deployedClasses.includes(container.class_name))
-      .map((container) => CANDIDATE_CONTAINER_CLASSES.has(container.class_name)
-        ? { ...container, image: dockerfilePath }
-        : { ...container, image: SANDBOX_IMAGE }),
+      .map((container) => ({ ...container, image: SANDBOX_IMAGE })),
     r2_buckets: config.r2_buckets.map((bucket) => bucket.bucket_name === 'kinu-devbox-bench'
       ? { ...bucket, bucket_name: names.bucket }
       : bucket),
@@ -653,19 +466,18 @@ export function plannedTeardownManifest(
   ]);
 }
 
-export async function createFixtureResources(
+export function createFixtureResources(
   runId: string,
   arms: readonly Strategy[],
-): Promise<FixtureResources> {
+): FixtureResources {
   // THE MANIFEST IS THE FIRST THING THAT EXISTS, before the config directory
   // and long before a deploy.
   //
   // WHAT THIS FIXES. The manifest used to be built by `main` from the fixtures
   // this function returns, so the window between "resources are named" and
-  // "the list of them is durable" spanned two bundle builds, a Dockerfile
-  // render and every per-arm config write. A driver killed inside that window
-  // — or one that threw out of a failed bundle — left a temp directory and a
-  // run id with no record anywhere that either had ever been planned.
+  // "the list of them is durable" spanned every per-arm config write. A driver
+  // killed inside that window left a temp directory and a run id with no
+  // record anywhere that either had ever been planned.
   //
   // The build directory is DERIVED from the run id rather than `mkdtemp`'s
   // random suffix, because a name nobody can predict cannot be written down
@@ -675,85 +487,31 @@ export async function createFixtureResources(
   const manifest = plannedTeardownManifest(runId, arms, dir);
   writeManifest(REPO_ROOT, manifest);
   mkdirSync(dir, { recursive: true });
-  const bundlePath = join(dir, 'candidate-runner.bundle.mjs');
-  const overlayBundlePath = join(dir, 'overlay-cas-runner.bundle.mjs');
-  const dockerfilePath = join(dir, 'candidate-runner.Dockerfile');
-  const [candidateBuilt, overlayBuilt] = await Promise.all([
-    Bun.build({ entrypoints: [CANDIDATE_RUNNER_SOURCE], format: 'esm', target: 'bun' }),
-    Bun.build({ entrypoints: [OVERLAY_RUNNER_SOURCE], format: 'esm', target: 'bun' }),
-  ]);
-  if (!candidateBuilt.success || !overlayBuilt.success) {
-    rmSync(dir, { recursive: true, force: true });
-    const logs = [...candidateBuilt.logs, ...overlayBuilt.logs].map((entry) => entry.message).join('; ');
-    throw new Error(`candidate image bundle failed: ${logs}`);
-  }
-  const candidateBundle = candidateBuilt.outputs[0];
-  const overlayBundle = overlayBuilt.outputs[0];
-  if (candidateBundle === undefined || overlayBundle === undefined) {
-    rmSync(dir, { recursive: true, force: true });
-    throw new Error('candidate image bundle produced no output');
-  }
-  await Promise.all([
-    Bun.write(bundlePath, candidateBundle),
-    Bun.write(overlayBundlePath, overlayBundle),
-  ]);
-  const dockerfile = candidateImageDockerfile();
-  writeFileSync(dockerfilePath, dockerfile);
-  let staged: StagedImageContext;
-  try {
-    staged = stageImageContext({
-      dir,
-      dockerfile,
-      written: [basename(bundlePath), basename(overlayBundlePath)],
-      sourceDir: JOURNAL_DAEMON_DIR,
-    });
-  } catch (error) {
-    rmSync(dir, { recursive: true, force: true });
-    throw error;
-  }
   const template = readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8');
   // ONE CONFIG PER ARM, all in the one build directory: each names its own
-  // Worker, binds its own bucket and deploys only its own class, and all of
-  // them point at the same generated Dockerfile so the image is built once.
+  // Worker, binds its own bucket and deploys only its own class.
   const armFixtures = arms.map((strategy): ArmFixture => {
     const names = resourceNames(runId, strategy);
     const configPath = join(dir, `wrangler-${strategy}.jsonc`);
-    const config = fixtureConfigForArms(template, names, [strategy], dockerfilePath);
+    const config = fixtureConfigForArms(template, names, [strategy]);
     writeFileSync(configPath, config);
     return { ...names, strategy, configPath, config };
   });
-  // DIGESTED FROM THE BYTES THAT WERE WRITTEN, not from the sources they came
-  // from: the bundles are built here, so only these bytes describe what the
-  // containers will actually load.
-  const digest = (bytes: string | Uint8Array): string =>
-    `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
   return {
     arms: armFixtures,
     manifest,
     configDir: dir,
-    digests: {
-      imageSha256: SANDBOX_IMAGE_DIGEST,
-      dockerfileSha256: digest(dockerfile),
-      candidateRunnerSha256: digest(new Uint8Array(await Bun.file(bundlePath).arrayBuffer())),
-      overlayRunnerSha256: digest(new Uint8Array(await Bun.file(overlayBundlePath).arrayBuffer())),
-      journalDaemonSha256: staged.journalDaemonSha256,
-    },
+    digests: { imageSha256: SANDBOX_IMAGE_DIGEST },
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
 const HARNESS = '/workspace/.devbox-bench';
-const CANDIDATE_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/bench/candidate-runner.ts');
-const OVERLAY_RUNNER_SOURCE = join(REPO_ROOT, 'packages/devbox/src/cas/overlay-runner.ts');
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
-const JOURNAL_DAEMON_DIR = join(REPO_ROOT, 'packages/devbox/bench/journal-daemon');
-const JOURNAL_DAEMON_DOCKERFILE = join(JOURNAL_DAEMON_DIR, 'Dockerfile');
-/** The mutable version tag written in the checked-in daemon recipe. */
-const SANDBOX_IMAGE_TAG = 'docker.io/cloudflare/sandbox:0.12.8';
-/** The manifest digest that tag resolved to on 2026-08-27. */
+/** The manifest digest the published sandbox tag resolved to on 2026-08-27. */
 export const SANDBOX_IMAGE_DIGEST = 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f';
-/** Every generated fixture config and generated candidate Dockerfile uses this
- * immutable reference, so the image provenance row identifies the bytes that
- * ran rather than a tag another publisher can repoint. */
+/** Every generated fixture config uses this immutable reference, so the image
+ *  provenance row identifies the bytes that ran rather than a tag another
+ *  publisher can repoint. */
 export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox@${SANDBOX_IMAGE_DIGEST}`;
 /**
  * The decisive experiment's arms, from the adopted research spec.
@@ -804,27 +562,12 @@ const CHANGE_SIZES_KIB = [64, 4_096, 65_536] as const;
 const POLL_MS = 10_000;
 const PROCESS_DEADLINE_MS = 1_500_000;
 
-/** All stored artifact formats remain readable, including retired strategies. */
-export type Strategy = 'snapshot-chain' | 'r2fs' | 'overlay-cas' | 'bounded-layers' | 'merkle-pack';
-export const STRATEGIES: readonly Strategy[] = [
-  'snapshot-chain',
-  'r2fs',
-  'overlay-cas',
-  'bounded-layers',
-  'merkle-pack',
-];
+export type Strategy = 'snapshot-chain';
+export const STRATEGIES: readonly Strategy[] = ['snapshot-chain'];
 
-export const DECISIVE_ARMS: readonly Strategy[] = [
-  'snapshot-chain', 'bounded-layers', 'merkle-pack',
-];
-export const SCOPE_FREEZE = 'Scope frozen 2026-09-05. snapshot-chain, bounded-layers and merkle-pack compete. '
-  + 'r2fs and overlay-cas retire from the decision. Both have red-structural cells 6.10 (racing containers) '
-  + 'and 6.17 (two containers, one head). Neither can be a durable default. Their code and conformance rows remain.';
-
-/** The incumbent at scope freeze. A later product default cannot move this baseline. */
-export const INCUMBENT = 'snapshot-chain' as const satisfies Strategy;
-
-export const CHALLENGERS: readonly Strategy[] = DECISIVE_ARMS.filter((arm) => arm !== INCUMBENT);
+/** The shipped default. Every run measures it and the report ranks it against
+ *  nothing else: it is the only strategy this package holds. */
+export const SHIPPED_STRATEGY = 'snapshot-chain' as const satisfies Strategy;
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 
 interface FrozenControlArtifact {
@@ -1721,122 +1464,6 @@ export async function headObject(fixture: Fixture, box: string, key: string): Pr
   );
 }
 
-// ── the candidate lifecycle contract ───────────────────────────────────────
-//
-// MEASURED DEFECT THIS REPAIRS. The mount branch below used to read
-//
-//     if (strategy === 'r2fs' || strategy === 'overlay-cas' || mode === 'chain')
-//
-// so a candidate arm took the CHAIN's checks whenever the box happened to
-// report `mode: 'chain'`, and otherwise fell through to the extraction branch —
-// which asks only that `/workspace` is a plain directory and that
-// `ALLOW_EXTRACTION` is set. A container that never attached a candidate store
-// at all satisfies the second one completely. Both candidate arms could
-// therefore pass a lifecycle proof having proven nothing whatsoever about their
-// own strategy, and their latency rows would then be ranked.
-//
-// A candidate attachment is neither a chain nor an extraction, and the three
-// things it must prove have no counterpart in either:
-//
-//   the workload writes THROUGH a journal daemon's FUSE mount over the work
-//     directory, with the daemon alive and its control socket outside both the
-//     journal mount and the payload mount — or the capture reads through the
-//     mount it is capturing;
-//   the control envelope is the single immutable published head, addressed by
-//     its own digest, stamped with this arm's format and box, and living
-//     OUTSIDE the payload subtree a container replacement owns;
-//   the payload closure that envelope names is completely present, at the
-//     declared byte length of every object in it.
-
-interface CandidateEnvelopeFact {
-  key?: string;
-  rootEnvelopeId?: string;
-  sha256?: string;
-  format?: string;
-  boxId?: string;
-  generation?: string;
-  cut?: string;
-  closureCount?: number;
-}
-
-const CandidateEnvelopeFactSchema: v.GenericSchema<CandidateEnvelopeFact> = v.looseObject({
-  key: v.optional(v.string()),
-  rootEnvelopeId: v.optional(v.string()),
-  sha256: v.optional(v.string()),
-  format: v.optional(v.string()),
-  boxId: v.optional(v.string()),
-  generation: v.optional(v.string()),
-  cut: v.optional(v.string()),
-  closureCount: v.optional(v.number()),
-});
-
-interface CandidateClosureFact {
-  key?: string;
-  declaredBytes?: string;
-  storedBytes?: number | null;
-}
-
-const CandidateClosureFactSchema: v.GenericSchema<CandidateClosureFact> = v.looseObject({
-  key: v.optional(v.string()),
-  declaredBytes: v.optional(v.string()),
-  storedBytes: v.optional(v.nullable(v.number())),
-});
-
-interface CandidateStoreFact {
-  payloadPrefix?: string;
-  envelopePrefix?: string;
-  expectedBoxId?: string;
-  expectedFormat?: string;
-  envelopes?: CandidateEnvelopeFact[];
-  head?: CandidateEnvelopeFact | null;
-  forkedHeads?: string[];
-  closure?: CandidateClosureFact[];
-  unreadable?: string[];
-}
-
-interface CandidateContainerFact {
-  expectedWorkdirMount?: string;
-  expectedStoreMount?: string;
-  expectedJournalRoot?: string;
-  expectedJournalSocket?: string;
-  expectedJournalBinary?: string;
-  mounts?: string;
-  journalRootPresent?: boolean;
-  journalSocketPresent?: boolean;
-  /** Whether the journal control socket answered a correlated, read-only
-   *  `stats` request — stronger than the socket merely existing. */
-  journalReady?: boolean;
-  /** Raw daemon reply when ready, or the socket/exec failure when not. */
-  journalReadyDetail?: string;
-  journalDaemonCommand?: string;
-}
-
-/**
- * The candidate control row, restated from `CandidateControlDump` in
- * `packages/devbox/src/devbox.ts`. The driver reads a deployed box over HTTP
- * and imports nothing from it, so the six keys live here too — every field
- * optional, so fixture evolution cannot fail the probe parse — and the
- * decision suite compares the two key sets literally. `found: false` with a
- * null head is meaningful data (no publication yet), never a gap.
- */
-export interface CandidateControlDump {
-  strategy?: string;
-  boxId?: string;
-  key?: string | null;
-  found?: boolean;
-  head?: string | null;
-  operation?: string | null;
-}
-
-const CandidateControlDumpSchema: v.GenericSchema<CandidateControlDump> = v.looseObject({
-  strategy: v.optional(v.string()),
-  boxId: v.optional(v.string()),
-  key: v.optional(v.nullable(v.string())),
-  found: v.optional(v.boolean()),
-  head: v.optional(v.nullable(v.string())),
-  operation: v.optional(v.nullable(v.string())),
-});
-
 /**
  * One filed failure, restated from `IncidentReasonRow` in
  * `packages/devbox/src/devbox.ts`. Same device: loose, all-optional, key sets
@@ -1860,57 +1487,10 @@ const IncidentReasonRowSchema: v.GenericSchema<IncidentReasonRow> = v.looseObjec
   delivered: v.optional(v.boolean()),
 });
 
-const ControlDumpReplySchema = v.looseObject({
-  ok: v.optional(v.boolean()),
-  error: v.optional(v.string()),
-  control: v.optional(CandidateControlDumpSchema),
-});
-
 const IncidentReasonsReplySchema = v.looseObject({
   ok: v.optional(v.boolean()),
   error: v.optional(v.string()),
   incidents: v.optional(v.array(IncidentReasonRowSchema)),
-});
-
-export interface CandidateFactsReply {
-  ok?: boolean;
-  error?: string;
-  store?: CandidateStoreFact;
-  container?: CandidateContainerFact;
-  /** The raw control row, travelling verbatim so a dump taken at publish and
-   *  one taken at wake compare byte for byte. Absent in replies from before
-   *  the route carried it. */
-  control?: CandidateControlDump;
-}
-
-const CandidateFactsReplySchema: v.GenericSchema<CandidateFactsReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
-  error: v.optional(v.string()),
-  store: v.optional(v.looseObject({
-    payloadPrefix: v.optional(v.string()),
-    envelopePrefix: v.optional(v.string()),
-    expectedBoxId: v.optional(v.string()),
-    expectedFormat: v.optional(v.string()),
-    envelopes: v.optional(v.array(CandidateEnvelopeFactSchema)),
-    head: v.optional(v.nullable(CandidateEnvelopeFactSchema)),
-    forkedHeads: v.optional(v.array(v.string())),
-    closure: v.optional(v.array(CandidateClosureFactSchema)),
-    unreadable: v.optional(v.array(v.string())),
-  })),
-  container: v.optional(v.looseObject({
-    expectedWorkdirMount: v.optional(v.string()),
-    expectedStoreMount: v.optional(v.string()),
-    expectedJournalRoot: v.optional(v.string()),
-    expectedJournalSocket: v.optional(v.string()),
-    expectedJournalBinary: v.optional(v.string()),
-    mounts: v.optional(v.string()),
-    journalRootPresent: v.optional(v.boolean()),
-    journalSocketPresent: v.optional(v.boolean()),
-    journalReady: v.optional(v.boolean()),
-    journalReadyDetail: v.optional(v.string()),
-    journalDaemonCommand: v.optional(v.string()),
-  })),
-  control: v.optional(CandidateControlDumpSchema),
 });
 
 /** One mountpoint's row in `/proc/mounts`, whose fields are
@@ -1924,278 +1504,6 @@ function mountAt(mounts: string, mountpoint: string): { line: string; fstype: st
     if (fields[1] === mountpoint && fstype !== undefined) return { line, fstype };
   }
   return null;
-}
-
-/**
- * The probe's one precondition: the candidate mutation journal answered a
- * correlated, read-only `stats` request before the ladder spent anything.
- * Socket presence, process argv and a mounted FUSE path are deliberately not
- * substitutes — the failed deployed probe held all three while checkpoint
- * answered CandidateCaptureUnavailable.
- */
-export function candidateProbePrecondition(reply: CandidateFactsReply): VerifyCheck {
-  const container = reply.container;
-  const pass = reply.ok === true && container?.journalReady === true;
-  const detail = container?.journalReadyDetail ?? reply.error
-    ?? (container === undefined ? 'candidate facts carried no container evidence'
-      : `journalReady=${String(container.journalReady ?? 'unreported')}`);
-  return {
-    name: 'the mutation journal answers before the ladder',
-    pass,
-    detail,
-  };
-}
-
-/** A verify-only execution that stops without becoming a scored arm. */
-class ProbeAbort extends Error {
-  constructor(
-    readonly status: 'precondition-failed' | 'partial',
-    detail: string,
-  ) {
-    super(detail);
-    this.name = 'ProbeAbort';
-  }
-}
-
-/**
- * Observe the candidate journal before the ladder. One read, no semantic
- * retry: an absent or malformed fact means this probe did not run, rather
- * than a failed arm whose numbers the report might still score.
- */
-async function runProbePrecondition(
-  fixture: Fixture,
-  box: string,
-  strategy: Strategy,
-  enabled: boolean,
-): Promise<ProbeExecution | undefined> {
-  if (!enabled || (strategy !== 'bounded-layers' && strategy !== 'merkle-pack')) return undefined;
-  let reply: CandidateFactsReply;
-  try {
-    reply = await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema);
-  } catch (error) {
-    throw new ProbeAbort('precondition-failed',
-      `the mutation journal precondition could not be observed: ${describeThrown({ cause: error })}`);
-  }
-  const check = candidateProbePrecondition(reply);
-  if (!check.pass) throw new ProbeAbort('precondition-failed', check.detail);
-  return { status: 'partial', detail: `precondition held: ${check.detail}` };
-}
-
-/**
- * A probe may archive a failed ladder row, but it may not keep walking into
- * stop/wake and call the later live state recycle evidence. `skipped` is a
- * settled product outcome rather than a failure; failed, missing or malformed
- * outcomes abort with the row already retained.
- */
-function requireProbeCheckpoint(
-  probe: ProbeExecution | undefined,
-  checkpoint: CheckpointReply,
-  label: string,
-): void {
-  if (probe === undefined) return;
-  const kind = checkpoint.outcome?.kind;
-  if (checkpoint.ok === true && (kind === 'committed' || kind === 'skipped')) return;
-  throw new ProbeAbort(
-    'partial',
-    `${label} failed: ${checkpoint.error ?? checkpoint.outcome?.reason ?? kind ?? 'no outcome'}`,
-  );
-}
-
-/** Mark the evidence window complete without growing the arm walk. */
-function completeProbe(probe: ProbeExecution | undefined): ProbeExecution | undefined {
-  return probe?.status === 'partial'
-    ? { status: 'complete', detail: `${probe.detail}; ladder, stop and wake completed` }
-    : probe;
-}
-
-/**
- * One candidate arm's lifecycle rows, derived from the fixture's raw facts.
- *
- * Pure, and exported, so the contract is provable against hand-built facts:
- * the red tests drive every direction of it without a deployment, which is the
- * only way a fallthrough like the one above gets caught before a 70-minute run
- * ranks an arm that measured nothing.
- */
-export function candidateLifecycleChecks(
-  strategy: 'bounded-layers' | 'merkle-pack',
-  reply: CandidateFactsReply,
-): VerifyCheck[] {
-  const store = reply.store;
-  const container = reply.container;
-  if (reply.ok !== true || store === undefined || container === undefined) {
-    return [{
-      name: `the fixture answered the ${strategy} candidate contract`,
-      pass: false,
-      detail: reply.error ?? `ok=${String(reply.ok)} store=${store === undefined ? 'absent' : 'present'} `
-        + `container=${container === undefined ? 'absent' : 'present'}`,
-    }];
-  }
-
-  const checks: VerifyCheck[] = [];
-  const add = (name: string, pass: boolean, detail: string): void => {
-    checks.push({ name, pass, detail });
-  };
-
-  const workdirMountpoint = container.expectedWorkdirMount ?? '';
-  const storeMountpoint = container.expectedStoreMount ?? '';
-  const mounts = container.mounts ?? '';
-  const workdir = workdirMountpoint === '' ? null : mountAt(mounts, workdirMountpoint);
-  const storeMount = storeMountpoint === '' ? null : mountAt(mounts, storeMountpoint);
-
-  // A FUSE fstype is `fuse`, `fuse.<name>` or `fuseblk`. Prefix-matching the
-  // field rather than searching the whole line keeps an unrelated mount whose
-  // DEVICE name contains "fuse" from answering for the work directory.
-  add(
-    'the work directory is the journal daemon\'s FUSE mount',
-    workdir !== null && /^fuse(?:\.|blk$|$)/.test(workdir.fstype),
-    workdir === null
-      ? `${workdirMountpoint || '(no expected mountpoint)'} is not mounted`
-      : `${workdirMountpoint} -> ${workdir.fstype}`,
-  );
-
-  const daemonCommand = container.journalDaemonCommand ?? '';
-  const daemonBinary = container.expectedJournalBinary ?? '';
-  const journalRoot = container.expectedJournalRoot ?? '';
-  const journalSocket = container.expectedJournalSocket ?? '';
-  const daemonNames = [daemonBinary, journalRoot, workdirMountpoint, journalSocket];
-  add(
-    'the journal daemon is alive and serving this arm\'s root, mount and socket',
-    daemonBinary !== '' && daemonNames.every((part) => part !== '' && daemonCommand.includes(part)),
-    daemonCommand === ''
-      ? 'no journal daemon process is alive in the container'
-      : `argv is missing ${daemonNames.filter((part) => part === '' || !daemonCommand.includes(part)).join(', ') || 'nothing'}`,
-  );
-
-  add(
-    'the journal root is materialized beneath the mount',
-    container.journalRootPresent === true,
-    `${journalRoot || '(no expected root)'} -> ${container.journalRootPresent === true ? 'present' : 'absent'}`,
-  );
-
-  // OUTSIDE BOTH MOUNTS. The daemon's control socket and sealed stage are what
-  // a capture reads; holding them under the journal mount would make the
-  // capture read through the mount it captures, and under the store mount would
-  // publish them as payload.
-  const socketInsideMount = journalSocket !== ''
-    && [workdirMountpoint, storeMountpoint]
-      .filter((mount) => mount !== '')
-      .some((mount) => journalSocket === mount || journalSocket.startsWith(`${mount}/`));
-  add(
-    'the journal control socket is present outside both mounts',
-    container.journalSocketPresent === true && journalSocket !== '' && !socketInsideMount,
-    container.journalSocketPresent === true
-      ? socketInsideMount
-        ? `${journalSocket} is inside a mount this arm captures`
-        : `${journalSocket} is present outside both mounts`
-      : `${journalSocket || '(no expected socket)'} is not a socket`,
-  );
-
-  add(
-    'the payload store is an s3fs mount at the candidate prefix',
-    storeMount !== null && storeMount.fstype.includes('s3fs'),
-    storeMount === null
-      ? `${storeMountpoint || '(no expected mountpoint)'} is not mounted`
-      : `${storeMountpoint} -> ${storeMount.fstype}`,
-  );
-
-  const head = store.head ?? null;
-  const forked = store.forkedHeads ?? [];
-  const unreadable = store.unreadable ?? [];
-  add(
-    'the control envelope is the single published head',
-    head !== null && forked.length === 0 && unreadable.length === 0,
-    head === null
-      ? forked.length > 0
-        ? `${forked.length} envelopes share the newest generation: ${forked.join(', ')}`
-        : `no readable root envelope under ${store.envelopePrefix ?? '(no envelope prefix)'}`
-      : unreadable.length > 0
-        ? `head present but ${unreadable.length} envelope(s) are unreadable: ${unreadable.join('; ')}`
-        : `generation ${head.generation ?? '?'} at cut ${head.cut ?? '?'}`,
-  );
-
-  add(
-    'the control envelope is the immutable object its own key names',
-    head !== null && head.sha256 !== undefined && head.sha256 === head.rootEnvelopeId,
-    head === null
-      ? '(no head envelope)'
-      : `key names ${head.rootEnvelopeId ?? '?'}, bytes hash to ${head.sha256 ?? '?'}`,
-  );
-
-  add(
-    'the control envelope carries this arm\'s format and box',
-    head !== null
-      && head.format === store.expectedFormat && store.expectedFormat !== undefined
-      && head.boxId === store.expectedBoxId && store.expectedBoxId !== undefined,
-    head === null
-      ? '(no head envelope)'
-      : `format ${head.format ?? '?'} (want ${store.expectedFormat ?? '?'}), `
-        + `box ${head.boxId ?? '?'} (want ${store.expectedBoxId ?? '?'})`,
-  );
-
-  const envelopePrefix = store.envelopePrefix ?? '';
-  const payloadPrefix = store.payloadPrefix ?? '';
-  add(
-    'the control envelope prefix is outside the payload mount',
-    envelopePrefix !== '' && payloadPrefix !== ''
-      && !envelopePrefix.startsWith(payloadPrefix) && !payloadPrefix.startsWith(envelopePrefix),
-    `envelopes at ${envelopePrefix || '(none)'}, payload at ${payloadPrefix || '(none)'}`,
-  );
-
-  // NOT `length > 0` ALONE. An object the envelope declares at 4 MiB and the
-  // store holds at 0 B resolves, so an existence check would pass a closure
-  // that cannot be read back. Its objects must also sit below THIS arm's
-  // payload prefix; a complete closure borrowed from another arm is not this
-  // candidate's durable payload.
-  const closure = store.closure ?? [];
-  const absent = closure.filter((row) => row.storedBytes === null || row.storedBytes === undefined);
-  const short = closure.filter((row) =>
-    row.storedBytes !== null && row.storedBytes !== undefined
-    && Number(row.declaredBytes ?? '-1') !== row.storedBytes);
-  const outsidePayload = closure.filter((row) =>
-    payloadPrefix === '' || row.key === undefined || !row.key.startsWith(payloadPrefix));
-  add(
-    'the payload closure is completely present at its declared lengths',
-    head !== null && closure.length > 0 && absent.length === 0 && short.length === 0 && outsidePayload.length === 0,
-    head === null
-      ? '(no head envelope, so no closure to resolve)'
-      : closure.length === 0
-        ? 'the head envelope names no payload objects at all'
-        : `${closure.length} object(s): ${absent.length} absent, ${short.length} at the wrong length, `
-          + `${outsidePayload.length} outside this arm's payload prefix`
-          + `${absent.length + short.length + outsidePayload.length === 0 ? '' : ` (${[...absent, ...short, ...outsidePayload].map((row) => row.key ?? '?').slice(0, 4).join(', ')})`}`,
-  );
-
-  return checks;
-}
-
-/**
- * The candidate control row at one evidence edge, for the probe to archive.
- * A candidate arm whose read misses notes its gap — the dump is the
- * publication's identity.
- */
-async function readControlDump(
-  fixture: Fixture,
-  box: string,
-  strategy: Strategy,
-  notes: string[],
-): Promise<CandidateControlDump | undefined> {
-  // Candidates only, and silently so: the route refuses any other arm with
-  // `publishes no candidate control envelope`, so asking there would note a
-  // gap where nothing can exist.
-  if (strategy !== 'bounded-layers' && strategy !== 'merkle-pack') return undefined;
-  try {
-    const reply = await call(fixture, 'GET', `/candidate?box=${box}`, ControlDumpReplySchema);
-    if (reply.ok !== true || reply.control === undefined) {
-      notes.push(
-        `the control dump did not arrive: ${reply.error ?? 'the route answered without a control row'}`,
-      );
-      return undefined;
-    }
-    return reply.control;
-  } catch (error) {
-    notes.push(`the control dump did not arrive: ${describeThrown({ cause: error }).slice(0, 160)}`);
-    return undefined;
-  }
 }
 
 /**
@@ -2264,7 +1572,7 @@ const requestOverHttps: HttpsRequester = (url, options, respond) =>
  * benchmark's teardown is allowed to take as long as a purge takes. A caller
  * that judges teardown by a CEILING passes one, because the reply-size bound
  * this function already had does nothing for a box that never answers — the
- * calibration run's `r2fs` and `overlay-cas` teardowns each burned a 900,000 ms
+ * calibration run's teardowns each burned a 900,000 ms
  * ceiling on one such request, and probe `wakeprobe09010702` reproduced it
  * against a box wedged in its own attach loop. The purge is idempotent and
  * `teardownLiveArms` posts a second pass, so an abandoned request costs a retry
@@ -2619,8 +1927,8 @@ export interface StopReply { ok?: boolean; ms?: number; error?: string }
 // `runPhase` already backgrounds anything minute-scale and polls a sentinel
 // "because the blocking path is bounded by a ceiling that no timeout option
 // raises". `POST /checkpoint` and `POST /stop` were posted as BLOCKING requests
-// anyway, and both deployed decisive runs lost `bounded-layers` and
-// `merkle-pack` to exactly that ceiling: `AbortSignal.timeout(180_000)` fired
+// anyway, and both deployed decisive runs lost arms to exactly that ceiling:
+// `AbortSignal.timeout(180_000)` fired
 // mid-publication, `call` re-posted the same checkpoint, the fixture's
 // checkpoint lane serialised the two, and the retry ran a SECOND full
 // publication against a box already saturated — the container 502s in those
@@ -2669,7 +1977,7 @@ const OperationPollReplySchema: v.GenericSchema<OperationPollReply> = v.looseObj
     // exactly that reason, and a retracted amplification claim came from reading
     // the cumulative field as a per-tick one.
     //
-    // `undefined` is a truthful "not measurable here" and NOT zero: r2fs uploads
+    // `undefined` is a truthful "not measurable here" and NOT zero: a store that uploads
     // when the last handle closes, so no bytes attribute to a sync. Zero would
     // read as "moved nothing", which is a different claim.
     movedBytes: v.optional(v.number()),
@@ -2803,7 +2111,7 @@ export interface OperationBounds {
  * minted once outside the closure, so the retry re-posted the same `op`, the
  * fixture answered the row it had already settled, and the "retry" read the
  * same failure three times. MEASURED, run 20260905232937 (2026-09-05): the
- * merkle-pack post-ladder stop logged "transient replacement on attempt 1",
+ * a post-ladder stop logged "transient replacement on attempt 1",
  * "attempt 2", and then failed the arm with the identical sentence, all
  * inside the ten seconds a sibling arm spent in one readiness drive; no
  * second quiesce ever ran. A fresh `op` is a fresh operation, which is the
@@ -3070,16 +2378,6 @@ export function complexityRestoreBill(
   return { remoteOps: total, payloadBytes: bytes['payload'] ?? 0 };
 }
 
-/**
- * The verify-only probe's execution state, separate from an arm verdict.
- * A missing precondition means the probe did not run; a later failure means
- * its archived evidence is partial. Neither state is a measurement to score.
- */
-export interface ProbeExecution {
-  readonly status: 'precondition-failed' | 'partial' | 'complete';
-  readonly detail: string;
-}
-
 export interface ArmResult {
   strategy: Strategy;
   box: string;
@@ -3098,11 +2396,10 @@ export interface ArmResult {
   stopMs: number | null;
   wakeMs: number | null;
   wakeKind: string;
-  /** The wake attach's detail verbatim — the `folded <cursor> <n>P` replay count,
-   *  the chain's served shape, the candidate root. Retained, never re-derived:
-   *  the counted-restore cell parses this string, and a detail the parser cannot
-   *  read is an uncounted restore rather than a zero. Empty when the wake never
-   *  attached. */
+  /** The wake attach's detail verbatim — the chain's served shape. Retained,
+   *  never re-derived: the counted-restore cell parses this string, and a
+   *  detail the parser cannot read is an uncounted restore rather than a zero.
+   *  Empty when the wake never attached. */
   wakeDetail?: string;
   /** The flushed `/ops` window across the stop-to-wake restore alone, by
    *  operation name. Null when the window could not be bracketed (the arm died
@@ -3114,9 +2411,9 @@ export interface ArmResult {
    *  mounts the restore took, retained line by line so the count carries its
    *  method. Empty when the wake never attached. */
   wakeMountLines?: string[];
-  /** The entries the served tree holds after a chain wake, read with `find`
-   *  after the wake window closed. The chain materializes nothing, so this is
-   *  its `cpuSteps`. Null when the count did not answer, or on any other arm. */
+  /** The entries the served tree holds after the wake, read with `find` after
+   *  the wake window closed. The chain materializes nothing, so this is its
+   *  `cpuSteps`. Null when the count did not answer. */
   wakeServedEntries?: number | null;
   checkpoints: CheckpointRow[];
   /** Tree-size complexity rows: one fixed 64 KiB backup plus one restore per
@@ -3145,56 +2442,36 @@ export interface ArmResult {
   generationBeforeLadder: ChainGeneration | null;
   generationAfterLadder: ChainGeneration | null;
   treeBytes: Record<string, number>;
-  /** Execution state for `--verify-only`; absent on ordinary measurements. */
-  probe?: ProbeExecution;
   ops: OpTally | null;
   teardown: TeardownReply | null;
   /**
    * What this arm's preregistered red witnesses DID, cell by cell.
    *
-   * Empty for a candidate, which preregisters none. For a control it is the
-   * whole of G2's evidence: `observed` true is the defect the control exists to
-   * catch, showing up where it was predicted, and `observed` false is either a
-   * cell that could not run or a defect that has silently vanished — both of
-   * which refuse the run rather than passing quietly.
+   * The whole of G2's evidence: `observed` true is the defect the
+   * preregistration exists to catch, showing up where it was predicted, and
+   * `observed` false is either a cell that could not run or a defect that has
+   * silently vanished — both of which refuse the run rather than passing
+   * quietly.
    */
   witnessChecks: WitnessCheck[];
   /** What this arm's fault-cut cell observed, or null when the cell never ran:
-   *  the arm died before it, never attached its wake, or is excluded from the
-   *  cut with its reason in `notes`. The run-level publication block is built
-   *  from these, one per requested arm. */
+   *  the arm died before it, or never attached its wake, with the reason in
+   *  `notes`. The run-level publication block is built from these, one per
+   *  requested arm. */
   cut?: FaultCutObservation | null;
   /** What this arm's G4 security cells observed, or null when they never ran:
-   *  the arm is excluded, the cell threw, or the fixture predates /security.
+   *  the cell threw, or the fixture predates /security.
    *  The run-level security block is built from these, one per requested arm. */
   security?: SecurityCellsObservation | null;
-  /** The candidate control row as the ladder's publication left it. Absent on
-   *  arms that publish no control row, and on runs whose fixture predates the
-   *  dump. The probe compares this against `wakeControl` byte for byte; a gap
-   *  on a candidate arm is a note, never a silent null. */
-  publishControl?: CandidateControlDump;
   /** Every failure the box had filed when the ladder published, oldest first.
    *  Absent when the read missed; the totals in `/state` say how many, only
    *  these rows say what. */
   publishIncidents?: IncidentReasonRow[];
-  /** The control row as the post-wake stock `/candidate` call answered it —
-   *  archived from that reply, never re-read. Absent where `publishControl`
-   *  is absent. */
-  wakeControl?: CandidateControlDump;
   /** Every failure the box had filed after the wake, oldest first, beside the
    *  publish-time rows so the probe quotes each incident adjacent to the dump
    *  whose window filed it. */
   wakeIncidents?: IncidentReasonRow[];
   notes: string[];
-}
-
-/** Keep failed lifecycle arms out of a decision even if they produced ticks. */
-export function rankableTicks<T extends TickRecord>(
-  arms: readonly { readonly strategy: string; readonly verifyPassed: boolean }[],
-  ticks: readonly T[],
-): T[] {
-  const ranked = new Set(arms.filter((arm) => arm.verifyPassed).map((arm) => arm.strategy));
-  return ticks.filter((tick) => ranked.has(tick.arm));
 }
 
 async function installHarness(fixture: Fixture, box: string): Promise<void> {
@@ -3272,10 +2549,10 @@ async function runPhase(
  * diff taken across it — flush first so the window is closed, flush again after
  * so nothing the tick issued is still batched in an isolate.
  *
- * `unitsMoved` is whatever the strategy itself claims it moved. A chain reports
- * delta bytes; a content-addressed arm reports journal entries. Reported as null
- * with its label rather than 0 when the checkpoint said neither, because a
- * strategy that does not account for its own work is a finding.
+ * `unitsMoved` is whatever the strategy itself claims it moved: the chain
+ * reports delta bytes. Reported as null with its label rather than 0 when the
+ * checkpoint said neither, because a strategy that does not account for its own
+ * work is a finding.
  */
 export async function runDecisive(
   fixture: Fixture,
@@ -3375,14 +2652,13 @@ export async function runDecisive(
       classB: (after.classB ?? 0) - (before.classB ?? 0),
       classFree: (after.classFree ?? 0) - (before.classFree ?? 0),
       // NOT `?? 0`: a failed tick may have landed blobs before throwing, and
-      // r2fs cannot attribute bytes to a commit boundary at all. Both answer
-      // `null`, which is a different fact from a skip's honest zero.
+      // answers `null`, which is a different fact from a skip's honest zero.
       bytesPut: moved ?? null,
       heldBytes: bytes ?? null,
       movedReported: moved !== undefined,
       // Kept for the report's own arithmetic check.
       unitsMoved: moved ?? null,
-      unitLabel: arm === 'overlay-cas' ? 'journal entries / CAS bytes' : 'delta bytes',
+      unitLabel: 'delta bytes',
       outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
     });
   }
@@ -3391,16 +2667,13 @@ export async function runDecisive(
 
 // ── the preregistered witness cells ─────────────────────────────────────────
 //
-// Three of the arms ship today and each has documented defects. Each of those
-// arms preregisters the red witnesses its defects must produce, and G2 refuses
-// a run on either drift: a witness nobody observed (the defect went away, or
-// the cell could not run) and an observed failure nobody predicted.
+// The shipped strategy has documented defects. It preregisters the red
+// witnesses those defects must produce, and G2 refuses a run on either drift:
+// a witness nobody observed (the defect went away, or the cell could not run)
+// and an observed failure nobody predicted.
 //
-// A WITNESS PRICES AN ARM; IT DOES NOT DISQUALIFY ONE. The header here used to
-// read "MANDATORY HISTORICAL CONTROLS, never production winners", and the rest
-// of the instrument believed it: those three arms were marked rank-ineligible
-// and could not be recommended whatever they measured. They compete now, and
-// what these cells buy is a measured cost to weigh against their numbers.
+// A WITNESS PRICES A STRATEGY; IT DOES NOT DISQUALIFY ONE. What these cells buy
+// is a measured cost to weigh against the numbers.
 //
 // WHY THESE CELLS EXIST AT ALL. `observedRedChecks` was hardcoded `[]`, so every
 // run carrying a control was refused for eight witnesses that nothing had ever
@@ -3413,8 +2686,7 @@ export async function runDecisive(
 // WHERE THEY RUN, AND WHY IT MATTERS. After the arm's own `/ops` tally is read.
 // A cell writes files and takes checkpoints of its own, and an arm's operation
 // count is a measured column: cells inside the measured window would inflate
-// this arm's count with operations the comparison is not about. The one
-// r2fs open-write holder, which must exist BEFORE the recycle it survives.
+// this arm's count with operations the measurement is not about.
 
 /** One preregistered witness cell's result. `observed` is the DEFECT showing
  *  up where it was predicted — the arm is REQUIRED to produce it — never a
@@ -3446,17 +2718,6 @@ export interface WitnessCheck {
  *     `commitChain`'s `rebasing`, which mints a fresh generation id and records
  *     `delta: undefined` ("COLLAPSE RATHER THAN APPEND while a delta is served
  *     as a layer").
- *   `unbounded-pending-replay` — "replay the journal entries newer than the
- *     folded cursor": recovery is O(pending change) with no bound on pending,
- *     which is the `unbounded` restore class this arm CLAIMS.
- *   `O(u)-scan` — "scan the upper" on every tick, so an unchanged checkpoint
- *     still costs the whole writable layer.
- *   `open-write-loss` — "a file still open when the container stops loses
- *     whatever had not been closed".
- *   `non-atomic-rename` — "rename is a copy followed by a delete. It is not
- *     atomic and it costs the object's bytes".
- *   `POSIX-gap` — "there is no flush-to-store primitive": `sync` reaches s3fs
- *     and s3fs uploads on close, so a synced file is not yet durable.
  *
  * A witness is a MEASURED DEFECT, never an eligibility filter. An arm carrying
  * one of these defects still competes and can still win: the defect is named
@@ -3481,10 +2742,6 @@ export interface WitnessCheck {
  */
 const PREREGISTERED_WITNESSES = {
   'snapshot-chain': ['mutable-delta', 'delta-layer-collapse'],
-  'overlay-cas': ['unbounded-pending-replay', 'O(u)-scan'],
-  r2fs: ['open-write-loss', 'non-atomic-rename', 'POSIX-gap'],
-  'bounded-layers': [],
-  'merkle-pack': [],
 } as const satisfies Record<Strategy, readonly string[]>;
 
 /**
@@ -3529,44 +2786,7 @@ export interface ControlWitnessFacts {
     readonly bytesBefore: number;
     readonly bytesAfter: number;
   };
-  readonly unboundedPendingReplay?: {
-    readonly smallPending: number;
-    readonly smallReplayed: number;
-    readonly largePending: number;
-    readonly largeReplayed: number;
-  };
-  readonly upperScan?: {
-    readonly smallEntries: number;
-    readonly smallMs: number;
-    readonly largeEntries: number;
-    readonly largeMs: number;
-  };
-  readonly openWriteLoss?: {
-    readonly wroteBytes: number;
-    /** Bytes readable after the recycle, or null when the path is gone. */
-    readonly survivedBytes: number | null;
-  };
-  readonly nonAtomicRename?: {
-    readonly fileBytes: number;
-    /** Store operations the rename itself cost, across a flushed window. */
-    readonly storeOps: number;
-    readonly sourcePresent: boolean;
-    readonly destinationBytes: number | null;
-  };
-  readonly posixGap?: {
-    /** Whether the store holds the object for a path whose only writer has
-     *  written and `sync`ed it and not yet closed it. */
-    readonly syncedKeyPresent: boolean;
-    readonly key: string;
-  };
 }
-
-/** How much bigger the large scan cell's layer must be before its duration is
- *  read as scaling, and how much slower the unchanged tick over it must be. A
- *  tick proportional to the CHANGE — which is zero in both cells — would be
- *  flat, so the growth is the whole signal. */
-const SCAN_ENTRY_GROWTH = 4;
-const SCAN_COST_GROWTH = 2;
 
 /**
  * Turn the cells' raw facts into this arm's witness verdicts.
@@ -3628,75 +2848,6 @@ export function controlWitnessChecks(
             + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
         };
       }
-      case 'unbounded-pending-replay': {
-        const cell = facts.unboundedPendingReplay;
-        if (cell === undefined) return absentCell(name);
-        // UNBOUNDED means the replay follows the pending set rather than a
-        // constant: more pending, strictly more replayed.
-        const grew = cell.largePending > cell.smallPending
-          && cell.largeReplayed > cell.smallReplayed
-          && cell.smallReplayed > 0;
-        return {
-          name,
-          observed: grew,
-          detail: `${cell.smallPending} pending replayed ${cell.smallReplayed} entries, `
-            + `${cell.largePending} pending replayed ${cell.largeReplayed} — `
-            + `${grew ? 'the replay follows the pending set' : 'the replay did NOT follow the pending set'}`,
-        };
-      }
-      case 'O(u)-scan': {
-        const cell = facts.upperScan;
-        if (cell === undefined) return absentCell(name);
-        const layerGrew = cell.largeEntries >= cell.smallEntries * SCAN_ENTRY_GROWTH;
-        const costGrew = cell.largeMs >= cell.smallMs * SCAN_COST_GROWTH;
-        return {
-          name,
-          observed: layerGrew && costGrew && cell.smallMs > 0,
-          detail: `an unchanged tick cost ${cell.smallMs}ms over ${cell.smallEntries} entries and `
-            + `${cell.largeMs}ms over ${cell.largeEntries} — layer ${layerGrew ? 'grew' : 'did NOT grow'} `
-            + `${String(SCAN_ENTRY_GROWTH)}x, cost ${costGrew ? 'grew' : 'did NOT grow'} with it`,
-        };
-      }
-      case 'open-write-loss': {
-        const cell = facts.openWriteLoss;
-        if (cell === undefined) return absentCell(name);
-        const lost = cell.wroteBytes > 0
-          && (cell.survivedBytes === null || cell.survivedBytes < cell.wroteBytes);
-        return {
-          name,
-          observed: lost,
-          detail: `${cell.wroteBytes}B written through a handle held open across the stop; `
-            + `${cell.survivedBytes === null ? 'the path is gone after the wake' : `${cell.survivedBytes}B survived`}`,
-        };
-      }
-      case 'non-atomic-rename': {
-        const cell = facts.nonAtomicRename;
-        if (cell === undefined) return absentCell(name);
-        // A rename that costs the store anything is a copy: the object arrives
-        // under a new key and the old key is deleted, which is not an atomic
-        // metadata move however fast it is.
-        const copied = cell.storeOps > 0
-          && !cell.sourcePresent
-          && cell.destinationBytes !== null
-          && cell.destinationBytes > 0;
-        return {
-          name,
-          observed: copied,
-          detail: `renaming ${cell.fileBytes}B cost ${cell.storeOps} store operation(s); source `
-            + `${cell.sourcePresent ? 'still present' : 'deleted'}, destination `
-            + `${cell.destinationBytes === null ? 'absent' : `${cell.destinationBytes}B`}`,
-        };
-      }
-      case 'POSIX-gap': {
-        const cell = facts.posixGap;
-        if (cell === undefined) return absentCell(name);
-        return {
-          name,
-          observed: !cell.syncedKeyPresent,
-          detail: `${cell.key} was written and \`sync\`ed with its handle still open and the store `
-            + `${cell.syncedKeyPresent ? 'HOLDS it, so a flush-to-store primitive exists' : 'holds nothing: there is no flush-to-store primitive'}`,
-        };
-      }
       default:
         return absentCell(name);
     }
@@ -3704,8 +2855,8 @@ export function controlWitnessChecks(
 }
 
 /** A cell that produced no facts proves nothing, so its witness is unobserved
- *  and G2 refuses. Named rather than inlined at eight sites so the reason a
- *  refusal gives is one sentence rather than eight. */
+ *  and G2 refuses. Named rather than inlined at both sites so the reason a
+ *  refusal gives is one sentence rather than two. */
 function absentCell(name: string): WitnessCheck {
   return {
     name,
@@ -3722,7 +2873,7 @@ function absentCell(name: string): WitnessCheck {
  * whether the run CONTINUES; the lifecycle verify checks and
  * `armCompletedTheCell` are what judge whether a step was satisfied. The
  * difference is expensive: an arm ended by an expectation loses every cell
- * after it, and in run `kinu-devbox-bench-20260904142724` `r2fs` completed its
+ * after it, and in run `kinu-devbox-bench-20260904142724` an arm completed its
  * cold attach, its whole checkpoint ladder, its stop and its wake, and was then
  * ended at the warm attach by a step that admitted only `attached` when the box
  * legitimately answered `already-attached` — attaching an already-attached box
@@ -3779,25 +2930,13 @@ const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
 /**
  * The layer paths the LIFECYCLE PROOF reads, restated for the same reason and
  * kept true by `bench-devbox-decision.test.ts`, which compares every one of
- * them against the constant its strategy exports.
+ * them against the constant the strategy exports.
  *
- * MEASURED DEFECT THIS REPAIRS. The overlay-cas lower was checked at
- * `/var/tmp/devbox/cas-lower` — its path until the arm moved the lower INSIDE
- * the store mount so that a fold and the lower are one object — and the check
- * also demanded a mount line of its own, which that layout deliberately does
- * not have. Run 20260903140046 therefore failed the arm's lifecycle proof on
- * `cas-lower -> no` while the same proof's other rows showed the folded tree
- * holding the committed marker and the cursor advanced: a healthy arm refused
- * by a stale question. A restated path with nothing re-checking it is the
- * defect class; the test is what makes restating safe.
+ * A restated path with nothing re-checking it is the defect class — run
+ * 20260903140046 failed a healthy arm's lifecycle proof on a path its layout
+ * had moved — and the test is what makes restating safe.
  */
 const CHAIN_LOWER_BASE_DIR = '/var/tmp/devbox/lower-base';
-const R2FS_CACHE_DIR = '/var/tmp/devbox/r2fs-cache';
-const CAS_UPPER_DIR = '/var/tmp/devbox/cas-upper';
-const CAS_STORE_MOUNT_DIR = '/var/tmp/devbox/cas-store';
-/** The overlay's read-only lower: a path INSIDE the one store mount, which is
- *  why the proof checks the directory and the STORE's mount line. */
-const CAS_TREE_LOWER_DIR = `${CAS_STORE_MOUNT_DIR}/tree`;
 /** One directory per served generation, named after it: `deltaLayerMountPoint`
  *  is `${lowerDeltaRoot}/<generation>`, and its presence in `/proc/mounts` is
  *  the same fact `deltaLayerServed` reads to decide the collapse. */
@@ -3807,186 +2946,7 @@ const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
  *  restore's mount lines against it, and `bench-devbox-decision.test.ts`
  *  compares this restatement against that source. */
 const CHAIN_STORE_MOUNT_DIR = '/backups';
-/** The most layers a bounded-layers root may name, restated from
- *  `MAX_LAYER_DEPTH` in `packages/devbox/src/candidates/bounded-layers.ts`.
- *  The G5 bound check holds a wake's consulted layers to it, and
- *  `bench-devbox-decision.test.ts` compares this restatement against that
- *  source. */
-const CANDIDATE_MAX_LAYER_DEPTH = 8;
 
-/** Entry counts the two scan cells run at, and pending sizes the two replay
- *  cells leave. Small enough to cost seconds, far enough apart that a cost
- *  following the layer is unmistakable. */
-const SCAN_CELL_ENTRIES = [200, 2_000] as const;
-const PENDING_CELL_ENTRIES = [50, 500] as const;
-/** A rename big enough that a copy is not free and small enough to be quick. */
-const RENAME_CELL_KIB = 1_024;
-
-/** The holder an r2fs arm leaves running across its recycle, and what the store
- *  already said about the path it holds. Named because two cells consume it. */
-interface OpenWriteHolder {
-  readonly path: string;
-  readonly wroteBytes: number;
-  /** Whether the store held the object while the writer's handle was open and
-   *  its bytes had been `sync`ed — the `POSIX-gap` observation. */
-  readonly syncedKeyPresent: boolean;
-  readonly key: string;
-  readonly notes: readonly string[];
-}
-
-/**
- * What an r2fs arm must have in place BEFORE the recycle it is measured across.
- *
- * A detached writer holds a handle open over bytes it has written and `sync`ed,
- * which is the state both r2fs semantic witnesses are about: the store holds
- * nothing for that path while the handle is open (`POSIX-gap`), and the bytes do
- * not survive the container that dies holding it (`open-write-loss`). It must be
- * spawned before the stop, so it is the one cell that cannot wait until the
- * arm's tally has been read.
- */
-async function armOpenWriteHolder(
-  fixture: Fixture,
-  box: string,
-): Promise<OpenWriteHolder> {
-  const notes: string[] = [];
-  const path = '/workspace/witness-open-write.bin';
-  const payload = `witness-open-write-${crypto.randomUUID()}`;
-  // ONE detached shell, holding fd 9 open for longer than the arm's remaining
-  // lifetime: `printf` writes, `sync` pushes the kernel's dirty pages into
-  // s3fs, and the handle is never closed. `nohup … &` because `/exec` waits for
-  // the command it runs.
-  await execInBox(
-    fixture,
-    box,
-    `nohup sh -c 'exec 9>${path}; printf %s ${payload} >&9; sync; sleep 1800' >/dev/null 2>&1 & echo spawned`,
-  );
-  // Long enough for the write and the sync to have happened, short enough that
-  // nothing in the arm waits on it. The claim under test is that neither makes
-  // the bytes durable, so a delay cannot manufacture the observation.
-  await delay(3_000);
-  const state = await boxState(fixture, box);
-  const prefix = state.storePrefix ?? '';
-  const key = prefix.length === 0 ? '' : `${prefix}witness-open-write.bin`;
-  let syncedKeyPresent = false;
-  if (key.length === 0) {
-    notes.push('the POSIX-gap cell could not run: /state reported no store prefix for this arm');
-  } else {
-    const head = await headObject(fixture, box, key);
-    syncedKeyPresent = head.exists === true && (head.size ?? 0) >= payload.length;
-  }
-  return { path, wroteBytes: payload.length, syncedKeyPresent, key, notes };
-}
-
-/** The pending entries an overlay-cas attach replayed, as the strategy's own
- *  attach detail publishes them (`overlay-cas folded <cursor> <pending>P`).
- *  Parsed rather than inferred: the count is the restore receipt's, and a detail
- *  this driver cannot read is a cell that did not run rather than a zero. */
-export function replayedEntries(detail: string): number | null {
-  const matched = OVERLAY_FOLDED_PATTERN.exec(detail);
-  const entries = matched === null ? undefined : matched[2];
-  return entries === undefined ? null : Number.parseInt(entries, 10);
-}
-
-/** The durable cursor an overlay-cas attach folded through, from the same
- *  detail string as the replay count. Null when the detail carries no fold —
- *  an already-attached or empty attach names no cursor to compare. */
-export function foldedCursor(detail: string): number | null {
-  const matched = OVERLAY_FOLDED_PATTERN.exec(detail);
-  const cursor = matched === null ? undefined : matched[1];
-  return cursor === undefined ? null : Number.parseInt(cursor, 10);
-}
-
-/**
- * The overlay-cas attach detail's shape, restated from the template the
- * strategy publishes (`overlay-cas folded ${foldedSeq} ${entries}P` in
- * `packages/devbox/src/overlay-cas.ts`). The driver reads a deployed box over
- * HTTP and imports nothing from it, so the shape lives here — and
- * `bench-devbox-decision.test.ts` instantiates the product's own template
- * against this pattern, so a rewording on either side fails loudly instead of
- * parsing every later wake as uncounted.
- */
-const OVERLAY_FOLDED_PATTERN = /folded (\d+) (\d+)P/;
-
-/**
- * The candidate attach detail's shape, restated from `servedOutcome` and
- * `restoreOutcome` in `packages/devbox/src/candidates/container.ts`
- * (`${how} candidate root ${rootId}`, `how` one of `restored`, `repaired`,
- * followed by ` work <receipt>` when a fresh restore counted itself). Same
- * reason, same check: the fault-cut cell compares the root the attach claims
- * to serve against the head the store reports, and a detail outside this
- * shape is evidence the cell cannot read rather than a root it can use.
- */
-const CANDIDATE_ROOT_PATTERN = /^(restored|repaired) candidate root (\S+)(?: work (.+))?$/;
-
-/** The root a candidate attach claims to serve, or null when the detail speaks
- *  a shape the cut cell cannot read — a rewording, or a new attach path. */
-export function candidateRootId(detail: string): string | null {
-  return CANDIDATE_ROOT_PATTERN.exec(detail)?.[2] ?? null;
-}
-
-/**
- * One pending-replay point: write `entries` files, journal them WITHOUT folding,
- * kill the container, and read what the healing attach replayed.
- *
- * A tick journals and does not fold; only a quiesce folds. So a kill after a
- * tick leaves exactly the state a platform replacement leaves — staged entries,
- * an unadvanced cursor, no boot marker — and the next commit heals the box,
- * which is the attach whose replay is being counted.
- */
-async function pendingReplayPoint(
-  fixture: Fixture,
-  box: string,
-  entries: number,
-): Promise<{ replayed: number | null; detail: string }> {
-  const root = `/workspace/witness-pending-${String(entries)}`;
-  await execInBox(
-    fixture,
-    box,
-    `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
-    + `printf %s pending-$i > ${root}/f$i.txt; i=$((i+1)); done; sync`,
-  );
-  await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  await checkpointOperation(fixture, box, 'tick', `pending cell ${String(entries)} journal`);
-  await call(fixture, 'POST', `/kill?box=${box}`, AckReplySchema, {});
-  // The commit is what heals a replaced container, and healing is what runs the
-  // attach whose replay this cell counts.
-  await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  await checkpointOperation(fixture, box, 'tick', `pending cell ${String(entries)} heal`);
-  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-  const detail = state.state?.lastAttach?.detail ?? '';
-  return { replayed: replayedEntries(detail), detail };
-}
-
-/**
- * One scan point: bring the writable layer to `entries` files, commit them, then
- * time a tick that changes NOTHING.
- *
- * An unchanged tick is the whole cell: overlay-cas decides "unchanged" BY
- * scanning the upper, so what it costs is the scan and nothing else. The
- * duration is the fixture's own measurement of that checkpoint.
- */
-async function upperScanPoint(
-  fixture: Fixture,
-  box: string,
-  entries: number,
-): Promise<{ entries: number; ms: number }> {
-  const root = '/workspace/witness-scan';
-  await execInBox(
-    fixture,
-    box,
-    `mkdir -p ${root} && i=1; while [ $i -le ${String(entries)} ]; do `
-    + `printf %s scan-$i > ${root}/f$i.txt; i=$((i+1)); done; sync`,
-  );
-  await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} commit`);
-  await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  const unchanged = await checkpointOperation(fixture, box, 'tick', `scan cell ${String(entries)} unchanged`);
-  const counted = await execInBox(fixture, box, 'find /workspace -type f | wc -l');
-  return {
-    entries: Number.parseInt((counted.stdout ?? '0').trim(), 10) || 0,
-    ms: unchanged.ms ?? -1,
-  };
-}
 
 /**
  * Run this arm's preregistered witness cells and answer what they observed.
@@ -3996,20 +2956,15 @@ async function upperScanPoint(
  * witness and G2 refuses. A cell is never allowed to take the arm down with it —
  * the rows this arm already measured are worth more than the cell.
  *
- * An arm with no preregistered witness runs no cells and answers no facts; it
- * is not a special case here, just an empty list in `PREREGISTERED_WITNESSES`.
+ * A strategy with no preregistered witness runs no cells and answers no facts;
+ * it is not a special case here, just an empty list in
+ * `PREREGISTERED_WITNESSES`.
  */
 async function runControlWitnessCells(
   fixture: Fixture,
   box: string,
-  strategy: Strategy,
-  input: {
-    /** The holder the pre-stop hook left behind, for the two r2fs cells that
-     *  are about a handle held open across a container's death. */
-    readonly openWrite: OpenWriteHolder | null;
-  },
 ): Promise<{ facts: ControlWitnessFacts; notes: string[] }> {
-  const notes: string[] = [...(input.openWrite?.notes ?? [])];
+  const notes: string[] = [];
   const facts: {
     -readonly [Key in keyof ControlWitnessFacts]: ControlWitnessFacts[Key];
   } = {};
@@ -4023,262 +2978,113 @@ async function runControlWitnessCells(
   const headKey = async (key: string): Promise<HeadReply> =>
     await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
 
-  if (strategy === 'snapshot-chain') {
-    // MUTABLE-DELTA FIRST, and the order is load-bearing: the collapse cell
-    // below drops this arm's measured trees and recycles the box, so running it
-    // first would leave this cell comparing two heads of a generation that had
-    // just been superseded.
-    await cell('mutable-delta', async () => {
-      const before = await deltaAfterOneChange(fixture, box, 'a');
-      const after = await deltaAfterOneChange(fixture, box, 'b');
-      if (before.chainId !== after.chainId) {
-        throw new Error(
-          `the chain rebased between the two heads (${before.chainId} then ${after.chainId}), so the `
-          + 'cell compared two generations rather than one key',
-        );
-      }
-      facts.mutableDelta = {
-        key: after.key,
-        etagBefore: before.etag,
-        etagAfter: after.etag,
-        bytesBefore: before.bytes,
-        bytesAfter: after.bytes,
-      };
-    });
-    // THE WAKE THIS CELL NEEDS IS ITS OWN.
-    //
-    // The claim is about a wake WITH A DELTA, and the arm's own recycle cannot
-    // witness it: that wake ran before the workload phases, and by the time the
-    // cells run the record has moved on several generations. So the cell commits
-    // a marker INTO a delta, recycles the box, and reads both halves back.
-    //
-    // THE MEASURED TREES GO FIRST, which is what keeps the cell cheap AND keeps
-    // its premise true. Every number this arm produced is already settled to its
-    // own artifact. Dropping the trees leaves a delta of whiteouts plus one
-    // marker, so the stop's own quiesce cannot rebase — `shouldRebase` asks
-    // `delta > base` — and the collapse below archives a merged view of
-    // kilobytes instead of the gigabyte the decisive workloads leave.
-    await cell('delta-layer-collapse', async () => {
-      const marker = `delta-layer-${crypto.randomUUID()}`;
-      const markerFile = 'witness-delta-layer.txt';
-      const harness = basename(HARNESS);
-      await execInBox(
-        fixture,
-        box,
-        `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
-        + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
+  // MUTABLE-DELTA FIRST, and the order is load-bearing: the collapse cell
+  // below drops this arm's measured trees and recycles the box, so running it
+  // first would leave this cell comparing two heads of a generation that had
+  // just been superseded.
+  await cell('mutable-delta', async () => {
+    const before = await deltaAfterOneChange(fixture, box, 'a');
+    const after = await deltaAfterOneChange(fixture, box, 'b');
+    if (before.chainId !== after.chainId) {
+      throw new Error(
+        `the chain rebased between the two heads (${before.chainId} then ${after.chainId}), so the `
+        + 'cell compared two generations rather than one key',
       );
-      await delay(MIN_CHECKPOINT_INTERVAL_MS);
-      // A TICK, NOT A QUIESCE: a quiesce over the delta the decisive window
-      // left would rebase, and the wake would then have a bare base to attach
-      // and nothing to serve as a layer.
-      const seeded = await checkpointOperation(
-        fixture, box, 'tick', 'delta-layer-collapse marker commit',
+    }
+    facts.mutableDelta = {
+      key: after.key,
+      etagBefore: before.etag,
+      etagAfter: after.etag,
+      bytesBefore: before.bytes,
+      bytesAfter: after.bytes,
+    };
+  });
+  // THE WAKE THIS CELL NEEDS IS ITS OWN.
+  //
+  // The claim is about a wake WITH A DELTA, and the arm's own recycle cannot
+  // witness it: that wake ran before the workload phases, and by the time the
+  // cells run the record has moved on several generations. So the cell commits
+  // a marker INTO a delta, recycles the box, and reads both halves back.
+  //
+  // THE MEASURED TREES GO FIRST, which is what keeps the cell cheap AND keeps
+  // its premise true. Every number this arm produced is already settled to its
+  // own artifact. Dropping the trees leaves a delta of whiteouts plus one
+  // marker, so the stop's own quiesce cannot rebase — `shouldRebase` asks
+  // `delta > base` — and the collapse below archives a merged view of
+  // kilobytes instead of the gigabyte the decisive workloads leave.
+  await cell('delta-layer-collapse', async () => {
+    const marker = `delta-layer-${crypto.randomUUID()}`;
+    const markerFile = 'witness-delta-layer.txt';
+    const harness = basename(HARNESS);
+    await execInBox(
+      fixture,
+      box,
+      `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
+      + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
+    );
+    await delay(MIN_CHECKPOINT_INTERVAL_MS);
+    // A TICK, NOT A QUIESCE: a quiesce over the delta the decisive window
+    // left would rebase, and the wake would then have a bare base to attach
+    // and nothing to serve as a layer.
+    const seeded = await checkpointOperation(
+      fixture, box, 'tick', 'delta-layer-collapse marker commit',
+    );
+    if (seeded.outcome?.kind !== 'committed') {
+      throw new Error(
+        `the marker commit did not publish a delta to serve: `
+        + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
       );
-      if (seeded.outcome?.kind !== 'committed') {
-        throw new Error(
-          `the marker commit did not publish a delta to serve: `
-          + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
-        );
-      }
-      const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
-      requireConfirmedStop(stopped, 'the box did not stop');
-      const woke = await startupOperation(
-        fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
-      );
-      // THE SERVED GENERATION IS THE ONE THE RECORD NAMES AFTER THE WAKE, never
-      // the one named before it: an attach that fell back to its retained
-      // fallback serves a different generation, and reading the pre-stop id
-      // would describe a generation nothing is mounted from.
-      const served = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-      const chainId = served.state?.chain?.base?.id ?? '';
-      if (chainId.length === 0) throw new Error('/state reported no chain generation after the wake');
-      const delta = await headKey(`${served.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
-      const mounts = await execInBox(fixture, box, 'cat /proc/mounts');
-      const inMergedView = await execInBox(
-        fixture, box, `test -f ${DEVBOX_WORK_DIR}/${markerFile} && echo yes || echo no`,
-      );
-      const inUpper = await execInBox(
-        fixture, box, `test -f ${CHAIN_UPPER_DIR}/${markerFile} && echo yes || echo no`,
-      );
-      // THE NEXT CHECKPOINT, with something to say: a box that woke and wrote
-      // nothing is skipped with `nothing has been written since the attach`, so
-      // the collapse would never be reached.
-      await execInBox(
-        fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-collapse.txt && sync`,
-      );
-      await delay(MIN_CHECKPOINT_INTERVAL_MS);
-      await checkpointOperation(fixture, box, 'tick', 'delta-layer-collapse next checkpoint');
-      const collapsed = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-      const collapsedChain = collapsed.state?.chain;
-      facts.deltaLayerCollapse = {
-        chainId,
-        deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
-        attachDetail: woke.attach.detail,
-        deltaLayerMounted: mountAt(mounts.stdout ?? '', `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null,
-        markerInMergedView: (inMergedView.stdout ?? '').trim() === 'yes',
-        markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
-        collapsedChainId: collapsedChain?.base?.id ?? '',
-        collapsedNamesDelta: collapsedChain?.delta !== undefined && collapsedChain?.delta !== null,
-      };
-    });
-  }
-
-  if (strategy === 'overlay-cas') {
-    await cell('O(u)-scan', async () => {
-      const small = await upperScanPoint(fixture, box, SCAN_CELL_ENTRIES[0]);
-      const large = await upperScanPoint(fixture, box, SCAN_CELL_ENTRIES[1]);
-      facts.upperScan = {
-        smallEntries: small.entries,
-        smallMs: small.ms,
-        largeEntries: large.entries,
-        largeMs: large.ms,
-      };
-    });
-    await cell('unbounded-pending-replay', async () => {
-      const small = await pendingReplayPoint(fixture, box, PENDING_CELL_ENTRIES[0]);
-      const large = await pendingReplayPoint(fixture, box, PENDING_CELL_ENTRIES[1]);
-      if (small.replayed === null || large.replayed === null) {
-        throw new Error(
-          `the healing attach published no replay count (details: "${small.detail}", "${large.detail}")`,
-        );
-      }
-      facts.unboundedPendingReplay = {
-        smallPending: PENDING_CELL_ENTRIES[0],
-        smallReplayed: small.replayed,
-        largePending: PENDING_CELL_ENTRIES[1],
-        largeReplayed: large.replayed,
-      };
-    });
-  }
-
-  if (strategy === 'r2fs') {
-    await cell('open-write-loss', async () => {
-      const holder = input.openWrite;
-      if (holder === null) throw new Error('no open-write holder was armed before the stop');
-      const read = await execInBox(fixture, box, `wc -c < ${holder.path} 2>/dev/null || echo MISSING`);
-      const text = (read.stdout ?? '').trim();
-      facts.openWriteLoss = {
-        wroteBytes: holder.wroteBytes,
-        survivedBytes: text === 'MISSING' || text.length === 0 ? null : Number.parseInt(text, 10),
-      };
-    });
-    await cell('POSIX-gap', async () => {
-      const holder = input.openWrite;
-      if (holder === null) throw new Error('no open-write holder was armed before the stop');
-      if (holder.key.length === 0) throw new Error('the arm published no store prefix to head');
-      facts.posixGap = { syncedKeyPresent: holder.syncedKeyPresent, key: holder.key };
-    });
-    await cell('non-atomic-rename', async () => {
-      const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-      const prefix = state.storePrefix ?? '';
-      if (prefix.length === 0) throw new Error('/state reported no store prefix for this arm');
-      const source = 'witness-rename-src.bin';
-      const destination = 'witness-rename-dst.bin';
-      await execInBox(
-        fixture,
-        box,
-        `dd if=/dev/urandom of=/workspace/${source} bs=1024 count=${String(RENAME_CELL_KIB)} 2>/dev/null && sync`,
-      );
-      // A FLUSHED WINDOW AROUND THE RENAME ALONE. The tally batches in the
-      // proxy isolate, so an unflushed boundary would price the write before it
-      // against the rename.
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-      await execInBox(fixture, box, `mv /workspace/${source} /workspace/${destination} && sync`);
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-      const sourceHead = await headKey(`${prefix}${source}`);
-      const destinationHead = await headKey(`${prefix}${destination}`);
-      facts.nonAtomicRename = {
-        fileBytes: RENAME_CELL_KIB * 1024,
-        storeOps: (after.total ?? 0) - (before.total ?? 0),
-        sourcePresent: sourceHead.exists === true,
-        destinationBytes: destinationHead.exists === true ? destinationHead.size ?? 0 : null,
-      };
-    });
-  }
+    }
+    const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
+    requireConfirmedStop(stopped, 'the box did not stop');
+    const woke = await startupOperation(
+      fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
+    );
+    // THE SERVED GENERATION IS THE ONE THE RECORD NAMES AFTER THE WAKE, never
+    // the one named before it: an attach that fell back to its retained
+    // fallback serves a different generation, and reading the pre-stop id
+    // would describe a generation nothing is mounted from.
+    const served = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+    const chainId = served.state?.chain?.base?.id ?? '';
+    if (chainId.length === 0) throw new Error('/state reported no chain generation after the wake');
+    const delta = await headKey(`${served.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
+    const mounts = await execInBox(fixture, box, 'cat /proc/mounts');
+    const inMergedView = await execInBox(
+      fixture, box, `test -f ${DEVBOX_WORK_DIR}/${markerFile} && echo yes || echo no`,
+    );
+    const inUpper = await execInBox(
+      fixture, box, `test -f ${CHAIN_UPPER_DIR}/${markerFile} && echo yes || echo no`,
+    );
+    // THE NEXT CHECKPOINT, with something to say: a box that woke and wrote
+    // nothing is skipped with `nothing has been written since the attach`, so
+    // the collapse would never be reached.
+    await execInBox(
+      fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-collapse.txt && sync`,
+    );
+    await delay(MIN_CHECKPOINT_INTERVAL_MS);
+    await checkpointOperation(fixture, box, 'tick', 'delta-layer-collapse next checkpoint');
+    const collapsed = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+    const collapsedChain = collapsed.state?.chain;
+    facts.deltaLayerCollapse = {
+      chainId,
+      deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
+      attachDetail: woke.attach.detail,
+      deltaLayerMounted: mountAt(mounts.stdout ?? '', `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null,
+      markerInMergedView: (inMergedView.stdout ?? '').trim() === 'yes',
+      markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
+      collapsedChainId: collapsedChain?.base?.id ?? '',
+      collapsedNamesDelta: collapsedChain?.delta !== undefined && collapsedChain?.delta !== null,
+    };
+  });
 
   return { facts, notes };
 }
 
 /** The victim publication's size. Big enough that no arm settles it before the
- *  kill lands — the ladder's own 64 MiB quiesce spent 37 s on overlay-cas —
- *  and small enough to heal inside the cell. A victim that settles before the
- *  kill is a missed cut, never a fast pass. */
+ *  kill lands — the ladder's own 64 MiB quiesce spent 37 s — and small enough
+ *  to heal inside the cell. A victim that settles before the kill is a missed
+ *  cut, never a fast pass. */
 const FAULT_CUT_VICTIM_MIB = 64;
-
-/** A cursor body as the store writes it. Parsed at the exec boundary, so the
- *  judge branches on the domain value rather than on representation checks. */
-const CursorBodySchema: v.GenericSchema<{ readonly foldedSeq: number }> = v.object({
-  foldedSeq: v.number(),
-});
-
-export function parseCursorSeq(body: string): number | null {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(body);
-  } catch (error) {
-    if (error instanceof SyntaxError) return null;
-    throw error;
-  }
-  const parsed = v.safeParse(CursorBodySchema, decoded);
-  if (!parsed.success) return null;
-  return Number.isSafeInteger(parsed.output.foldedSeq) && parsed.output.foldedSeq >= 0
-    ? parsed.output.foldedSeq
-    : null;
-}
-
-/**
- * Sweep an overlay-cas store through its own mount: every journal batch must
- * parse, and every blob a file entry names must be readable. Prints
- * `swept <n> batches` plus one `missing <key>` line per absent object; any
- * shape the sweep does not understand fails the script, so a reworded journal
- * refuses the sweep instead of reporting it clean.
- *
- * The `journal/`, `blobs/` and `cursor.json` spellings restate
- * `PREFIX_JOURNAL`, `PREFIX_BLOBS`, `KEY_CURSOR` and the `.json` batch suffix
- * in `packages/devbox/src/cas/types.ts`, checked by the decision suite. The
- * dynamic import below runs inside the measured container, not this driver —
- * a static import here would load the module into the instrument instead of
- * the box it measures.
- */
-const OVERLAY_SWEEP_SCRIPT = [
-  'async function main() {',
-  '  const fs = await import("node:fs/promises");',
-  `  const ROOT = "${CAS_STORE_MOUNT_DIR}";`,
-  '  const missing = [];',
-  '  const seen = new Set();',
-  '  let batches = 0;',
-  '  const cursor = await fs.readFile(`${ROOT}/cursor.json`, "utf8").catch(() => null);',
-  '  if (cursor === null) missing.push("cursor.json");',
-  '  const names = await fs.readdir(`${ROOT}/journal`).catch(() => null);',
-  '  if (names === null) { missing.push("journal/"); }',
-  '  else {',
-  '    for (const name of names.filter((n) => n.endsWith(".json"))) {',
-  '      batches += 1;',
-  '      const body = await fs.readFile(`${ROOT}/journal/${name}`, "utf8").catch(() => null);',
-  '      if (body === null) { missing.push(`journal/${name}`); continue; }',
-  '      const entries = JSON.parse(body).entries;',
-  '      if (!Array.isArray(entries)) throw new Error(`batch ${name} has no entries array`);',
-  '      for (const entry of entries) {',
-  '        if (entry.kind !== "file") continue;',
-  '        if (!Array.isArray(entry.parts)) throw new Error(`file entry has no parts array`);',
-  '        for (const part of entry.parts) {',
-  '          if (part.kind !== "data") continue;',
-  '          const key = `blobs/${part.hash.slice(0, 2)}/${part.hash}`;',
-  '          if (seen.has(key)) continue;',
-  '          seen.add(key);',
-  '          try { await fs.access(`${ROOT}/${key}`); } catch { missing.push(key); }',
-  '        }',
-  '      }',
-  '    }',
-  '  }',
-  '  console.log(`swept ${batches} batches`);',
-  '  for (const key of missing) console.log(`missing ${key}`);',
-  '}',
-  'main().catch((error) => { console.log(`sweep-failed ${error instanceof Error ? error.message : error}`); process.exit(1); });',
-].join('\n');
 
 /** Combine one arm's rollback and phantom judgments strictly: true holds on a
  *  single caught true, while false requires both judged clean — an unjudged
@@ -4482,194 +3288,15 @@ async function readChainCutCell(
 }
 
 /**
- * The overlay-cas reader checks: the cursor the kill left, what the wake
- * replayed, the sweep of every reference the journal names, and — after the
- * heal — the folded cursor and an empty journal. The verdict waits for the
- * heal: the crash state replays the victim's batch into view without folding
- * it, so only the post-heal marker proves the commit.
- */
-async function readOverlayCutCell(
-  fixture: Fixture,
-  box: string,
-  cut: {
-    readonly prefix: string;
-    readonly marker: string;
-    readonly content: string;
-    readonly victimEnd: string;
-    readonly kind: string;
-    readonly detail: string;
-    readonly preBody: string;
-    readonly preHead: HeadReply | null;
-  },
-): Promise<FaultCutObservation> {
-  const {
-    prefix, marker: cutMarker, content: cutContent, victimEnd,
-    kind: cutKind, detail: cutDetail, preBody: overlayPreBody, preHead: overlayPreHead,
-  } = cut;
-  const cursorPath = `${CAS_STORE_MOUNT_DIR}/cursor.json`;
-  // Crash-state reads: the cursor the kill left, what the wake replayed,
-  // and the sweep of every reference the journal names.
-  const crashBody = (await execInBox(fixture, box, `cat ${cursorPath} 2>/dev/null || echo MISSING`)).stdout ?? '';
-  const crashSeq = parseCursorSeq(crashBody);
-  const cursorHead = await headObject(fixture, box, `${prefix}cursor.json`);
-  const cursorExists = crashBody.trim() !== 'MISSING' || cursorHead.exists === true;
-  const markerPresentCrash = await readBoxMarker(fixture, box, cutMarker, cutContent);
-  const replayed = replayedEntries(cutDetail);
-  const sweepOut = await execInBox(fixture, box, `bun -e '${OVERLAY_SWEEP_SCRIPT}'`);
-  const sweep = sweepOut.exitCode === 0 ? parseOverlaySweep(sweepOut.stdout ?? '') : null;
-  const absent = sweep !== null && sweep.batches !== null ? sweep.missing : null;
-  const healNote = await healBox(fixture, box);
-  // Post-heal reads: the folded cursor (numbers, else etags) and whether the
-  // quiesce left anything unfolded behind.
-  const healBody = (await execInBox(fixture, box, `cat ${cursorPath} 2>/dev/null || echo MISSING`)).stdout ?? '';
-  const healSeq = parseCursorSeq(healBody);
-  const healHead = await headObject(fixture, box, `${prefix}cursor.json`);
-  const journalLs = await execInBox(fixture, box, `ls -A ${CAS_STORE_MOUNT_DIR}/journal 2>/dev/null | wc -l`);
-  const journalEmpty = journalLs.exitCode !== 0 ? null : (journalLs.stdout ?? '').trim() === '0';
-  const preSeq = parseCursorSeq(overlayPreBody);
-  const preEtag = overlayPreHead?.etag === undefined || overlayPreHead.etag.length === 0 ? null : overlayPreHead.etag;
-  const healEtag = healHead.etag === undefined || healHead.etag.length === 0 ? null : healHead.etag;
-  const numbers = preSeq !== null && healSeq !== null;
-  const seqMoved = numbers
-    ? healSeq !== preSeq
-    : preEtag !== null && healEtag !== null
-      ? healEtag !== preEtag
-      : null;
-  // The verdict waits for the heal: the crash state replays the victim's
-  // batch into view without folding it, so only the post-heal marker proves
-  // the commit.
-  const markerPresentHeal = await readBoxMarker(fixture, box, cutMarker, cutContent);
-  const judgment = judgeOverlayCut({
-    seqMoved,
-    seqComparable: numbers,
-    seqDecreased: preSeq !== null && healSeq !== null && healSeq < preSeq,
-    replayedEntries: replayed,
-    cutMarkerPresent: markerPresentHeal,
-    cursorExists,
-    journalEmpty,
-  });
-  return {
-    completed: true,
-    verdict: cutKind !== 'attached' && cutKind !== 'already-attached' ? 'mixed' : judgment.verdict,
-    absentReferences: absent,
-    rollbackOrPhantomRoot: combineRollbackPhantom(judgment.rollback, judgment.phantom),
-    barrierAckLoss: null,
-    readOnlySurface: null,
-    readOnlyRefusedWrites: null,
-    detail: `victim ${victimEnd}; crash replayed ${replayed ?? 'unknown'} entries over cursor ${crashSeq ?? '?'} (marker ${markerPresentCrash ? 'in view' : 'absent'}); ${judgment.detail}${healNote === '' ? '' : `; ${healNote}`}`,
-  };
-}
-
-/**
- * The candidate reader checks: the head the kill left, the root the attach
- * claims, the closure the head names — then, after the heal, that forks,
- * envelopes newer than the head, and undecodable envelopes are all gone.
- */
-async function readCandidateCutCell(
-  fixture: Fixture,
-  box: string,
-  cut: {
-    readonly marker: string;
-    readonly content: string;
-    readonly barrierMarker: string;
-    readonly barrierContent: string;
-    readonly victimEnd: string;
-    readonly kind: string;
-    readonly detail: string;
-    readonly barrierGeneration: string | null;
-    readonly preRootId: string | null;
-  },
-): Promise<FaultCutObservation> {
-  const {
-    marker: cutMarker, content: cutContent, barrierMarker, barrierContent, victimEnd,
-    kind: cutKind, detail: cutDetail, barrierGeneration, preRootId,
-  } = cut;
-  // Crash-state reads: the head the kill left, the root the attach claims,
-  // and the closure the head names.
-  const facts = await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema);
-  const head = facts.store?.head ?? null;
-  const postGeneration = head?.generation ?? null;
-  const postRootId = head?.rootEnvelopeId ?? null;
-  const forkedHeads = facts.store?.forkedHeads ?? [];
-  const closureRows = head !== null ? facts.store?.closure : undefined;
-  const closureChecked = closureRows !== undefined;
-  const closureAbsent = closureRows === undefined
-    ? 0
-    : closureRows.filter((row) => row.storedBytes === null).length;
-  const detailRootId = candidateRootId(cutDetail);
-  const markerPresent = await readBoxMarker(fixture, box, cutMarker, cutContent);
-  const barrierMarkerPresent = await readBoxMarker(fixture, box, barrierMarker, barrierContent);
-  const healNote = await healBox(fixture, box);
-  // Post-heal convergence reads: forks, envelopes newer than the head, and
-  // undecodable envelopes must all be gone.
-  let healFacts: CandidateFactsReply | null = null;
-  let healReadNote = '';
-  try {
-    healFacts = await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema);
-  } catch (error) {
-    healReadNote = `post-heal candidate read threw: ${describeThrown({ cause: error }).slice(0, 120)}`;
-  }
-  const healHead = healFacts?.store?.head ?? null;
-  const healForks = healFacts?.store?.forkedHeads ?? null;
-  const healGen = healHead?.generation ?? null;
-  const healEnvelopes = healFacts?.store?.envelopes ?? null;
-  let healStrays: number | null = null;
-  let healSkipped = 0;
-  if (healEnvelopes !== null && healGen !== null) {
-    let strays = 0;
-    for (const envelope of healEnvelopes) {
-      const order = compareGenerations(healGen, envelope.generation ?? null);
-      if (order === null) {
-        healSkipped += 1;
-        continue;
-      }
-      if (order < 0) strays += 1;
-    }
-    healStrays = strays;
-  }
-  const healUnreadable = healFacts?.store?.unreadable === undefined ? null : healFacts.store.unreadable.length;
-  const judgment = judgeCandidateCut({
-    postKind: cutKind,
-    preGeneration: barrierGeneration,
-    preRootId,
-    postGeneration,
-    postRootId,
-    detailRootId,
-    forkedHeads,
-    closureAbsent,
-    closureChecked,
-    cutMarkerPresent: markerPresent,
-    barrierGeneration,
-    barrierMarkerPresent,
-    healForkedHeads: healForks,
-    healStrayEnvelopes: healStrays,
-    healUnreadable,
-  });
-  return {
-    completed: true,
-    verdict: cutKind !== 'attached' && cutKind !== 'already-attached' ? 'mixed' : judgment.verdict,
-    absentReferences: closureChecked ? closureAbsent : null,
-    rollbackOrPhantomRoot: combineRollbackPhantom(judgment.rollback, judgment.phantom),
-    barrierAckLoss: judgment.barrierAckLoss,
-    readOnlySurface: null,
-    readOnlyRefusedWrites: null,
-    detail: `victim ${victimEnd}; ${judgment.detail}`
-      + `${healSkipped > 0 ? `; ${healSkipped} post-heal envelope(s) with unorderable generations skipped` : ''}`
-      + `${healNote === '' ? '' : `; ${healNote}`}${healReadNote === '' ? '' : `; ${healReadNote}`}`,
-  };
-}
-
-/**
- * Cut one arm's publication mid-flight and judge what a reader sees.
+ * Cut the arm's publication mid-flight and judge what a reader sees.
  *
- * The shape: an acked barrier first (candidate arms only — legacy arms have
- * no barrier concept), then a cut marker plus a 64 MiB victim, an armed
- * victim quiesce, two pending polls, the kill, the victim's own outcome, a
- * wake that admits every kind so damage reads as evidence rather than
- * throwing at admission, per-arm reader checks, a healing quiesce, and the
- * post-heal convergence reads. Anything that cannot run throws, and the
- * caller records the throw as an incomplete cell — a cut that never met its
- * publication is a missed cut, never a fast pass.
+ * The shape: a cut marker plus a 64 MiB victim, an armed victim quiesce, two
+ * pending polls, the kill, the victim's own outcome, a wake that admits every
+ * kind so damage reads as evidence rather than throwing at admission, the
+ * reader checks, a healing quiesce, and the post-heal convergence reads.
+ * Anything that cannot run throws, and the caller records the throw as an
+ * incomplete cell — a cut that never met its publication is a missed cut,
+ * never a fast pass.
  *
  * Runs after the witness cells and before teardown: it disturbs generations,
  * boots and the operation tally, so nothing after it may measure.
@@ -4677,55 +3304,23 @@ async function readCandidateCutCell(
 async function runFaultCutCell(
   fixture: Fixture,
   box: string,
-  strategy: Strategy,
 ): Promise<FaultCutObservation> {
-  if (
-    strategy !== 'snapshot-chain' && strategy !== 'overlay-cas'
-    && strategy !== 'bounded-layers' && strategy !== 'merkle-pack'
-  ) {
-    throw new Error(`the fault-cut cell has no branch for excluded strategy "${strategy}"`);
-  }
   const tag = crypto.randomUUID().slice(0, 8);
-  const barrierMarker = `faultcut-barrier-${tag}.txt`;
-  const barrierContent = `faultcut-barrier-${tag}`;
   const cutMarker = `faultcut-cut-${tag}.txt`;
   const cutContent = `faultcut-cut-${tag}`;
   const victim = `faultcut-victim-${tag}.bin`;
   const state0 = await boxState(fixture, box);
   const prefix = state0.storePrefix ?? '';
-  // PRE-CUT BASELINE. Candidates read theirs after the barrier below, since
-  // the barrier is legitimate publication and the fault window starts past it.
-  const chainPre = strategy === 'snapshot-chain' ? await chainGeneration(fixture, box) : null;
+  // PRE-CUT BASELINE.
+  const chainPre = await chainGeneration(fixture, box);
   let chainPreDeltaEtag: string | null = null;
-  if (chainPre !== null && chainPre.hasDelta && chainPre.baseId !== null) {
+  if (chainPre.hasDelta && chainPre.baseId !== null) {
     const preRows = chainArchiveExpectations(chainPre.baseId, true, prefix);
     const preDelta = preRows[1];
     if (preDelta !== undefined) {
       const head = await headObject(fixture, box, preDelta.key);
       chainPreDeltaEtag = head.etag === undefined || head.etag.length === 0 ? null : head.etag;
     }
-  }
-  const cursorPath = `${CAS_STORE_MOUNT_DIR}/cursor.json`;
-  const overlayPreBody = strategy === 'overlay-cas'
-    ? (await execInBox(fixture, box, `cat ${cursorPath} 2>/dev/null || echo MISSING`)).stdout ?? ''
-    : '';
-  const overlayPreHead = strategy === 'overlay-cas' ? await headObject(fixture, box, `${prefix}cursor.json`) : null;
-  // THE ACKED BARRIER. Only candidate arms record barriers; legacy arms jump
-  // straight to the victim, with nothing to lose.
-  let barrierGeneration: string | null = null;
-  let preRootId: string | null = null;
-  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    await execInBox(fixture, box, `printf %s ${barrierContent} > /workspace/${barrierMarker} && sync`);
-    if ((await readBoxMarker(fixture, box, barrierMarker, barrierContent)) !== true) {
-      throw new Error('the fault-cut barrier marker did not land: the box is not serving its workspace');
-    }
-    const barrier = await checkpointOperation(fixture, box, 'quiesce', 'fault-cut barrier');
-    if (barrier.ok !== true || barrier.outcome?.kind !== 'committed') {
-      throw new Error(`the fault-cut barrier did not commit: ${barrier.error ?? barrier.outcome?.kind ?? 'no outcome'}`);
-    }
-    const barrierFacts = await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema);
-    barrierGeneration = barrierFacts.store?.head?.generation ?? null;
-    preRootId = barrierFacts.store?.head?.rootEnvelopeId ?? null;
   }
   // THE VICTIM, FIRED AND CUT. Marker, file, arming, polls, kill and outcome
   // live in `fireCutVictim`; a cut that never met its publication comes back
@@ -4748,44 +3343,16 @@ async function runFaultCutCell(
   const cut = await startupOperation(fixture, box, '/wake', 'fault-cut wake', ['attached', 'already-attached', 'empty']);
   const cutDetail = cut.attach.detail;
   const cutKind = cut.attach.kind;
-  if (strategy === 'snapshot-chain') {
-    return await readChainCutCell(fixture, box, {
-      prefix,
-      marker: cutMarker,
-      content: cutContent,
-      victimEnd: fired.victimEnd,
-      kind: cutKind,
-      detail: cutDetail,
-      pre: chainPre,
-      preDeltaEtag: chainPreDeltaEtag,
-    });
-  }
-  if (strategy === 'overlay-cas') {
-    return await readOverlayCutCell(fixture, box, {
-      prefix,
-      marker: cutMarker,
-      content: cutContent,
-      victimEnd: fired.victimEnd,
-      kind: cutKind,
-      detail: cutDetail,
-      preBody: overlayPreBody,
-      preHead: overlayPreHead,
-    });
-  }
-  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    return await readCandidateCutCell(fixture, box, {
-      marker: cutMarker,
-      content: cutContent,
-      barrierMarker,
-      barrierContent,
-      victimEnd: fired.victimEnd,
-      kind: cutKind,
-      detail: cutDetail,
-      barrierGeneration,
-      preRootId,
-    });
-  }
-  throw new Error('unreachable: strategy dispatch fell through');
+  return await readChainCutCell(fixture, box, {
+    prefix,
+    marker: cutMarker,
+    content: cutContent,
+    victimEnd: fired.victimEnd,
+    kind: cutKind,
+    detail: cutDetail,
+    pre: chainPre,
+    preDeltaEtag: chainPreDeltaEtag,
+  });
 }
 /** One change, one tick, and the delta object's identity afterwards. Two of
  *  these either side of a change are what the `mutable-delta` cell compares. */
@@ -4923,29 +3490,6 @@ async function closeWakeOpsWindow(
 }
 
 /**
- * The mounts the restore took, retained line by line so the count carries its
- * method. Candidate arms match the retained post-wake text against the
- * `/candidate` reply's own mount expectations, so nothing is restated for
- * them; the legacy three select the points their strategies declare.
- */
-export function retainWakeMountLines(
-  strategy: Strategy,
-  mountText: string,
-  container?: CandidateContainerFact,
-): string[] {
-  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    // The reply names the mounts this arm should hold; matching the retained
-    // post-wake text against those values restates nothing.
-    const expectedPoints = [
-      container?.expectedWorkdirMount,
-      container?.expectedStoreMount,
-    ].filter((point): point is string => point !== undefined && point.length > 0);
-    return selectWakeMountLines(strategy, mountText, expectedPoints);
-  }
-  return selectWakeMountLines(strategy, mountText);
-}
-
-/**
  * The workload phases: every phase once, then the deciding phase repeated.
  * A phase that throws records its reason and leaves the row absent, which G9
  * then counts as one repetition fewer rather than as a silent success.
@@ -5022,18 +3566,17 @@ export async function runWorkloadPhases(
  * a wake, a healing checkpoint), so nothing after it may measure. An arm
  * that never verified its lifecycle, or whose wake never attached, has no
  * publication to cut: skipping the cell records that rather than judging a
- * blank disk. r2fs is excluded by FAULT_CUT_EXCLUDED, with its reason.
+ * blank disk.
  */
 async function runFaultCutPhase(
   fixture: Fixture,
   box: string,
-  strategy: Strategy,
   arm: Pick<ArmResult, 'verifyPassed' | 'wakeKind'>,
 ): Promise<{ cut: FaultCutObservation | null; notes: string[] }> {
-  if (faultCutExclusion(strategy) === undefined && arm.verifyPassed && arm.wakeKind === 'attached') {
+  if (arm.verifyPassed && arm.wakeKind === 'attached') {
     log('fault-cut cell');
     try {
-      const cut = await runFaultCutCell(fixture, box, strategy);
+      const cut = await runFaultCutCell(fixture, box);
       return { cut, notes: [`fault-cut: ${cut.detail}`] };
     } catch (error) {
       const reason = describeThrown({ cause: error }).slice(0, 240);
@@ -5052,13 +3595,10 @@ async function runFaultCutPhase(
       };
     }
   }
-  const exclusion = faultCutExclusion(strategy);
   return {
     cut: null,
     notes: [
-      exclusion === undefined
-        ? `fault-cut cell skipped: ${arm.verifyPassed ? `its wake answered "${arm.wakeKind || 'nothing'}"` : 'the arm never verified its lifecycle'}, so there is no publication to cut`
-        : `fault-cut cell not run: ${exclusion}`,
+      `fault-cut cell skipped: ${arm.verifyPassed ? `its wake answered "${arm.wakeKind || 'nothing'}"` : 'the arm never verified its lifecycle'}, so there is no publication to cut`,
     ],
   };
 }
@@ -5068,18 +3608,14 @@ async function runFaultCutPhase(
  *
  * Storage-only against an isolated per-call namespace, so it needs no
  * lifecycle gate: it never judges the arm's publication and never touches a
- * live prefix. An excluded arm reports a null observation with its reason,
- * and G4 refuses the run.
+ * live prefix. A cell the fixture could not run reports its reason, and G4
+ * refuses the run.
  */
 async function runSecurityCellsPhase(
   fixture: Fixture,
   box: string,
   strategy: Strategy,
 ): Promise<{ observation: SecurityCellsObservation | null; notes: string[] }> {
-  const exclusion = securityExclusion(strategy);
-  if (exclusion !== undefined) {
-    return { observation: null, notes: [`security cells not run: ${exclusion}`] };
-  }
   log('security cells');
   try {
     const nonce = securityNonce();
@@ -5095,9 +3631,9 @@ async function runSecurityCellsPhase(
 
 /**
  * Everything below measurement is CLEANUP, and a cleanup failure is not a
- * measurement failure. The 2026-08-29 02:42 run lost a fully measured
- * `bounded-layers` arm and never started `merkle-pack` because the release
- * below timed out and threw out of here, 70 minutes in: the numbers were
+ * measurement failure. The 2026-08-29 02:42 run lost a fully measured arm and
+ * never started the next one because the release below timed out and threw out
+ * of here, 70 minutes in: the numbers were
  * already collected and were discarded with the exception. So a step here
  * records its reason and the arm still returns what it measured. Nothing is
  * hidden by that — `teardownLiveArms` still sweeps the box and still reports
@@ -5157,17 +3693,16 @@ async function releaseArm(
  * mounts layers and materializes nothing, so its `cpuSteps` is what the
  * mount serves: the count the conformance machine takes from its own
  * snapshot. `printf x` per entry, so a newline in a name cannot count twice.
- * Recorded on the row for an attached chain wake; a count that did not
- * answer is a note, and any other arm's wake serves no tree to count.
+ * Recorded on the row for an attached wake; a count that did not answer is a
+ * note.
  */
 async function recordServedEntries(
   fixture: Fixture,
   box: string,
-  strategy: Strategy,
   result: ArmResult,
   notes: string[],
 ): Promise<void> {
-  if (strategy !== 'snapshot-chain' || result.wakeKind !== 'attached') return;
+  if (result.wakeKind !== 'attached') return;
   const served = await retryTransient('served entry count', async () =>
     await execInBox(fixture, box, 'find /workspace -mindepth 1 -printf x | wc -c'));
   const count = Number((served.stdout ?? '').trim());
@@ -5335,7 +3870,7 @@ async function measureArm(
     // Logged as well as noted. A create failure ends this arm and the run
     // continues to the next one, so an operator watching the log otherwise sees
     // the arm's banner followed by the NEXT arm's and no reason at all —
-    // overlay-cas failed here twice in a row and said why only inside the
+    // an arm failed here twice in a row and said why only inside the
     // artifact.
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
@@ -5347,11 +3882,6 @@ async function measureArm(
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
   settle('the cold attach');
-  // Candidate probes must prove the mutation journal answers before harness
-  // installation, marker creation, ops reset or any ladder write spends work.
-  // A failed observation throws ProbeAbort, which `runArm` reports as a
-  // precondition rather than an arm.
-  result.probe = await runProbePrecondition(fixture, box, strategy, options.verifyOnly);
   log('install harness');
   await installHarness(fixture, box);
 
@@ -5404,29 +3934,13 @@ async function measureArm(
           `${cp.outcome?.kind ?? 'unknown'} moved=${cp.outcome?.movedBytes ?? 'n/a'} held=${cp.outcome?.bytes ?? 0}B ${cp.error ?? cp.outcome?.reason ?? ''}`.trim(),
         );
       }
-      requireProbeCheckpoint(result.probe, cp, `ladder ${kib}KiB ${kind}`);
     }
     ladderBytes = await measureComplexityRung(fixture, box, kib, rung, ladderBytes, complexityScope, result, notes, startup);
   }
-  // THE PUBLISH-TIME PROBE READS. The ladder just published, so the control
-  // row and the incident ledger name this publication's own window. Both are
-  // archived whole; the probe compares the dump against the wake-time one and
-  // quotes each incident adjacent to it.
-  result.publishControl = await readControlDump(fixture, box, strategy, notes);
+  // THE PUBLISH-TIME PROBE READ. The ladder just published, so the incident
+  // ledger names this publication's own window. It is archived whole; the
+  // probe quotes each incident adjacent to it.
   result.publishIncidents = await readIncidentReasons(fixture, box, notes);
-
-  // THE ONE CELL THAT CANNOT WAIT. `open-write-loss` and `POSIX-gap` are both
-  // about a handle held open across a container's death, so the holder has to
-  // exist before the stop that kills it. Everything else this arm witnesses
-  // runs after its operation tally is read — see `runControlWitnessCells`.
-  let openWrite: OpenWriteHolder | null = null;
-  if (strategy === 'r2fs') {
-    try {
-      openWrite = await armOpenWriteHolder(fixture, box);
-    } catch (error) {
-      notes.push(`the r2fs open-write holder was not armed: ${describeThrown({ cause: error }).slice(0, 240)}`);
-    }
-  }
 
   // The normal recycle follows the normal ladder. Each request is independently
   // retryable if a replacement interrupts it; nothing reruns the whole proof.
@@ -5472,11 +3986,9 @@ async function measureArm(
   // containing that text, and took whichever line came first.
   const workdirMount = mountAt(mountText, '/workspace');
   const mountLine = workdirMount?.line ?? '';
-  // The mounts the restore took, retained line by line. Candidate arms match
-  // theirs against the `/candidate` reply's own mount expectations inside the
-  // retention, so nothing is restated for them here.
-  result.wakeMountLines = retainWakeMountLines(strategy, mountText);
-  await recordServedEntries(fixture, box, strategy, result, notes);
+  // The mounts the restore took, retained line by line.
+  result.wakeMountLines = selectWakeMountLines(mountText);
+  await recordServedEntries(fixture, box, result, notes);
 
   const survived = await retryTransient('marker read after wake', async () =>
     await execInBox(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
@@ -5518,10 +4030,9 @@ async function measureArm(
     );
   };
 
-  // ONE BRANCH PER ARM, dispatched on the STRATEGY the driver asked for and
-  // never on a mode the box happened to report. Every arm's surface is proven
-  // against its own contract; there is no branch a strategy can fall into by
-  // resembling another one.
+  // THE ARM'S OWN SURFACE, proven against its own contract: the served
+  // workspace is an overlay of a writable upper over the layers the record
+  // names, or a plain directory when the box could only extract.
   const writableLayer = async (path: string): Promise<void> => {
     const exists = await retryTransient('writable-layer read', async () =>
       await execInBox(fixture, box, `test -d ${path} && echo yes || echo no`),
@@ -5530,71 +4041,24 @@ async function measureArm(
   };
   /**
    * A read-only lower layer: the directory is there, and the mount that serves
-   * it is up. `mountedAt` is the path whose `/proc/mounts` line carries it —
-   * the layer itself for a chain layer mounted on its own, or the store mount
-   * for a lower that lives INSIDE one (overlay-cas, since the fold and the
-   * lower became one object).
+   * it is up on that same path.
    */
-  const lowerLayer = async (name: string, path: string, mountedAt = path): Promise<void> => {
+  const lowerLayer = async (name: string, path: string): Promise<void> => {
     const lower = await retryTransient(`${name} read`, async () =>
       await execInBox(
         fixture,
         box,
-        `test -d ${path} && grep -qs " ${mountedAt} " /proc/mounts && echo yes || echo no`,
+        `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`,
       ),
     );
     verify(
       name,
       (lower.stdout ?? '').trim() === 'yes',
-      `${path} under ${mountedAt} -> ${(lower.stdout ?? '').trim()}`,
+      `${path} mounted -> ${(lower.stdout ?? '').trim()}`,
     );
   };
 
-  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    const facts = await retryTransient('candidate lifecycle facts', async () =>
-      await call(fixture, 'GET', `/candidate?box=${box}`, CandidateFactsReplySchema),
-    );
-    for (const check of candidateLifecycleChecks(strategy, facts)) {
-      verify(check.name, check.pass, check.detail);
-    }
-    // The reply names the mounts this arm should hold; matching the retained
-    // post-wake text against those values restates nothing. Its control row
-    // is the wake-time dump, archived from this stock call, never re-read.
-    result.wakeMountLines = retainWakeMountLines(strategy, mountText, facts.container);
-    result.wakeControl = facts.control;
-  } else if (strategy === 'r2fs') {
-    verify(
-      '/workspace is really a s3fs mount',
-      workdirMount?.fstype.includes('s3fs') === true,
-      mountLine.length > 0 ? mountLine : '(no mount line)',
-    );
-    await writableLayer(R2FS_CACHE_DIR);
-    await head('the store holds the committed marker', afterWake.storePrefix === undefined
-      ? undefined
-      : `${afterWake.storePrefix}${markerFile}`);
-  } else if (strategy === 'overlay-cas') {
-    verify(
-      '/workspace is really a overlay mount',
-      workdirMount?.fstype.includes('overlay') === true,
-      mountLine.length > 0 ? mountLine : '(no mount line)',
-    );
-    await writableLayer(CAS_UPPER_DIR);
-    // THE LOWER IS A PATH INSIDE THE ONE STORE MOUNT, so the question is
-    // whether the tree directory is there and whether the STORE is mounted —
-    // never whether the lower is a mount of its own, which this layout does
-    // not create and never will.
-    await lowerLayer(
-      'the tree lower is present under its mounted store',
-      CAS_TREE_LOWER_DIR,
-      CAS_STORE_MOUNT_DIR,
-    );
-    await head('the folded tree holds the committed marker', afterWake.storePrefix === undefined
-      ? undefined
-      : `${afterWake.storePrefix}tree/${markerFile}`);
-    await head('the fold advanced the durable cursor', afterWake.storePrefix === undefined
-      ? undefined
-      : `${afterWake.storePrefix}cursor.json`);
-  } else if (mode === 'chain') {
+  if (mode === 'chain') {
     verify(
       '/workspace is really a overlay mount',
       workdirMount?.fstype.includes('overlay') === true,
@@ -5619,8 +4083,8 @@ async function measureArm(
     }
     for (const expectation of expectations) await archive(expectation);
   } else {
-    // The chain in EXTRACTION mode, which is the only arm this branch can now
-    // hold: r2fs, overlay-cas and both candidates are dispatched above.
+    // The chain in EXTRACTION mode, which is the only other shape this box
+    // can serve.
     verify(
       '/workspace is a plain directory, as extraction mode requires',
       mountLine.length === 0,
@@ -5665,7 +4129,6 @@ async function measureArm(
   // would file incident rows the dump comparison cannot place, so the walk
   // returns here with what the window settled.
   if (options.verifyOnly) {
-    result.probe = completeProbe(result.probe);
     notes.push(
       'probe scope: verify-only keeps the ladder, stop, wake and teardown; '
       + 'the decisive workloads, warm attach, tally and cells did not run',
@@ -5733,13 +4196,11 @@ async function measureArm(
   // past the measured window on purpose: an arm whose count included its witness
   // cells would report operations the comparison is not about.
   //
-  // DERIVED from the preregistration, never a second copy of its membership.
-  // The hardcoded `snapshot-chain || r2fs || overlay-cas` this replaces was the
-  // same three-arm taxonomy that kept those arms out of the ranking, and a
-  // fourth arm given a witness would have silently never run its cells.
+  // DERIVED from the preregistration, never a second copy of its membership: a
+  // strategy whose witness list is empty runs no cells.
   if (PREREGISTERED_WITNESSES[strategy].length > 0) {
     log('witness cells');
-    const witnessed = await runControlWitnessCells(fixture, box, strategy, { openWrite });
+    const witnessed = await runControlWitnessCells(fixture, box);
     result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
     notes.push(...witnessed.notes);
     const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
@@ -5754,7 +4215,7 @@ async function measureArm(
 
   // THE FAULT-CUT PHASE, after the witness cells and before the teardown —
   // see `runFaultCutPhase` for why nothing after it may measure.
-  const faultCut = await runFaultCutPhase(fixture, box, strategy, result);
+  const faultCut = await runFaultCutPhase(fixture, box, result);
   result.cut = faultCut.cut;
   notes.push(...faultCut.notes);
   settle('the fault-cut cell');
@@ -5966,23 +4427,6 @@ export async function runArm(
     return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
   } catch (error) {
     const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
-    if (error instanceof ProbeAbort) {
-      const label = error.status === 'precondition-failed' ? 'PROBE PRECONDITION FAILED' : 'PROBE PARTIAL';
-      const reason = `${label}: ${error.message}`;
-      measured.probe = { status: error.status, detail: error.message };
-      measured.notes.push(reason);
-      log(reason);
-      // This is a probe execution state, not an arm verdict. Teardown and
-      // release still run normally; the row returns without `refuseFailedArm`
-      // adding the scored-arm wording this path exists to avoid.
-      await releaseArm(fixture, measured.box, measured, measured.notes);
-      try {
-        writeArmArtifact(REPO_ROOT, options.runId, strategy, measured);
-      } catch (writeError) {
-        log(`the durable arm artifact could not be written after ${label}: ${describeThrown({ cause: writeError })}`);
-      }
-      return measured;
-    }
     const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
     log(reason);
     try {
@@ -6162,67 +4606,6 @@ export interface RunMeta {
   INCOMPLETE?: string;
 }
 
-/** Each frozen challenger must beat the incumbent on the same admitted run. */
-const DECISION_PAIRS: readonly {
-  readonly baseline: Strategy;
-  readonly candidate: Strategy;
-  readonly purpose: string;
-}[] = CHALLENGERS.map((challenger) => ({
-  baseline: INCUMBENT,
-  candidate: challenger,
-  purpose: `whether \`${challenger}\` displaces the deployed \`${INCUMBENT}\``,
-}));
-
-export interface ComparedPair {
-  readonly baseline: Strategy;
-  readonly candidate: Strategy;
-  readonly purpose: string;
-}
-
-export type DecisionPairs =
-  | { readonly kind: 'pairs'; readonly pairs: readonly ComparedPair[] }
-  | { readonly kind: 'absent'; readonly reason: string };
-
-/**
- * Every incumbent-versus-challenger ratio this run can actually take, derived
- * from the arms it MEASURED rather than named beside the table.
- *
- * ALL of them, not the first that matches. The single-pair predecessor returned
- * the most specific pair it could find and the report printed exactly one
- * ratio, so a five-arm run — the shape this driver deploys by default — decided
- * the default on one comparison and silently discarded the other three.
- *
- * MEASURED DEFECT THIS REPAIRS. The caller before that one read
- *
- *     const candidate = STRATEGIES.find((id) => id === 'overlay-cas');
- *     if (candidate !== undefined) { decide(ticks, 'snapshot-chain', candidate); }
- *
- * over a frozen five-element constant, so the guard was true on every run and
- * the else-branch beside it was unreachable. A two-arm run therefore printed a
- * decision rule whose ratio was taken over `snapshot-chain` and `overlay-cas`:
- * two arms it never deployed, never measured, and could not have measured,
- * because their durable-object bindings are absent from the generated config.
- */
-export function comparablePairs(arms: readonly { readonly strategy: string }[]): DecisionPairs {
-  const present = new Set(arms.map((arm) => arm.strategy));
-  const pairs = DECISION_PAIRS.filter(
-    (pair) => present.has(pair.baseline) && present.has(pair.candidate),
-  );
-  if (pairs.length > 0) return { kind: 'pairs', pairs };
-  const measured = arms.length === 0
-    ? 'no arms'
-    : arms.map((arm) => `\`${arm.strategy}\``).join(', ');
-  return {
-    kind: 'absent',
-    reason: present.has(INCUMBENT)
-      ? `This run measured ${measured}, so it carries the incumbent \`${INCUMBENT}\` and no challenger `
-        + 'to compare against it.'
-      : `This run measured ${measured}, and the incumbent \`${INCUMBENT}\` is not among them. Every ratio `
-        + 'this instrument takes is a challenger against the incumbent, so a run without it can rank its '
-        + 'arms against each other but cannot say whether any of them displaces what production runs.',
-  };
-}
-
 export function renderFrozenControls(controls: readonly FrozenControl[]): string {
   const out = [
     '#### Frozen controls (not ranked)',
@@ -6247,23 +4630,9 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
   return out.join('\n');
 }
 
-/**
- * One report row, with verify-only execution states kept separate from arm
- * verdicts. In particular a missing precondition says PROBE NOT RUN, never
- * FAILED: there is no measurement in that row to score or diagnose as an arm.
- */
+/** One report row. A missing precondition says FAILED with the failing checks
+ *  named, so a reader sees what the arm could not prove. */
 export function renderArmLifecycleRow(arm: ArmResult): string {
-  const probe = arm.probe;
-  if (probe !== undefined) {
-    const detail = probe.detail.replaceAll('|', '\\|');
-    if (probe.status === 'precondition-failed') {
-      return `| \`${arm.strategy}\` | **PROBE NOT RUN — PRECONDITION FAILED** | ${detail} |`;
-    }
-    if (probe.status === 'partial') {
-      return `| \`${arm.strategy}\` | **PROBE PARTIAL — NOT SCORED** | ${detail} |`;
-    }
-    return `| \`${arm.strategy}\` | PROBE COMPLETE — NOT SCORED | ${detail} |`;
-  }
   const failing = arm.verifyChecks.filter((check) => !check.pass)
     .map((check) => `\`${check.name}\``).join(', ');
   return `| \`${arm.strategy}\` | ${arm.verifyPassed ? 'PASSED' : '**FAILED**'} | ${failing === '' ? '—' : failing} |`;
@@ -6272,7 +4641,7 @@ export function renderArmLifecycleRow(arm: ArmResult): string {
 /**
  * The tree-size complexity table: one fixed 64 KiB backup plus one restore
  * per ladder rung. A rung the arm never reached reads NOT MEASURED, with the
- * reason the probe scope or the absent row gives. Dated from the run's own
+ * reason the absent row gives. Dated from the run's own
  * meta, never from the day the cell was written.
  */
 function renderComplexitySection(arms: readonly ArmResult[], date: string): string {
@@ -6293,9 +4662,7 @@ function renderComplexitySection(arms: readonly ArmResult[], date: string): stri
       const backup = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'backup-64k');
       const restore = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'restore');
       if (backup === undefined && restore === undefined) {
-        const reason = arm.probe !== undefined
-          ? 'the verify-only probe keeps the ladder, stop, wake and teardown; the tree-size rows run in the decisive scope'
-          : `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
+        const reason = `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
         out.push(`| \`${arm.strategy}\` | ${num(treeBytes, 0)} | NOT MEASURED: ${reason} | — | — | — | NOT MEASURED |`);
         continue;
       }
@@ -6318,11 +4685,11 @@ export function render(
   renderControlContext = false,
 ): string {
   const out: string[] = [];
-  const compared = arms.map((arm) => `\`${arm.strategy}\``).join(' vs ');
-  out.push(`### Devbox storage strategies: ${compared}`);
+  const compared = arms.map((arm) => `\`${arm.strategy}\``).join(', ');
+  out.push(`### Devbox storage strategy: ${compared}`);
   out.push('');
   for (const [key, value] of Object.entries(meta)) out.push(`- ${key}: \`${value}\``);
-  out.push('', SCOPE_FREEZE, '');
+  out.push('');
 
   out.push('#### Lifecycle proof, first, per arm');
   if (renderControlContext || frozenControls.length > 0) {
@@ -6374,13 +4741,12 @@ export function render(
       const before = arm.generationBeforeLadder;
       const after = arm.generationAfterLadder;
       // OBSERVED, not weighed. A rebase writes a fresh base uuid and drops the
-      // delta, so the pair answers it outright. `n/a` is a non-chain arm, which
-      // is the interesting half: overlay-cas never rebases, so a chain that does
-      // is a structural difference reproducing on every run with this ladder.
+      // delta, so the pair answers it outright. A run whose ladder wrote no
+      // base has no generation to compare, which is its own answer.
       const rebased = before === null || after === null
         ? 'not read'
         : before.baseId === null && after.baseId === null
-          ? 'n/a (not a chain)'
+          ? 'no base generation'
           : before.baseId !== after.baseId
             ? `YES (${String(before.baseId).slice(0, 8)} -> ${String(after.baseId).slice(0, 8)})`
             : 'no';
@@ -6421,68 +4787,22 @@ export function render(
     }
     out.push('');
 
-    // The rule, applied to the rows above and to nothing else. Stated with its
-    // thresholds so a reader can check the arithmetic rather than trust it.
-    //
-    // ONLY LIFECYCLE-PROVEN ARMS REACH THE RULE. `decide` only sees ticks, so
-    // this gate prevents a blank-disk arm from supplying a plausible ratio.
-    const eligibleTicks = rankableTicks(arms, ticks);
+    // ONLY LIFECYCLE-PROVEN ARMS ARE RANKED: an arm that failed the proof
+    // measured the container's own blank disk, so its ticks are recorded for
+    // diagnosis and named here rather than ranked.
     const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
     if (refused.length > 0) {
       out.push(
         `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed the lifecycle proof, so `
-        + 'their ticks measured a container\'s own blank disk and are excluded from the ratio '
+        + 'their ticks measured a container\'s own blank disk and are excluded from the ranking '
         + 'below. Their rows remain in the table above for diagnosis.',
-      );
-      out.push('');
-    }
-    out.push('#### Decision rule');
-    out.push('');
-    const comparisons = comparablePairs(arms);
-    if (comparisons.kind === 'absent') {
-      out.push(
-        `**NO RATIO IS DERIVABLE FROM THIS RUN.** ${comparisons.reason} A ratio needs the incumbent and at `
-        + 'least one challenger, both MEASURED here; printing one over arms the run never requested '
-        + 'would report a rule about a comparison nobody performed.',
-      );
-      out.push('');
-    } else {
-      out.push(
-        `ratio(w) = Σ ticks(\`${INCUMBENT}\`, w) / Σ ticks(challenger, w), taken once per challenger this `
-        + 'run measured. ratio(git) ≥ 10 AND ratio(npm) ≥ 3 ⇒ that challenger\'s O(p) shape wins outright. '
-        + `Both < 3 ⇒ O(c) tick time is not the bottleneck and \`${INCUMBENT}\` holds against it. `
-        + 'Between them the rule is deliberately undecided, and says so.',
-      );
-      out.push('');
-      out.push('| challenger | verdict | measured |');
-      out.push('| --- | --- | --- |');
-      for (const pair of comparisons.pairs) {
-        const verdict: DecisionVerdict = decide(eligibleTicks, pair.baseline, pair.candidate);
-        const label = verdict.kind === 'inconclusive'
-          ? 'INCONCLUSIVE'
-          : verdict.kind === 'o-p-wins'
-            ? `**DISPLACES \`${INCUMBENT}\`**`
-            : `\`${INCUMBENT}\` HOLDS`;
-        const detail = verdict.kind === 'inconclusive' ? verdict.reason : verdict.detail;
-        out.push(`| \`${pair.candidate}\` | ${label} | ${detail} |`);
-      }
-      out.push('');
-      out.push(
-        'Every challenger is judged against the same incumbent by the same rule, so the rows are '
-        + 'comparable with each other. A challenger absent from this table is one whose arm this run '
-        + 'did not measure.',
-      );
-      out.push('');
-      out.push(
-        'The 10x and 3x bars are CHOSEN thresholds from the research that set them, not measured '
-        + 'constants. This experiment measures the ratio; it does not confirm the bar.',
       );
       out.push('');
     }
     if (frozenControls.length > 0) {
       out.push(
-        'Only the current arms\' rows may be compared. The frozen controls above remain visible '
-        + 'as historical context and never enter a ratio, rank, or recommendation.',
+        'Only the current arm\'s rows may be ranked. The frozen controls above remain visible '
+        + 'as historical context and never enter a rank or a recommendation.',
       );
       out.push('');
     }
@@ -6595,7 +4915,7 @@ export function render(
 /** Rank the frozen scope. A challenger must still clear the 10x/3x displacement bar. */
 export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdict): string {
   requireAdmitted(admission);
-  const proven = arms.filter((arm) => arm.verifyPassed && DECISIVE_ARMS.includes(arm.strategy));
+  const proven = arms.filter((arm) => arm.verifyPassed);
   if (proven.length === 0) {
     return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm completed the lifecycle proof, which means every arm '
       + 'measured the container\'s own blank disk rather than its strategy. The lifecycle rows above '
@@ -6624,13 +4944,13 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
 
   const out: string[] = [
     `RANKED ON THE DECISIVE WORKLOADS (${RULE_WORKLOADS.join(' + ')}), over every arm that completed the `
-    + 'lifecycle proof within the frozen scope.',
+    + 'lifecycle proof.',
     '',
     '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | observed defects |',
     '| --- | --- | --- | --- | --- |',
   ];
   rankable.forEach((row, index) => {
-    const name = `\`${row.arm.strategy}\`${row.arm.strategy === INCUMBENT ? ' (incumbent)' : ''}`;
+    const name = `\`${row.arm.strategy}\``;
     out.push(
       `| ${index + 1} | ${name} | ${Math.round(row.decisiveMs)} `
       + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
@@ -6652,31 +4972,10 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     );
     return out.join('\n');
   }
-  const incumbent = rankable.find((row) => row.arm.strategy === INCUMBENT);
-  if (incumbent === undefined) {
-    out.push(
-      `\`${best.arm.strategy}\` RAN FASTEST HERE, but the incumbent \`${INCUMBENT}\` is not in the ranking, so `
-      + 'nothing in this run says whether it displaces the deployed default. Re-run with the incumbent among '
-      + `the arms before treating this order as a change of default.${wakeNote(best.arm)}`
-    );
-    return out.join('\n');
-  }
-  if (best.arm.strategy === INCUMBENT) {
-    out.push(
-      `\`${INCUMBENT}\` STAYS DEFAULT. It is the incumbent and it also ranks first on the decisive workloads, `
-      + 'so no challenger displaces it on this run.',
-    );
-    return out.join('\n');
-  }
-
-  const verdict = decide(proven.flatMap((arm) => arm.decisiveTicks), INCUMBENT, best.arm.strategy);
-  const ratio = incumbent.decisiveMs / best.decisiveMs;
-  out.push(verdict.kind === 'o-p-wins'
-    ? `DEFAULT TO \`${best.arm.strategy}\`. Its decisive tick time is ${ratio.toFixed(1)}x below the `
-      + `incumbent \`${INCUMBENT}\` and it clears the preregistered bar — ${verdict.detail}.${wakeNote(best.arm)}`
-    : `\`${INCUMBENT}\` STAYS DEFAULT. \`${best.arm.strategy}\` has ${ratio.toFixed(1)}x lower decisive tick `
-      + 'time, but the default changes only when a challenger clears the preregistered bar, and this one does '
-      + `not — ${verdict.kind === 'inconclusive' ? verdict.reason : verdict.detail}.`);
+  out.push(
+    `\`${best.arm.strategy}\` IS THE SHIPPED DEFAULT, and this run measured it end to end: the decisive `
+    + `tick time above is the number a later change to it is judged against.${wakeNote(best.arm)}`,
+  );
   if (best.witnesses.length > 0) {
     out.push('');
     out.push(
@@ -6688,7 +4987,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
   return out.join('\n');
 }
 
-/** G2 keeps every declared witness, including historical diagnostic arms. */
+/** G2 keeps every declared witness. */
 export function devboxArmEvidence(
   arm: Pick<
     ArmResult,
@@ -6698,7 +4997,9 @@ export function devboxArmEvidence(
   return {
     arm: arm.strategy,
     kind: 'candidate',
-    rankEligible: DECISIVE_ARMS.includes(arm.strategy),
+    // The run measures the shipped strategy, and a shipped strategy is always
+    // eligible to be recommended: there is nothing else it could rank behind.
+    rankEligible: true,
     expectedRedChecks: [...PREREGISTERED_WITNESSES[arm.strategy]],
     // OBSERVED, not asserted: every name here comes from a cell that RAN
     // against the deployed arm and saw the defect. A witness the cells could
@@ -6750,22 +5051,13 @@ const DECISIVE_REPETITIONS = MIN_DECIDING_REPETITIONS;
 export const EXPECTED_LADDER_ROWS = CHANGE_SIZES_KIB.length * 2;
 
 /**
- * The restore class each arm CLAIMS, preregistered before the run.
+ * The restore class the arm CLAIMS, preregistered before the run.
  *
- * A claim is not a result. `overlay-cas` claims `unbounded` because that is its
- * preregistered red witness (`unbounded-pending-replay`), `bounded-layers`
- * claims `bounded-k` because `MAX_LAYERS` bounds one resolution to eight
- * consulted layers, `merkle-pack` claims `log-p` because a path resolves down
- * a digest-linked node tree, `snapshot-chain` claims `bounded-k` because a
- * restore replays base plus the deltas its rebase policy bounds, and `r2fs`
- * claims `strict-o1` because its restore is a mount with no replay at all.
+ * A claim is not a result. `snapshot-chain` claims `bounded-k` because a
+ * restore replays base plus the deltas its rebase policy bounds.
  */
 const RESTORE_CLAIMS = {
   'snapshot-chain': 'bounded-k',
-  r2fs: 'strict-o1',
-  'overlay-cas': 'unbounded',
-  'bounded-layers': 'bounded-k',
-  'merkle-pack': 'log-p',
 } as const satisfies Record<Strategy, RestoreClaim>;
 
 /**
@@ -6782,18 +5074,18 @@ const RESTORE_CLAIMS = {
  * - remote operations: the flushed `/ops` window across the stop-to-wake
  *   restore. Every bucket touch, Durable-Object-side and container-side, lands
  *   in the `BenchOpCounter` the fixture counts, while the fixture's own
- *   verification reads (`/head`, `/candidate`) use the raw binding and cannot
- *   pollute the window.
- * - replay units: the overlay-cas attach detail's `folded <cursor> <n>P`
- *   receipt. No other arm publishes a replay count.
+ *   verification reads (`/head`) use the raw binding and cannot pollute the
+ *   window.
+ * - replay units: the delta layer mount lines the wake read.
  * - mounts: the post-wake `/proc/mounts` lines at the arm's own mount points,
  *   retained verbatim on the arm row.
- * - metadata bytes, payload bytes, cpu steps: NO live counter. The tally
- *   counts operations, never bytes, and nothing on any wake path meters CPU —
- *   the sidecar's `bytesFetched` counter exists in code but no bench process
- *   launches it, so its rows never reach the boundary. Every live row stays
- *   null on those three fields, and G5 keeps refusing on them, per arm, with
- *   the sentence saying so rather than the old blanket one.
+ * - metadata bytes: zero, and counted rather than assumed — the chain keeps
+ *   its control record in Durable Object storage, so no control body is ever
+ *   served out of the store.
+ * - payload bytes: the fixture's byte tally over the same window.
+ * - cpu steps: the served tree's entry count, read after the wake window
+ *   closed, because a chain wake materializes nothing and serves the whole
+ *   tree through its mounts.
  */
 
 /**
@@ -6838,13 +5130,13 @@ function diffCounts(start: Record<string, number>, end: Record<string, number>):
 }
 
 export const RESTORE_FIELD_SOURCES = {
-  serialRemoteOps: 'the runner’s longest chain of awaited store reads, carried on the wake detail as the restore receipt; the chain restores sequentially, so its window total',
+  serialRemoteOps: 'the flushed /ops window across the stop-to-wake restore; the chain probes and mounts one read after another, so its whole window is serial',
   totalRemoteOps: 'the flushed /ops window across the stop-to-wake restore, summed over operation names',
-  metadataBytes: 'the bytes `get` served under a candidate-control key inside the wake window, from the fixture’s byte tally',
+  metadataBytes: 'the bytes `get` served under a control key inside the wake window, from the fixture’s byte tally; the chain keeps its control record in Durable Object storage, so the store serves none',
   payloadBytes: 'the bytes `get` served under every other key inside the wake window, from the fixture’s byte tally',
-  cpuSteps: 'the entries the restore materialized: the receipt for a candidate arm, the served tree’s entry count after a chain wake',
+  cpuSteps: 'the entries the restore materialized: the served tree’s entry count after the wake',
   mounts: 'the post-wake /proc/mounts lines at the arm’s own mount points',
-  replayUnits: 'the receipt’s layers consulted (bounded-layers) or node fetches (merkle-pack), the chain’s delta layer mount lines, the overlay-cas `folded <cursor> <n>P` receipt',
+  replayUnits: 'the delta layer mount lines the wake read',
 } satisfies Record<keyof RestoreWork, string>;
 
 /** Every field of a wake restore, each null while its source did not answer. */
@@ -6863,35 +5155,10 @@ export interface CountedRestore {
   readonly missing: readonly string[];
   /** The observed evidence in one line, for the run notes. */
   readonly detail: string;
-  /** The runner's receipt when the wake detail carried one. */
-  readonly receipt: RestoreReceipt | null;
-}
-
-/** What a candidate wake detail carried after its root: the receipt, or the
- *  reason a present receipt is unreadable. A detail with no receipt answers
- *  null for both. */
-export interface ReceiptRead {
-  readonly receipt: RestoreReceipt | null;
-  readonly refusal: string | null;
-}
-
-export function restoreReceiptOf(detail: string): ReceiptRead {
-  const encoded = CANDIDATE_ROOT_PATTERN.exec(detail)?.[3];
-  if (encoded === undefined) return { receipt: null, refusal: null };
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(encoded);
-  } catch (error) {
-    return { receipt: null, refusal: `the receipt is not JSON: ${describeThrown({ cause: error })}` };
-  }
-  const parsed = v.safeParse(RestoreReceiptSchema, decoded);
-  if (!parsed.success) return { receipt: null, refusal: `the receipt misses its contract: ${issueText(parsed.issues)}` };
-  return { receipt: parsed.output, refusal: null };
 }
 
 /** The arguments `countedRestoreWork` counts from: what the run retained of one wake. */
 interface WakeRestoreArgs {
-  readonly strategy: Strategy;
   readonly wakeKind: string;
   readonly wakeDetail: string;
   readonly wakeOps: OpTally | null;
@@ -6901,59 +5168,29 @@ interface WakeRestoreArgs {
 
 /**
  * REPLAY UNITS: what the wake re-applied over its base. A chain re-mounts its
- * delta layers, so their mount lines are the count; the candidate receipt
- * carries the layers or nodes its runner consulted; overlay-cas publishes its
- * folded count. Null with the missing source named when the field went
- * uncounted.
+ * delta layers, so their mount lines are the count. Null with the missing
+ * source named when the field went uncounted.
  */
 function replayUnitsOf(
   args: WakeRestoreArgs,
-  receipt: RestoreReceipt | null,
   mounts: number | null,
   missing: string[],
 ): number | null {
-  const { strategy, wakeKind, wakeDetail, wakeMountLines } = args;
-  if (strategy === 'overlay-cas') {
-    const replayed = replayedEntries(wakeDetail);
-    if (replayed !== null) return replayed;
-    missing.push(
-      `replayUnits: the wake detail "${wakeDetail || 'empty'}" carries no folded count, so the replay went uncounted rather than zero`,
-    );
-    return null;
+  if (mounts !== null) {
+    return args.wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
   }
-  if (strategy === 'snapshot-chain') {
-    if (mounts !== null) {
-      return wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
-    }
-    missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
-    return null;
-  }
-  if (strategy === 'r2fs') {
-    missing.push('replayUnits: r2fs mounts with no replay and publishes no count');
-    return null;
-  }
-  if (receipt !== null) return receipt.work.replayUnits;
-  return wakeKind === 'already-attached' ? 0 : null;
+  missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
+  return null;
 }
 
 /**
- * CPU STEPS are the entries the restore materialized. The candidate runner
- * counts them on its receipt. A chain wake materializes nothing and serves
- * the whole tree through its mounts, so its count is the served tree's
- * entries, read after the wake window closed. Null with the missing source
- * named when the field went uncounted.
+ * CPU STEPS are the entries the restore materialized. A chain wake
+ * materializes nothing and serves the whole tree through its mounts, so its
+ * count is the served tree's entries, read after the wake window closed. Null
+ * with the missing source named when the field went uncounted.
  */
-function cpuStepsOf(args: WakeRestoreArgs, receipt: RestoreReceipt | null, missing: string[]): number | null {
-  const { strategy, wakeKind } = args;
-  if (strategy === 'bounded-layers' || strategy === 'merkle-pack') {
-    if (receipt !== null) return receipt.work.cpuSteps;
-    return wakeKind === 'already-attached' ? 0 : null;
-  }
-  if (strategy !== 'snapshot-chain') {
-    missing.push('cpuSteps: r2fs and overlay-cas meter no materialized entries on their wake paths');
-    return null;
-  }
-  if (wakeKind === 'already-attached') return 0;
+function cpuStepsOf(args: WakeRestoreArgs, missing: string[]): number | null {
+  if (args.wakeKind === 'already-attached') return 0;
   if (args.wakeServedEntries !== undefined && args.wakeServedEntries !== null) return args.wakeServedEntries;
   missing.push('cpuSteps: the served entry count after the chain wake did not answer');
   return null;
@@ -6962,14 +5199,14 @@ function cpuStepsOf(args: WakeRestoreArgs, receipt: RestoreReceipt | null, missi
 /**
  * Count one arm's wake restore from what the run retained: the wake's detail
  * string, the flushed operation and byte window across it, its mount lines
- * and, for a chain, the served tree's entry count.
+ * and the served tree's entry count.
  *
  * Pure, so the decision suite drives it green and red without a deployment:
  * a fabricated full window counts exactly, an unparseable detail refuses to
  * parse, and a backwards window refuses to price.
  */
 export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
-  const { strategy, wakeKind, wakeDetail, wakeOps, wakeMountLines } = args;
+  const { wakeKind, wakeDetail, wakeOps, wakeMountLines } = args;
   if (wakeKind !== 'attached' && wakeKind !== 'already-attached') {
     return {
       counts: UNCOUNTED,
@@ -6978,7 +5215,6 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
         `no counted restore: the wake answered "${wakeKind || 'nothing'}", so the restore never ran and none of the seven fields was observed`,
       ],
       detail: `wake kind "${wakeKind || 'none'}"`,
-      receipt: null,
     };
   }
   const missing: string[] = [];
@@ -6995,32 +5231,11 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       missing.push('totalRemoteOps: the wake-window tally holds a non-integer count, so its sum is not a bill');
     }
   }
-  const candidate = strategy === 'bounded-layers' || strategy === 'merkle-pack';
-  const read = candidate ? restoreReceiptOf(wakeDetail) : { receipt: null, refusal: null };
-  const receipt = read.receipt;
-  if (candidate && receipt === null && wakeKind === 'attached') {
-    missing.push(
-      `receipt: the wake detail "${wakeDetail.slice(0, 120) || 'empty'}" carries no readable restore receipt`
-      + `${read.refusal === null ? '' : ` (${read.refusal})`}, so the runner's chain, entries and replay went uncounted`,
-    );
-  }
-  // SERIAL is the critical path. The chain and r2fs probe and mount one read
-  // after another, so their whole window is serial. The candidate runner
-  // counts the longest chain of awaited reads through its pools and carries
-  // it on the receipt. An overlay-cas wake that replayed pending entries ran
-  // its batch and blob fetches through the store pool; only its unchanged
-  // wake (cursor GET plus journal LIST) is serial by product invariant.
+  // SERIAL is the critical path. The chain probes and mounts one read after
+  // another, so its whole window is serial.
   let serialRemoteOps: number | null = null;
-  const pending = strategy === 'overlay-cas' ? replayedEntries(wakeDetail) : null;
-  if (candidate) {
-    if (receipt !== null) serialRemoteOps = receipt.work.serialRemoteOps;
-    else if (wakeKind === 'already-attached') serialRemoteOps = 0;
-  } else if (totalRemoteOps === null) {
+  if (totalRemoteOps === null) {
     missing.push('serialRemoteOps: unobservable without the operation bill it is a path through');
-  } else if (strategy === 'overlay-cas' && pending !== 0) {
-    missing.push(
-      'serialRemoteOps: this wake replayed pending entries whose batch and blob fetches run through the store pool, so only the unchanged wake (cursor GET plus journal LIST) has an observable critical path',
-    );
   } else {
     serialRemoteOps = totalRemoteOps;
   }
@@ -7036,10 +5251,10 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       'mounts: the post-wake mount read matched none of the arm’s points on an attached wake — either the restore took no mounts or the read failed, and the two are indistinguishable, so the count is refused',
     );
   }
-  const replayUnits = replayUnitsOf(args, receipt, mounts, missing);
+  const replayUnits = replayUnitsOf(args, mounts, missing);
   // BYTES come from the fixture's byte tally over the same window as the
-  // operations: what `get` served, split by whether the key holds a
-  // candidate control envelope. A window without a tally stays uncounted.
+  // operations: what `get` served, split by whether the key holds a control
+  // record. A window without a tally stays uncounted.
   let metadataBytes: number | null = null;
   let payloadBytes: number | null = null;
   const bytes = wakeOps?.bytes;
@@ -7051,7 +5266,7 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       'metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally, so the bytes the restore moved are uncounted',
     );
   }
-  const cpuSteps = cpuStepsOf(args, receipt, missing);
+  const cpuSteps = cpuStepsOf(args, missing);
   const counts: WakeRestoreCounts = { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits };
   const work = restoreWorkFromCounts(counts);
   const window = totalRemoteOps === null ? 'no operation bill' : `${totalRemoteOps} windowed store call(s)`;
@@ -7061,7 +5276,6 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
     work,
     missing,
     detail: `wake "${wakeDetail.slice(0, 120) || 'no detail'}" — ${window} — ${served} — ${wakeMountLines.length} mount line(s)`,
-    receipt,
   };
 }
 
@@ -7091,93 +5305,36 @@ export interface BoundVerdict {
 
 /**
  * Hold a counted row against the restore class its arm claims, with the
- * evidence one wake carries: the chain's mount lines show its two-deep serve,
- * and a candidate's receipt shows what its open read and how deep its
- * resolutions went. A size-independence shape (r2fs) and the preregistered
- * unbounded witness (overlay-cas) stay unverifiable from one wake.
+ * evidence one wake carries: the chain's mount lines show its two-deep serve.
  */
 export function verifyRestoreBound(
-  strategy: Strategy,
   work: RestoreWork | null,
   wakeMountLines: readonly string[],
-  receipt: RestoreReceipt | null,
 ): BoundVerdict {
   if (work === null) return { verified: false, reason: 'no counted row to hold to any bound' };
-  if (strategy === 'snapshot-chain') {
-    // The mountpoint is `/proc/mounts` field two; read inline at both sites
-    // rather than behind a name, so the parse stays where it is used.
-    const baseLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '') === CHAIN_LOWER_BASE_DIR).length;
-    const deltaLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
-    if (baseLayers <= 1 && deltaLayers <= 1) {
-      return {
-        verified: true,
-        reason: `this wake served at most one base and one delta layer (the at-most-two-deep serve ${baseLayers}+${deltaLayers})`,
-      };
-    }
+  // The mountpoint is `/proc/mounts` field two; read inline at both sites
+  // rather than behind a name, so the parse stays where it is used.
+  const baseLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '') === CHAIN_LOWER_BASE_DIR).length;
+  const deltaLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+  if (baseLayers <= 1 && deltaLayers <= 1) {
     return {
-      verified: false,
-      reason: `this wake served ${baseLayers} base and ${deltaLayers} delta layers, past the at-most-two-deep serve the bounded-k claim rests on`,
+      verified: true,
+      reason: `this wake served at most one base and one delta layer (the at-most-two-deep serve ${baseLayers}+${deltaLayers})`,
     };
   }
-  if (strategy === 'r2fs') {
-    return {
-      verified: false,
-      reason: 'strict-o1 is a size-independence shape and one counted wake cannot show it; the two-size mount cell the claim needs does not run',
-    };
-  }
-  if (strategy === 'overlay-cas') {
-    return {
-      verified: false,
-      reason: 'unbounded is the preregistered red witness, not a verifiable class; the two-size pending/replay cell witnesses the shape under G2',
-    };
-  }
-  if (receipt === null) {
-    return { verified: false, reason: `the ${RESTORE_CLAIMS[strategy]} claim is checked against the restore receipt, and this wake carried none` };
-  }
-  const bound = receipt.bound;
-  if (strategy === 'bounded-layers') {
-    // bounded-k: one resolution consults at most MAX_LAYER_DEPTH layers
-    // (`packages/devbox/src/candidates/bounded-layers.ts`), and the open reads
-    // the root plus one document per consulted layer.
-    if (bound.layersConsulted === null) {
-      return { verified: false, reason: 'the receipt names no consulted layer count, so the bounded-k claim has nothing to hold to' };
-    }
-    const held = bound.layersConsulted <= CANDIDATE_MAX_LAYER_DEPTH && bound.openReads === bound.layersConsulted + 1;
-    return {
-      verified: held,
-      reason: `the open consulted ${bound.layersConsulted} layer(s) in ${bound.openReads} read(s) against MAX_LAYER_DEPTH ${CANDIDATE_MAX_LAYER_DEPTH}`
-        + (held ? '' : ', past the bounded-k claim'),
-    };
-  }
-  // log-p: the open reads the root record and the ledger, whatever the tree
-  // holds, and a resolution walks at most one node per level of a tree whose
-  // depth stays within log2 of the paths it resolved plus its root and leaf.
-  if (bound.maxNodeDepth === null || bound.nodeFetches === null) {
-    return { verified: false, reason: 'the receipt names no node depth or node fetch count, so the log-p claim has nothing to hold to' };
-  }
-  const depthBound = Math.floor(Math.log2(Math.max(bound.pathsResolved, 1))) + 2;
-  const held = bound.openReads === 2
-    && bound.nodeFetches <= bound.pathsResolved * bound.maxNodeDepth
-    && bound.maxNodeDepth <= depthBound;
   return {
-    verified: held,
-    reason: `the open took ${bound.openReads} read(s), ${bound.pathsResolved} path(s) resolved through ${bound.nodeFetches} node fetch(es) at depth ${bound.maxNodeDepth} against log2 bound ${depthBound}`
-      + (held ? '' : ', past the log-p claim'),
+    verified: false,
+    reason: `this wake served ${baseLayers} base and ${deltaLayers} delta layers, past the at-most-two-deep serve the bounded-k claim rests on`,
   };
 }
 
 /**
- * The mount points one arm's wake takes. Candidate arms read theirs from the
- * `/candidate` reply at runtime and restate nothing; the legacy three restate
- * the constants their strategies declare, checked by the decision suite.
+ * The mount points the arm's wake takes: the constants its strategy declares,
+ * restated here and checked against that source by the decision suite.
  */
-const WAKE_MOUNT_POINTS = {
-  'snapshot-chain': [DEVBOX_WORK_DIR, CHAIN_STORE_MOUNT_DIR, CHAIN_LOWER_BASE_DIR, CHAIN_DELTA_LAYER_ROOT],
-  r2fs: [DEVBOX_WORK_DIR],
-  'overlay-cas': [DEVBOX_WORK_DIR, CAS_STORE_MOUNT_DIR],
-  'bounded-layers': [],
-  'merkle-pack': [],
-} satisfies Record<Strategy, readonly string[]>;
+const WAKE_MOUNT_POINTS: readonly string[] = [
+  DEVBOX_WORK_DIR, CHAIN_STORE_MOUNT_DIR, CHAIN_LOWER_BASE_DIR, CHAIN_DELTA_LAYER_ROOT,
+];
 
 /**
  * Keep the post-wake `/proc/mounts` lines at the arm's own mount points: the
@@ -7186,11 +5343,10 @@ const WAKE_MOUNT_POINTS = {
  * else by exact mountpoint.
  */
 export function selectWakeMountLines(
-  strategy: Strategy,
   mountsText: string,
   extraPoints: readonly string[] = [],
 ): string[] {
-  const points = [...WAKE_MOUNT_POINTS[strategy], ...extraPoints];
+  const points = [...WAKE_MOUNT_POINTS, ...extraPoints];
   const lines: string[] = [];
   for (const raw of mountsText.split('\n')) {
     const line = raw.trim();
@@ -7221,13 +5377,9 @@ export function selectWakeMountLines(
  * The judges are pure over small fact interfaces, so the decision suite seeds
  * every violation they must catch — a mixed read, an absent reference, a
  * rollback, a phantom fork, a lost barrier, a write that succeeded — without
- * a deployment. The live cell that gathers the facts runs once per cuttable
- * arm after the witness cells, where it can disturb generations and boots
- * without moving any measured column.
- *
- * Cuttable means the arm publishes through an atomic cut. r2fs is excluded
- * with its reason below: cutting a sync would fail an honest arm for lacking
- * a property its strategy refuses to offer.
+ * a deployment. The live cell that gathers the facts runs once per arm after
+ * the witness cells, where it can disturb generations and boots without moving
+ * any measured column.
  */
 
 /** What one cut left behind: the head the reader found, or the reason the
@@ -7252,51 +5404,12 @@ export interface FaultCutObservation {
   readonly detail: string;
 }
 
-/** Arms the cut cell never runs, and the reason for each. Read by
- *  `summarizePublication` and pinned by the decision suite: an exclusion
- *  without prose, or an arm silently added to it, fails loudly. */
-const FAULT_CUT_EXCLUDED = {
-  r2fs: 'r2fs publishes nothing to cut. Its checkpoint is a sync over per-close s3fs uploads — files land independently as their handles close — so a kill interrupts unrelated uploads with no atomic cut, no all-old-or-all-new to judge, and no references to sweep. Cutting it would fail an honest arm for lacking a property its strategy refuses to offer.',
-} satisfies Partial<Record<Strategy, string>>;
-
-/**
- * Whether the cut cell skips this arm, with the reason. The table above stays
- * narrow (only the excluded arms exist on its type), so every read goes
- * through here rather than indexing it with an arbitrary strategy. One case
- * per table key — the decision suite checks the two stay identical.
- */
-function faultCutExclusion(strategy: Strategy): string | undefined {
-  switch (strategy) {
-    case 'r2fs':
-      return FAULT_CUT_EXCLUDED.r2fs;
-    default:
-      return undefined;
-  }
-}
 /** What one judge concluded, before aggregation. */
 export interface CutJudgment {
   readonly verdict: CutVerdict;
   readonly rollback: boolean | null;
   readonly phantom: boolean | null;
   readonly detail: string;
-}
-
-export interface CandidateCutJudgment extends CutJudgment {
-  readonly barrierAckLoss: number | null;
-}
-
-/**
- * Compare canonical decimal generations. Null when either side is not one —
- * an uncomparable generation refuses rather than ordering by string accident.
- */
-export function compareGenerations(before: string | null, after: string | null): number | null {
-  if (before === null || after === null) return null;
-  if (!/^(?:0|[1-9]\d*)$/.test(before) || !/^(?:0|[1-9]\d*)$/.test(after)) return null;
-  const older = BigInt(before);
-  const newer = BigInt(after);
-  if (older < newer) return -1;
-  if (older > newer) return 1;
-  return 0;
 }
 
 /**
@@ -7376,119 +5489,6 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
   };
 }
 
-export interface OverlayCutFacts {
-  /** Whether the folded cursor moved between the pre-cut read and the
-   *  post-heal read — by number when both cursor bodies parsed, by etag
-   *  otherwise. Null when neither comparison ran. */
-  readonly seqMoved: boolean | null;
-  /** Whether both cursor bodies parsed, which is what makes a decrease — a
-   *  rollback — judgeable at all. */
-  readonly seqComparable: boolean;
-  readonly seqDecreased: boolean;
-  /** What the crash-state wake replayed: informational, and a consistency
-   *  tripwire in the detail, never the verdict. */
-  readonly replayedEntries: number | null;
-  readonly cutMarkerPresent: boolean;
-  readonly cursorExists: boolean;
-  /** Whether `journal/` held anything after the healing quiesce folded and
-   *  reaped. Null when the listing failed. */
-  readonly journalEmpty: boolean | null;
-}
-
-/**
- * Judge an overlay-cas cut. The cursor advances past whole batches only, so a
- * kill mid-fold leaves it whole at the old batch or the new one — and the
- * verdict waits for the healing quiesce, which folds whatever the victim
- * journalled: cursor moved with the marker is new, unmoved without it is old,
- * anything else is torn.
- */
-export function judgeOverlayCut(facts: OverlayCutFacts): CutJudgment {
-  let verdict: CutVerdict;
-  if (!facts.cursorExists) verdict = 'mixed';
-  else if (facts.seqMoved === null) verdict = 'unjudged';
-  else if (facts.seqMoved && facts.cutMarkerPresent) verdict = 'all-new';
-  else if (!facts.seqMoved && !facts.cutMarkerPresent) verdict = 'all-old';
-  else verdict = 'mixed';
-  return {
-    verdict,
-    rollback: facts.seqComparable ? facts.seqDecreased : null,
-    phantom: facts.journalEmpty === null ? null : !facts.journalEmpty,
-    detail: `cursor ${facts.seqMoved === null ? 'uncompared' : facts.seqMoved ? 'advanced' : 'unmoved'}`
-      + `, wake replayed ${facts.replayedEntries ?? 'unknown'} entr${facts.replayedEntries === 1 ? 'y' : 'ies'}`
-      + `, marker ${facts.cutMarkerPresent ? 'present' : 'absent'}`
-      + `, journal post-heal ${facts.journalEmpty === null ? 'unlisted' : facts.journalEmpty ? 'empty' : 'NON-EMPTY'}`,
-  };
-}
-
-export interface CandidateCutFacts {
-  readonly postKind: string | null;
-  readonly preGeneration: string | null;
-  readonly preRootId: string | null;
-  readonly postGeneration: string | null;
-  readonly postRootId: string | null;
-  /** The root the cut-wake detail claims to serve, parsed from
-   *  `restored|repaired candidate root <id>`. */
-  readonly detailRootId: string | null;
-  readonly forkedHeads: readonly string[];
-  readonly closureAbsent: number;
-  readonly closureChecked: boolean;
-  readonly cutMarkerPresent: boolean;
-  /** The generation the pre-cut barrier acked, or null when it never acked. */
-  readonly barrierGeneration: string | null;
-  readonly barrierMarkerPresent: boolean;
-  /** Post-heal fork scan. Null when the healing read never ran. */
-  readonly healForkedHeads: readonly string[] | null;
-  readonly healStrayEnvelopes: number | null;
-  /** Post-heal undecodable envelopes under the arm's prefix. Null when unread. */
-  readonly healUnreadable: number | null;
-}
-
-/**
- * Judge a candidate cut. The head CAS is the single point of no return —
- * everything before it is content-addressed and resumable — so the crash
- * state is old (same generation and root) or new (advanced generation serving
- * the marker over a complete closure with no fork and the detail agreeing on
- * the root). A sealed-but-uncommitted envelope is the designed crash window,
- * not a phantom: phantoms are judged after the healing checkpoint, where
- * convergence must have removed them.
- */
-export function judgeCandidateCut(facts: CandidateCutFacts): CandidateCutJudgment {
-  const order = compareGenerations(facts.preGeneration, facts.postGeneration);
-  const vanished = facts.postKind === 'empty' && facts.preGeneration !== null;
-  let verdict: CutVerdict;
-  if (vanished) verdict = 'mixed';
-  else if (order === null) verdict = 'unjudged';
-  else if (order === 0 && facts.postRootId === facts.preRootId) verdict = 'all-old';
-  else if (
-    order === -1 && facts.cutMarkerPresent && facts.closureChecked && facts.closureAbsent === 0
-    && facts.forkedHeads.length === 0 && facts.detailRootId !== null && facts.detailRootId === facts.postRootId
-  ) verdict = 'all-new';
-  else verdict = 'mixed';
-  let rollback: boolean | null = null;
-  if (vanished) rollback = true;
-  else if (order !== null) rollback = order > 0;
-  let phantom: boolean | null = null;
-  if (facts.healForkedHeads !== null && facts.healStrayEnvelopes !== null && facts.healUnreadable !== null) {
-    phantom = facts.healForkedHeads.length > 0 || facts.healStrayEnvelopes > 0 || facts.healUnreadable > 0;
-  }
-  let barrierAckLoss: number | null = null;
-  if (facts.barrierGeneration !== null) {
-    const behind = compareGenerations(facts.barrierGeneration, facts.postGeneration);
-    if (behind !== null) barrierAckLoss = behind <= 0 && facts.barrierMarkerPresent ? 0 : 1;
-  }
-  return {
-    verdict,
-    rollback,
-    phantom,
-    barrierAckLoss,
-    detail: `gen ${facts.preGeneration ?? '?'}→${facts.postGeneration ?? '?'}`
-      + ` root ${(facts.preRootId ?? '?').slice(0, 8)}→${(facts.postRootId ?? '?').slice(0, 8)}`
-      + `, marker ${facts.cutMarkerPresent ? 'present' : 'absent'}`
-      + `, closure ${facts.closureChecked ? `${facts.closureAbsent} absent` : 'unchecked'}`
-      + `${facts.forkedHeads.length > 0 ? `, FORKED (${facts.forkedHeads.length})` : ''}`,
-  };
-}
-
 /**
  * Judge a read-only probe: an `echo` into the served layer that must fail
  * with the filesystem refusing it. A probe that could not run never reaches
@@ -7499,48 +5499,19 @@ export function judgeReadOnlyRefusal(exitCode: number, stderr: string): boolean 
   return exitCode !== 0 && /read-only file system/i.test(stderr);
 }
 
-/** What the overlay-cas reference sweep read: journal batches seen, and keys a
- *  journal entry names whose bytes are absent through the store mount. */
-export interface OverlaySweep {
-  readonly batches: number | null;
-  readonly missing: number;
-}
-
-/**
- * Parse the sweep script's stdout: one `swept <n> batches` line and one
- * `missing <key>` line per absent object. Anything else on the channel is
- * ignored — the script's own diagnostics must never inflate a count.
- */
-export function parseOverlaySweep(stdout: string): OverlaySweep {
-  let batches: number | null = null;
-  let missing = 0;
-  for (const raw of stdout.split('\n')) {
-    const line = raw.trim();
-    if (line.startsWith('missing ') && line.length > 'missing '.length) missing += 1;
-    const swept = /^swept (\d+) batches$/.exec(line)?.[1];
-    if (swept !== undefined) {
-      const count = Number.parseInt(swept, 10);
-      if (Number.isSafeInteger(count)) batches = count;
-    }
-  }
-  return { batches, missing };
-}
-
 /**
  * Fold one observation per requested arm into the run-level publication
  * block. Strict in one direction: a single caught `true` (rollback, phantom,
  * lost barrier, present-but-absent reference) holds the field, while `false`
- * requires every cuttable arm to have judged that field clean — an unjudged
- * arm nulls the field rather than voting false. r2fs contributes nothing by
- * exclusion, with its reason; an arm the cell never reached contributes
- * nothing at all, and the block refuses.
+ * requires every arm to have judged that field clean — an unjudged arm nulls
+ * the field rather than voting false. An arm the cell never reached
+ * contributes nothing at all, and the block refuses.
  */
 export function summarizePublication(
-  rows: readonly { readonly strategy: Strategy; readonly cut: FaultCutObservation | null }[],
+  rows: readonly { readonly cut: FaultCutObservation | null }[],
 ): PublicationEvidence {
-  const cuttable = rows.filter((row) => faultCutExclusion(row.strategy) === undefined);
-  const cuts = cuttable.map((row) => row.cut);
-  const completed = cuttable.length > 0 && cuts.every((cut) => cut !== null && cut.completed);
+  const cuts = rows.map((row) => row.cut);
+  const completed = cuts.length > 0 && cuts.every((cut) => cut !== null && cut.completed);
   let allOldOrAllNew: boolean | null = null;
   if (completed) {
     allOldOrAllNew = cuts.every((cut) => cut?.verdict === 'all-old' || cut?.verdict === 'all-new');
@@ -7614,8 +5585,8 @@ export function summarizePublication(
  * Every field here is a G0 requirement, and each one identifies a different
  * thing that changes what the numbers mean: the source, whether that source
  * was actually the tree that ran, which deployed Worker version served the
- * arms, when the run really happened, and the exact image, runner bundles and
- * daemon source the containers were built from.
+ * arms, when the run really happened, and the exact image the containers were
+ * built from.
  */
 export interface RunIdentity {
   readonly commit: string;
@@ -7629,10 +5600,6 @@ export interface RunIdentity {
   readonly image: string;
   /** OCI manifest digest for the exact sandbox image the generated config pins. */
   readonly imageSha256: string;
-  readonly dockerfileSha256: string;
-  readonly candidateRunnerSha256: string;
-  readonly overlayRunnerSha256: string;
-  readonly journalDaemonSha256: string;
 }
 
 /** Commit plus the digest that distinguishes its dirty source tree. */
@@ -7686,10 +5653,6 @@ function identityVersions(identity: RunIdentity) {
     'worker-version': identity.workerVersion,
     'container-image': identity.image,
     'container-image-digest': identity.imageSha256,
-    'candidate-image-dockerfile': identity.dockerfileSha256,
-    'candidate-runner-bundle': identity.candidateRunnerSha256,
-    'overlay-cas-runner-bundle': identity.overlayRunnerSha256,
-    'journal-daemon-source': identity.journalDaemonSha256,
   };
 }
 
@@ -7703,8 +5666,7 @@ function devboxProvenance(identity: RunIdentity, meta: RunMeta): RunProvenance {
     image: identity.image,
     versions: identityVersions(identity),
     containerFacts: `one fixture Worker per arm (${meta.worker}) at ${identity.workerVersion} on ${identity.image} `
-      + `(${identity.imageSha256}), built from Dockerfile ${identity.dockerfileSha256} with candidate runner `
-      + `${identity.candidateRunnerSha256} and journal daemon source ${identity.journalDaemonSha256}`,
+      + `(${identity.imageSha256})`,
   };
 }
 
@@ -7715,13 +5677,7 @@ function identityProblems(identity: RunIdentity): string[] {
   for (const [name, value] of Object.entries(identityVersions(identity))) {
     if (value.trim() === '') problems.push(`the run recorded no ${name}`);
   }
-  const digests = {
-    'container-image-digest': identity.imageSha256,
-    'candidate-image-dockerfile': identity.dockerfileSha256,
-    'candidate-runner-bundle': identity.candidateRunnerSha256,
-    'overlay-cas-runner-bundle': identity.overlayRunnerSha256,
-    'journal-daemon-source': identity.journalDaemonSha256,
-  };
+  const digests = { 'container-image-digest': identity.imageSha256 };
   for (const [name, digest] of Object.entries(digests)) {
     if (digest !== '' && !/^sha256:[0-9a-f]{64}$/.test(digest)) {
       problems.push(`${name} "${digest}" is not a sha256 digest`);
@@ -7854,17 +5810,14 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
     schema: 'storage-matrix/run@1',
     provenance: devboxProvenance(input.identity, input.meta),
     arms: input.arms.map(devboxArmEvidence),
-    // The fault-cut cells ran once per cuttable arm after the witness cells;
+    // The fault-cut cell ran once per arm after the witness cells;
     // their observations fold into this block, and whatever they could not
     // observe stays at its refusing default. G4 keeps its refusing defaults:
     // this driver runs no security-cell instrumentation, and the leak scan
     // below already covers the cut cells' notes, since those ride on the arm
     // rows it stringifies.
     publication: summarizePublication(
-      input.requested.map((strategy) => ({
-        strategy,
-        cut: armOf(strategy)?.cut ?? null,
-      })),
+      input.requested.map((strategy) => ({ cut: armOf(strategy)?.cut ?? null })),
     ),
     security: summarizeSecurity({
       rows: input.requested.map((strategy) => ({
@@ -7876,14 +5829,13 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
     }),
     // ONE ROW PER REQUESTED ARM, counted where the boundary serves counters
     // and null where it does not. The builder names the missing source per
-    // field, and G5 refuses on every null — which is the honest answer while
-    // bytes and cpu steps have no live counter.
+    // field, and G5 refuses on every null — which is the honest answer while a
+    // source stays unobserved.
     restore: input.requested.map((strategy): RestoreEvidence => {
       const arm = armOf(strategy);
       const counted = arm === undefined
         ? null
         : countedRestoreWork({
-          strategy,
           wakeKind: arm.wakeKind,
           wakeDetail: arm.wakeDetail ?? '',
           wakeOps: arm.wakeOps ?? null,
@@ -7898,7 +5850,7 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
         claim: RESTORE_CLAIMS[strategy],
         mechanicalBoundVerified: work === null
           ? false
-          : verifyRestoreBound(strategy, work, arm?.wakeMountLines ?? [], counted?.receipt ?? null).verified,
+          : verifyRestoreBound(work, arm?.wakeMountLines ?? []).verified,
       };
     }),
     declaredStages: [...DEVBOX_DECLARED_STAGES],
@@ -8056,7 +6008,6 @@ function devboxRequirements(input: DevboxAdmissionInput) {
     const arm = input.arms.find((row) => row.strategy === strategy);
     if (arm === undefined) continue;
     const counted = countedRestoreWork({
-      strategy,
       wakeKind: arm.wakeKind,
       wakeDetail: arm.wakeDetail ?? '',
       wakeOps: arm.wakeOps ?? null,
@@ -8067,7 +6018,7 @@ function devboxRequirements(input: DevboxAdmissionInput) {
       g5.push(`arm \`${strategy}\` ${missing} (counted: ${counted.detail})`);
     }
     if (counted.work !== null) {
-      const bound = verifyRestoreBound(strategy, counted.work, arm.wakeMountLines ?? [], counted.receipt);
+      const bound = verifyRestoreBound(counted.work, arm.wakeMountLines ?? []);
       if (!bound.verified) {
         g5.push(`arm \`${strategy}\` claims a \`${RESTORE_CLAIMS[strategy]}\` restore bound that was never mechanically verified: ${bound.reason}`);
       }
@@ -8224,8 +6175,9 @@ function workerServingBox(box: string): string | null {
 const HELP = `Usage: bun scripts/bench-devbox-strategies.ts [options]
 
 Options:
-  --arms <strategy,...>             Measure named strategies. Defaults to the frozen scope:
-                                    ${DECISIVE_ARMS.join(', ')}.
+  --arms <strategy,...>             Measure named strategies. Defaults to every
+                                    strategy this package ships:
+                                    ${STRATEGIES.join(', ')}.
   --control <strategy>=<path>       Add frozen historical context for one strategy,
                                     from a previous run's artifact. Any of:
                                     ${STRATEGIES.join(', ')}.
@@ -8234,8 +6186,8 @@ Options:
   --fault-cuts                      Enable the publication rendezvous at Worker boot.
                                     Without this flag G3 remains unmeasured.
   --verify-only                     Run durability verification and cleanup, without performance
-                                    workloads: one arm's ladder, stop, wake and teardown with the
-                                    probe's evidence reads. Wins over --decisive.
+                                    workloads: one arm's ladder, stop, wake and teardown.
+                                    Wins over --decisive.
   --repetitions <n>                 Measure every deciding cell n times per arm — the
                                     decisive workloads and the \`${DECIDING_METRIC}\` phase
                                     G9 scores. Default ${DECISIVE_REPETITIONS} with --decisive, 1 without;
@@ -8250,7 +6202,7 @@ export function parseOptions(argv: readonly string[]): Options {
     args: argv,
     allowPositionals: false,
     options: {
-      arms: { type: 'string', default: DECISIVE_ARMS.join(',') },
+      arms: { type: 'string', default: STRATEGIES.join(',') },
       control: { type: 'string', multiple: true, default: [] },
       seed: { type: 'string', default: '20260824' },
       'budget-ms': { type: 'string', default: '8000' },
@@ -8308,9 +6260,6 @@ export function parseOptions(argv: readonly string[]): Options {
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
   const decisive = values.decisive && !values['verify-only'];
-  if (decisive && requestedArms.some((arm) => !DECISIVE_ARMS.includes(arm))) {
-    throw new Error(SCOPE_FREEZE);
-  }
   const rawRepetitions = values.repetitions ?? String(decisive ? DECISIVE_REPETITIONS : 1);
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
@@ -8352,7 +6301,7 @@ async function main(): Promise<number> {
       ? 'none (optional)'
       : options.controls.map((control) => `${control.strategy}=${control.path}`).join(', ');
     process.stdout.write(
-      `Devbox strategy A/B plan\n\n${SCOPE_FREEZE}\n\narms          ${options.arms.join(', ')}\n`
+      `Devbox storage plan\n\narms          ${options.arms.join(', ')}\n`
       + `controls      ${controls}\n`
       + `phases        ${PHASES.join(',')}\n`
       + `process-driven ${[...PROCESS_PHASES].join(',')}\n`
@@ -8428,7 +6377,7 @@ async function main(): Promise<number> {
     );
   }
 
-  const fixtures = await createFixtureResources(options.runId, options.arms);
+  const fixtures = createFixtureResources(options.runId, options.arms);
   const teardownManifest = fixtures.manifest;
   const lanes = fixtures.arms.map((fixture): ArmLaneState => ({
     fixture,

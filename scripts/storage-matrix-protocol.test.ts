@@ -14,11 +14,11 @@ const representative: MeasuredCell = {
 
 describe('paired order and censoring protocol', () => {
   test('uses a Latin square so every arm occupies every ordinal position once', () => {
-    const orders = latinSquareOrders(['chain', 'r2fs', 'overlay']);
+    const orders = latinSquareOrders(['chain', 'layer', 'pack']);
     expect(orders).toEqual([
-      ['chain', 'r2fs', 'overlay'],
-      ['r2fs', 'overlay', 'chain'],
-      ['overlay', 'chain', 'r2fs'],
+      ['chain', 'layer', 'pack'],
+      ['layer', 'pack', 'chain'],
+      ['pack', 'chain', 'layer'],
     ]);
     expect(latinSquareValid(orders)).toBe(true);
   });

@@ -29,8 +29,6 @@ const BENCH_GATE_FILES = [
   "packages/core/tests/unit-bench-split.test.ts",
   "packages/core/tests/unit-bench-stats.test.ts",
   "scripts/sandbox-durability-probe.test.ts",
-  "scripts/capture-probe.test.ts",
-  "scripts/capture-probe-live.test.ts",
   "scripts/storage-matrix-admission.test.ts",
   "scripts/storage-matrix-cleanup.test.ts",
   "scripts/storage-matrix-manifest.test.ts",

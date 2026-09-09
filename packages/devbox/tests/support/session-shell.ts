@@ -14,7 +14,7 @@
 //      — no separator before `done`. `sh` answered `Syntax error: "do"
 //      unexpected` and exited 2, so every stop in run `e2e20260901140445` died
 //      as `Session 'sandbox-default' shell exited (exit code: 2)`:
-//      snapshot-chain and r2fs both lost `stop-small` to it.
+//      two deployed boxes lost `stop-small` to it.
 //
 // The second one is why this module runs a REAL PARSE rather than another
 // pattern. A fake that matches `startsWith('holders=""')` accepts a command no

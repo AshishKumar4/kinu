@@ -5,20 +5,5 @@
   "packages/cf-backend/src/lib/user-api.ts#RegisteredDevice (unreferenced)",
   "packages/cf-backend/src/sandbox-lifecycle.ts#SandboxLifecycleStage (unreferenced)",
   "packages/cf-backend/src/user/mcp.ts#McpServerConfig (unreferenced)",
-  "packages/devbox/package.json#@cloudflare/containers (unused-dependency)",
-  "packages/devbox/src/candidates/publication.ts#PublicationInterrupted (test-only)",
-  "packages/devbox/src/candidates/publication.ts#publishedParentOf (test-only)",
-  "packages/devbox/src/candidates/publication.ts#readStagedCandidateObjectForTest (test-only)",
-  "packages/devbox/src/capture/capabilities.ts#CapabilityCheck (unreferenced)",
-  "packages/devbox/src/capture/freeze-drain.ts#ContainerCaptureDaemon (unreferenced)",
-  "packages/devbox/src/capture/freeze-drain.ts#captureFrozenCopy (test-only)",
-  "packages/devbox/src/capture/freeze-drain.ts#logFreezeSeam (test-only)",
-  "packages/devbox/src/capture/journal-capture.ts#WatchEventQueue (test-only)",
-  "packages/devbox/src/capture/journal-capture.ts#materializeJournalPrefix (test-only)",
-  "packages/devbox/src/capture/model.ts#contentExtents (unreferenced)",
-  "packages/devbox/src/capture/model.ts#toCapturedCut (test-only)",
-  "packages/devbox/src/capture/stable-scan.ts#naiveLiveScan (test-only)",
-  "packages/devbox/src/capture/stable-scan.ts#stableScan (test-only)",
-  "packages/devbox/src/capture/view.ts#logView (test-only)",
-  "packages/devbox/src/cas/hash.ts#digestBytes (test-only)"
+  "packages/devbox/package.json#@cloudflare/containers (unused-dependency)"
 ]

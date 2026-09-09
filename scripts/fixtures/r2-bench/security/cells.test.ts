@@ -16,7 +16,6 @@ import {
 
 import {
   runSecurityFaultCells,
-  securityExclusion,
   summarizeSecurity,
   type SecurityCellsObservation,
 } from './cells';
@@ -26,7 +25,7 @@ const SECRET = 'fixture-secret-live-xyz-123';
 function observation(overrides: Partial<SecurityCellsObservation> = {}): SecurityCellsObservation {
   const refused = (id: 'F7' | 'F10' | 'F11' | 'F12') => ({ id, status: 'refused' as const, detail: `${id} refused` });
   return {
-    strategy: 'bounded-layers',
+    strategy: 'snapshot-chain',
     completed: true,
     cells: [refused('F7'), refused('F10'), refused('F11'), refused('F12')],
     staleWriterAccepted: false,
@@ -76,29 +75,11 @@ function recordWithSecurity(security: ReturnType<typeof summarizeSecurity>): Sto
   };
 }
 
-describe('security exclusions', () => {
-  test('the decisive three are never excluded', () => {
-    for (const strategy of ['snapshot-chain', 'bounded-layers', 'merkle-pack']) {
-      expect(securityExclusion(strategy)).toBeUndefined();
-    }
-  });
-
-  test('r2fs and overlay-cas are unable with prose, not silent', () => {
-    for (const strategy of ['r2fs', 'overlay-cas']) {
-      const reason = securityExclusion(strategy);
-      if (reason === undefined) throw new Error(`expected exclusion prose for ${strategy}`);
-      expect(reason.length).toBeGreaterThan(80);
-    }
-  });
-});
-
 describe('summarizeSecurity', () => {
   test('three refused arms complete the cells and hold G4', () => {
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: observation({ strategy: 'snapshot-chain' }) },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: observation({ strategy: 'snapshot-chain' }) },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -123,9 +104,7 @@ describe('summarizeSecurity', () => {
     };
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: unable },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: unable },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -140,9 +119,7 @@ describe('summarizeSecurity', () => {
   test('a missing arm refuses G4 rather than voting clean', () => {
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: null },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: null },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -153,12 +130,7 @@ describe('summarizeSecurity', () => {
   test('an accepted stale writer fails G4 naming the epoch', () => {
     const security = summarizeSecurity({
       rows: [
-        {
-          strategy: 'snapshot-chain',
-          observation: observation({ strategy: 'snapshot-chain', completed: false, staleWriterAccepted: true }),
-        },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: observation({ strategy: 'snapshot-chain', completed: false, staleWriterAccepted: true }) },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -172,12 +144,7 @@ describe('summarizeSecurity', () => {
   test('an accepted hostile metadata fails G4', () => {
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: observation({ strategy: 'snapshot-chain' }) },
-        {
-          strategy: 'bounded-layers',
-          observation: observation({ strategy: 'bounded-layers', completed: false, hostileMetadataAccepted: true }),
-        },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: observation({ strategy: 'snapshot-chain', completed: false, hostileMetadataAccepted: true }) },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -189,9 +156,7 @@ describe('summarizeSecurity', () => {
   test('prefix and capability escapes sum and fail G4', () => {
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: observation({ strategy: 'snapshot-chain', completed: false, prefixEscapes: 2 }) },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers', completed: false, capabilityEscapesOrReplays: 1 }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: observation({ strategy: 'snapshot-chain', completed: false, prefixEscapes: 2, capabilityEscapesOrReplays: 1 }) },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -201,27 +166,10 @@ describe('summarizeSecurity', () => {
     expect(verdictG4Ok(security)).toBe(false);
   });
 
-  test('excluded arms do not vote: r2fs and overlay-cas contribute nothing', () => {
-    const security = summarizeSecurity({
-      rows: [
-        { strategy: 'snapshot-chain', observation: observation({ strategy: 'snapshot-chain' }) },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
-        { strategy: 'r2fs', observation: null },
-        { strategy: 'overlay-cas', observation: null },
-      ],
-      token: SECRET,
-      driverText: 'no secrets here',
-    });
-    expect(security.securityCellsComplete).toBe(true);
-  });
-
   test('a leaked fixture secret is reported without echoing it', () => {
     const security = summarizeSecurity({
       rows: [
-        { strategy: 'snapshot-chain', observation: observation({ strategy: 'snapshot-chain' }) },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
+        { observation: observation({ strategy: 'snapshot-chain' }) },
       ],
       token: SECRET,
       driverText: `run output contains ${SECRET} verbatim`,
@@ -235,14 +183,11 @@ describe('summarizeSecurity', () => {
     const security = summarizeSecurity({
       rows: [
         {
-          strategy: 'snapshot-chain',
           observation: observation({
             strategy: 'snapshot-chain', completed: false,
             credentialLeaks: ['F12: live fixture secret present in a scanned surface'],
           }),
         },
-        { strategy: 'bounded-layers', observation: observation({ strategy: 'bounded-layers' }) },
-        { strategy: 'merkle-pack', observation: observation({ strategy: 'merkle-pack' }) },
       ],
       token: SECRET,
       driverText: 'no secrets here',
@@ -259,7 +204,7 @@ function verdictG4Ok(security: ReturnType<typeof summarizeSecurity>): boolean {
 
 describe('runSecurityFaultCells wire', () => {
   test('parses a live-shaped reply and never sends the token in the body', async () => {
-    const obs = observation({ strategy: 'merkle-pack' });
+    const obs = observation({ strategy: 'snapshot-chain' });
     const real = globalThis.fetch;
     const seenUrls: string[] = [];
     const seenAuthorizations: Array<string | null> = [];
@@ -273,7 +218,7 @@ describe('runSecurityFaultCells wire', () => {
       const parsedAuth = v.safeParse(v.looseObject({ authorization: v.string() }), init?.headers);
       seenAuthorizations.push(parsedAuth.success ? parsedAuth.output.authorization : null);
       seenBodies.push(parsedBody.success ? parsedBody.output : '');
-      return new Response(JSON.stringify({ ok: true, strategy: 'merkle-pack', box: 'ab-x', security: obs, ms: 12 }), {
+      return new Response(JSON.stringify({ ok: true, strategy: 'snapshot-chain', box: 'ab-x', security: obs, ms: 12 }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -283,7 +228,7 @@ describe('runSecurityFaultCells wire', () => {
       const { observation: parsed, notes } = await runSecurityFaultCells(
         { origin: 'https://bench.invalid', token: SECRET },
         'ab-x',
-        'merkle-pack',
+        'snapshot-chain',
         'sec-12345678',
       );
       expect(parsed.completed).toBe(true);
@@ -308,7 +253,7 @@ describe('runSecurityFaultCells wire', () => {
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
     try {
       await expect(runSecurityFaultCells(
-        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'r2fs', 'sec-12345678',
+        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',
       )).rejects.toThrow(/strategy not deployed/);
     } finally {
       globalThis.fetch = real;
@@ -318,13 +263,13 @@ describe('runSecurityFaultCells wire', () => {
   test('a contract-breaking reply throws rather than defaulting', async () => {
     const real = globalThis.fetch;
     const answer = async (): Promise<Response> => new Response(
-      JSON.stringify({ ok: true, strategy: 'merkle-pack', box: 'ab-x', security: { strategy: 'merkle-pack' } }),
+      JSON.stringify({ ok: true, strategy: 'snapshot-chain', box: 'ab-x', security: { strategy: 'snapshot-chain' } }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
     try {
       await expect(runSecurityFaultCells(
-        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'merkle-pack', 'sec-12345678',
+        { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',
       )).rejects.toThrow(/reply contract/);
     } finally {
       globalThis.fetch = real;

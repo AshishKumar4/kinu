@@ -40,8 +40,8 @@
  *   bun scripts/devbox-e2e.ts                 the suite, ceilings enforced
  *   bun scripts/devbox-e2e.ts --calibrate     measure only, print 3x ceilings
  *   bun scripts/devbox-e2e.ts --plan          what it would do, deploying nothing
- *   bun scripts/devbox-e2e.ts --arms r2fs     one arm
- *   bun scripts/devbox-e2e.ts --wedge r2fs    prove the oracle red on a live arm
+ *   bun scripts/devbox-e2e.ts --arms snapshot-chain     one arm
+ *   bun scripts/devbox-e2e.ts --wedge snapshot-chain    prove the oracle red on a live arm
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -107,8 +107,8 @@ const SMOKE_RUN = 'the 20260831184750 smoke artifact';
 const LADDER_RUN = 'bench-artifacts/devbox-ab7.json';
 
 const G6 = 'the admission contract\'s COLD_ATTACH_CEILING_MS, unchanged';
-const measured = (ms: number, arm: string): string =>
-  `3x ${String(ms)} ms, the slowest arm (${arm}) that settled this step in ${CALIBRATION_RUN}`;
+const measured = (ms: number): string =>
+  `3x ${String(ms)} ms, the slowest arm that settled this step in ${CALIBRATION_RUN}`;
 
 /**
  * The ceilings, and where each number comes from.
@@ -127,9 +127,9 @@ const PROVISIONAL = 'PROVISIONAL: no arm has settled this step on any recorded r
 
 export const CEILINGS: readonly OperationCeiling[] = [
   { op: 'cold-attach', ms: COLD_ATTACH_CEILING_MS, source: G6 },
-  { op: 'small-workload', ms: 334_000, source: measured(111_276, 'r2fs') },
-  { op: 'checkpoint-small', ms: 83_000, source: measured(27_664, 'merkle-pack') },
-  { op: 'stop-small', ms: 25_000, source: measured(8_278, 'merkle-pack') },
+  { op: 'small-workload', ms: 334_000, source: measured(111_276) },
+  { op: 'checkpoint-small', ms: 83_000, source: measured(27_664) },
+  { op: 'stop-small', ms: 25_000, source: measured(8_278) },
   {
     op: 'wake-attach',
     ms: 90_000,
@@ -140,7 +140,7 @@ export const CEILINGS: readonly OperationCeiling[] = [
   {
     op: 'restore-verify',
     ms: 334_000,
-    source: `3x 111,276 ms, the small-workload step in ${CALIBRATION_RUN} (r2fs), which writes AND `
+    source: `3x 111,276 ms, the small-workload step in ${CALIBRATION_RUN}, which writes AND `
       + 'digests the same tree this step digests and reads — strictly more work',
   },
   { op: 'mid-workload', ms: 900_000, source: PROVISIONAL },
@@ -154,7 +154,7 @@ export const CEILINGS: readonly OperationCeiling[] = [
     op: 'stop-mid',
     ms: 155_000,
     source: '3x 50,891 ms, the slowest recorded stop in any complete arm '
-      + '(bench-artifacts/devbox-strategies-20260825230839.json, overlay-cas)',
+      + '(bench-artifacts/devbox-strategies-20260825230839.json)',
   },
   { op: 'cold-reattach', ms: COLD_ATTACH_CEILING_MS, source: G6 },
   { op: 'reattach-verify', ms: 400_000, source: PROVISIONAL },
@@ -302,8 +302,8 @@ export interface LifecycleSeam {
   readonly write: (path: string, content: string) => Promise<void>;
   /** Bounded like every other step: a box wedged in its own attach loop can
    *  hold a `/teardown` request open indefinitely, and this suite's verdict is
-   *  a ceiling. Measured on `r2fs` and `overlay-cas` in the calibration run,
-   *  both of which spent 900,000 ms on one unbounded request. */
+   *  a ceiling. Measured in the calibration run, where an arm spent
+   *  900,000 ms on one unbounded request. */
   readonly teardown: (deadlineMs: number) => Promise<void>;
 }
 
@@ -1027,7 +1027,7 @@ async function main(): Promise<number> {
 
   const workloadSource = readFileSync(WORKLOAD_SOURCE, 'utf8');
   const startedAt = new Date().toISOString();
-  const fixtures = await createFixtureResources(options.runId, options.arms);
+  const fixtures = createFixtureResources(options.runId, options.arms);
   const lanes: Lane[] = fixtures.arms.map((fixture) => ({
     fixture,
     box: `ab-${fixture.strategy}-${options.runId}`,

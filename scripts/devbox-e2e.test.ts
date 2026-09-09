@@ -149,7 +149,7 @@ const OPEN_WRITE_FILE = 'open-write.bin';
 
 /** The lifecycle, driven against a fake, with everything it needs stated. */
 async function drive(
-  fake: FakeSeam, ceilings: OperationCeiling[], strategy: Strategy = 'r2fs',
+  fake: FakeSeam, ceilings: OperationCeiling[], strategy: Strategy = 'snapshot-chain',
 ): Promise<StrategyVerdict> {
   return await runLifecycle(strategy, `ab-${strategy}-test`, fake.seam, {
     ceilings,
@@ -228,14 +228,14 @@ describe('the ceiling is the oracle', () => {
     const fake = fakeSeam();
     const wedged: FakeSeam = { ...fake, seam: wedgedSeam(fake.seam) };
     const started = Date.now();
-    const verdict = await drive(wedged, ceilingsAt(120), 'bounded-layers');
+    const verdict = await drive(wedged, ceilingsAt(120), 'snapshot-chain');
     const elapsed = Date.now() - started;
 
     expect(verdict.passed).toBeFalse();
     // THE WHOLE POINT: the arm, the operation and the bound are all in the one
     // sentence a reader sees, and the run ended at the ceiling rather than
     // hanging with the wedged operation.
-    expect(verdict.failures[0]).toContain('bounded-layers');
+    expect(verdict.failures[0]).toContain('snapshot-chain');
     expect(verdict.failures[0]).toContain('checkpoint-small');
     expect(verdict.failures[0]).toContain('did not settle inside its 120 ms ceiling');
     expect(elapsed).toBeLessThan(5_000);
@@ -264,15 +264,15 @@ describe('the ceiling is the oracle', () => {
     expect(refusedVerdict.failures[0]).toContain('skipped (work directory is unchanged)');
   });
 
-  test('a lane never throws, so one arm\'s refusal cannot reach a sibling', async () => {
+  test('a lane never throws, so one lane\'s refusal cannot reach a sibling', async () => {
     const broken = fakeSeam({}, {
       exec: async (): Promise<ExecOutcome> => { throw new Error('the container is gone'); },
       teardown: async (): Promise<void> => { throw new Error('teardown refused too'); },
     });
 
     const [brokenVerdict, healthyVerdict] = await Promise.all([
-      drive(broken, ceilingsAt(2_000), 'merkle-pack'),
-      drive(fakeSeam(), ceilingsAt(5_000), 'overlay-cas'),
+      drive(broken, ceilingsAt(2_000)),
+      drive(fakeSeam(), ceilingsAt(5_000)),
     ]);
 
     expect(brokenVerdict.passed).toBeFalse();
@@ -384,7 +384,7 @@ describe('the restore is verified byte for byte', () => {
 });
 
 describe('a calibration pass proposes ceilings from what it measured', () => {
-  test('three times the slowest arm that settled, and nothing from an arm that did not', () => {
+  test('three times the slowest step that settled, and nothing from one that did not', () => {
     const settled = (strategy: Strategy, ms: number, ok = true): StrategyVerdict => ({
       strategy,
       box: `ab-${strategy}`,
@@ -395,10 +395,10 @@ describe('a calibration pass proposes ceilings from what it measured', () => {
     });
 
     const proposals = proposedCeilings([
-      settled('r2fs', 8_100),
+      settled('snapshot-chain', 8_100),
       settled('snapshot-chain', 12_040),
       // A step that FAILED is not evidence of how long the operation takes.
-      settled('bounded-layers', 900_000, false),
+      settled('snapshot-chain', 900_000, false),
     ]);
 
     const wake = proposals.find((proposal) => proposal.op === 'wake-attach');
@@ -410,7 +410,7 @@ describe('a calibration pass proposes ceilings from what it measured', () => {
 
 describe('the deployed seam is the bench harness\'s own routes', () => {
   test('it is built from one fixture and one box, and exposes exactly the lifecycle\'s operations', () => {
-    const seam = deployedSeam({ origin: 'https://bench.invalid', token: 'token' }, 'ab-r2fs-probe');
+    const seam = deployedSeam({ origin: 'https://bench.invalid', token: 'token' }, 'ab-chain-probe');
     expect(Object.keys(seam).sort()).toEqual(
       ['checkpoint', 'exec', 'startup', 'stop', 'teardown', 'write'],
     );

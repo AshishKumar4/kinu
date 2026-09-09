@@ -4,8 +4,7 @@
  *
  * It runs INSIDE the container, under the bun the sandbox image already
  * carries, because every byte has to travel the strategy's real write path: the
- * s3fs mount for `r2fs`, the overlay upper for `snapshot-chain` and
- * `overlay-cas`, the journal daemon's FUSE mount for both candidates. A driver
+ * overlay upper the snapshot chain serves its work directory from. A driver
  * that wrote through the `/write` route instead would be measuring the Durable
  * Object's file API rather than the storage strategy under test.
  *
