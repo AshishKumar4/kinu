@@ -95,8 +95,6 @@ export interface ConformanceManifest {
 
 // ── Recurring reasons ────────────────────────────────────────────────────────
 
-const SUBORDINATE_SCOPED = (what: string): string =>
-  `${what} is a workspace-level surface; a subordinate reaches it through its orchestrator, not directly`;
 const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a signed-out local runtime has no account plane to serve it`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
@@ -114,26 +112,25 @@ const TEAM_RECURSES = {
 /**
  * The workspace filesystem's own tables.
  *
- * WIRED wherever a workspace lives, which is the orchestrator's own Durable
- * Object: `createWorkspace` opens Nimbus over `ctx.storage.sql`, so these sit
- * beside the conversation and the memory index that reads them. Absent on a
- * SUBORDINATE for the reason every shared-workspace surface is absent there —
- * a facet has its own SQLite and shares its parent's tree over one RPC, so a
- * filesystem in its own database would be a second, empty workspace.
+ * WIRED wherever a workspace lives: `createWorkspace` opens Nimbus over the
+ * host database — the orchestrator's own `ctx.storage.sql` on cf, the session's
+ * SQLite file locally — so these sit beside the conversation and the memory
+ * index that reads them. Every hosted actor of that workspace is scoped over
+ * that same database and works in that same tree, which is the point of hiring
+ * one, so a subordinate observes exactly these tables too.
  */
 const NIMBUS_BASE = {
   'cf-orchestrator': WIRED,
-  'cf-subordinate': {
-    absent: SUBORDINATE_SCOPED('the workspace filesystem')
-      + '; composing one here would be a second, empty workspace',
-  },
+  'cf-subordinate': WIRED,
   cli: WIRED,
 } satisfies RootStatuses;
 const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
+/** The release board's home is the OWNER's UserDO on cf, so no workspace
+ *  database there holds it — neither the root's rows nor a hire's. */
 const RELEASE_TABLE = {
   'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
-  'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
+  'cf-subordinate': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
   cli: WIRED,
 } satisfies RootStatuses;
 
@@ -260,24 +257,20 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // for the same reason: `initWorkspaceSchema` creates it, and a swarm forked down
     // into a local session re-enters the same rows.
     swarm_node_records: EVERYWHERE,
-    // The two tables the hosted facet class carries for its exploration modes,
-    // created at every activation of that class (`SubordinateAgent.onStart`) so
-    // a branch's first write is not what brings them into being. `traces` is
-    // the branch rollout's own step record, read back by its reflection;
-    // `facet_model_operation_outbox` holds the operation frames a facet forwards
-    // to its root until the root acknowledges them. The orchestrator is where
-    // those frames LAND, and a local branch runs in its own worker process with
-    // its own database (cli-backend/src/branch-worker.ts).
-    traces: {
-      'cf-orchestrator': { absent: 'a root never rolls a branch out in its own storage; every rollout runs in a facet' },
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local branch keeps its trace in its own worker process\'s database (branch-worker.ts)' },
-    },
-    facet_model_operation_outbox: {
-      'cf-orchestrator': { absent: 'the root is where a facet\'s forwarded operation frames land; it buffers none of its own' },
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local branch reports its operation frames in-process, with no isolate boundary to buffer across' },
-    },
+    // `traces` AND `facet_model_operation_outbox` ARE DELIBERATELY ABSENT FROM
+    // THIS REGISTRY, and their removal is the entry. Both belonged to the
+    // hosted facet class: `traces` held a branch rollout's step text across the
+    // two RPCs that could hibernate between them, and the outbox buffered the
+    // operation frames a facet forwarded to its root. A rollout branch is a
+    // logical actor in the workspace's own database now — its trace is the
+    // handle it produced and `search_nodes.observation` beside it
+    // (`cf-backend/src/exploration-hosting.ts`), and there is no isolate
+    // boundary left to buffer operation frames across — so no DDL in this tree
+    // creates either table on any root. Declaring them `absent` with a reason
+    // would say the product could have them and chose not to; declaring them
+    // `wired` said they existed. Neither is true, so they are not plane
+    // members, and the comparator reports an observed-but-undeclared table
+    // loudly if that is ever wrong.
 
     // ── events hub ──
     // `outbox_peer` is not in this group: the shared outbox creates its table
@@ -388,17 +381,17 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
           + 'registry to wire and nothing to sweep',
       },
     },
-    // The Agents SDK's durable execution rows. A subordinate opens its terminal
-    // recovery lane during start. A root creates the same tables only when its
-    // first durable fiber starts.
+    // The Agents SDK's durable execution rows, created by the first `runFiber`
+    // in the object's own database — the one database every actor of that
+    // workspace shares, so both cf roots see them from the same creator.
     cf_agents_runs: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
-      'cf-subordinate': WIRED,
+      'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     cf_agents_fibers: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('runFiber'),
-      'cf-subordinate': WIRED,
+      'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
     // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
@@ -517,29 +510,35 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: WIRED,
     },
+    // A subordinate's own name, mission, depth and lifetime — the CLI's
+    // durable identity row for a hired child. On cf those four are columns on
+    // the child's `workspace_actors` row, written by the directory under its
+    // parent's authority, so nothing on either cf root creates this table.
     subordinate_identity: {
-      'cf-orchestrator': { absent: 'lives on each subordinate DO, seeded by setSubordinateIdentity' },
-      'cf-subordinate': WIRED,
-      cli: { absent: 'lives in each local subordinate actor-state database, not the root workspace database' },
+      'cf-orchestrator': { absent: "a hosted actor's identity is its `workspace_actors` row, which the directory owns" },
+      'cf-subordinate': { absent: "a hosted actor's identity is its `workspace_actors` row, which the directory owns" },
+      cli: LAZY_ON_FIRST_USE("the first local hire's SubordinateIdentityStore"),
     },
-    // One uid/gid row per facet home, on the root that provisions the homes:
-    // `facetHomeProvisioner` creates the table on the first provision, and the
-    // workspace that owns the file plane is the only root that provisions
-    // (orchestrator.ts provisionFacetHome; the CLI runtime's nodeRuntime). A
-    // subordinate asks its owner for a home and holds no uid rows of its own.
+    // One uid/gid row per actor home, in the database of the workspace that
+    // owns the file plane: `facetHomeProvisioner` creates the table on the
+    // first provision (orchestrator.ts provisionHostedActorHome; the CLI
+    // runtime's nodeRuntime). Every hosted actor of that workspace is
+    // provisioned a home when it is acquired, so a subordinate observes the
+    // rows — its own among them — rather than holding a table of its own.
     kinu_agent_identity: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('facetHomeProvisioner'),
-      'cf-subordinate': { absent: 'the owning workspace provisions every facet home and keeps the uid rows' },
+      'cf-subordinate': WIRED,
       cli: LAZY_ON_FIRST_USE('facetHomeProvisioner'),
     },
     // The webhook gate — auth, replay window, rate limit — is core's, and the
-    // cloud orchestrator provisions its tables at boot. A local workspace has
-    // no inbound HTTP transport in front of it: it mints no URL, `kinu triggers
-    // <name> webhook` refuses a local target, and the session holds no
-    // delivery door, so it provisions neither gate table.
+    // cloud orchestrator provisions its tables at boot, in the one database
+    // every actor of that workspace reads. A local workspace has no inbound
+    // HTTP transport in front of it: it mints no URL, `kinu triggers <name>
+    // webhook` refuses a local target, and the session holds no delivery door,
+    // so it provisions neither gate table.
     webhook_rate_windows: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      'cf-subordinate': WIRED,
       cli: { absent: NO_LOCAL_INGRESS },
     },
     // One row per signed delivery already spent, so a captured HMAC request
@@ -549,7 +548,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // admit replays.
     webhook_replay_claims: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      'cf-subordinate': WIRED,
       cli: { absent: NO_LOCAL_INGRESS },
     },
     // The plaintext HMAC/bearer secret a registered webhook was created with,
@@ -559,41 +558,37 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // credential, so a restore does not resurrect one.
     webhook_secrets: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('registerDurableWebhook'),
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
+      'cf-subordinate': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    vfs_baseline: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace VFS baseline snapshot') },
-      cli: WIRED,
-    },
+    vfs_baseline: EVERYWHERE,
     // One row per container lifecycle incident the workspace has been told
     // about, carrying only whether that incident's announcement landed — the
     // dedupe that makes a retrying container produce one turn rather than one
-    // per retry. Keyed to the WORKSPACE's container: a subordinate rides its
-    // parent's, so it has none of its own to be told about, and the CLI's
-    // executor is the host machine rather than a container that can be
-    // restored, snapshotted or discarded.
+    // per retry. Keyed to the WORKSPACE's container, which every actor of that
+    // workspace shares and reads the incidents of; the CLI's executor is the
+    // host machine rather than a container that can be restored, snapshotted
+    // or discarded.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace container\'s lifecycle') },
+      'cf-subordinate': WIRED,
       cli: { absent: 'the local executor is the host machine, which has no snapshot, restore or discard stage to fail at' },
     },
     turn_feedback: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('operator feedback capture') },
+      'cf-subordinate': WIRED,
       cli: { absent: 'operator feedback arrives through the web surface only' },
     },
     // The sleep-time answer a terminal effect already paid for, kept between the
     // model call and the fact mutation so a replay applies the same update.
     sleep_time_updates: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the sleep-time compute lane') },
+      'cf-subordinate': WIRED,
       cli: { absent: "a local turn's sleep-time compute cannot be interrupted between its call and its write" },
     },
     turn_craft_usage: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('craft-usage telemetry') },
+      'cf-subordinate': WIRED,
       cli: LAZY_ON_FIRST_USE('the in-episode craft clock'),
     },
 
@@ -675,14 +670,17 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
 
     // ── the cf outbound intent logs (write-ahead + idempotency) ──
+    // The WORKSPACE's logs, and both cf roots observe them: one database holds
+    // every actor's rows, and a hire's outbound intent is written to the same
+    // log the workspace's own is.
     outbox_email: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the mission-inbox outbox') },
+      'cf-subordinate': WIRED,
       cli: { absent: NO_USER_PLANE('outbound email') },
     },
     outbox_peer: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the peer outbox') },
+      'cf-subordinate': WIRED,
       cli: { absent: NO_USER_PLANE('cross-workspace peer delivery') },
     },
   },

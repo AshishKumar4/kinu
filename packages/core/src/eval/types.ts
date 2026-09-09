@@ -8,6 +8,49 @@
 import * as v from 'valibot';
 import type { JsonObject } from '../utils/json';
 
+/**
+ * What one case is allowed to SPEND to be counted as having done it well.
+ *
+ * A trajectory eval that reports only pass/fail cannot tell a task solved in
+ * three steps from the same task solved in forty after nine failed tool calls,
+ * and the second is the one that costs a user their session. So every dimension
+ * here is a ceiling the tier measures against rather than a knob that changes
+ * what the agent may do: nothing in this type is enforced on the agent, and a
+ * case that blows its budget still runs to completion and still reports whether
+ * it solved the task. The budget is scored beside the outcome, never instead of
+ * it.
+ *
+ * EVERY FIELD IS OPTIONAL AND AN ABSENT ONE IS NOT SCORED — "no ceiling
+ * declared" and "ceiling of zero" are different facts, and the tier's whole
+ * eligible/passed convention rests on keeping them apart. A budget object with
+ * no fields is therefore legal and means "measure this case's cost, hold it to
+ * nothing", which is what a case whose sizing nobody has established yet
+ * honestly declares.
+ *
+ * Values are per CASE, not per turn: a multi-turn case's ceiling covers the
+ * whole episode, because "twelve steps" split across three turns is the same
+ * cost to the person waiting as twelve steps in one.
+ */
+export const EvalBudgetSchema = v.object({
+  /** Model steps the episode may close. `step_finish` rows, so it counts what
+   *  the loop actually did rather than what a cap allowed. */
+  steps: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /** Input plus output tokens over the whole episode. One number rather than
+   *  two: which side a task spends on is a property of the task, and splitting
+   *  the ceiling would make a case that reads a large file look profligate. */
+  tokens: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  /** The largest share of this episode's tool calls that may have failed, in
+   *  [0,1]. A ceiling rather than zero because some cases are ABOUT a failure —
+   *  a refusal the agent must recover from is a failed tool call and a correct
+   *  trajectory. */
+  toolErrorRate: v.optional(v.pipe(v.number(), v.minValue(0), v.maxValue(1))),
+  /** Wall milliseconds from the first prompt to the settled episode. Wall, not
+   *  model time: the number a user experiences includes every tool call. */
+  wallMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+});
+
+export type EvalBudget = v.InferOutput<typeof EvalBudgetSchema>;
+
 /** A single eval case — task + optional rubric for the judge. */
 export interface EvalCase {
   id: string;
@@ -37,6 +80,12 @@ export interface EvalCase {
    * declared the parameters still narrows them at the point of use.
    */
   params?: JsonObject;
+  /**
+   * What this case may spend. Absent, the case's cost is still measured and
+   * recorded — it is simply held to nothing, which is what every case did
+   * before this field existed.
+   */
+  budget?: EvalBudget;
 }
 
 /** One strategy's run against one case. */

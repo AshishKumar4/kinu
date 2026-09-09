@@ -230,7 +230,7 @@ requirements:
       - Kinu.MCTS.StorageIsolation.transition_preserves_isolation
     tsRefs:
       - packages/cli-backend/src/branch-process.ts#createBranchSpawner
-      - packages/cli-backend/src/branch-worker.ts#dbPath
+      - packages/cli-backend/src/branch-worker.ts#validateActor
       - packages/cf-backend/src/runtime.ts#createCFRuntime
     remainingEvidence:
       - Transition postconditions are hand-asserted rather than refined from branch spawning and storage code
@@ -648,7 +648,7 @@ requirements:
       - Kinu.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
       - Kinu.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
-      - packages/cf-backend/src/subordinate-agent.ts#SubordinateAgent
+      - packages/cf-backend/src/actor-hosting.ts#createWorkspaceActorHost
       - packages/core/src/strategy/swarm.ts#SWARM_UNITS
     remainingEvidence:
       - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist
