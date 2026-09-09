@@ -310,7 +310,7 @@ requirements:
     remainingEvidence:
       - No covering integration test writes a payload larger than the production chunk size
       - WP-F4 differential multi-chunk fixtures
-      - Chunk reassembly itself lives in @nimbus-sh/core since the Nimbus cutover, so no in-repo function concatenates chunks; readRange is the in-repo read path over those chunk rows
+      - Chunk reassembly itself lives in @nimbus-sh/core, so no in-repo function concatenates chunks; readRange is the in-repo read path over those chunk rows
   PR-EXPL-001:
     statement: The objective's direction admits exactly two values, strict betterness is irreflexive, asymmetric, transitive and total up to ties, a verifier's return type cannot report a fault, and an adversary bound is declarable but refused as a floor.
     status: by-construction-witness
@@ -338,8 +338,8 @@ requirements:
       - Kinu.Exploration.floorAdmissible_rejects_negative_margin
       - Kinu.Exploration.floorAdmissible_rejects_breaching_baseline
       - Kinu.Exploration.floorAdmissible_rejects_adversary
-      - Kinu.Exploration.old_majority_floor_escapes_c1
-      - Kinu.Exploration.fixed_majority_floor_has_more_room
+      - Kinu.Exploration.defective_majority_floor_escapes_c1
+      - Kinu.Exploration.corrected_majority_floor_has_more_room
       - Kinu.Exploration.c1_refuses_a_refuted_floor
     tsRefs:
       - packages/core/src/strategy/objective.ts#floorMargin

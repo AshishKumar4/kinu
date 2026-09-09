@@ -328,8 +328,8 @@ aborts it, its mission governor declines the next request, or an opt-in
 are read between steps, so none interrupts one: a node runs in the isolate that
 ran the search, as its own logical actor of the one workspace, and the search
 records the cut on the node's own report under the cancel reason. There is no
-node facet and no node-loop host any more — the loop runs in one place, so the
-cut is observed in one place.
+node facet and no node-loop host — the loop runs in one place, so the cut is
+observed in one place.
 
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
 22 / 25 / 26 steps when a 1,200,000 ms abort fired. Their mean steps were

@@ -79,15 +79,15 @@ its own ledgers and reaches the workspace over one RPC
 would be a second, empty workspace.
 
 Destruction is one object's teardown: `this.destroy()` drops the filesystem with
-the conversation, so a same-name recreate cannot find half a workspace. Fresh
-workspaces start on this layout directly; there is no cutover, legacy copy, dual
-read, synchronization bridge, or fallback filesystem.
+the conversation, so a same-name recreate cannot find half a workspace. Every
+workspace starts on this layout directly: one filesystem, one reader, no second
+copy, no synchronization bridge, no fallback.
 
 A hosted workspace cannot run the wasm interpreters (`bash`, `python3`,
 `ruby`, `clang`). Those need a facet substrate that compiles and enters a guest
 module, which on workerd is a dynamic-worker pool the Nimbus session
 object composed for itself. `NIMBUS_RUNTIME_CACHE` stays bound and `runtimes.*` still
-reaches it, but the workspace executor no longer declares `python` or
+reaches it, but the workspace executor declares neither `python` nor
 `native_binary` on this backend (`runtimeCatalog: false`, `runtime.ts`). The
 local CLI keeps them. It supplies `localFacetHost()`, which a Worker cannot.
 
@@ -197,8 +197,8 @@ separate site. A Worker-only flag cannot deliver it honestly.
   before Nimbus destruction preserves the authoritative workspace.
 - A same-name recreation never reconnects to an undeleted Nimbus session.
 
-These are fresh-state invariants. There is no migration path and no old-layout
-compatibility path. That is deliberate.
+These are fresh-state invariants. One layout, one read path, and nothing bridges
+to a second one. That is deliberate.
 
 ## Configuration and package boundary
 

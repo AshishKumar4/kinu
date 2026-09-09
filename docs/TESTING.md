@@ -81,11 +81,11 @@ files run in workerd, not Bun. The UI command is
 It drives Chromium over the gallery. The UI-gates row in `scripts/ladder.ts`
 declares that cost at the `ci` tier. `gate:computed-style` stays standalone at
 vite plus Chrome over every gallery frame it boots. Both figures are in
-`bun scripts/ladder.ts --matrix` rather than here: the line numbers this
-paragraph used to cite had slid onto an unrelated gate, and the frame count it
-quoted was two short of the one the gate reads.
+`bun scripts/ladder.ts --matrix` rather than here: a line number quoted here
+slides onto an unrelated gate, and a frame count quoted here goes stale against
+the one the gate reads.
 
-### Ambient credentials no longer change what a suite measures
+### Ambient credentials do not change what a suite measures
 
 `resolveCloudSession()` prefers `KINU_TOKEN`. `resolveCloudOrigin()` prefers
 `KINU_ORIGIN`. A shell that had run `kinu chat` moved thirteen tests across six

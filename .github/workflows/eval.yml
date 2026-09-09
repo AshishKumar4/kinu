@@ -3,19 +3,19 @@ name: Quality Eval
 # Two jobs with different costs, so they get different triggers.
 #
 # `benchmark` makes REAL model calls. It runs only when someone asks for it —
-# manual dispatch, or a PR labelled `run-eval`. It used to run nightly with the
-# baseline defaulting to the candidate model, i.e. it paid every night to have
-# one model judged against itself, against an uncalibrated floor, on a corpus
-# containing tasks a no-tools single-shot cannot perform. The script now refuses
-# that configuration; the schedule is gone with it.
+# manual dispatch, or a PR labelled `run-eval`. The schedule cannot start it: a
+# nightly run, with the baseline defaulting to the candidate model, pays every
+# night to have one model judged against itself, against an uncalibrated floor,
+# on a corpus containing tasks a no-tools single-shot cannot perform. The script
+# refuses that configuration outright.
 #
 # WHO IT RUNS AS, AND WHERE IT POINTS. The `eval-service` account, against the
 # staging deployment. Both come from scripts/eval-credentials.ts over
 # packages/test-utils/src/eval-identity.ts — the resolution every other eval
 # path uses — and a credential aimed at any other deployment is refused there
-# and stops this job. It used to read a base URL and an auth header straight
-# from repository secrets, so one secret could name production and nothing
-# asked. Two vendor keys remain secrets, ANTHROPIC_API_KEY and OPENAI_API_KEY:
+# and stops this job. Neither a base URL nor an auth header comes from a
+# repository secret — one such secret could name production and nothing would
+# ask. Two vendor keys remain secrets, ANTHROPIC_API_KEY and OPENAI_API_KEY:
 # each buys a model from its vendor, names no deployment, and creates nothing.
 #
 # `validate-corpus` needs no credentials and no model, so it keeps the nightly
@@ -130,8 +130,8 @@ jobs:
       # called no model would answer a question nobody asked. It also refuses to
       # run when the baseline is not a different model.
       #
-      # Every dispatch input arrives through `env`, including the baseline. It
-      # used to be spliced into this command line, where a value is shell syntax
+      # Every dispatch input arrives through `env`, including the baseline, and
+      # none is spliced into this command line, where a value is shell syntax
       # rather than an argument: a dispatcher already needs write access, so this
       # is not the boundary that keeps a stranger out, but a run input is DATA and
       # a credential-bearing step is the last place to let data decide what runs.
