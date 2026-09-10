@@ -1747,7 +1747,7 @@ export {
 export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/model-catalog';
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, inheritedContextFromRows,
+  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromConversation,
   INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 

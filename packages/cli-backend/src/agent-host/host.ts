@@ -25,7 +25,7 @@
 
 import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { LanguageModel, ModelMessage } from 'ai';
+import type { LanguageModel } from 'ai';
 import {
   EventLog,
   ReplyChannelStore,
@@ -45,7 +45,7 @@ import {
   delegationBudgetAtDepth,
   delegationExhausted,
   describeSubordinateHandoff,
-  inheritedContextFromHistory,
+  inheritedContextFromConversation,
   headAgentName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
@@ -878,7 +878,7 @@ export class LocalAgentHost {
         runtime: this.childRuntime(input.key),
         now: () => Date.now(),
         renderInheritedContext: () => renderSubordinateInheritedContext(
-          inheritedContextFromHistory(readConversationTail(this.requireEntry(input.key))),
+          readConversationTail(this.requireEntry(input.key)),
         ),
         createName: mintSubordinateName,
       }),
@@ -1510,8 +1510,7 @@ export class LocalAgentHost {
       roster: parent.roster,
       runtime: this.childRuntime(parent.key),
       now: () => Date.now(),
-      inheritedContext: (): SerializedMessage[] =>
-        inheritedContextFromHistory(readConversationTail(parent)),
+      inheritedContext: (): SerializedMessage[] => readConversationTail(parent),
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
@@ -1912,17 +1911,10 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
   return { name: childName, cwd: parent.ref.cwd, workspaceId: parent.ref.workspaceId };
 }
 
-function readConversationTail(entry: HostEntry): ModelMessage[] {
-  const rows = makeSql(entry.tree.db)<{ role: string; content: string }>`
-    SELECT role, content FROM messages
-    WHERE actor_id = ${entry.ws.rt.actor.actorId} AND session_id = ${entry.sessionId}
-      AND role IN ('user', 'assistant')
-    ORDER BY created_at DESC, rowid DESC LIMIT 16`;
-
-  return rows.reverse().map((row): ModelMessage => ({
-    role: row.role === 'assistant' ? 'assistant' : 'user',
-    content: row.content,
-  }));
+/** The recent durable conversation a hire inherits — core's one reader over
+ *  the plain store, with core's cap and its omission note. */
+function readConversationTail(entry: HostEntry): SerializedMessage[] {
+  return inheritedContextFromConversation(makeSql(entry.tree.db), entry.ws.rt.actor, entry.sessionId);
 }
 
 /**
