@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-09",
+  "measuredAt": "2026-09-10",
   "files": 2060,
-  "functions": 52085,
+  "functions": 52096,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -23,7 +23,7 @@
     },
     {
       "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
-      "complexity": 79
+      "complexity": 78
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#measureArm",
