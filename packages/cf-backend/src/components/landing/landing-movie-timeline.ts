@@ -135,7 +135,7 @@ export function cursorAt(t: number): MovieCursor {
 
 /* ── the story fixtures ─────────────────────────────────────────────────── */
 
-export const MOVIE_ASK
+const MOVIE_ASK
   = 'Archived coupons still apply at checkout. Plan the fix, then build the support-queue dashboard.';
 
 const PLAN_REASONING

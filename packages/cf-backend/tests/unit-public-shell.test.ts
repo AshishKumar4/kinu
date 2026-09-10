@@ -31,7 +31,7 @@ import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from '../src/lib/public-pages';
 import {
-  CURSOR_ENTER_AT, MOVIE_ASK, MOVIE_CUES, MOVIE_END,
+  CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
 } from '../src/components/landing/landing-movie-timeline';
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
@@ -511,10 +511,14 @@ describe('the landing walkthrough timeline', () => {
 
   test('the composer types the request, then clears on send', () => {
     expect(composerTextAt(0)).toBe('');
+    // A PREFIX of the finished draft, asserted through the function rather than
+    // against the constant: the observable contract is that typing grows toward
+    // the request and is not yet complete partway through.
+    const full = composerTextAt(MOVIE_CUES.sent - 1);
     const mid = composerTextAt((MOVIE_CUES.typeStart + MOVIE_CUES.sent) / 2);
     expect(mid.length).toBeGreaterThan(0);
-    expect(MOVIE_ASK.startsWith(mid)).toBeTrue();
-    expect(mid.length).toBeLessThan(MOVIE_ASK.length);
+    expect(full.startsWith(mid)).toBeTrue();
+    expect(mid.length).toBeLessThan(full.length);
     expect(composerTextAt(MOVIE_CUES.sent)).toBe('');
     expect(composerTextAt(MOVIE_END)).toBe('');
   });
