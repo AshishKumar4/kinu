@@ -388,6 +388,41 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
+    // The Agents SDK's session store — the tables Think's activation creates
+    // (`Session.create(this)` then a session read in Think's `onStart`, which
+    // runs `AgentSessionProvider.ensureTable`) on every wake of either cf root,
+    // in the one database every actor of the workspace shares. Declared because
+    // Kinu READS them directly: `assistant_messages` is the pane store
+    // `identity/conversation-store.ts` selects on a hosted workspace, and the
+    // fork, archive, search, eval-split and inherited-context readers all name
+    // it in raw SQL. `@cloudflare/think`'s unreleased `brisk-chats-branch`
+    // changeset lifts these into `cf_agents_session_*` on first wake and DROPS
+    // them, which is exactly the disappearance this census must report.
+    // `assistant_compactions` and `assistant_config` are read by nothing in
+    // Kinu and are here so the one `ensureTable` that creates all four is
+    // observed whole. `assistant_fts` is the provider's FTS5 index
+    // (`normalizeObservedTables` folds its shadow tables); Kinu's own index is
+    // `conversation_fts`.
+    assistant_messages: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session has no Think base; its default chat is the core `messages` table, the store `hasPaneStore` falls to' },
+    },
+    assistant_compactions: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session has no Think base and no SDK compaction overlay; compaction is the core transformContext extension' },
+    },
+    assistant_config: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session has no Think base; session settings are `actor_config` rows' },
+    },
+    assistant_fts: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session has no Think base; the conversation index is the core `conversation_fts` table' },
+    },
     // `cf_agents_sub_agents` IS DELIBERATELY ABSENT FROM THIS REGISTRY, and its
     // absence is the entry. It is the Agents SDK's facet registry, created by
     // the first `subAgent()` call. No Kinu actor spawns a facet: a hired

@@ -14,19 +14,33 @@ import {
   renderConformanceFindings,
   type AgentRuntime, type ObservedSurface,
 } from '@kinu.run/core';
+import { Session, type SqlProvider } from 'agents/experimental/memory/session';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import type { ActorHarness, HarnessOrchestratorAgent } from './helpers/actor-harness';
 
-interface RawToolsAgent {
+interface RawToolsAgent extends SqlProvider {
   observeRawTools(): ToolSet;
   observeRuntime(): AgentRuntime;
   _kinuTerminalRetryTick(): Promise<void>;
+}
+
+/**
+ * The transcript read Think's own activation performs — `Session.create(this)`
+ * then a session read in Think's `onStart` — which is what creates the SDK's
+ * `assistant_*` tables on every wake. The harness boots the actor half of
+ * `onStart` alone (actor-harness.ts `ensureActorSchema`), so without this the
+ * table plane is observed BEFORE the vendor store exists and a census row for
+ * a table Kinu reads in raw SQL could never be checked in either direction.
+ */
+async function activateSession(agent: SqlProvider): Promise<void> {
+  await Session.create(agent).getLatestLeaf();
 }
 
 async function observe(workspace: ActorHarness<RawToolsAgent>): Promise<ObservedSurface> {
   const tools = workspace.agent.observeRawTools();
   await workspace.agent.observeRuntime().storage.vfs.exists('SOUL.md');
   await workspace.agent._kinuTerminalRetryTick();
+  await activateSession(workspace.agent);
   return {
     root: 'cf-orchestrator',
     planes: {
@@ -56,6 +70,7 @@ async function observeSubordinate(
   });
   const { tools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove the subordinate surface');
   await workspace.agent._kinuTerminalRetryTick();
+  await activateSession(workspace.agent);
   return {
     root: 'cf-subordinate',
     planes: {
