@@ -928,6 +928,61 @@ describe('CLI TUI layout', () => {
     }
   });
 
+  // Finishing the home screen once rendered an empty box and freed the
+  // renderer, which unmounted nothing: a React commit still queued at that
+  // moment landed afterwards on a tree whose native side was gone, and its
+  // blur wrote the cursor position through the released renderer pointer — a
+  // segfault in one create in ten, because the create test reaches complete()
+  // with the "busy" update pending only when the create outran React's
+  // scheduler. This does not sample that race, it forces it: Tab queues a
+  // focus commit, and Escape finishes the screen in the same tick, before that
+  // commit can run. What a consumer observes is then the whole assertion —
+  // once the renderer is freed, nothing at all reaches the native library.
+  // The list names what did, which a panic block never could.
+  test('nothing reaches the native library after the home screen frees its renderer', () => {
+    const run = runHomeScreen({
+      driver: `
+        const lib = renderer.lib;
+        const ptr = renderer.rendererPtr;
+        let freed = false;
+        const afterFree = [];
+        const destroyRenderer = lib.destroyRenderer.bind(lib);
+        lib.destroyRenderer = (target) => { destroyRenderer(target); if (target === ptr) freed = true; };
+        for (const name of Object.getOwnPropertyNames(Object.getPrototypeOf(lib))) {
+          if (name === 'constructor' || name === 'destroyRenderer' || typeof lib[name] !== 'function') continue;
+          const original = lib[name].bind(lib);
+          lib[name] = (...args) => {
+            if (freed) afterFree.push(name);
+            // A call through the freed pointer IS the segfault, so it is
+            // recorded and not forwarded; everything else still runs, because
+            // a stubbed allocation only moves the failure into a TypeError.
+            return freed && args[0] === ptr ? undefined : original(...args);
+          };
+        }
+        await waitFor('the mission field to render', () => frame().includes('What is this workspace for?'));
+        mockInput.pressTab();
+        mockInput.pressEscape();
+        const finalAction = await opened;
+        // Whatever React still holds runs on its own macrotask; wait it out
+        // without renderOnce, which would drive the freed renderer itself.
+        for (let i = 0; i < 5; i++) await Bun.sleep(10);
+        console.log(JSON.stringify({ finalAction, afterFree }));
+      `,
+    });
+    try {
+      const observed = v.parse(v.object({
+        finalAction: v.nullable(v.record(v.string(), v.unknown())),
+        afterFree: v.array(v.string()),
+      }), JSON.parse(run.stdout));
+      // The exit itself has to have happened, or an empty list is a screen
+      // that never finished rather than one that finished cleanly.
+      expect(observed.finalAction).toEqual({ type: 'exit' });
+      expect(observed.afterFree).toEqual([]);
+    } finally {
+      rmSync(run.home, { recursive: true, force: true });
+    }
+  });
+
   test('home model and effort selections persist as global defaults', () => {
     const kinuHome = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
     try {
