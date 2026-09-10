@@ -14,6 +14,7 @@ describe('TUI transcript rendering', () => {
   test('the user turn carries the YOU gutter, left-aligned; assistant markdown stays unprefixed', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
@@ -52,7 +53,9 @@ describe('TUI transcript rendering', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
@@ -87,6 +90,7 @@ describe('TUI transcript rendering', () => {
   test('text and tool calls render chronologically interleaved', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 30, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       // The transcript order IS the chronological order: text, tool, text, tool.
       root.render(
@@ -127,6 +131,7 @@ describe('TUI transcript rendering', () => {
   test('a live assistant segment renders its streaming text in place', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
@@ -150,6 +155,7 @@ describe('TUI transcript rendering', () => {
   test('steered user messages carry the steering marker', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%', backgroundColor: TEST_TUI_BACKGROUND }}>
@@ -181,6 +187,7 @@ describe('TUI transcript rendering', () => {
       const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === themeId)!;
       const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
+
       try {
         root.render(
           <TuiThemeProvider selection={{ mode: 'theme', themeId }} terminalAppearance={theme.appearance} colorCapability="truecolor">
@@ -191,9 +198,11 @@ describe('TUI transcript rendering', () => {
             </box>
           </TuiThemeProvider>,
         );
+
         const spans = await renderUntil(renderOnce, captureSpans, (frame) => (
           ['PROSELINE', 'const FENCED'].every((text) => frame.some((span) => span.text.includes(text)))
         ));
+
         const fenced = spans.find((span) => span.text.includes('const FENCED'))!;
         const prose = spans.find((span) => span.text.includes('PROSELINE'))!;
         const rail = spans.find((span) => span.text.includes('│'))!;
@@ -222,9 +231,11 @@ describe('TUI transcript rendering', () => {
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     let pick: (themeId: string) => void = () => undefined;
+
     function Transcript() {
       const [themeId, setThemeId] = useState('kinu-light');
       pick = setThemeId;
+
       return (
         <TuiThemeProvider selection={{ mode: 'theme', themeId }} terminalAppearance={themeId === 'kinu-light' ? 'light' : 'dark'} colorCapability="truecolor">
           <box style={{ width: '100%', height: '100%' }}>
@@ -233,13 +244,16 @@ describe('TUI transcript rendering', () => {
         </TuiThemeProvider>
       );
     }
+
     try {
       root.render(<Transcript />);
       await renderUntil(renderOnce, captureSpans, (frame) => frame.some((span) => span.text.includes('const FENCED')));
       pick('high-contrast');
+
       const spans = await renderUntil(renderOnce, captureSpans, (frame) => (
         frame.some((span) => span.text.includes('const FENCED') && hex(span.bg) === contrast.colors.well.fill)
       ));
+
       const fenced = spans.find((span) => span.text.includes('const FENCED'))!;
       expect(hex(fenced.bg)).toBe(contrast.colors.well.fill);
       expect(hex(fenced.fg)).toBe(contrast.colors.well.code);
@@ -263,12 +277,15 @@ async function renderSettled(
   texts: readonly string[],
 ): Promise<string> {
   let frame = '';
+
   for (let index = 0; index < 60; index += 1) {
     await renderOnce();
     frame = captureCharFrame();
+
     if (texts.every((text) => frame.includes(text))) break;
     await Bun.sleep(30);
   }
+
   return frame;
 }
 
@@ -279,22 +296,27 @@ async function renderUntil(
   ready: (spans: CapturedSpan[]) => boolean,
 ): Promise<CapturedSpan[]> {
   let spans: CapturedSpan[] = [];
+
   for (let index = 0; index < 60; index += 1) {
     await renderOnce();
     spans = captureSpans().lines.flatMap((line) => line.spans);
+
     if (ready(spans)) break;
     await Bun.sleep(30);
   }
+
   return spans;
 }
 
 function hex(color: RGBA): string {
   const [red, green, blue] = color.toInts();
+
   return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 }
 
 function lineContaining(frame: string, text: string): number {
   const line = frame.split('\n').findIndex((candidate) => candidate.includes(text));
   expect(line).toBeGreaterThanOrEqual(0);
+
   return line;
 }

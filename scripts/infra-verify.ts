@@ -88,6 +88,7 @@ import {
 import { isProductSource, readMatching } from './sources';
 
 const GATE = 'infra';
+
 const ACK = 'KINU_INFRA_ACK';
 
 export type Verdict = 'present' | 'absent' | 'unknown' | 'unobservable';
@@ -139,6 +140,7 @@ export interface Row {
  * both — that reaches an upload without `post-deploy` behind it.
  */
 export const PHASES = ['full', 'bootstrap', 'post-deploy'] as const;
+
 export type Phase = (typeof PHASES)[number];
 
 /** Resources THIS DEPLOY creates, from the manifest's own `origin` rather than a
@@ -168,8 +170,11 @@ const DEPLOYED_TYPE = new Map<string, string>([
  *  and it is decided here rather than at any call site. */
 export function observedRow(resource: Resource, observation: Observation): Row {
   const base = { id: resource.id, required: resource.required, purpose: resource.purpose, origin: resource.origin };
+
   if (observation.state === 'present') return { ...base, verdict: 'present', detail: observation.detail };
+
   if (observation.state === 'unknown') return { ...base, verdict: 'unknown', detail: observation.reason };
+
   // An absent row is the one an operator acts on, so it carries the action: the
   // observation's own detail where it has one, then the manual step for a
   // resource nothing can create, and otherwise the fact that provisioning is what
@@ -189,6 +194,7 @@ export function observedRow(resource: Resource, observation: Observation): Row {
  *  which is what makes the pin an assertion rather than a courtesy. */
 function unobservableRow(resource: Resource): Row {
   const check = UNOBSERVABLE.get(resource.id);
+
   return {
     id: resource.id,
     verdict: 'unobservable',
@@ -220,12 +226,16 @@ async function observe(
 ): Promise<Row> {
   const bound = (name: string, expect: string | undefined): Observation => {
     if (live.state === 'unknown') return { state: 'unknown', reason: live.reason };
+
     if (live.state === 'absent') {
       return { state: 'unknown', reason: `${environment.workerName} is not deployed, so nothing can say whether ${name} is bound` };
     }
+
     const binding = live.bindings.find((entry) => entry.name === name);
+
     if (binding === undefined) return { state: 'absent' };
     const kind = DEPLOYED_TYPE.get(binding.type) ?? binding.type;
+
     return {
       state: 'present',
       detail: `bound as ${kind}${binding.target === undefined ? '' : ` → ${binding.target}`}`
@@ -240,14 +250,19 @@ async function observe(
       return observedRow(resource, r2(resource.name));
     case 'vectorize': {
       const geometry = vectorizeGeometry();
+
       return observedRow(resource, vectorize(resource.name, geometry.dimensions, geometry.metric));
     }
+
     case 'container': {
       const image = /image (\S+)$/u.exec(resource.purpose)?.[1] ?? '';
+
       return observedRow(resource, container(resource.name, image));
     }
+
     case 'worker':
       if (live.state === 'deployed') return observedRow(resource, { state: 'present', detail: `version ${live.versionId}` });
+
       return observedRow(resource, live.state === 'absent' ? { state: 'absent' } : { state: 'unknown', reason: live.reason });
     case 'durable-object':
       return observedRow(resource, bound(resource.boundBy[0]?.binding ?? '', 'Durable Object'));
@@ -257,6 +272,7 @@ async function observe(
       return observedRow(resource, await servesWorker(resource.name));
     case 'zone-route': {
       const host = routeHost(resource.name);
+
       // A wildcard route is asked whether ANYTHING answers under it, because a
       // preview host with no live preview answers 404 on purpose. An exact route
       // claims one origin, so it is asked the stronger question the custom
@@ -265,6 +281,7 @@ async function observe(
         ? await edgeResponds(`${PROBE_LABEL}.${host}`)
         : await servesWorker(host));
     }
+
     case 'wildcard-dns':
       return observedRow(resource, await wildcardDns(routeHost(resource.name)));
     case 'dns-record':
@@ -329,6 +346,7 @@ export function supplyRows(
 ): readonly SupplyRow[] {
   const rows: SupplyRow[] = [];
   const secretsReadable = observed.state !== 'unknown';
+
   if (!secretsReadable) {
     rows.push({
       environment: environment.key,
@@ -338,9 +356,12 @@ export function supplyRows(
       detail: observed.reason,
     });
   }
+
   const held = new Set(observed.state === 'present' ? observed.names ?? [] : []);
+
   for (const [name, supply] of SUPPLY) {
     const configVar = supply.handling === 'config-var';
+
     // A secret whose names could not be listed is already reported once, above.
     // A config var is read from the config this run derived, so it is checkable
     // whatever the session can see.
@@ -357,10 +378,12 @@ export function supplyRows(
         : `${supply.handling} — absent ⇒ ${supply.absent}`,
     });
   }
+
   // A secret set on the Worker that `Env` never declares is stale configuration:
   // it is not a hole, so it does not fail, but nothing reads it and nobody knows
   // it is there.
   const declared = new Set(envFields().map((field) => field.name));
+
   for (const name of held) {
     if (declared.has(name)) continue;
     rows.push({
@@ -371,6 +394,7 @@ export function supplyRows(
       detail: 'set on the Worker and declared nowhere in Env — nothing reads it',
     });
   }
+
   return rows;
 }
 
@@ -389,12 +413,15 @@ export function supplyRows(
 export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
   const fields = envFields();
   const unsuppliedIn = new Map<string, string[]>();
+
   for (const environment of infrastructure.environments) {
     for (const field of supplyCensus(environment, fields)) {
       unsuppliedIn.set(field.name, [...unsuppliedIn.get(field.name) ?? [], environment.key]);
     }
   }
+
   const classified = [...SUPPLY.keys()];
+
   return [
     ...[...unsuppliedIn].filter(([name]) => !classified.includes(name)).map(([name, environments]) =>
       `${name} is read from \`Env\`, supplied by no binding and no var in `
@@ -417,6 +444,7 @@ export function supplyDrift(infrastructure: Infrastructure): readonly string[] {
 export function unobservableDrift(rows: readonly Row[]): readonly string[] {
   const seen = rows.filter((entry) => entry.verdict === 'unobservable').map((entry) => entry.id);
   const declared = new Set(rows.map((entry) => entry.id));
+
   return [...UNOBSERVABLE.keys()]
     .filter((id) => declared.has(id))
     .filter((id) => !seen.includes(id))
@@ -453,6 +481,7 @@ function remedy(entry: Row, phase: Phase): string {
     return 'bun run infra:provision — or, for a resource provisioning cannot create, the manual '
       + 'step it prints.';
   }
+
   if (phase === 'post-deploy') {
     return 'nothing is left to run: the upload carried the config that declares this and the '
       + 'account does not hold it. Read the `wrangler deploy` output above. A Durable Object '
@@ -460,6 +489,7 @@ function remedy(entry: Row, phase: Phase): string {
       + '(a named `env.*` block inherits none), and a container, a route and a cron each need '
       + 'their own block there. Provisioning can create none of them.';
   }
+
   return 'the deploy creates this one; `bun run infra:provision` neither can nor may. If THIS '
     + 'deploy is the one that declares it — a class new to `migrations`, a new container or a new '
     + 'route — say so: `bash scripts/deploy.sh <environment> --bootstrap` defers exactly this row '
@@ -478,6 +508,7 @@ export function audit(
 ): Audit {
   const findings: string[] = [];
   const notes: string[] = [];
+
   const workerDeployed = rows.some(
     (entry) => entry.id.startsWith('worker.') && entry.verdict === 'present',
   );
@@ -496,6 +527,7 @@ export function audit(
       }));
       continue;
     }
+
     if (entry.verdict === 'unobservable' && !UNOBSERVABLE.has(entry.id)) {
       findings.push(finding({
         at: entry.id,
@@ -508,6 +540,7 @@ export function audit(
       }));
       continue;
     }
+
     if (
       entry.verdict === 'absent'
       && entry.required
@@ -530,6 +563,7 @@ export function audit(
           + 'deploy lands'}`);
       continue;
     }
+
     if (entry.verdict === 'absent' && entry.required) {
       findings.push(finding({
         at: entry.id,
@@ -558,6 +592,7 @@ export function audit(
       }));
       continue;
     }
+
     if (value.verdict === 'absent' && value.required) {
       const configVar = SUPPLY.get(value.name)?.handling === 'config-var';
       findings.push(finding({
@@ -627,18 +662,24 @@ function print(
   supplied: readonly SupplyRow[],
 ): void {
   console.log('\nResources');
+
   for (const entry of rows) {
     const flag = entry.required ? '' : ' (optional)';
     console.log(`  [${SYMBOL[entry.verdict]}] ${entry.id}${flag}\n           ${entry.detail}`);
   }
+
   console.log('\nSupplied values — presence only; no value is ever requested or printed');
+
   for (const value of supplied) {
     const flag = value.required ? 'required' : 'optional';
     console.log(`  [${SYMBOL[value.verdict]}] ${value.environment}/${value.name} (${flag})\n           ${value.detail}`);
   }
+
   const fields = envFields();
+
   for (const environment of environments) console.log(`\n${supplySummary(environment, fields)}`);
   console.log('\nDeclared by nothing the manifest can express — check these by hand:');
+
   for (const item of UNCAPTURED) console.log(`  · ${item.what}\n      evidence: ${item.evidence}\n      check:    ${item.check}`);
 }
 
@@ -650,6 +691,7 @@ function print(
  */
 export function supplySummary(environment: InfraEnvironment, fields = envFields()): string {
   const census = supplyCensus(environment, fields);
+
   return `${environment.key} supplies ${String(fields.length - census.length)} of `
     + `${String(fields.length)} \`Env\` fields from its own ${String(environment.bindings.length)} `
     + `bindings and ${String(environment.vars.size)} vars. SUPPLY governs the other `
@@ -662,6 +704,7 @@ export function supplySummary(environment: InfraEnvironment, fields = envFields(
  *  string for `scripts/ladder.ts` to parse and match against LADDER, so anything
  *  that varies per run travels beside the command rather than inside it. */
 const PHASE_FLAG = '--phase=';
+
 const PHASE_ENV = 'KINU_INFRA_PHASE';
 
 /**
@@ -681,6 +724,7 @@ export function phaseFrom(
 ): Phase | undefined {
   const flag = argv.find((argument) => argument.startsWith(PHASE_FLAG));
   const named = flag?.slice(PHASE_FLAG.length) ?? environment[PHASE_ENV] ?? 'full';
+
   return PHASES.find((candidate) => candidate === named);
 }
 
@@ -707,37 +751,48 @@ export function phaseFrom(
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const phase = phaseFrom(argv, process.env);
+
   if (phase === undefined) {
     console.error(`${GATE}: usage: bun scripts/infra-verify.ts [environment] `
       + `[${PHASE_FLAG}${PHASES.join('|')}]`);
+
     return 2;
   }
+
   // Every line this run prints says which phase produced it. `infra: ok` from a
   // bootstrap run would be read as the gate passing, and the whole point of the
   // phase is that it has not.
   const label = phase === 'full' ? GATE : `${GATE} ${phase}`;
 
   const session = authenticated();
+
   if (session.state !== 'present') {
     return blocked(label, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK);
   }
 
   const infrastructure = deriveInfrastructure();
+
   const requested = argv.find((argument) => !argument.startsWith('--'))
     ?? process.env.KINU_DEPLOY_ENV ?? 'production';
+
   const selected = infrastructure.environments.filter((entry) => entry.key === requested);
+
   if (selected.length === 0) {
     console.error(`${label}: no environment named \`${requested}\` in the manifest. `
       + `Declared: ${infrastructure.environments.map((entry) => entry.key).join(', ')}`);
+
     return 1;
   }
 
   const rows: Row[] = [];
   const supplied: SupplyRow[] = [];
+
   for (const environment of selected) {
     const live = deployment(environment.wranglerEnv);
+
     const owned = infrastructure.resources.filter((resource) =>
       resource.environments.includes(environment.key));
+
     for (const resource of owned) {
       // A resource two environments share is observed once, under the first.
       if (rows.some((entry) => entry.id === resource.id)) continue;
@@ -749,6 +804,7 @@ async function main(): Promise<number> {
       // UNOBSERVABLE entry.
       rows.push(await observe(resource, environment, live));
     }
+
     supplied.push(...supplyRows(environment, secretNames(environment.wranglerEnv)));
   }
 
@@ -757,6 +813,7 @@ async function main(): Promise<number> {
   const verdict = audit(infrastructure, rows, supplied, unread, phase);
 
   const fields = envFields();
+
   const measured = assertMeasured(label, [
     ['environments checked', selected.length],
     ['resources declared', rows.length],
@@ -775,8 +832,10 @@ async function main(): Promise<number> {
   print(selected, rows, supplied);
 
   const unchecked = infrastructure.environments.filter((entry) => !selected.includes(entry));
+
   if (unchecked.length > 0) {
     console.log(`\nNOT CHECKED by this run — named rather than skipped:`);
+
     for (const entry of unchecked) {
       console.log(`  ${entry.key} (${entry.workerName}) — bun scripts/infra-verify.ts ${entry.key}`);
     }
@@ -806,6 +865,7 @@ async function main(): Promise<number> {
       + 'scripts/deploy.sh runs after the upload and which tolerates none of them.',
     );
   }
+
   if (phase === 'post-deploy') {
     console.log(
       `${label}: no absence is tolerated in this phase — the upload that owns these resources has `
@@ -815,11 +875,15 @@ async function main(): Promise<number> {
 
   if (verdict.findings.length > 0) {
     console.error(`\n${label}: ${String(verdict.findings.length)} finding(s)\n`);
+
     for (const entry of verdict.findings) console.error(entry);
     console.error(`\n${label}: measured ${measured}`);
+
     return 1;
   }
+
   console.log(`${label}: ok — ${measured}`);
+
   return 0;
 }
 

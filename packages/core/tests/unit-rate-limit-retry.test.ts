@@ -23,11 +23,14 @@ function retryHarness(
   const waits: number[] = [];
   const warnings: string[] = [];
   const now = () => nowMs;
+
   const sleep = async (ms: number) => {
     waits.push(ms);
     nowMs += ms;
   };
+
   const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]!);
+
   const wrapped = withRateLimitRetry(fetchImpl, {
     now,
     random: () => 0.5,
@@ -38,6 +41,7 @@ function retryHarness(
     warn: (message) => warnings.push(message),
     ...overrides,
   });
+
   return { wrapped, waits, warnings, calls: () => calls };
 }
 
@@ -56,6 +60,7 @@ describe('withRateLimitRetry', () => {
 
   test('honors Retry-After HTTP dates against the injected clock', async () => {
     const retryAt = new Date(1_005_000).toUTCString();
+
     const harness = retryHarness([
       new Response('limited', { status: 429, headers: { 'Retry-After': retryAt } }),
       new Response('ok'),
@@ -100,6 +105,7 @@ describe('withRateLimitRetry', () => {
   test('stops provider waits only when the caller cancels', async () => {
     const controller = new AbortController();
     const reason = new Error('cancelled by user');
+
     const wrapped = withRateLimitRetry(
       asFetchFunction(async () => new Response('limited', { status: 429 })),
       {

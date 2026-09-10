@@ -107,10 +107,13 @@ function searchParams(configJson: string, realised: number | null): SearchRunPar
   // A checkpoint column that is not JSON is the one failure this read treats as a
   // value; any other failure is a fault in the read itself and propagates.
   const decoded: unknown = tolerate(() => JSON.parse(configJson), 'malformed-input');
+
   if (decoded === undefined) return null;
   const parsed = v.safeParse(ConfigSchema, decoded);
+
   if (!parsed.success) return null;
   const config = parsed.output;
+
   return {
     budget: config.budget,
     branches: config.branches,
@@ -134,6 +137,7 @@ export function readForkRunParams(
   rootIds: readonly string[],
 ): ForkRunParams[] {
   actor.assertCurrent();
+
   if (rootIds.length === 0) return [];
   const wanted = new Set(rootIds);
   const search = new Map<string, SearchRunParams>();
@@ -143,9 +147,11 @@ export function readForkRunParams(
     root_id: string; config_json: string; judge_samples_realised: number | null;
   }>`SELECT root_id, config_json, judge_samples_realised FROM mcts_search_runs
      WHERE actor_id = ${actor.actorId}`;
+
   for (const row of searches) {
     if (!wanted.has(row.root_id)) continue;
     const params = searchParams(row.config_json, row.judge_samples_realised);
+
     if (params) search.set(row.root_id, params);
   }
 
@@ -157,6 +163,7 @@ export function readForkRunParams(
            MAX(merge_strategy)                             AS merge_strategy,
            SUM(CASE WHEN id != root_id THEN 1 ELSE 0 END)  AS heads
     FROM head_journal WHERE actor_id = ${actor.actorId} GROUP BY root_id`;
+
   for (const row of journals) {
     if (!wanted.has(row.root_id)) continue;
     transcripts.set(row.root_id, { mergeStrategy: row.merge_strategy, branches: row.heads });
@@ -164,6 +171,7 @@ export function readForkRunParams(
 
   return rootIds.flatMap((rootId) => {
     const halves = { search: search.get(rootId) ?? null, transcripts: transcripts.get(rootId) ?? null };
+
     return halves.search === null && halves.transcripts === null ? [] : [{ rootId, ...halves }];
   });
 }

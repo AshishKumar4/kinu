@@ -148,6 +148,7 @@ describe('the digest', () => {
       tiers: { default: { model: 'm-default' } },
       roles: { scout: { preset: 'research', tier: 'fast', instructions: 'Go look.', description: 'Explores.' } },
     };
+
     expect(profileCatalogDigest(reordered)).toBe(profileCatalogDigest(VALID_CATALOG));
     // Known answer: SHA-256 over the canonical serialization, reproduced with sha256sum.
     expect(profileCatalogDigest(VALID_CATALOG)).toBe(
@@ -181,11 +182,14 @@ describe('built-in defaults', () => {
       auditor: ['slow', 'audit'],
       designer: ['default', 'ideate'],
     } satisfies Record<BuiltinRoleId, readonly [TierId, NamedSwarmPreset]>;
+
     for (const id of BUILTIN_IDS) {
       expect(BUILTINS[id].tier).toBe(expected[id][0]);
       expect(BUILTINS[id].preset).toBe(expected[id][1]);
     }
+
     expect(BUILTINS.planner.plan).toBe(true);
+
     for (const id of BUILTIN_IDS) {
       if (id !== 'planner') expect(BUILTINS[id].plan).toBeUndefined();
     }

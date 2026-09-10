@@ -16,8 +16,11 @@ import { wrapToolsForBackground } from '../src/jobs/background-wrap';
 import { readSpawnStarted, BACKGROUND_POLICY, invocationBackgroundPolicy, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 type TestToolResult = object | string;
+
 interface ForkInput { action: string; task?: string }
+
 interface RunInput { command: string }
 
 /** A minimal BackgroundJobRunner double — only the two members the wrapper
@@ -45,6 +48,7 @@ function fakeForkTool(exploreMs: number, onExplored?: () => void): ToolSet[strin
       readSpawnStarted(options)?.();
       await delay(exploreMs);
       onExplored?.();
+
       return { strategy: 'merge', text: 'merged fork answer' };
     },
   });
@@ -56,13 +60,19 @@ function fakeRunTool(ms: number): ToolSet[string] {
     inputSchema: jsonSchema<RunInput>({
       type: 'object', properties: { command: { type: 'string' } }, required: ['command'],
     }),
-    execute: async () => { await delay(ms); return 'command output'; },
+    execute: async () => {
+      await delay(ms);
+
+      return 'command output';
+    },
   });
 }
 
 function executeTool<Args>(tools: ToolSet, name: string) {
   const entry = tools[name];
+
   if (!entry) throw new Error(`Expected ${name} tool to be registered`);
+
   return toolExecute<Args, TestToolResult>(entry);
 }
 
@@ -78,12 +88,15 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const detached: Promise<unknown>[] = [];
     let explored = false;
     const exploringAtDetach: boolean[] = [];
+
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, (kind, promise) => {
       crossings.push(kind);
       exploringAtDetach.push(!explored);
       detached.push(promise);
+
       return { detached: true, jobId: 'job-fork' };
     });
+
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
 
     const raw: ToolSet = { agents: fakeForkTool(150, () => { explored = true; }) };
@@ -110,10 +123,17 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // 4 of 40 iterations before `bg_jobs_abandoned`.
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-fork-osh' }; },
+      (kind, promise) => {
+        crossings.push(kind);
+        detached.push(promise);
+
+        return { detached: true, jobId: 'job-fork-osh' };
+      },
     );
+
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
 
     const raw: ToolSet = { agents: fakeForkTool(60) };
@@ -131,10 +151,17 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     // result was never the point.
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
-      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-run' }; },
+      (kind, promise) => {
+        crossings.push(kind);
+        detached.push(promise);
+
+        return { detached: true, jobId: 'job-run' };
+      },
     );
+
     const wrapped = wrapToolsForBackground({ run: fakeRunTool(60) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'serve' });
 
@@ -145,18 +172,25 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
   test('a non-fork agents action (hire/ask/list) is not detachable — always runs inline, on either surface', async () => {
     let ran = false;
+
     const raw: ToolSet = {
       agents: tool({
         description: 'agents',
         inputSchema: jsonSchema<ForkInput>({
           type: 'object', properties: { action: { type: 'string' } }, required: ['action'],
         }),
-        execute: async () => { ran = true; return { subordinates: [] }; },
+        execute: async () => {
+          ran = true;
+
+          return { subordinates: [] };
+        },
       }),
     };
+
     const jobRunner = fakeJobRunner(BACKGROUND_POLICY.interactive, () => {
       throw new Error('must not cross the threshold for a non-fork action');
     });
+
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'list' });
     expect(ran).toBe(true);
@@ -166,10 +200,17 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
   test('run/execute_tools stay result-shaped even on the interactive surface — they race the threshold, never spawn-detach', async () => {
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 20 },
-      (kind, promise) => { crossings.push(kind); detached.push(promise); return { detached: true, jobId: 'job-run' }; },
+      (kind, promise) => {
+        crossings.push(kind);
+        detached.push(promise);
+
+        return { detached: true, jobId: 'job-run' };
+      },
     );
+
     const raw: ToolSet = { run: fakeRunTool(80) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'sleep 1' });
@@ -186,6 +227,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 1000 },
       () => { throw new Error('must not cross for fast work'); },
     );
+
     const raw: ToolSet = { run: fakeRunTool(10) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'ls' });

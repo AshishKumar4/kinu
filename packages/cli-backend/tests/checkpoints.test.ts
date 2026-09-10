@@ -19,18 +19,21 @@ function setup(opts: { keep?: number; gitBin?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'kinu-ckpt-'));
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
+
   const engine = createHostCheckpoints({
     agent: 'test-agent',
     base: join(root, 'shadow'),
     keep: opts.keep,
     gitBin: opts.gitBin,
   });
+
   return { root, work, engine, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe('createHostCheckpoints', () => {
   test('first mutation in a turn snapshots once; later mutations in the same turn do not', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'one');
       engine.beginTurn({ turnId: 'turn-1', sessionId: 'sess-1' });
@@ -53,6 +56,7 @@ describe('createHostCheckpoints', () => {
 
   test('an unchanged tree produces no new checkpoint', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'same');
       engine.beginTurn({ turnId: 't1', sessionId: 's' });
@@ -66,6 +70,7 @@ describe('createHostCheckpoints', () => {
 
   test('restore returns exact multi-file content, recreates deletions, removes additions', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       mkdirSync(join(work, 'src'), { recursive: true });
       writeFileSync(join(work, 'src', 'main.ts'), 'original main');
@@ -107,6 +112,7 @@ describe('createHostCheckpoints', () => {
 
   test('the pre-restore snapshot carries no turn meta even while a turn is armed', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'original');
       engine.beginTurn({ turnId: 'turn-1', sessionId: 's' });
@@ -130,6 +136,7 @@ describe('createHostCheckpoints', () => {
 
   test("the user's own .git repo is never snapshotted or touched", async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       // A real user repo in the target dir. `git()` clears the whole GIT_
       // prefix, not just the config vars: a git hook exports GIT_DIR, and with
@@ -159,12 +166,14 @@ describe('createHostCheckpoints', () => {
 
   test('retention keeps only the newest N checkpoints', async () => {
     const { work, engine, cleanup } = setup({ keep: 3 });
+
     try {
       for (let i = 0; i < 5; i++) {
         writeFileSync(join(work, 'counter.txt'), `value ${i}`);
         engine.beginTurn({ turnId: `turn-${i}`, sessionId: 's' });
         expect(await engine.ensureCheckpoint(work)).toBeTruthy();
       }
+
       const list = await engine.list();
       expect(list).toHaveLength(3);
       expect(list.map((e) => e.turnId)).toEqual(['turn-4', 'turn-3', 'turn-2']);
@@ -189,15 +198,19 @@ describe('createHostCheckpoints', () => {
    */
   test('a turn-keyed read finds a checkpoint the global window cannot reach', async () => {
     const { root, engine, cleanup } = setup({ keep: 4 });
+
     try {
       const dirs = ['alpha', 'beta', 'gamma'].map((name) => {
         const dir = join(root, name);
         mkdirSync(dir, { recursive: true });
+
         return dir;
       });
+
       // The turn under test is the OLDEST, in the FIRST directory, so every
       // later checkpoint outranks it in a newest-first window.
       const buried = 'turn-buried';
+
       for (const [index, dir] of dirs.entries()) {
         for (let i = 0; i < 4; i++) {
           writeFileSync(join(dir, 'counter.txt'), `d${String(index)} v${String(i)}`);
@@ -234,6 +247,7 @@ describe('createHostCheckpoints', () => {
 
   test('degrades honestly when git is not installed', async () => {
     const { work, engine, cleanup } = setup({ gitBin: '/nonexistent/definitely-not-git' });
+
     try {
       writeFileSync(join(work, 'a.txt'), 'data');
       engine.beginTurn({ turnId: 't', sessionId: 's' });
@@ -247,6 +261,7 @@ describe('createHostCheckpoints', () => {
 
   test('a vanished workdir fails the operation without flipping into git-not-found mode', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'x');
       engine.beginTurn({ turnId: 't', sessionId: 's' });
@@ -265,6 +280,7 @@ describe('createHostCheckpoints', () => {
     // refuse the agent's write.
     const { work, engine, cleanup } = setup();
     const foreign = join(work, 'systemd-private-9f2c');
+
     try {
       writeFileSync(join(work, 'a.txt'), 'mine');
       // Sorts AFTER both unreadable entries, so a staging pass that aborts on
@@ -311,6 +327,7 @@ describe('createHostCheckpoints', () => {
     // makes staging that tree SUCCEED, so this is the difference between a
     // skipped snapshot and copying the box's scratch into the agent's store.
     const { engine, cleanup } = setup();
+
     try {
       expect(engine.workdirForPath(join(tmpdir(), 'scratch.js'))).toBe(tmpdir());
 
@@ -323,6 +340,7 @@ describe('createHostCheckpoints', () => {
 
   test('workdirForPath resolves the nearest project marker dir', async () => {
     const { work, engine, cleanup } = setup();
+
     try {
       mkdirSync(join(work, 'nested', 'deep'), { recursive: true });
       writeFileSync(join(work, 'package.json'), '{}');
@@ -337,8 +355,10 @@ describe('checkpointed runtime shell', () => {
   test('any shell exec snapshots the cwd before running (first mutation per turn)', async () => {
     const { root, work, cleanup } = setup();
     const db = new Database(join(root, 'agent.db'), { create: true });
+
     try {
       writeFileSync(join(work, 'precious.txt'), 'original');
+
       // Checkpoint storage is global per agent name, so this fixture mints a
       // unique one. A stable test name would read valid stores from prior runs.
       const rt = createCLIRuntime(db, {
@@ -347,11 +367,14 @@ describe('checkpointed runtime shell', () => {
         agentName: `ckpt-shell-test-${String(Date.now())}-${String(process.pid)}`,
         llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
       });
+
       // The default is 'strict', which asks a channel this runtime has none of.
       rt.actor.config.setShellApprovalMode('allow_all');
       const shell = rt.shell;
+
       if (!shell) throw new Error('a bound runtime must have a shell');
       const checkpoints = rt.checkpoints;
+
       if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
 
       checkpoints.beginTurn({ turnId: 'shell-turn', sessionId: 's' });

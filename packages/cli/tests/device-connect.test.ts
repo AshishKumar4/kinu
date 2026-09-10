@@ -30,6 +30,7 @@ import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' }
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 
 const repoRoot = resolve(__dirname, '../../..');
+
 /** Every module the daemon requires beside itself, keyed by the name it
  *  requires, with the bytes this CLI ships for it. Derived from the daemon's
  *  own require lines: a sibling the daemon requires and this table lacks is
@@ -37,6 +38,7 @@ const repoRoot = resolve(__dirname, '../../..');
  *  for one release while the daemon required it, and every clean install
  *  died on its first require. */
 const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE } as const;
+
 /** Mirrors the installer's private reader of the daemon's `require('./x')`
  *  lines; drift between the two fails these tests, which is the point. */
 const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
@@ -48,16 +50,21 @@ const tempDirs: string[] = [];
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
   tempDirs.push(dir);
+
   return dir;
 }
 
 const sleepers: Subprocess[] = [];
+
 const deviceDaemonPids: number[] = [];
+
 const stubs: Server<unknown>[] = [];
 
 afterEach(async () => {
   for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+
   for (const proc of sleepers.splice(0)) proc.kill();
+
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
 });
@@ -104,21 +111,26 @@ const POISON_DAEMON = [
  *  serving poison so any fetch of it is visible in the installed bytes. */
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0, ticket: 0 };
+
   const server = Bun.serve({
     port: 0,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
+
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;
         const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
+
         if (opts.registerGate) {
           opts.registerGate.onArrival?.();
           await opts.registerGate.release;
         }
+
         if (opts.registrationFailure) {
           return Response.json({ error: opts.registrationFailure.error }, { status: opts.registrationFailure.status });
         }
+
         return Response.json({
           deviceId: 'dev_1',
           token: 'device-token',
@@ -126,23 +138,32 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
           origin: `http://localhost:${server.port}`,
         });
       }
+
       if (url.pathname === '/api/cli/devices' && req.method === 'GET') {
         hits.list += 1;
+
         return Response.json(opts.devices?.() ?? []);
       }
+
       if (url.pathname === '/pc/connect-ticket' && opts.ticketStatuses !== undefined) {
         const status = opts.ticketStatuses[Math.min(hits.ticket, opts.ticketStatuses.length - 1)];
         hits.ticket += 1;
+
         return Response.json({ error: 'refused by the stub' }, { status });
       }
+
       if (url.pathname === '/pc/daemon.js') {
         hits.daemonScript += 1;
+
         return new Response(POISON_DAEMON, { headers: { 'content-type': 'text/javascript' } });
       }
+
       return new Response('not found', { status: 404 });
     },
   });
+
   stubs.push(server);
+
   return { origin: `http://localhost:${server.port}`, hits };
 }
 
@@ -150,6 +171,7 @@ function makeHome(config: JsonObject): string {
   const home = mkdtempSync(join(tmpdir(), 'kinu-device-'));
   tempDirs.push(home);
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+
   return home;
 }
 
@@ -163,14 +185,17 @@ async function runScript(home: string, script: string, environment: Record<strin
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   if (exitCode !== 0) {
     throw new Error(`script failed (${exitCode}): ${stderr}`);
   }
+
   return stdout;
 }
 
@@ -181,6 +206,7 @@ async function scriptFailure(home: string, script: string, environment: Record<s
     if (error instanceof Error) return error.message;
     throw error;
   }
+
   throw new Error('expected script to fail');
 }
 
@@ -206,14 +232,18 @@ function connectedResult() {
 
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
+
   while (Date.now() < deadline) {
     // ESRCH is kill(2)'s "no such process" — the exit this loop waits for.
     try { process.kill(pid, 0); } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
+
       return true;
     }
+
     await Bun.sleep(25);
   }
+
   return false;
 }
 
@@ -221,19 +251,24 @@ async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> 
 async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<number> {
   const pidfile = join(home, 'pc-agent.pid');
   const deadline = Date.now() + timeoutMs;
+
   while (Date.now() < deadline) {
     if (existsSync(pidfile)) {
       const pid = Number(readFileSync(pidfile, 'utf-8').trim());
+
       if (Number.isInteger(pid) && pid > 0) return pid;
     }
+
     await Bun.sleep(25);
   }
+
   throw new Error(`no daemon claimed ${pidfile} within ${timeoutMs}ms`);
 }
 
 /** Every live process running the installed daemon at `script`. */
 function liveDaemons(script: string): number[] {
   const found = Bun.spawnSync({ cmd: ['pgrep', '-f', script] });
+
   return new TextDecoder().decode(found.stdout).split('\n').filter(Boolean).map(Number);
 }
 
@@ -252,6 +287,7 @@ const DAEMON_PROBE_SCHEMA = v.object({
  */
 function daemonRuntimeProbe(origin: string): string {
   const ps = Bun.which('ps') ?? '/bin/ps';
+
   return `
     import { execFileSync } from 'node:child_process';
     import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
@@ -347,6 +383,7 @@ describe('device-connect daemon lifecycle', () => {
       result: v.looseObject({ kind: v.string(), deviceId: v.string() }),
       status: v.object({ sessionActive: v.boolean(), daemonPid: v.nullable(v.number()) }),
     }), JSON.parse(out.trim()));
+
     expect(result).toEqual(connectedResult());
     expect(status.sessionActive).toBe(true);
     expect(status.daemonPid ?? 0).toBeGreaterThan(0); // the daemon holds the machine lock
@@ -387,6 +424,7 @@ describe('device-connect daemon lifecycle', () => {
     const { result } = v.parse(v.object({
       result: v.object({ kind: v.string(), connected: v.boolean() }),
     }), JSON.parse(out.trim()));
+
     expect(result).toEqual({ kind: 'already-running', connected: false });
     // No takeover: nothing registered, installed, or killed.
     expect(stub.hits.register).toBe(0);
@@ -438,6 +476,7 @@ describe('the sandbox state the machine reported', () => {
     probe_failed: 'Fix what the daemon named',
     daemon_outdated: 'Update the Kinu CLI',
   } satisfies Record<DeviceSandboxReason, string>;
+
   const NO_COMMANDS_LINE =
     'Nothing runs here until you fix that, or turn Sandbox off for this device.';
 
@@ -514,6 +553,7 @@ describe('the sandbox state the machine reported', () => {
         connectedDevice(false, { id: 'dev_4', label: 'retired' }),
       ],
     });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const out = await runScript(home, `
@@ -564,9 +604,11 @@ describe('device-connect install hardening', () => {
     // is this CLI's own.
     expect(REQUIRED_SIBLINGS.length).toBeGreaterThan(1);
     expect(Object.keys(DAEMON_SIBLINGS).sort()).toEqual([...REQUIRED_SIBLINGS].sort());
+
     for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
       expect(readFileSync(join(home, name), 'utf-8')).toBe(source);
     }
+
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
   }, 20_000);
 
@@ -619,6 +661,7 @@ describe('device-connect install hardening', () => {
     const stub = startStubCloud({
       registrationFailure: { status: 409, error: 'device name already exists' },
     });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const failure = await scriptFailure(home, `
@@ -694,10 +737,12 @@ describe('device-connect install hardening', () => {
 
     const { result, runtime, command } = v.parse(DAEMON_PROBE_SCHEMA, JSON.parse(out.trim()));
     expect(result).toEqual(connectedResult());
+
     // The stub node answered --version and was still never chosen.
     const calls = existsSync(`${join(stubDir, 'node')}.calls`)
       ? readFileSync(`${join(stubDir, 'node')}.calls`, 'utf-8')
       : '';
+
     expect(calls).toBe('');
     expect(command).toContain(runtime);
     expect(command).toContain(join(home, 'pc-agent.js'));
@@ -815,6 +860,7 @@ describe('device-connect install hardening', () => {
     expect(sleeper.killed).toBe(false);
     expect(tolerate(() => {
       process.kill(sleeper.pid, 0);
+
       return true;
     }, 'esrch')).toBe(true);
     const daemonPid = Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
@@ -826,22 +872,27 @@ describe('device-connect install hardening', () => {
     const release = Promise.withResolvers<void>();
     const bothRegistered = Promise.withResolvers<void>();
     let arrivals = 0;
+
     const stub = startStubCloud({
       devices: () => [connectedDevice(true)],
       registerGate: {
         release: release.promise,
         onArrival() {
           arrivals += 1;
+
           if (arrivals === 2) bothRegistered.resolve();
         },
       },
     });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
     const program = `
       import { connectDevice } from './packages/cli/src/device-connect.ts';
       const result = await connectDevice({ origin: ${JSON.stringify(stub.origin)}, token: 'ptc_test' });
       console.log(JSON.stringify(result));
     `;
+
     const outcomes = Promise.allSettled([runScript(home, program), runScript(home, program)]);
     await bothRegistered.promise;
     release.resolve();
@@ -861,17 +912,20 @@ describe('device daemon single-instance lock', () => {
   function installedMachine(origin: string): string {
     const home = makeHome({ origin, accessToken: 'ptc_test' });
     writeFileSync(join(home, 'pc-agent.js'), DAEMON_SOURCE, { mode: 0o700 });
+
     // Every sibling, because the daemon requires them by relative path: an
     // installed machine missing one is a daemon that dies before it logs
     // anything, which is what this fixture found — twice.
     for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
       writeFileSync(join(home, name), source, { mode: 0o700 });
     }
+
     writeFileSync(
       join(home, 'device.json'),
       `${JSON.stringify({ user: 'user_1', token: 'device-token', origin })}\n`,
       { mode: 0o600 },
     );
+
     return home;
   }
 
@@ -884,11 +938,14 @@ describe('device daemon single-instance lock', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     if (proc.pid) deviceDaemonPids.push(proc.pid);
     let output = '';
+
     const drained = (async () => {
       for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
     })();
+
     return {
       proc,
       drained,
@@ -897,6 +954,7 @@ describe('device daemon single-instance lock', () => {
       // wait polls the buffer the reader above fills.
       async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
         const deadline = Date.now() + timeoutMs;
+
         while (!output.includes(text)) {
           if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
           await Bun.sleep(25);
@@ -913,11 +971,13 @@ describe('device daemon single-instance lock', () => {
     await owner.waitFor('Ticket exchange'); // the owner's connect loop is running
 
     const second = startDaemon(home);
+
     const exited = await Promise.race([
       second.proc.exited,
       // Bounds a daemon that never exits, which is the defect this pins.
       Bun.sleep(5_000).then(() => 'still running' as const),
     ]);
+
     await Promise.race([second.drained, Bun.sleep(100)]);
 
     expect(second.output()).toContain('already running');
@@ -951,6 +1011,7 @@ describe('classic cloud chat connect prompt', () => {
   function spawnChatInPty(home: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
     const command = [
       `KINU_HOME=${quote(home)}`,
       `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
@@ -961,6 +1022,7 @@ describe('classic cloud chat connect prompt', () => {
       '--classic',
       '--no-transcript',
     ].join(' ');
+
     const proc = Bun.spawn({
       cmd: ['script', '-qefc', command, '/dev/null'],
       cwd: newProjectDir(),
@@ -969,16 +1031,20 @@ describe('classic cloud chat connect prompt', () => {
       stderr: 'pipe',
       env: process.env,
     });
+
     let output = '';
+
     const drained = (async () => {
       for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
     })();
+
     return {
       proc,
       output: () => output,
       drained,
       async waitFor(text: string, timeoutMs = 10_000): Promise<void> {
         const deadline = Date.now() + timeoutMs;
+
         while (!output.includes(text)) {
           if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
           await Bun.sleep(25);
@@ -990,13 +1056,16 @@ describe('classic cloud chat connect prompt', () => {
       },
     };
   }
+
   test('interactive open offers c/s/n/d and session connect goes end to end', async () => {
     // Devices connect only after the daemon is registered and started.
     let registered = false;
+
     const stub = startStubCloud({
       devices: () => (registered ? [connectedDevice(true)] : []),
       onRegister: () => { registered = true; },
     });
+
     const home = makeHome(cloudAgentConfig(stub.origin));
 
     const chat = spawnChatInPty(home);
@@ -1036,6 +1105,7 @@ describe('classic cloud chat connect prompt', () => {
       new Response(proc.stdout).text(),
       proc.exited,
     ]);
+
     expect(exitCode).toBe(0);
     expect(stdout).toContain('No PC connected. Connect one with: kinu connect');
     expect(stub.hits.register).toBe(0);
@@ -1047,6 +1117,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
   function spawnConnectInPty(home: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+
     const command = [
       `KINU_HOME=${quote(home)}`,
       `KINU_INFLIGHT_ROOT=${quote(join(home, 'inflight'))}`,
@@ -1054,6 +1125,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
       quote(cliBin),
       'connect',
     ].join(' ');
+
     const proc = Bun.spawn({
       cmd: ['script', '-qefc', command, '/dev/null'],
       cwd: newProjectDir(),
@@ -1062,10 +1134,13 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
       stderr: 'pipe',
       env: process.env,
     });
+
     let output = '';
+
     const drained = (async () => {
       for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
     })();
+
     return {
       proc,
       output: () => output,
@@ -1074,6 +1149,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
       // wait polls the buffer the reader fills.
       async waitFor(text: string, timeoutMs = 15_000): Promise<void> {
         const deadline = Date.now() + timeoutMs;
+
         while (!output.includes(text)) {
           if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
           await Bun.sleep(25);
@@ -1089,10 +1165,12 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
   test('it states what access it grants, registers under the name given, and links', async () => {
     let registered = false;
     let label: string | undefined;
+
     const stub = startStubCloud({
       devices: () => (registered ? [connectedDevice(true)] : []),
       onRegister: (body) => { registered = true; label = body?.label; },
     });
+
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const connect = spawnConnectInPty(home);
@@ -1148,11 +1226,13 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
 
   test('the suggested name is this machine, not a generic label', async () => {
     const home = makeHome({ origin: 'https://example.invalid', accessToken: 'ptc_test' });
+
     const out = await runScript(home, `
       import { hostname } from 'node:os';
       import { defaultDeviceName } from './packages/cli/src/device-connect.ts';
       console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname() }));
     `);
+
     const { name, host } = v.parse(v.object({ name: v.string(), host: v.string() }), JSON.parse(out.trim()));
     // On any POSIX box with a passwd entry this is user@host; 'Your PC' is the
     // only other legal answer, and it is never the empty string.
@@ -1164,10 +1244,12 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
 describe('/connect slash command', () => {
   test('is offered to consent-capable clients and returns the device-connect outcome', async () => {
     const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands');
+
     const clientOptions = {
       origin: 'https://kinu.invalid', token: 'test', agentName: 'test', cloudName: 'test',
       transcript: { noTranscript: true },
     };
+
     const cloudish = new CloudAgentClient(clientOptions);
     const localish = new CloudAgentClient(clientOptions);
     Object.defineProperty(localish, 'consents', { value: null });
@@ -1200,6 +1282,7 @@ describe('desktop command reuses device-connect', () => {
   // identically by definition. That claim is a review concern, not a test.
   test('desktop status and logs report the paths device-connect owns', async () => {
     const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
+
     const stdout = await runScript(home, `
       import { desktopCommand } from './packages/cli/src/commands/desktop.ts';
       import { DEVICE_CONFIG_PATH, DAEMON_LOG_PATH } from './packages/cli/src/device-connect.ts';
@@ -1213,6 +1296,7 @@ describe('desktop command reuses device-connect', () => {
       console.log = real;
       console.log(JSON.stringify({ printed: lines.join('\\n'), DEVICE_CONFIG_PATH, DAEMON_LOG_PATH }));
     `);
+
     const seen = v.parse(
       v.object({ printed: v.string(), DEVICE_CONFIG_PATH: v.string(), DAEMON_LOG_PATH: v.string() }),
       JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}'),
@@ -1231,10 +1315,12 @@ describe('desktop command reuses device-connect', () => {
 
   test('an unknown desktop subcommand names the three it has', async () => {
     const home = makeHome({ cloudOrigin: 'http://localhost:1', token: 'tok' });
+
     const failure = await scriptFailure(home, `
       import { desktopCommand } from './packages/cli/src/commands/desktop.ts';
       await desktopCommand('reinstall-everything', {});
     `);
+
     expect(failure).toContain('Usage: kinu desktop [connect|status|logs]');
   });
 });

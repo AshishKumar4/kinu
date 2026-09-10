@@ -26,6 +26,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { CodemodeEgress, EGRESS_FAILURE_HEADER } from '../src/codemode-egress';
+
 /** The loopback entrypoint under test, outside workerd. Its fetch override
  *  reads no instance state, so an empty env and a bare execution context are
  *  the whole construction. */
@@ -34,12 +35,16 @@ const entryContext: ExecutionContext = {
   passThroughOnException: () => {},
   props: {},
 };
+
 const entry = new CodemodeEgress(entryContext, {});
+
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));
 
 const originalFetch = globalThis.fetch;
+
 let logs: RecordingLogger;
+
 /** Requests that reached the network. A refusal must leave this empty. */
 let attempted: Request[] = [];
 
@@ -51,7 +56,9 @@ beforeEach(() => {
     const request = input instanceof Request && init === undefined
       ? input
       : new Request(input, init);
+
     attempted.push(request);
+
     return new Response('upstream', { status: 200 });
   });
 });
@@ -116,6 +123,7 @@ describe('a public destination is still the program\'s own business', () => {
     expect(response.status).toBe(200);
     expect(attempted).toHaveLength(1);
     const sent = attempted[0];
+
     if (!sent) throw new Error('expected the request to reach the network');
     expect(sent.url).toBe('https://api.example.com/v1/things');
     // A hop the runtime follows never re-enters this handler, so a public host
@@ -128,6 +136,7 @@ describe('a public destination is still the program\'s own business', () => {
     await egressFetch('https://api.example.com/', { redirect: 'error' });
 
     const sent = attempted[0];
+
     if (!sent) throw new Error('expected the request to reach the network');
     expect(sent.redirect).toBe('error');
   });
@@ -149,6 +158,7 @@ describe('one judgment, three enforcement points', () => {
   test('every seam that lets untrusted code choose a destination asks the same function', () => {
     const read = (path: string): string =>
       readFileSync(join(import.meta.dir, '..', '..', path), 'utf8');
+
     // Removing the call from any one of these is how this defect happened the
     // first time: two of the three asked, and the third was a pass-through.
     expect(read('cf-backend/src/codemode-egress.ts')).toContain('refusedHostname(url.hostname)');

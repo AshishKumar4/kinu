@@ -67,6 +67,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       // frame, leaves the start row as the only record of what was running.
       const operation = beginModelOperation(spend, 'stream');
       let result;
+
       try {
         result = streamText({
           model,
@@ -76,6 +77,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
             content: m.content,
           })),
         });
+
         for await (const chunk of result.textStream) {
           yield chunk;
         }
@@ -83,6 +85,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         operation.failed({ cause: err });
         throw err;
       }
+
       // Usage is only knowable once the stream has finished, so the report goes
       // here. A consumer that abandons the generator mid-way never reaches this
       // line and reports nothing — honest, because the cost of a stream nobody
@@ -92,6 +95,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       const usage = normalizeUsage(await result.totalUsage);
       const modelId = (await result.response).modelId;
       operation.completed({ usage, modelId });
+
       if (spend) {
         spend.report({ source: spend.source, usage, modelId });
       }
@@ -100,6 +104,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
     async complete(prompt) {
       const operation = beginModelOperation(spend, 'complete');
       let result;
+
       try {
         result = await generateText({
           model,
@@ -109,6 +114,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         operation.failed({ cause: err });
         throw err;
       }
+
       // Reported even when the provider said nothing: `normalizeUsage` returns
       // `{}` and the CALL still lands, which is what keeps a silent provider
       // distinguishable from a free one. No `spec`: this factory is configured
@@ -118,6 +124,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
       const modelId = result.response.modelId;
       operation.completed({ usage, modelId });
       spend?.report({ source: spend.source, usage, modelId });
+
       return result.text.trim();
     },
   };
@@ -149,7 +156,9 @@ export function createCompletionLLM(opts: {
     REASONING_EFFORT_FOR_STAGE[opts.stage],
     parseModelSpec(opts.spec).provider,
   );
+
   const spend = opts.spend;
+
   return {
     stream() {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
@@ -159,6 +168,7 @@ export function createCompletionLLM(opts: {
       // a start row naming this operation rather than nothing at all.
       const operation = beginModelOperation(spend, 'complete', { spec: opts.spec });
       let result;
+
       try {
         result = await generateText({
           model: opts.model,
@@ -169,6 +179,7 @@ export function createCompletionLLM(opts: {
         operation.failed({ cause: err });
         throw err;
       }
+
       // `spec` is what the caller resolved and therefore what the catalog
       // prices; `modelId` is what the provider says served it.
       const usage = normalizeUsage(result.totalUsage);
@@ -180,6 +191,7 @@ export function createCompletionLLM(opts: {
         spec: opts.spec,
         modelId,
       });
+
       return result.text.trim();
     },
   };
@@ -238,6 +250,7 @@ export function estimateUsdCost(tokens: number): number {
  */
 export function meterLLM(llm: LLM): MeteredLLM {
   const usage: LLMUsage = { calls: 0, promptChars: 0, responseChars: 0 };
+
   return {
     usage,
     llm: {
@@ -247,6 +260,7 @@ export function meterLLM(llm: LLM): MeteredLLM {
         usage.promptChars += prompt.length;
         const text = await llm.complete(prompt);
         usage.responseChars += text.length;
+
         return text;
       },
     },
@@ -274,13 +288,16 @@ export function collectStepText(result: {
   if (result.text) return result.text;
 
   const textParts: string[] = [];
+
   for (const step of result.steps) {
     if (step.text) textParts.push(step.text);
   }
+
   if (textParts.length > 0) return textParts.join('\n\n');
 
   // No text in any step — synthesize from tool results
   const fallback = synthesizeToolFallback(result.steps);
+
   return fallback ? fallback : '(no response)';
 }
 
@@ -320,6 +337,7 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
       fetch: config.fetch,
     });
   }
+
   return createOpenAICompatible({
     name: config.name ?? 'openai-compat',
     baseURL: config.baseURL,
@@ -330,6 +348,7 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
 
 function createModelFromLLMConfig(config: LLMProviderConfig): LanguageModel {
   if (config.name === 'anthropic') return createAnthropicModel(config);
+
   return createOpenAICompatible({
     name: config.name,
     baseURL: config.baseURL,
@@ -348,6 +367,7 @@ function createAnthropicModel(
 
   const authorization = headers.Authorization ?? headers.authorization;
   const authToken = apiKey ? undefined : bearerToken(authorization);
+
   if (authToken) {
     delete headers.Authorization;
     delete headers.authorization;
@@ -361,10 +381,12 @@ function createAnthropicModel(
     headers,
     fetch: withRateLimitRetry(config.fetch ?? fetch),
   });
+
   return provider.languageModel(config.model);
 }
 
 function bearerToken(value: string | undefined): string | undefined {
   const match = /^Bearer\s+(.+)$/i.exec(value ?? '');
+
   return match?.[1]?.trim() || undefined;
 }

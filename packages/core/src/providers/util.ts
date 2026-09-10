@@ -36,22 +36,31 @@ function isHeaderIterable(value: HeadersInit): value is HeadersInit & Iterable<I
  * union into Bun's narrower constructor overload. */
 export function copyHeaders(init: HeadersInit | undefined): Headers {
   const headers = new Headers();
+
   if (init === undefined) return headers;
+
   if (init instanceof Headers) {
     init.forEach((value, name) => { headers.append(name, value); });
+
     return headers;
   }
+
   if (isHeaderIterable(init)) {
     for (const pair of init) {
       const [name, value] = pair;
+
       if (name === undefined || value === undefined) {
         throw new Error('header pair must contain a name and value');
       }
+
       headers.append(name, value);
     }
+
     return headers;
   }
+
   for (const [name, value] of Object.entries(init)) headers.append(name, value);
+
   return headers;
 }
 
@@ -63,29 +72,38 @@ export function copyHeaders(init: HeadersInit | undefined): Headers {
  */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
   const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
+
   return asFetchFunction(async (input, init) => {
     const resolved = await deps.getAuth(opts.credKey);
+
     if (!resolved || (opts.requireBaseURL && !resolved.baseURL)) {
       return new Response(
         JSON.stringify({ error: opts.missingCredentialError }),
         { status: 401, headers: { 'Content-Type': 'application/json' } },
       );
     }
+
     let auth = resolved;
+
     if (!auth.baseURL && opts.resolveBaseURL) {
       const baseURL = await opts.resolveBaseURL();
+
       if (!baseURL) {
         return new Response(
           JSON.stringify({ error: opts.missingBaseURLError ?? opts.missingCredentialError }),
           { status: 401, headers: { 'Content-Type': 'application/json' } },
         );
       }
+
       auth = { ...auth, baseURL };
     }
+
     const headers = copyHeaders(init?.headers);
+
     for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
     const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });
+
     return baseFetch(rewritten ?? input, { ...init, headers });
   });
 }
@@ -123,22 +141,26 @@ export async function catalogModelInfo(
 ): Promise<ModelInfo | null> {
   if (!provider) return null;
   const models = await provider.listModels(deps);
+
   return models.find((m) => m.id === modelId) ?? null;
 }
 
 export function nonEmptyString<T>(value: T): string | undefined {
   const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
+
   return parsed.success ? parsed.output : undefined;
 }
 
 export function positiveInteger<T>(value: T): number | undefined {
   const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), value);
+
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }
 
 /** How deep to follow nested `{ error: … }` envelopes. OpenAI-shaped bodies
  *  nest once; two spare levels cover the gateways that re-wrap them. */
 const PROVIDER_ERROR_MAX_DEPTH = 3;
+
 const PROVIDER_ERROR_MAX_CHARS = 800;
 
 /** The two fields the AI SDK's `APICallError` carries that this boundary
@@ -204,10 +226,12 @@ function readProviderFailure(
   input: { readonly cause: unknown; readonly depth: number },
 ): ProviderFailureFacts | null {
   const { cause: error, depth } = input;
+
   if (error instanceof Error) {
     const envelope = v.safeParse(ApiCallErrorSchema, error);
     const status = envelope.success ? envelope.output.statusCode : undefined;
     const body = envelope.success ? envelope.output.responseBody : undefined;
+
     // The SDK's message for an HTTP failure is the status line
     // ("AI_APICallError", "Bad Request"), so the provider's reason lives in the
     // body — read it, never print it. A body that reads as nothing leaves the
@@ -216,9 +240,11 @@ function readProviderFailure(
     const parsed = body === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
       ? undefined
       : tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
+
     const fromBody = parsed === undefined
       ? null
       : readProviderFailure({ cause: parsed, depth: depth + 1 });
+
     // Assigned rather than spread-when-present: `exactOptionalPropertyTypes` is
     // off, so an absent fact IS `undefined` on an optional field, and a
     // conditional empty spread only obscures that.
@@ -230,7 +256,9 @@ function readProviderFailure(
   }
 
   const text = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), error);
+
   if (text.success) return { message: text.output };
+
   if (v.is(v.string(), error)) return null;
 
   // Shallow on purpose, and not through a `JsonObject` guard: `JsonObjectSchema` is
@@ -240,24 +268,29 @@ function readProviderFailure(
   // that overflow as "not an object".
   // Nothing here needs deep JSON validity: each field below re-validates.
   const record = v.safeParse(v.record(v.string(), v.unknown()), error);
+
   if (!record.success) return null;
 
   const fields = record.output;
   const status = v.safeParse(StatusFieldSchema, fields);
   const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
   const providerCode = nonEmptyString(fields.code) ?? nonEmptyString(fields.type);
+
   const stated = nonEmptyString(fields.message)
     ?? nonEmptyString(fields.error_description)
     ?? nonEmptyString(fields.detail);
+
   // A gateway wraps the provider's reason and stamps its own code and status on
   // the outside, so the envelope's identifiers still count when the payload
   // inside states neither.
   const nested = stated !== undefined || fields.error === undefined || depth >= PROVIDER_ERROR_MAX_DEPTH
     ? null
     : readProviderFailure({ cause: fields.error, depth: depth + 1 });
+
   // No reason anywhere: name what the payload carried rather than stringify it.
   // The keys are the diagnosis; the values are the leak.
   const named = Object.keys(fields).join(', ') || 'no fields';
+
   return {
     message: stated ?? nested?.message ?? `unrecognised provider error (fields: ${named})`,
     providerCode: nested?.providerCode ?? providerCode,
@@ -279,10 +312,13 @@ function readProviderFailure(
 export function describeProviderError(failure: { readonly cause: unknown }): string {
   const facts = providerFailureFacts({ cause: failure.cause });
   const tags: string[] = [];
+
   if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
   const code = facts.providerCode;
+
   if (code !== undefined && !facts.message.toLowerCase().includes(code.toLowerCase())) tags.push(code);
   const rendered = tags.length > 0 ? `${facts.message} (${tags.join(', ')})` : facts.message;
+
   return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
 }
 
@@ -295,10 +331,15 @@ export function describeProviderError(failure: { readonly cause: unknown }): str
  */
 function codeForStatus(status: number): ErrorCode | null {
   if (status === 401 || status === 402 || status === 403) return 'denied';
+
   if (status === 404) return 'missing';
+
   if (status === 408 || status === 504) return 'timeout';
+
   if (status === 400 || status === 413 || status === 422) return 'bad_input';
+
   if (status === 429 || status >= 500) return 'unavailable';
+
   return null;
 }
 
@@ -315,9 +356,11 @@ function codeForStatus(status: number): ErrorCode | null {
  */
 export function toProviderError(input: { doing: string; cause: unknown }): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
+
   const code = classifyErrorCode({ cause: input.cause })
     ?? (facts.status === undefined ? null : codeForStatus(facts.status))
     ?? 'unavailable';
+
   return new KinuError(code, `${input.doing}: ${describeProviderError({ cause: input.cause })}`, {
     cause: input.cause,
   });
@@ -327,10 +370,14 @@ export function toProviderError(input: { doing: string; cause: unknown }): KinuE
  *  and TUI model pickers. Null when unknown. */
 export function formatContextWindow(tokens: number | undefined): string | null {
   if (!tokens || tokens <= 0) return null;
+
   if (tokens >= 1_000_000) {
     const m = tokens / 1_000_000;
+
     return `${m >= 10 || Number.isInteger(m) ? Math.round(m) : m.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}M`;
   }
+
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}k`;
+
   return String(tokens);
 }

@@ -177,6 +177,7 @@ export class AgentOrchestrator {
     onToolResult: (ctx) => {
       const recovery = this.steering.onToolResult(ctx);
       this.craft.onToolResult(ctx);
+
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
@@ -184,6 +185,7 @@ export class AgentOrchestrator {
       // evidence — what a codemode program actually changed, which no
       // tool-call signature can show. Both live on this object, per turn.
       const steer = this.steering.steerFor(ctx, this.acc.files.progress);
+
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };
@@ -301,6 +303,7 @@ export class AgentOrchestrator {
    *  records read. */
   recoverySnapshot(): ExecutionRecoveryRecord | null {
     if (this.turnRecoveries.length === 0) return null;
+
     return {
       recoveries: this.turnRecoveries.map(({ tool, failures, failedSignature }) =>
         ({ tool, failures, failedSignature })),
@@ -328,6 +331,7 @@ export class AgentOrchestrator {
   observeUserTurn(userText: string, continuity: TurnContinuity): void {
     if (!this.turnEvolutionEnabled) return;
     const previous = this.window.claimPendingReview();
+
     if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
     this.dispatchReview(previous.turn, followup, previous.rowId);
@@ -384,6 +388,7 @@ export class AgentOrchestrator {
     if (!(opts?.enabled ?? this.turnEvolutionEnabled)) return;
     const scoped = this.scopeTurn(turn);
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
+
     // An independent task's arrival proves the parked turn's follow-up can
     // never come — this prompt was written without reading the answer it
     // waits on. Its review is still owed, so it demotes to the queue. A
@@ -398,6 +403,7 @@ export class AgentOrchestrator {
         opts?.recordedAt === undefined ? undefined : { before: opts.recordedAt },
       );
     }
+
     // The append CARRIES the obligation: a turn with no follow-up coming is
     // inserted already `queued`, and the durable queued-review lane
     // (`settleEvolution` → `takeQueuedReviews`, with `resetStaleClaims` for a
@@ -410,6 +416,7 @@ export class AgentOrchestrator {
       scoped,
       opts?.recordedAt === undefined ? appendOpts : { ...appendOpts, now: opts.recordedAt },
     );
+
     // Promptness on TOP of durability, never instead of it. The obligation is
     // already on the row, so this drain is a liveness choice: it runs the review
     // now instead of at the next session open, and a crash costs only the
@@ -422,6 +429,7 @@ export class AgentOrchestrator {
       if (!awaitsFollowup) {
         this.detach(this.deps.engine.runDeferredTurnReviews().then(() => undefined), 'Turn review');
       }
+
       const cadence = this.runDueSessionEvolution();
       const previousCadence = this.cadencePasses;
       this.cadencePasses = (async (): Promise<void> => {
@@ -457,6 +465,7 @@ export class AgentOrchestrator {
     // nothing.
     if (turn.missionLabels !== undefined) return turn;
     const labels = this.deps.budget?.scope ?? [];
+
     return labels.length === 0 ? turn : { ...turn, missionLabels: [...labels] };
   }
 
@@ -490,8 +499,10 @@ export class AgentOrchestrator {
   private dispatchReview(turn: CompletedTurn, followup: string | null, storedRowId?: string): void {
     if (this.deps.oneShot) {
       this.deps.engine.deferTurnReview(turn, followup, { storedRowId });
+
       return;
     }
+
     this.detach(this.deps.engine.runStoredTurnReview(storedRowId ?? '', turn, followup), 'Turn review');
   }
 
@@ -511,6 +522,7 @@ export class AgentOrchestrator {
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
     if (this.deps.oneShot) return { reviewed: 0, refused: [] };
+
     return await this.deps.engine.runDeferredTurnReviews();
   }
 
@@ -533,16 +545,20 @@ export class AgentOrchestrator {
    */
   runDueSessionEvolution(): Promise<void> {
     if (this.sessionEvolution) return this.sessionEvolution;
+
     const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
       ? this.window.claim()
       : null;
+
     let pass = this.runCadencePass(claimed);
+
     // Only a pass that CLAIMED a window latches. A drain-only pass must not,
     // or it would hide a window that filled while it ran.
     if (claimed) {
       pass = pass.finally(() => { this.sessionEvolution = null; });
       this.sessionEvolution = pass;
     }
+
     return pass;
   }
 
@@ -558,6 +574,7 @@ export class AgentOrchestrator {
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
     await this.drainDueShadowTrials();
+
     if (claimed) {
       try {
         await this.deps.engine.onSessionComplete({
@@ -572,12 +589,14 @@ export class AgentOrchestrator {
           toKinuError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
         );
       }
+
       // Settled either way: retrying the same window forever on a persistent
       // failure would be a livelock, and every step of the chain already absorbs
       // its own errors. Carry-forward is for a host that DIED, which never
       // reaches here at all.
       claimed.settle();
     }
+
     await this.drainRefinementLane();
   }
 
@@ -586,7 +605,9 @@ export class AgentOrchestrator {
    *  are durable, so a failed step is a step the next cadence re-drives. */
   private async drainRefinementLane(): Promise<void> {
     const lane = this.deps.refinementLane;
+
     if (!lane) return;
+
     try {
       await lane();
     } catch (err) {
@@ -600,9 +621,12 @@ export class AgentOrchestrator {
   /** The promotion gate's queued trials, at most one drain at a time. */
   private drainDueShadowTrials(): Promise<void> {
     if (this.shadowTrials) return this.shadowTrials;
+
     const drain = this.deps.engine.runDueShadowTrials()
       .finally(() => { this.shadowTrials = null; });
+
     this.shadowTrials = drain;
+
     return drain;
   }
 
@@ -625,12 +649,15 @@ export class AgentOrchestrator {
     // slow, and 100-600s of unattributed post-answer wall has been chased
     // across environments twice (TB2.1, 2026-08-20).
     const waitedOn = [...new Set(this.inFlight.values())];
+
     while (this.inFlight.size > 0) {
       // A lap over one snapshot; work dispatched by settled work lands in the
       // map during the await and is joined by the next lap.
       await Promise.all(this.inFlight.keys());
     }
+
     const waitedMs = Date.now() - started;
+
     if (waitedMs > 1_000) {
       diagnostics.event('evolution.settled', { waitedMs, waitedOn: waitedOn.join(', ') });
     }
@@ -723,6 +750,7 @@ export class AgentOrchestrator {
         );
       }
     }
+
     this.reconcileDurableWake();
   }
 
@@ -753,10 +781,13 @@ export class AgentOrchestrator {
     let batch: ReturnType<typeof buildDrainBatch>;
     const turnId = `evt-${nanoid()}`;
     const bound: string[] = [];
+
     try {
       const pending = this.deps.eventLog.pending({ resolve_deferred: { now: Date.now(), phase: 'idle' } });
       batch = buildDrainBatch(pending);
+
       if (!batch) return;
+
       for (const id of batch.ids) {
         this.deps.eventLog.markConsumed(id, turnId, 0);
         bound.push(id);
@@ -778,20 +809,29 @@ export class AgentOrchestrator {
           );
         }
       }
+
       const failure = toKinuError({
         doing: 'select the pending events for a drain turn', cause: err, otherwise: 'io',
       });
+
       diagnostics.failure('orchestrator.drain_select_failed', failure, { turnId });
+
       if (opts?.rethrow) throw failure;
+
       return;
     }
+
     const ids = batch.ids;
     let metadata: JsonObject | undefined;
+
     if (batch.mode !== null || batch.missions.length > 0) {
       metadata = {};
+
       if (batch.mode !== null) metadata.kinuMode = batch.mode;
+
       if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
     }
+
     const signal: AgentSignal = {
       kind: 'event_drain',
       text: batch.text,
@@ -815,6 +855,7 @@ export class AgentOrchestrator {
       metadata,
       requiresOwnTurn: batch.mode !== null,
     };
+
     await this.signals.deliver(signal);
   }
 

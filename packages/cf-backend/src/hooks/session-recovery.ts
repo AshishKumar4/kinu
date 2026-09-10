@@ -41,6 +41,7 @@ const RPC_TIMEOUT_PATTERN = /^RPC call to .+ timed out after \d+ms$/;
 
 function isRpcTimeoutError<ErrorValue>(error: ErrorValue): boolean {
   const parsed = v.safeParse(v.instance(Error), error);
+
   return parsed.success
     && RPC_TIMEOUT_PATTERN.test(renderThrownChain({ cause: parsed.output }));
 }
@@ -58,6 +59,7 @@ const REDIAL_WINDOW_MS = 90_000;
 /** Minimum spacing between forced redials — doubles per redial up to the cap,
  *  so a long-dead origin is probed at a heartbeat, not with a hammer. */
 const REDIAL_MIN_INTERVAL_MS = 15_000;
+
 const REDIAL_MAX_INTERVAL_MS = 60_000;
 
 export interface SessionRecoveryCallbacks {
@@ -125,17 +127,22 @@ export function createSessionRecovery(
       // `Connection closed`. That is not peer evidence and must not erase the
       // redial spacing this outage already earned.
       if (!socketOpen) return;
+
       if (!isRpcTimeoutError(error)) {
         restoreTrust();
+
         return;
       }
+
       const at = now();
+
       if (timeoutStreak === 0 || at - streakStartMs > redialWindowMs) {
         streakStartMs = at;
         timeoutStreak = 1;
       } else {
         timeoutStreak += 1;
       }
+
       if (
         timeoutStreak >= timeoutsToRedial
         && at - lastRedialMs >= minRedialIntervalMs
@@ -161,6 +168,7 @@ export function createSessionRecovery(
 /* ── version-skew signal ────────────────────────────────────────────────────── */
 
 const HealthBuildSchema = v.object({ sha: v.pipe(v.string(), v.trim(), v.minLength(1)) });
+
 const HealthBodySchema = v.object({ build: v.nullable(HealthBuildSchema) });
 
 /** Transport-level failures of a best-effort public read: the request timed
@@ -180,11 +188,14 @@ function isTolerableHealthFailure<ErrorValue>(cause: ErrorValue): boolean {
 export async function fetchDeployedBuildSha(): Promise<string | null> {
   try {
     const res = await fetch("/api/health", { signal: AbortSignal.timeout(10_000) });
+
     if (!res.ok) return null;
     const parsed = v.safeParse(HealthBodySchema, await res.json());
+
     return parsed.success ? parsed.output.build?.sha ?? null : null;
   } catch (cause) {
     if (!isTolerableHealthFailure(cause)) throw cause;
+
     return null;
   }
 }
@@ -198,6 +209,7 @@ let pageBuild: Promise<string | null> | null = null;
  * caught, and the two ways to have no sha are told apart below it. */
 async function loadPageBuildSha(): Promise<string | null> {
   let thrown: { cause: unknown } | null = null;
+
   try {
     // The read's OWN answer, its absences included: a deployment that carries
     // no stamp, and a transport failure {@link isTolerableHealthFailure} names
@@ -207,6 +219,7 @@ async function loadPageBuildSha(): Promise<string | null> {
   } catch (cause) {
     thrown = { cause };
   }
+
   // Only a defect reaches past the handler: the read rethrows precisely what it
   // does not tolerate. It lands on the sink WITH a class, so a health read that
   // broke is a recorded failure and not a page that merely looks unstamped —
@@ -217,6 +230,7 @@ async function loadPageBuildSha(): Promise<string | null> {
     cause: thrown.cause,
     otherwise: 'unavailable',
   }));
+
   return null;
 }
 
@@ -237,6 +251,7 @@ async function loadPageBuildSha(): Promise<string | null> {
  */
 export function pageDeployedBuildSha(): Promise<string | null> {
   pageBuild ??= loadPageBuildSha();
+
   return pageBuild;
 }
 

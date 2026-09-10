@@ -59,6 +59,7 @@ function makeParent(): LocalParent {
   // journal. `createCLIRuntime` creates only the handful a bare runtime reads
   // on its own first touch, because a branch worker legitimately has no more.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
   return Object.assign(createCLIRuntime(db, {
     dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
@@ -69,6 +70,7 @@ function makeParent(): LocalParent {
  *  directly — the cf backend's has to cross a facet boundary to reach one. */
 function makeGovernor(): MissionGovernor {
   const db = new Database(':memory:');
+
   return new MissionGovernor({ actor: createTestActorsOver(db).main, storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
 }
 
@@ -77,6 +79,7 @@ function makeGovernor(): MissionGovernor {
 function makeJournal(): HeadJournal {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
+
   return new HeadJournal(makeSql(db), createTestActorsOver(db).main);
 }
 
@@ -113,6 +116,7 @@ function headDeps(
   // same map has to reach both halves or the observer is set where nobody
   // looks.
   const writes = new Map<string, WriteObserver>();
+
   return {
     model: () => model, parentRuntime: parent,
     // THE GENUINE HOST. Every head this runtime spawns is acquired from it, so
@@ -123,6 +127,7 @@ function headDeps(
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
+
       return {
         model,
         providerOptions: reasoningEffortOptions(route.reasoningEffort, 'openai') ?? {},
@@ -154,9 +159,11 @@ function capturingHeadModel(
     doGenerate: async (opts) => {
       sink((opts.tools ?? []).map((t) => t.name));
       promptSink?.(JSON.stringify(opts.prompt));
+
       if (runSchemaSink) {
         runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'run')));
       }
+
       return {
         content: [{ type: 'text', text: answer }],
         finishReason: 'stop' as const,
@@ -182,14 +189,17 @@ function fakeHeadsModel(capture?: (options: {
   providerOptions?: LanguageModelV2CallOptions['providerOptions'];
 }, isMerge: boolean) => void): LanguageModel {
   const usage = { inputTokens: 8, outputTokens: 12, totalTokens: 20 };
+
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake',
     doGenerate: async (opts) => {
       const isMerge = JSON.stringify(opts.prompt ?? '').includes('merging the findings');
       capture?.(opts, isMerge);
+
       const text = isMerge
         ? '{"narrative":"Unified: both heads agree the parser is sound.","selected_decisions":[],"unresolved_questions":[],"recommendations":["ship it"]}'
         : 'This head examined its angle and found it solid.';
+
       return {
         content: [{ type: 'text', text }],
         finishReason: 'stop' as const,
@@ -206,6 +216,7 @@ function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
   initHeadsTables(makeExecRaw(db));
   const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
   const overrides = { journal: () => journal };
+
   return {
     journal,
     controller: new HeadController(createCLIHeadRuntime(headDeps(model, overrides, probe)), journal),
@@ -215,6 +226,7 @@ function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
 describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('two heads run in-process and the merge synthesizes their findings', async () => {
     const { controller } = controllerWithCLIRuntime(fakeHeadsModel());
+
     const result = await controller.run({
       mode: 'build',
       parentHeadId: null,
@@ -245,6 +257,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     const db = new Database(':memory:');
     initHeadsTables(makeExecRaw(db));
     const journal = new HeadJournal(makeSql(db), createTestActorsOver(db).main);
+
     const controller = new HeadController(
       createCLIHeadRuntime(headDeps(fakeHeadsModel(), {
         journal: () => journal,
@@ -312,9 +325,11 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       maxOutputTokens?: number;
       providerOptions?: LanguageModelV2CallOptions['providerOptions'];
     } | undefined;
+
     const { controller } = controllerWithCLIRuntime(
       fakeHeadsModel((options, isMerge) => { if (isMerge) mergeOptions = options; }),
     );
+
     await controller.run({
       mode: 'build',
       parentHeadId: null,
@@ -348,12 +363,14 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('the prompt identifies the canonical workspace reached by its file tools', async () => {
     let prompt = '';
     let runSchema = '';
+
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel(
       'done',
       () => {},
       (value) => { prompt = value; },
       (value) => { runSchema = value; },
     )));
+
     await (await runtime.spawnHead(aHeadInput())).run();
 
     expect(prompt).toContain('`workspace.*` is the canonical workspace you were forked from');
@@ -399,6 +416,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
    */
   test('every head step reaches the journal, so a branch trace is readable', async () => {
     const { controller, journal } = controllerWithCLIRuntime(fakeHeadsModel());
+
     const result = await controller.run({
       mode: 'build',
       parentHeadId: null,
@@ -410,6 +428,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     const run = journal.readRun(result.headIds[0]!.split('-d')[0]!);
     const heads = run?.heads ?? [];
     expect(heads).toHaveLength(2);
+
     for (const head of heads) {
       expect(journal.readSteps(head.id).length).toBeGreaterThan(0);
       expect(head.lastStepAt).not.toBeNull();
@@ -417,12 +436,14 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   });
   test('nested heads keep their reports and transcripts in the root journal', async () => {
     let split = false;
+
     const model = new TestLanguageModelV2({
       provider: 'fake', modelId: 'recursive-head',
       doGenerate: async (opts) => {
         const prompt = JSON.stringify(opts.prompt);
         let finishReason: 'tool-calls' | 'stop' = 'stop';
         let content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'];
+
         if (prompt.includes('merging the findings')) {
           content = [{ type: 'text', text: JSON.stringify({
             narrative: 'combined findings', selected_decisions: [], unresolved_questions: [],
@@ -441,12 +462,14 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
         } else {
           content = [{ type: 'text', text: 'The branch preserves its findings.' }];
         }
+
         return {
           content, finishReason, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
           response: { id: 'recursive', modelId: 'recursive-head', timestamp: new Date(0) }, warnings: [],
         };
       },
     });
+
     const { controller, journal } = controllerWithCLIRuntime(model);
     await controller.run({
       mode: 'build', parentHeadId: null, rootId: 'nested-local', inheritedContext: [],
@@ -460,6 +483,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(run?.heads.map((head) => head.task).sort()).toEqual([
       'nested grammar', 'nested lexer', 'parent investigation', 'sibling investigation',
     ]);
+
     for (const head of run?.heads ?? []) {
       expect(head.status).toBe('completed');
       expect(journal.readSteps(head.id).some((step) => step.text.includes('preserves its findings'))).toBe(true);
@@ -506,6 +530,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     writeFileSync(join(dir, 'note.txt'), 'real file content');
     const rt = await createHeadRuntime(makeParent(), 'h2');
     const capture = new HeadCapture();
+
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
       executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
@@ -550,8 +575,10 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
   let arrived = 0;
   let open!: () => void;
   const gate = new Promise<void>((resolve) => { open = resolve; });
+
   return async () => {
     if (++arrived === n) { onRelease(); open(); }
+
     await gate;
   };
 }
@@ -565,6 +592,7 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
  */
 function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: string) => string): LanguageModel {
   const stepsByHead = new Map<string, number>();
+
   const envelope = (
     content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
     finishReason: 'tool-calls' | 'stop',
@@ -575,6 +603,7 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
     response: { id: 'r', modelId: 'fake-scratch', timestamp: new Date(0) },
     warnings: [],
   });
+
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-scratch',
     doGenerate: async (opts) => {
@@ -583,12 +612,20 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
+
       const fileCall = (input: JsonObject) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
         input: JSON.stringify(input),
       }], 'tool-calls');
+
       if (step === 1) return fileCall({ action: 'write', path: scratchPathFor(marker), content: `scratch-of-${marker}` });
-      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: scratchPathFor(marker) }); }
+
+      if (step === 2) {
+        await arrive();
+
+        return fileCall({ action: 'read', path: scratchPathFor(marker) });
+      }
+
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
   });
@@ -603,6 +640,7 @@ function scratchProbeModel(arrive: () => Promise<void>, scratchPathFor: (name: s
  */
 function readBack(journal: HeadJournal, rootId: string, headId: string): string {
   const head = journal.readRun(rootId)?.heads.find((h) => h.id === headId);
+
   return (head === undefined ? [] : journal.readSteps(head.id))
     .flatMap((s) => s.toolCalls)
     .filter((c) => c.name === 'file')
@@ -621,13 +659,17 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
     // re-resolved after the run when there is no row left to answer with. Still
     // the directory's answer, never a derived one.
     const issued = new Map<string, string>();
+
     const key = (id: string): string => {
       const known = issued.get(id);
+
       if (known !== undefined) return known;
       const minted = headStorageKey(parent, id);
       issued.set(id, minted);
+
       return minted;
     };
+
     const runtime = createCLIHeadRuntime(headDeps(
       scratchProbeModel(barrier(2, () => {}), (id) => `/home/${headAgentName(key(id))}/note.txt`),
       { journal: () => journal, parentRuntime: parent },
@@ -637,6 +679,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
       aHeadInput({ id: 'alpha', task: 'alpha' }),
       aHeadInput({ id: 'beta', task: 'beta' }),
     ];
+
     for (const input of inputs) journal.insertSpawn(input);
     await Promise.all(inputs.map(async (input) => (await runtime.spawnHead(input)).run()));
 
@@ -658,10 +701,12 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
 
   test('a head that throws retires its actor and leaves no live seat', async () => {
     const parent = makeParent();
+
     const exploding = new TestLanguageModelV2({
       provider: 'fake', modelId: 'boom',
       doGenerate: async () => { throw new Error('provider exploded'); },
     });
+
     const input = aHeadInput();
     const report = await (await createCLIHeadRuntime(headDeps(exploding, { parentRuntime: parent })).spawnHead(input)).run();
     expect(report.status).toBe('errored');
@@ -681,6 +726,7 @@ describe("a local head's state is its own actor's rows in the parent's ONE datab
  */
 function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
+
   const envelope = (
     content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
     finishReason: 'tool-calls' | 'stop',
@@ -691,12 +737,14 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
     response: { id: 'r', modelId: 'fake-shared', timestamp: new Date(0) },
     warnings: [],
   });
+
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-shared',
     doGenerate: async (opts) => {
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
+
       // Through the parent EXECUTOR: that is where a head's writes to its
       // parent land, and where attribution is recorded.
       const write = (content: string) => envelope([{
@@ -705,8 +753,15 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
           code: `await parent.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
       }], 'tool-calls');
+
       if (step === 1) return write('one\n');
-      if (step === 2) { await arrive(); return write('one\ntwo\nthree\n'); }
+
+      if (step === 2) {
+        await arrive();
+
+        return write('one\ntwo\nthree\n');
+      }
+
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
   });
@@ -749,10 +804,12 @@ describe("a head's execute_tools holds the namespaces the shared description pro
   test('state.set and state.get work inside a local head, over its own scratch', async () => {
     const journal = makeJournal();
     let step = 0;
+
     const model = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-state',
       doGenerate: async () => {
         step += 1;
+
         const content = step === 1
           ? [{
             type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'execute_tools',
@@ -761,6 +818,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
             }),
           }]
           : [{ type: 'text' as const, text: 'done' }];
+
         return {
           content,
           finishReason: step === 1 ? 'tool-calls' as const : 'stop' as const,
@@ -770,6 +828,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
         };
       },
     });
+
     const runtime = createCLIHeadRuntime(headDeps(model, { journal: () => journal }));
     const input = aHeadInput({ id: 'stateful', task: 'stateful' });
     journal.insertSpawn(input);
@@ -779,6 +838,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
       .flatMap((s) => s.toolCalls)
       .filter((c) => c.name === 'execute_tools')
       .map((c) => JSON.stringify(c.output ?? ''));
+
     expect(outputs).toHaveLength(1);
     expect(outputs[0]).toContain('kept');
     expect(outputs[0]).not.toContain('ReferenceError');
@@ -800,6 +860,7 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
       capturingHeadModel('did the work', () => {}),
       { governor: () => governor },
     ));
+
     const head = await runtime.spawnHead(aHeadInput());
     const report = await head.run();
 
@@ -817,6 +878,7 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
       capturingHeadModel('did the work', () => {}),
       { governor: () => governor },
     ));
+
     const head = await runtime.spawnHead(aHeadInput({ missionLabels: ['sweep'] }));
     expect((await head.run()).status).toBe('completed');
 
@@ -831,10 +893,12 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
     governor.debit(10, { labels: ['sweep'], calls: 1 });
 
     let calls = 0;
+
     const runtime = createCLIHeadRuntime(headDeps(
       capturingHeadModel('should never run', () => { calls++; }),
       { governor: () => governor },
     ));
+
     const head = await runtime.spawnHead(aHeadInput({ missionLabels: ['sweep'] }));
     const report = await head.run();
 
@@ -858,6 +922,7 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
       provider: 'fake', modelId: id,
       doGenerate: async () => {
         seen.push(id);
+
         return {
           content: [{ type: 'text', text: `${id} looked at its angle.` }],
           finishReason: 'stop' as const,
@@ -871,6 +936,7 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
 
   test('each head resolves its OWN spec; a head that named none inherits the session model', async () => {
     const seen: string[] = [];
+
     const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
       resolveModel: (spec: string) => labelledModel(spec, seen),
     }));
@@ -897,6 +963,7 @@ describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
 
   test('an unresolvable spec degrades to the session model instead of failing the fork', async () => {
     const seen: string[] = [];
+
     const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
       resolveModel: (spec: string) => { throw new Error(`no such provider for ${spec}`); },
     }));
@@ -931,10 +998,12 @@ describe("the merge synthesis' operation lifecycle", () => {
   function runtimeWith(model: LanguageModel) {
     const operations: ModelOperationEvent[] = [];
     const reports: ModelCallReport[] = [];
+
     const runtime = createCLIHeadRuntime(headDeps(model, {
       operations: (event) => operations.push(event),
       reportModelCall: (report) => reports.push(report),
     }));
+
     return { operations, reports, runtime };
   }
 
@@ -987,6 +1056,7 @@ test('the public head abort cancels its in-flight provider request, not a siblin
   const pending = Promise.withResolvers<never>();
   let calls = 0;
   let providerStopped = false;
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'cancel-head', doGenerate: options => {
     if (calls++ > 0) return {
       content: [{ type: 'text', text: 'sibling finished' }], finishReason: { unified: 'stop', raw: undefined },
@@ -994,18 +1064,22 @@ test('the public head abort cancels its in-flight provider request, not a siblin
         outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
     };
     const signal = options.abortSignal;
+
     if (signal !== undefined) signal.addEventListener('abort', () => {
       providerStopped = true;
       pending.reject(signal.reason);
     }, { once: true });
     started.resolve();
+
     return pending.promise;
   } });
+
   const runtime = createCLIHeadRuntime(headDeps(model));
   const first = await runtime.spawnHead(aHeadInput({ id: 'cancel-first' }));
   const running = first.run();
   await started.promise;
   await first.abort('operator stopped this head');
+
   try {
     expect(providerStopped).toBe(true);
     expect(await running).toMatchObject({ status: 'aborted', errorMessage: 'operator stopped this head' });

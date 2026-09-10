@@ -23,6 +23,7 @@ import { sqlExec } from './helpers/user-do';
 // ── A site to probe ──────────────────────────────────────────────
 
 const SHA = 'c0ffee1234567890';
+
 const SPA_SHELL = '<!doctype html><html><body><div id="root"></div></body></html>';
 
 /** Distinct bytes per artifact, so a probe that checks one and calls the rest
@@ -33,6 +34,7 @@ function artifactBytes(path: string) {
 
 async function artifactSha(path: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', artifactBytes(path));
+
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -41,13 +43,17 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
   const fetchSite: ProbeDeps['fetch'] = async (input) => {
     const path = new URL(new Request(input).url).pathname;
     const override = broken[path];
+
     if (override) return override();
+
     if (CLI_DIST_PATHS.includes(path)) return new Response(artifactBytes(path));
+
     for (const artifact of CLI_DIST_PATHS) {
       if (path === `${artifact}.sha256`) {
         return new Response(`${await artifactSha(artifact)}  ${artifact.split('/').pop() ?? ''}\n`);
       }
     }
+
     switch (path) {
       case '/api/health':
         return Response.json({ ok: true, sha: SHA, version: '0.1.0' });
@@ -62,6 +68,7 @@ function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['
         return new Response('not found', { status: 404 });
     }
   };
+
   return fetchSite;
 }
 
@@ -74,7 +81,9 @@ async function probe(broken: Partial<Record<string, () => Response>> = {}): Prom
 
 function outcome(outcomes: ProbeOutcome[], probeName: string): ProbeOutcome {
   const found = outcomes.find((o) => o.probe === probeName);
+
   if (!found) throw new Error(`no outcome for ${probeName}`);
+
   return found;
 }
 
@@ -95,6 +104,7 @@ describe('synthetic probes', () => {
     const outcomes = await probe({
       [CLI_DIST_PATHS[0] ?? '']: () => new Response(new TextEncoder().encode('a different build')),
     });
+
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('install and update are both refusing');
   });
@@ -103,6 +113,7 @@ describe('synthetic probes', () => {
   // else, so a probe that reads only the first would call the outage green.
   test('any single missing platform artifact is caught, not just the first', async () => {
     expect(CLI_DIST_PATHS.length).toBeGreaterThan(1);
+
     for (const path of CLI_DIST_PATHS) {
       const outcomes = await probe({ [path]: spaFallback });
       expect(outcome(outcomes, 'downloads').ok, `${path} went unchecked`).toBe(false);
@@ -120,6 +131,7 @@ describe('synthetic probes', () => {
     const outcomes = await probe({
       '/api/health': () => Response.json({ ok: true, sha: 'deadbeef' }),
     });
+
     expect(outcome(outcomes, 'health').ok).toBe(false);
     expect(outcome(outcomes, 'health').detail).toContain('different deploys');
   });
@@ -134,6 +146,7 @@ describe('synthetic probes', () => {
     const outcomes = await probe({
       '/login': () => new Response('<html><title>Sign in to Kinu</title><p>No OAuth providers</p></html>'),
     });
+
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('nobody can sign in');
   });
@@ -142,6 +155,7 @@ describe('synthetic probes', () => {
     const unreadable = () => new Response(new ReadableStream({
       start(c) { c.error(new Error('connection reset')); },
     }));
+
     const outcomes = await probe({ [CLI_DIST_PATHS[0] ?? '']: unreadable });
     expect(outcome(outcomes, 'downloads').ok).toBe(false);
     expect(outcome(outcomes, 'downloads').detail).toContain('could not be read');
@@ -153,6 +167,7 @@ describe('synthetic probes', () => {
     const unreadable = () => new Response(new ReadableStream({
       start(c) { c.error(new Error('connection reset')); },
     }));
+
     const outcomes = await probe({ '/login': unreadable });
     expect(outcome(outcomes, 'login').ok).toBe(false);
     expect(outcome(outcomes, 'login').detail).toContain('could not be read');
@@ -163,10 +178,12 @@ describe('synthetic probes', () => {
     const unavailableFetch: ProbeDeps['fetch'] = async () => {
       throw new Error('connection refused');
     };
+
     const outcomes = await runSyntheticProbes({
       origin: 'https://kinu.test',
       fetch: unavailableFetch,
     });
+
     expect(outcomes.every((o) => !o.ok)).toBe(true);
     expect(outcome(outcomes, 'health').detail).toContain('connection refused');
   });
@@ -179,6 +196,7 @@ function ledger(alertEmail: string | null = 'owner@example.com') {
   const sql = sqlExec(db);
   const sent: OutboundEmailMessage[] = [];
   let failSends = false;
+
   const OutboundMessageSchema = v.object({
     from: v.union([v.string(), v.object({ email: v.string(), name: v.string() })]),
     to: v.union([
@@ -190,24 +208,31 @@ function ledger(alertEmail: string | null = 'owner@example.com') {
     text: v.string(),
     headers: v.optional(v.record(v.string(), v.string())),
   });
+
   type SendEmailBuilder = Parameters<SendEmail['send']>[0];
+
   function send(message: EmailMessage): Promise<EmailSendResult>;
   function send(message: SendEmailBuilder): Promise<EmailSendResult>;
   async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
     if (failSends) throw new Error('mail transport down');
     sent.push(v.parse(OutboundMessageSchema, message));
+
     return { messageId: `monitor-${sent.length}` };
   }
+
   const binding: SendEmail = { send };
   const outbox = new EmailOutbox(sql);
+
   const deps = (now: number): MonitorDeps => ({
     sql, outbox, email: binding, emailDomain: 'kinu.test', alertEmail,
     origin: 'https://kinu.test', now,
   });
+
   return { sql, sent, deps, breakMail: (on: boolean) => { failSends = on; } };
 }
 
 const FAILING: ProbeOutcome[] = [{ probe: 'downloads', ok: false, detail: 'checksum mismatch' }];
+
 const PASSING: ProbeOutcome[] = [{ probe: 'downloads', ok: true, detail: 'sha256 ok' }];
 
 describe('alert fatigue', () => {
@@ -230,6 +255,7 @@ describe('alert fatigue', () => {
       expect(again.emails).toBe(0);
       expect(again.alerting).toEqual([]);
     }
+
     expect(l.sent).toHaveLength(1);
     expect(listIncidents(l.sql)[0]).toMatchObject({ probe: 'downloads', failures: 10 });
 
@@ -260,6 +286,7 @@ describe('alert fatigue', () => {
       { probe: 'login', ok: false, detail: 'no provider' },
       { probe: 'health', ok: false, detail: 'HTTP 500' },
     ]);
+
     expect(later.alerting).toEqual(['health']);
     expect(l.sent).toHaveLength(2);
     expect(l.sent[1]!.subject).toContain('health is failing');

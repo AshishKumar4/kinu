@@ -11,10 +11,12 @@ import * as v from 'valibot';
 const CredentialKindSchema = v.object({
   kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
 });
+
 const BearerCredentialSchema = v.object({
   kind: v.literal('bearer'),
   token: v.pipe(v.string(), v.minLength(1)),
 });
+
 const OAuthCredentialSchema = v.object({
   kind: v.literal('oauth'),
   accessToken: v.pipe(v.string(), v.minLength(1)),
@@ -22,6 +24,7 @@ const OAuthCredentialSchema = v.object({
   expiresAt: v.optional(v.number()),
   metadata: v.optional(JsonObjectSchema),
 });
+
 const OpenAICompatCredentialSchema = v.object({
   kind: v.literal('openai-compat'),
   baseURL: v.pipe(v.string(), v.minLength(1)),
@@ -31,21 +34,29 @@ const OpenAICompatCredentialSchema = v.object({
 
 export function validateCredential<Input>(input: Input): Credential {
   const kind = v.parse(CredentialKindSchema, input).kind;
+
   if (kind === 'bearer') return v.parse(BearerCredentialSchema, input);
+
   if (kind === 'oauth') {
     const parsed = v.parse(OAuthCredentialSchema, input);
     const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
+
     if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
+
     if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
+
     if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
+
     return credential;
   }
 
   const parsed = v.parse(OpenAICompatCredentialSchema, input);
+
   const extraHeaders = parsed.extraHeaders === undefined
     ? undefined
     : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
       v.is(v.string(), entry[1])));
+
   return {
     kind: 'openai-compat',
     baseURL: parsed.baseURL,

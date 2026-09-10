@@ -7,6 +7,7 @@ describe("plan annotation save queue", () => {
     const completions: ReturnType<typeof Promise.withResolvers<boolean>>[] = [];
     let concurrent = 0;
     let maxConcurrent = 0;
+
     const queue = createPlanAnnotationSaveQueue<{ id: string }>(async (values) => {
       writes.push(values.map((value) => value.id));
       concurrent++;
@@ -15,6 +16,7 @@ describe("plan annotation save queue", () => {
       completions.push(completion);
       const result = await completion.promise;
       concurrent--;
+
       return result;
     });
 
@@ -39,8 +41,10 @@ describe("plan annotation save queue", () => {
 
   test("continues with the newest snapshot after a failed write", async () => {
     const writes: string[][] = [];
+
     const queue = createPlanAnnotationSaveQueue<{ id: string }>(async (values) => {
       writes.push(values.map((value) => value.id));
+
       return writes.length > 1;
     });
 

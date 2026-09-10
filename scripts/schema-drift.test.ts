@@ -209,6 +209,7 @@ describe('schema-drift over this tree', () => {
     const declared = tablesIn(new Map(state.tables.map(({ file }) => [file, ''])));
 
     expect(declared).toEqual([]);
+
     for (const { table, file } of state.tables) expect(censused.has(lockKey(table, file))).toBe(true);
   });
 });

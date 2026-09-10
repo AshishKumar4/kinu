@@ -61,11 +61,17 @@ import { readRepositoryFile, trackedFiles } from './sources';
 import viteConfig from '../packages/cf-backend/vite.config';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
+
 const PACKAGE = 'packages/cf-backend/package.json';
+
 const VITE_CONFIG = 'packages/cf-backend/vite.config.ts';
+
 const WORKFLOWS = '.github/workflows';
+
 const SETUP_LEAN = '.github/actions/setup-lean/action.yml';
+
 const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
 
 /**
@@ -112,10 +118,14 @@ const EnvironmentScopedPluginSchema = v.looseObject({
  */
 function isImmutableImageReference(reference: string): boolean {
   const parts = reference.split('@');
+
   if (parts.length !== 2) return false;
   const [name, digest] = parts;
+
   if (name === undefined || digest === undefined) return false;
+
   if (!/^sha256:[0-9a-f]{64}$/u.test(digest)) return false;
+
   // Only the last segment can carry a tag; an earlier colon is a registry port.
   return !name.slice(name.lastIndexOf('/') + 1).includes(':');
 }
@@ -150,10 +160,12 @@ function deployments(): readonly Deployment[] {
   const config = parseJsonc(
     readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER,
   );
+
   return [['production', config], ...Object.entries(config.env ?? {})];
 }
 
 const DEPLOYMENTS = deployments();
+
 const EACH = DEPLOYMENTS.map((deployment) => [deployment[0], deployment[1]] as const);
 
 describe('the sandbox container image is pinned', () => {
@@ -167,6 +179,7 @@ describe('the sandbox container image is pinned', () => {
     const images = (block.containers ?? []).map((container) => container.image);
 
     expect(images.length, `${name} declares no container`).toBeGreaterThan(0);
+
     for (const image of images) {
       expect(isImmutableImageReference(image), `${name} runs a re-pointable image`).toBe(true);
       expect(image, `${name} runs an image the release record does not declare`).toBe(PINNED_IMAGE);
@@ -211,6 +224,7 @@ describe("the deployed Worker's stack traces are readable", () => {
   test('the vite build emits worker source maps and leaves the client without', () => {
     const plugins = (viteConfig.plugins ?? []).flatMap((plugin) => {
       const parsed = v.safeParse(EnvironmentScopedPluginSchema, plugin);
+
       return parsed.success ? [parsed.output] : [];
     });
 
@@ -276,6 +290,7 @@ function workflows(): readonly Workflow[] {
     .filter((file) => dirname(file) === WORKFLOWS)
     .map((file) => {
       const text = readRepositoryFile(REPO_ROOT, file);
+
       return { file, text, parsed: v.parse(WorkflowSchema, Bun.YAML.parse(text)) };
     });
 }
@@ -334,6 +349,7 @@ describe('the workflows that publish and measure this product', () => {
       ['.github/workflows/deploy-staging.yml#deploy', 'staging'],
       ['.github/workflows/eval.yml#benchmark', 'eval'],
     ]);
+
     for (const { label, job } of SECRET_JOBS) {
       expect(job.environment, `${label} reads a repository-wide secret`).toBe(bound.get(label));
     }
@@ -341,8 +357,10 @@ describe('the workflows that publish and measure this product', () => {
 
   test('a job that holds a secret checks out no pull-request code', () => {
     let checked = 0;
+
     for (const { label, job, triggers } of SECRET_JOBS) {
       if (!triggers.includes('pull_request') && !triggers.includes('pull_request_target')) continue;
+
       for (const step of job.steps ?? []) {
         if (step.uses === undefined || !step.uses.includes('actions/checkout')) continue;
         const ref = step.with?.ref;
@@ -356,6 +374,7 @@ describe('the workflows that publish and measure this product', () => {
         checked += 1;
       }
     }
+
     // Non-vacuity: a secret-bearing job really is reachable from a pull request,
     // which is the whole reason this assertion exists.
     expect(checked, 'no secret-bearing job is triggered by a pull request')
@@ -381,12 +400,14 @@ describe('the workflows that publish and measure this product', () => {
 
   test('no workflow pipes a remote script into a shell', () => {
     let bodies = 0;
+
     for (const { file, job, step } of steps()) {
       if (step.run === undefined) continue;
       bodies += 1;
       expect(step.run, `${file}#${job} pipes a download into a shell`)
         .not.toMatch(/(?:curl|wget)[^\n]*\|\s*(?:ba)?sh\b/u);
     }
+
     expect(bodies, 'no workflow runs a shell body').toBeGreaterThan(0);
   });
 
@@ -395,6 +416,7 @@ describe('the workflows that publish and measure this product', () => {
       v.object({ runs: v.object({ steps: v.array(StepSchema) }) }),
       Bun.YAML.parse(readRepositoryFile(REPO_ROOT, SETUP_LEAN)),
     );
+
     const install = action.runs.steps.map((step) => step.run).find((run) => run !== undefined);
     expect(install, `${SETUP_LEAN} runs no install body`).toBeDefined();
     const body = install ?? '';
@@ -445,15 +467,18 @@ describe('the workflows that publish and measure this product', () => {
     // because a tag is somebody else's mutable pointer at code that runs here.
     const TAG_ALLOWED = ['actions', 'oven-sh'];
     let pinned = 0;
+
     for (const { file, job, step } of steps()) {
       if (step.uses === undefined) continue;
       const uses = step.uses;
+
       if (uses.startsWith('./')) continue;
       const at = uses.lastIndexOf('@');
       const name = at === -1 ? uses : uses.slice(0, at);
       const ref = at === -1 ? '' : uses.slice(at + 1);
       const owner = name.slice(0, name.indexOf('/'));
       pinned += 1;
+
       if (TAG_ALLOWED.includes(owner)) {
         expect(
           commit.test(ref) || release.test(ref),
@@ -461,9 +486,11 @@ describe('the workflows that publish and measure this product', () => {
         ).toBe(true);
         continue;
       }
+
       expect(commit.test(ref), `${file}#${job} uses ${uses} from outside a pinned commit`)
         .toBe(true);
     }
+
     expect(pinned, 'no workflow uses an action').toBeGreaterThan(0);
   });
 });

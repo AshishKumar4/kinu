@@ -39,7 +39,9 @@ afterEach(() => {
  *  Identical to the binder in unit-workspace-cwd.test.ts. */
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -60,13 +62,16 @@ interface ActorObject {
 function actorObject(): ActorObject {
   const database = new Database(':memory:');
   databases.push(database);
+
   const storage = {
     sql: {
       exec(query: string, ...bindings: SqlValue[]) {
         const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
         const bound = bindings.map(sqlBinding);
+
         if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
         statement.run(...bound);
+
         return [];
       },
     },
@@ -77,17 +82,20 @@ function actorObject(): ActorObject {
     deleteAll: async () => {},
     deleteAlarm: async () => {},
   };
+
   const context = {
     storage,
     id: { toString: () => 'locality-actor', name: 'locality-actor' },
     waitUntil: () => {},
     getWebSockets: () => [],
   };
+
   const partial: Partial<DurableObjectState> = {};
   Object.assign(partial, context);
   // SAFETY: the partial above is constructed with exactly the members
   // `createHostedWorkspace` reads; any other member access throws by name.
   const ctx = partial as DurableObjectState;
+
   return {
     database,
     ctx,
@@ -115,6 +123,7 @@ const WORKSPACE_BINDINGS: Partial<Env> = { NIMBUS_RUNTIME_CACHE: undefined };
 
 function strictEnv(bindings: Partial<Env>): Env {
   const held = new Map(Object.entries(bindings));
+
   const proxy = new Proxy({}, {
     get(_target, property: string) {
       if (held.has(property)) return held.get(property);
@@ -122,6 +131,7 @@ function strictEnv(bindings: Partial<Env>): Env {
     },
     has: (_target, property: string) => held.has(property),
   });
+
   // SAFETY: the proxy is constructed to answer exactly the declared bindings
   // and to throw by name for every other member — the throw IS the assertion
   // this suite makes about which bindings a hosted workspace reads.
@@ -131,6 +141,7 @@ function strictEnv(bindings: Partial<Env>): Env {
 describe('the hosted workspace lives in the actor Durable Object', () => {
   test('a first file operation creates the Nimbus filesystem in ctx.storage.sql', async () => {
     const actor = actorObject();
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
@@ -145,6 +156,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     await workspace.bundle.vfs.writeFile('memory/MEMORY.md', 'the bytes are here\n');
 
     const tables = actor.tables();
+
     // The exact namespace the library commits to owning inside a host's
     // database — the set `NimbusWorkspace.destroy()` drops, and the set the
     // conformance manifest declares for this root.
@@ -154,12 +166,14 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     ]) {
       expect(tables).toContain(table);
     }
+
     expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
       .toBe('the bytes are here\n');
   });
 
   test('the shell and the file plane are two views of the same rows', async () => {
     const actor = actorObject();
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
@@ -195,11 +209,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       get: async (key: string) => shellState.get(key),
       put: async (key: string, value: JsonValue) => { shellState.set(key, value); },
     });
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     await workspace.bundle.vfs.mkdir('alpha', { recursive: true });
     await workspace.bundle.vfs.mkdir('beta', { recursive: true });
 
@@ -212,6 +228,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
   test('the workspace never reads a session binding out of env', async () => {
     const actor = actorObject();
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       // Only the runtime catalogue bucket is legitimately read, and this
@@ -219,6 +236,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     await workspace.bundle.vfs.writeFile('proof.txt', 'no binding was read');
     expect(await workspace.box('agent:main').exec('cat proof.txt'))
       .toMatchObject({ stdout: 'no binding was read', exitCode: 0 });
@@ -235,11 +253,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
    */
   test('the memory index and the bytes it indexes are in one database', async () => {
     const actor = actorObject();
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     const store = new MemoryStore(workspace.bundle.vfs, sqlOver(actor.database));
     store.ensureSchema();
     // The store's own write: the bytes go to the workspace filesystem and the
@@ -260,11 +280,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
   test('destroy drops the filesystem tables and leaves the actor rows alone', async () => {
     const actor = actorObject();
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     actor.ctx.storage.sql.exec('CREATE TABLE actor_rows (id INTEGER PRIMARY KEY)');
     actor.ctx.storage.sql.exec('INSERT INTO actor_rows (id) VALUES (1)');
     await workspace.bundle.vfs.writeFile('doomed.txt', 'bytes');
@@ -290,14 +312,17 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
           failures -= 1;
           throw new Error('transient storage failure');
         }
+
         return realExec(query, ...bindings);
       },
     });
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     // Armed AFTER construction: the boot is lazy, so the first operation is
     // what meets the failure.
     failures = 1;
@@ -315,11 +340,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       get: async (key: string) => kv.get(key),
       put: async (key: string, value: JsonValue) => { kv.set(key, value); },
     });
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
       env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     const capability = 'abcdef0123456789abcdef01';
     kv.set('nimbus_preview_capability:3000', { capability, owner: null });
 
@@ -328,6 +355,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const recycled = await workspace.routePreview(
       3000, capability.slice(0, 10), new Request('https://preview.test/'), '/',
     );
+
     expect(recycled.status).toBe(410);
     const body = v.parse(v.object({ code: v.string() }), await recycled.json());
     expect(body.code).toBe('RECYCLED_WORKSPACE_PREVIEW');
@@ -335,12 +363,15 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const unknown = await workspace.routePreview(
       3001, 'ffffffffff', new Request('https://preview.test/'), '/',
     );
+
     expect(unknown.status).toBe(404);
+
     // And a handle that does not match the persisted capability is a plain
     // 404 too — the recycled answer never leaks for a forged link.
     const forged = await workspace.routePreview(
       3000, 'ffffffffff', new Request('https://preview.test/'), '/',
     );
+
     expect(forged.status).toBe(404);
   });
 
@@ -349,17 +380,21 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const capability = 'abcdef0123456789abcdef01';
     Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? { capability, owner: null } : undefined });
     let source = 'old';
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       refreshPreview: async () => { source = 'edited'; },
     });
+
     await workspace.registerPort(9000, 3000, {
       handleHttpRequest: async (request) => Response.json({ source, invocation: request.headers.get('x-slate-call') }),
     });
+
     const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
       headers: { 'x-slate-call': 'forged-invocation' },
     }), '/');
+
     expect(v.parse(v.object({ source: v.string(), invocation: v.nullable(v.string()) }), await response.json()))
       .toEqual({ source: 'edited', invocation: null });
     workspace.unregisterPorts(9000);
@@ -371,20 +406,24 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const capability = 'abcdef0123456789abcdef01';
     Object.assign(actor.ctx.storage, { get: async (key: string) => key === 'nimbus_preview_capability:3000' ? { capability, owner: null } : undefined });
     const released: string[] = [];
+
     const workspace = createHostedWorkspace({
       ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       refreshPreview: async () => undefined,
       slateInvocation: (port) => ({ value: `minted-${String(port)}`, release: () => { released.push(`minted-${String(port)}`); } }),
     });
+
     await workspace.registerPort(9000, 3000, {
       handleHttpRequest: async (request) => Response.json({ invocation: request.headers.get('x-slate-call') }),
     });
+
     // The visitor's forged value is dropped and the host's own name replaces it,
     // so bindings kept from this request stop resolving the moment it settles.
     const response = await workspace.routePreview(3000, capability.slice(0, 10), new Request('https://preview.test/', {
       headers: { 'x-slate-call': 'forged-invocation' },
     }), '/');
+
     expect(v.parse(v.object({ invocation: v.nullable(v.string()) }), await response.json()))
       .toEqual({ invocation: 'minted-3000' });
     expect(released).toEqual(['minted-3000']);
@@ -399,13 +438,16 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       put: async (key: string, value: JsonValue) => { kv.set(key, value); },
       delete: async (key: string) => kv.delete(key),
     });
+
     const activate = () => createHostedWorkspace({
       ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
       previewUrl: async (_port, capability) => ({ url: 'https://preview.test/' + capability }),
     });
+
     const first = activate();
     await first.registerPort(9000, 20000, { handleHttpRequest: async () => new Response('caller A') }, 'workspace/slate-A/caller-A');
     const exposure = await first.box('agent:main').ports?.expose?.(20000);
+
     if (!exposure?.url) throw new Error('The fixture did not expose its first listener');
     const handle = new URL(exposure.url).pathname.slice(1, 11);
     expect(await (await first.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A');

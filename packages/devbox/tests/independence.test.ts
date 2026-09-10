@@ -31,7 +31,9 @@ const ManifestSchema = v.object({
 
 function manifest(path: string): v.InferOutput<typeof ManifestSchema> {
   const parsed = v.safeParse(ManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
+
   if (!parsed.success) throw new Error(`${path} is not a manifest this test can read`);
+
   return parsed.output;
 }
 
@@ -43,25 +45,31 @@ const PACKAGE_DIR = join(import.meta.dir, '..');
  *  failure it exists to make loud. */
 function forbiddenScope(): string {
   const name = manifest(join(PACKAGE_DIR, '..', 'core', 'package.json')).name;
+
   if (name === undefined || !name.startsWith('@') || !name.includes('/')) {
     throw new Error(
       `the sibling core package declares no scoped name (${JSON.stringify(name)}), so this `
       + 'test cannot know what to forbid',
     );
   }
+
   return name;
 }
 
 function sourceFiles(dir: string): readonly string[] {
   const found: string[] = [];
+
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
+
     if (statSync(path).isDirectory()) {
       found.push(...sourceFiles(path));
       continue;
     }
+
     if (entry.endsWith('.ts') || entry.endsWith('.tsx')) found.push(path);
   }
+
   return found;
 }
 
@@ -70,9 +78,11 @@ describe('package independence', () => {
 
   test('the shipped source imports nothing from the product core', () => {
     const offenders: string[] = [];
+
     for (const dir of ['src', 'bench']) {
       for (const file of sourceFiles(join(PACKAGE_DIR, dir))) {
         const text = readFileSync(file, 'utf8');
+
         // Import, re-export and dynamic import all reach the same module, so
         // the check is for the specifier rather than for one syntax.
         if (text.includes(`'${scope}`) || text.includes(`"${scope}`)) {
@@ -80,15 +90,18 @@ describe('package independence', () => {
         }
       }
     }
+
     expect(offenders).toEqual([]);
   });
 
   test('the manifest declares no dependency on any workspace package', () => {
     const own = manifest(join(PACKAGE_DIR, 'package.json'));
+
     const declared = [
       ...Object.keys(own.dependencies ?? {}),
       ...Object.keys(own.devDependencies ?? {}),
     ];
+
     expect(declared.filter(name => name.startsWith(`${scope.split('/')[0]}/`))).toEqual([]);
     // And nothing reached in by workspace protocol under another name either.
     const ranges = Object.values({ ...own.dependencies, ...own.devDependencies });
@@ -115,6 +128,7 @@ describe('package independence', () => {
  */
 async function bundledSpecifiers(entrypoint: string): Promise<readonly string[]> {
   const reached = new Set<string>();
+
   const built = await Bun.build({
     entrypoints: [entrypoint],
     target: 'node',
@@ -123,12 +137,15 @@ async function bundledSpecifiers(entrypoint: string): Promise<readonly string[]>
       setup(build) {
         build.onResolve({ filter: /^[^./]/ }, (args) => {
           reached.add(args.path);
+
           return { path: args.path, external: true };
         });
       },
     }],
   });
+
   if (!built.success) throw new AggregateError(built.logs, `${entrypoint} does not bundle`);
+
   return [...reached].sort();
 }
 

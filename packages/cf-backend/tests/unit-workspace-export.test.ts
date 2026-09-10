@@ -33,9 +33,11 @@ function workspace(): WorkspaceFixture {
   db.exec(`INSERT INTO workspace_capability (id, token) VALUES (1, 'pwc_secret')`);
   // The DO's own bookkeeping tables, which belong to the platform, not the user.
   db.exec(`CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)`);
+
   for (let i = 0; i < 450; i++) {
     db.query(`INSERT INTO messages (id, content) VALUES (?, ?)`).run(`m${i}`, `message ${i}`);
   }
+
   return { sql: archiveSqlFromDatabase(db), db };
 }
 
@@ -44,12 +46,14 @@ async function drain(sql: SqlExec, maxBytes: number): Promise<{ lines: string[];
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
   let pages = 0;
+
   do {
     const page = await readWorkspaceArchivePage(sql, { workspace: 'scout', source: 'cloud', cursor, maxBytes });
     lines.push(...page.lines);
     cursor = page.next;
     pages++;
   } while (cursor && pages < 100);
+
   return { lines, pages };
 }
 
@@ -83,6 +87,7 @@ describe('cloud workspace export', () => {
     expect(requiredRpcAccess('exportWorkspaceArchive')).toBe('interactive');
 
     const scopeTag = cliScopesConnectionTag('workspace.exec');
+
     if (!scopeTag) throw new Error('workspace.exec must have a connection tag');
     const execToken = [scopeTag];
     const frame = JSON.stringify({ type: 'rpc', id: '1', method: 'exportWorkspaceArchive', args: [] });

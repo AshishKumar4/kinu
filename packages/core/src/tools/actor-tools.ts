@@ -56,9 +56,11 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   let extra: ToolSet | undefined;
+
   if (deps.agents && (deps.agents.swarm || deps.agents.team || deps.agents.peers)) {
     extra = { agents: createAgentsTool(deps.agents) };
   }
+
   return withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
 }
 

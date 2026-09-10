@@ -255,5 +255,6 @@ export function boundaryOf(event: string): string {
  */
 export function eventFamily(event: string): string {
   const dot = event.indexOf('.');
+
   return dot < 0 ? event : event.slice(0, dot);
 }

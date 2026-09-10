@@ -32,11 +32,14 @@ const workspace = {
     readFile: async (...args: unknown[]) => {
       const path = text(args, 0);
       const stored = files.get(path);
+
       if (stored === undefined) throw new Error(`ENOENT: no such file: ${path}`);
+
       return stored;
     },
     writeFile: async (...args: unknown[]) => {
       files.set(text(args, 0), text(args, 1));
+
       return 'ok';
     },
     readdir: async () => [...files.keys()],
@@ -56,12 +59,14 @@ function toolsProvider(crafted: Array<{ name: string; code: string; description:
 }
 
 const state = new Map<string, JsonValue>();
+
 const stateProvider = {
   name: 'state',
   fns: {
     get: async (...args: unknown[]) => state.get(text(args, 0)) ?? null,
     set: async (...args: unknown[]) => {
       state.set(text(args, 0), decodeJsonValue({ value: args[1] }));
+
       return { ok: true };
     },
   },
@@ -72,14 +77,17 @@ describe('the execute_tools sandbox under workerd', () => {
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];
+
     const program = createCodeTool({
       executor,
       tools: [{ name: 'workspace', types: '', tools: {
         exec: { description: 'Return a branchable command refusal', execute: async () => ({ reason: 'denied', error: 'not run' }) },
       } }],
     });
+
     const invoke = async (code: string) => {
       let step = 0;
+
       const model = scriptedTurnModel({ doGenerate: () => ({
         content: ++step === 1
           ? [{ type: 'tool-call', toolCallId: 'program-1', toolName: 'program', input: JSON.stringify({ code }) }]
@@ -88,10 +96,12 @@ describe('the execute_tools sandbox under workerd', () => {
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
           outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
       }) });
+
       return generateText({ model, prompt: 'Run the program', tools: { program }, stopWhen: stepCountIs(2),
         experimental_onToolCallFinish: (event) => { outcomes.push(event.success ? { success: true } : failedToolOutcome({ cause: event.error })); },
       });
     };
+
     await invoke('return { reason: "denied", error: "historical incident", exitCode: 7 };');
     await invoke('const refusal = await workspace.exec("blocked"); return refusal.reason;');
     const failed = await invoke('console.log("before failure"); throw new Error("denied is just diagnostic text");');
@@ -110,6 +120,7 @@ describe('the execute_tools sandbox under workerd', () => {
       "console.log('read', text.length, 'bytes');",
       "return { text, listing: await fs.readdir('.'), workspace: env.workspace };",
     ].join('\n');
+
     const result = await executor.execute(program, [toolsProvider([]), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({
@@ -126,11 +137,13 @@ describe('the execute_tools sandbox under workerd', () => {
       { name: 'double', code: 'async (n) => n * 2', description: 'doubles' },
       { name: 'quad', code: 'async (n) => (await tools.double(n)) * 2', description: 'quadruples' },
     ];
+
     const program = [
       '// Call a native tool and two crafted tools',
       "const native = await tools.file({ action: 'read', path: 'notes.md' });",
       'return { native, quad: await tools.quad(3) };',
     ].join('\n');
+
     const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ native: { echoed: { action: 'read', path: 'notes.md' } }, quad: 12 });
@@ -138,11 +151,14 @@ describe('the execute_tools sandbox under workerd', () => {
 
   test('admitted crafted source retains the module metadata of its hosted runtime', async () => {
     const admitted = admitCraftedSource('async () => import.meta', 'metadata');
+
     if (!admitted.ok) throw new Error(admitted.error);
+
     const result = await executor.execute(
       'const metadata = await tools.metadata(); return { type: typeof metadata, same: metadata === import.meta };',
       [toolsProvider([{ name: 'metadata', code: admitted.code, description: '' }])],
     );
+
     expect(result.error).toBeUndefined();
     expect(result.result).toEqual({ type: 'object', same: true });
   });
@@ -152,12 +168,14 @@ describe('the execute_tools sandbox under workerd', () => {
       { name: 'broken', code: 'const broken = async () => 1', description: '' },
       { name: 'fine', code: 'async () => 2', description: '' },
     ];
+
     const program = [
       '// One broken tool must not take the sandbox down',
       'let failure = null;',
       'try { await tools.broken(); } catch (e) { failure = e.message; }',
       'return { fine: await tools.fine(), failure };',
     ].join('\n');
+
     const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
@@ -175,12 +193,14 @@ describe('the execute_tools sandbox under workerd', () => {
       { name: 'waited', code: 'await Promise.resolve(async (n) => n * 3)', description: '' },
       { name: 'value', code: '42', description: '' },
     ];
+
     const program = [
       '// An awaited definition is callable; a value is a named failure',
       'let failure = null;',
       'try { await tools.value(); } catch (e) { failure = e.message; }',
       'return { waited: await tools.waited(5), failure };',
     ].join('\n');
+
     const result = await executor.execute(program, [toolsProvider(crafted), stateProvider, workspace]);
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({
@@ -199,6 +219,7 @@ describe('the execute_tools sandbox under workerd', () => {
       "// read a file that is not there\nreturn await workspace.readFile('absent.md')",
       [toolsProvider([]), stateProvider, workspace],
     );
+
     expect(failed.result).toBeUndefined();
     expect(failed.error).toContain('workspace.readFile: ');
     expect(failed.error).toContain('ENOENT');

@@ -74,6 +74,7 @@ function weightedQuantile<S extends AnalyticsSchema>(
   quantile: number,
 ): string {
   assertQuantileLevel(quantile);
+
   return `quantileExactWeighted(${quantile})(${doubleColumn(schema, metric)}, _sample_interval)`;
 }
 
@@ -143,24 +144,31 @@ interface WeightedQuery<S extends AnalyticsSchema> {
 function buildWeightedQuery<S extends AnalyticsSchema>(query: WeightedQuery<S>): string {
   const { schema } = query;
   const grouped = query.groupBy.map((name) => `${blobColumn(schema, name)} AS ${String(name)}`);
+
   const selected = [
     ...grouped,
     ...query.metrics.map((metric) => `${metric.expression} AS ${metric.as}`),
   ];
+
   const predicates = [
     `timestamp > NOW() - INTERVAL ${query.since}`,
     ...(query.where ?? []),
   ];
+
   const lines = [
     `SELECT ${selected.join(', ')}`,
     `FROM ${analyticsDataset(schema, query.datasetSuffix)}`,
     `WHERE ${predicates.join(' AND ')}`,
   ];
+
   if (query.groupBy.length > 0) {
     lines.push(`GROUP BY ${query.groupBy.map((name) => blobColumn(schema, name)).join(', ')}`);
   }
+
   if (query.orderBy !== undefined) lines.push(`ORDER BY ${query.orderBy} DESC`);
+
   if (query.limit !== undefined) lines.push(`LIMIT ${query.limit}`);
+
   return lines.join('\n');
 }
 
@@ -230,13 +238,17 @@ export function controlPlaneMetricsQueries(
   const agent = AGENT_METRICS_SCHEMA;
   const ops = CONTROL_PLANE_OPS_SCHEMA;
   const workspace = opts.workspaceDigest;
+
   const scoped = (kind: string): string[] => {
     const predicates = [`${blobColumn(agent, 'kind')} = '${kind}'`];
+
     if (workspace !== undefined && workspace !== '') {
       predicates.push(`${indexColumn(agent)} = '${workspace}'`);
     }
+
     return predicates;
   };
+
   return {
     turns: buildWeightedQuery({
       schema: agent, datasetSuffix,

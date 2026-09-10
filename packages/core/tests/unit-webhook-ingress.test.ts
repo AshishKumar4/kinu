@@ -50,6 +50,7 @@ function hub() {
   const secrets = createWebhookSecretStore(sql);
   const { vfs, files } = createMemoryVfs();
   let drains = 0;
+
   const deps = {
     triggers, log, secrets, sql, vfs,
     replies: new ReplyChannelStore(sql, actor),
@@ -156,12 +157,15 @@ describe('webhook ingress admits a verified delivery', () => {
     });
 
     const [event] = h.log.pending({ variant: 'webhook' });
+
     if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
       throw new Error(`expected readable webhook payload, received ${event.payload_visibility}`);
     }
+
     if (event.variant !== 'webhook') throw new Error(`expected webhook event, received ${event.variant}`);
     const path = event.payload.body_path;
     expect(path).toBeString();
+
     if (!path) throw new Error('large webhook body was not spilled');
     expect(await h.files.get(path)).toContain('x'.repeat(4000));
   });
@@ -176,11 +180,13 @@ describe('webhook ingress admits a verified delivery', () => {
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"deploy":"prod"}';
+
     const signed = {
       trigger_id, body_text,
       hmac_timestamp: String(NOW),
       hmac_signature: await hmacSha256Hex('k', `${NOW}.${body_text}`),
     };
+
     // Just before an aligned bucket boundary, and just after it: two different
     // dedupe buckets, one signature.
     const beforeBoundary = Math.floor((NOW + 5 * 60 * 1000) / (5 * 60 * 1000)) * (5 * 60 * 1000) - 1_000;
@@ -208,6 +214,7 @@ describe('webhook ingress admits a verified delivery', () => {
       hmac_timestamp: String(NOW),
       hmac_signature: await hmacSha256Hex('k', `${NOW}.${body_text}`),
     });
+
     const resigned = await h.deliver({
       trigger_id, body_text, now: NOW + 1_000,
       hmac_timestamp: String(NOW + 1_000),
@@ -309,11 +316,13 @@ describe('webhook ingress refuses everything else', () => {
     // The replay window is ±5 minutes, inclusive at the boundary and in both
     // directions (a clock ahead of the receiver is as valid as one behind).
     const window = 5 * 60 * 1000;
+
     for (const ts of [NOW - window, NOW + window]) {
       expect(await h.deliver({
         trigger_id, body_text, hmac_timestamp: String(ts), hmac_signature: await sign(ts),
       })).toMatchObject({ status: 'admitted' });
     }
+
     for (const ts of [NOW - window - 1, NOW + window + 1]) {
       expect(await h.deliver({
         trigger_id, body_text, hmac_timestamp: String(ts), hmac_signature: await sign(ts),
@@ -354,6 +363,7 @@ describe('webhook ingress refuses everything else', () => {
     const h = hub();
     const a = await h.register({ label: 'a', auth_mode: 'mtls', rate_limit_per_min: 2 });
     const b = await h.register({ label: 'b', auth_mode: 'mtls', rate_limit_per_min: 2 });
+
     const send = (trigger_id: string, now: number) =>
       h.deliver({ trigger_id, cf_mtls_verified: true, now, delivery_id: `d-${trigger_id}-${now}` });
 
@@ -410,6 +420,7 @@ describe('webhook registration', () => {
     // delivery answered `no hmac secret configured`, with no route able to set
     // one afterwards.
     const h = hub();
+
     const created = await registerDurableWebhook(
       h.triggers, h.secrets, { label: 'ci', auth_mode: 'hmac' }, NOW,
     );
@@ -428,20 +439,24 @@ describe('webhook registration', () => {
 
   test('a blank secret is a missing one, and mTLS is minted none', async () => {
     const h = hub();
+
     const blank = await registerDurableWebhook(
       h.triggers, h.secrets, { label: 'blank', auth_mode: 'bearer', secret: '   ' }, NOW,
     );
+
     expect(blank.secret).toMatch(/^[0-9a-f]{64}$/);
 
     const mtls = await registerDurableWebhook(
       h.triggers, h.secrets, { label: 'partner', auth_mode: 'mtls' }, NOW,
     );
+
     expect(mtls.secret).toBeNull();
     expect(await h.secrets.get(mtls.secret_id)).toBeNull();
   });
 
   test('a secret that cannot be stored leaves no active trigger behind', async () => {
     const h = hub();
+
     const refusing = {
       put: () => { throw new Error('disk is unwell'); },
       deleteByTrigger: h.secrets.deleteByTrigger,
@@ -529,6 +544,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
 
   test('a model turn may still close a schedule of its own making', async () => {
     const h = hub();
+
     // What `agent.schedule` leaves behind: the model's own timer, not the
     // owner's ingress. Withholding this would break the tool it needs.
     const own = await h.triggers.register({

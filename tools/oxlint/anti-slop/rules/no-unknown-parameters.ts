@@ -1,10 +1,15 @@
 import { defineRule } from "@oxlint/plugins";
-
 import type { ESTree } from "@oxlint/plugins";
 
-import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts";
-
-type Parameter = ESTree.ParamPattern;
+import {
+  functionParameterBindingName,
+  functionParameterTypeAnnotation,
+} from "../shared/function-parameters.ts";
+import {
+  createTypeAliasEnvironment,
+  resolvedTypeMatches,
+  type TypeAliasEnvironment,
+} from "../shared/type-alias-resolution.ts";
 type ParameterOwner =
   | ESTree.ArrowFunctionExpression
   | ESTree.Function
@@ -14,48 +19,11 @@ type ParameterOwner =
   | ESTree.TSFunctionType
   | ESTree.TSMethodSignature;
 
-function parameterAnnotation(parameter: Parameter): ESTree.TSTypeAnnotation | null | undefined {
-  if (parameter.type === "TSParameterProperty") {
-    return parameterAnnotation(parameter.parameter);
-  }
-  if (parameter.type === "RestElement") {
-    return parameter.typeAnnotation ?? parameterAnnotation(parameter.argument);
-  }
-  if (parameter.type === "AssignmentPattern") {
-    return parameter.typeAnnotation ?? parameter.left.typeAnnotation;
-  }
-  return parameter.typeAnnotation;
-}
-
-function parameterName(parameter: Parameter, sourceText: string): string {
-  if (parameter.type === "TSParameterProperty") {
-    return parameterName(parameter.parameter, sourceText);
-  }
-  if (parameter.type === "AssignmentPattern") {
-    return parameterName(parameter.left, sourceText);
-  }
-  if (parameter.type === "RestElement") {
-    return parameterName(parameter.argument, sourceText);
-  }
-  return parameter.type === "Identifier"
-    ? parameter.name
-    : sourceText.replace(/\s*:\s*unknown\s*$/u, "");
-}
-
-function referencedAliasName(type: ESTree.TSType): string | null {
-  if (type.type === "TSParenthesizedType") return referencedAliasName(type.typeAnnotation);
-  if (type.type !== "TSTypeReference" || type.typeName.type !== "Identifier") return null;
-  return type.typeArguments === null ||
-    type.typeArguments === undefined ||
-    type.typeArguments.params.length === 0
-    ? type.typeName.name
-    : null;
-}
-
 /**
- * KINU-LOCAL: upstream flags only a literal `unknown` annotation and exempts a parameter named
- * `cause`. Both carve-outs let unparsed input through, so this copy resolves aliases, unions and
- * parentheses and exempts nothing. See tools/oxlint/anti-slop/upstream.json.
+ * KINU-LOCAL: upstream exempts a parameter named `cause` and the subject of a type predicate, and
+ * matches only a literal `unknown` (or a union/parenthesised form of one). Every carve-out lets
+ * unparsed input through, so this copy resolves aliases through the shared lexical environment
+ * and exempts nothing. See tools/oxlint/anti-slop/upstream.json.
  */
 /** Disallow unknown inputs; callers must pass a parsed or explicitly wrapped boundary value. */
 export const noUnknownParametersRule = defineRule({
@@ -71,66 +39,37 @@ export const noUnknownParametersRule = defineRule({
     },
   },
   createOnce(context) {
-    const aliases = new Map<string, ESTree.TSTypeAliasDeclaration>();
+    let environment: TypeAliasEnvironment | null = null;
 
-    const resolvesToUnknown = (
-      type: ESTree.TSType,
-      shadowedAliases: ReadonlySet<string>,
-      visited = new Set<string>(),
-    ): boolean => {
-      if (type.type === "TSUnknownKeyword") return true;
-      if (type.type === "TSParenthesizedType") {
-        return resolvesToUnknown(type.typeAnnotation, shadowedAliases, visited);
-      }
-      if (type.type === "TSUnionType") {
-        return type.types.some((member) =>
-          resolvesToUnknown(member, shadowedAliases, visited),
-        );
-      }
-      const name = referencedAliasName(type);
-      if (name === null || visited.has(name) || shadowedAliases.has(name)) return false;
-      const alias = aliases.get(name);
-      if (
-        alias === undefined ||
-        (alias.typeParameters !== null && alias.typeParameters !== undefined)
-      ) {
-        return false;
-      }
-      const nextVisited = new Set(visited);
-      nextVisited.add(name);
-      return resolvesToUnknown(alias.typeAnnotation, shadowedAliases, nextVisited);
-    };
+    const resolvesToUnknown = (type: ESTree.TSType): boolean =>
+      environment !== null &&
+      resolvedTypeMatches(type, environment, (resolved, matches) => {
+        if (resolved.type === "TSUnknownKeyword") return true;
+        if (resolved.type === "TSParenthesizedType") {
+          return matches(resolved.typeAnnotation);
+        }
+        return resolved.type === "TSUnionType" && resolved.types.some(matches);
+      });
 
     const checkParameters = (node: ParameterOwner) => {
-      const shadowedAliases = lexicalTypeParameterNames(node, context.sourceCode.visitorKeys);
       for (const parameter of node.params) {
-        const annotation = parameterAnnotation(parameter);
-        if (
-          annotation === null ||
-          annotation === undefined ||
-          !resolvesToUnknown(annotation.typeAnnotation, shadowedAliases)
-        ) {
-          continue;
-        }
-        const name = parameterName(parameter, context.sourceCode.getText(parameter));
+        const annotation = functionParameterTypeAnnotation(parameter);
+        if (annotation === null || annotation === undefined) continue;
+        if (!resolvesToUnknown(annotation.typeAnnotation)) continue;
         context.report({
           node: annotation.typeAnnotation,
           messageId: "unknownParameter",
-          data: { parameter: name },
+          data: { parameter: functionParameterBindingName(parameter, context.sourceCode) },
         });
       }
     };
 
     return {
       Program(node) {
-        aliases.clear();
-        for (const statement of node.body) {
-          const declaration =
-            statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
-          if (declaration?.type === "TSTypeAliasDeclaration") {
-            aliases.set(declaration.id.name, declaration);
-          }
-        }
+        environment = createTypeAliasEnvironment(
+          node,
+          context.sourceCode.visitorKeys,
+        );
       },
       ArrowFunctionExpression: checkParameters,
       FunctionDeclaration: checkParameters,

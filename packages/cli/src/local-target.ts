@@ -45,9 +45,11 @@ export function agentTargetExists(target: AgentTarget): boolean {
 /** The backend `name` addresses, refusing a name that addresses nothing. */
 export function requireAgentTarget(name: string, opts: ResolveAgentTargetOptions = {}): AgentTarget {
   const target = resolveAgentTarget(name, opts);
+
   if (!agentTargetExists(target)) {
     printError(`Workspace "${name}" not found.`, `Create it with: kinu create ${name}`);
     process.exit(1);
   }
+
   return target;
 }

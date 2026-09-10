@@ -15,6 +15,7 @@ export function strategyIsDeployed<TNamespace extends NamedNamespace>(
   strategy: string,
 ): boolean {
   const configured = env.BENCH_SELECTED_ARMS;
+
   return (configured === undefined || configured.split(',').includes(strategy))
     && env.SnapshotChainBox !== undefined;
 }
@@ -27,6 +28,8 @@ export function storePrefixOf<TNamespace extends NamedNamespace>(
   name: string,
 ): string {
   const binding = env.SnapshotChainBox;
+
   if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
+
   return `boxes/${binding.idFromName(`${strategy}:${name}`).toString()}/`;
 }

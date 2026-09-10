@@ -26,6 +26,7 @@ import {
 
 /** What the turn is set to: the model a merge must NOT run on. */
 export const MERGE_POLICY_CHAT_MODEL = 'fake/chat-default';
+
 export const MERGE_POLICY_CHAT_EFFORT: ReasoningEffort = 'low';
 
 /** What `MODEL_ROUTE_POLICY.judge` routes to — the account-wide `deep` tier, and
@@ -34,6 +35,7 @@ export const MERGE_POLICY_CHAT_EFFORT: ReasoningEffort = 'low';
  *  implementation that took the routed model at a constant effort is half-routed,
  *  which reads as routed while only one axis is. */
 export const MERGE_POLICY_JUDGE_MODEL = 'fake/deep-grader';
+
 export const MERGE_POLICY_JUDGE_EFFORT: ReasoningEffort = 'high';
 
 /** The label the merge's cost is filed under. Same string the route is keyed by,
@@ -50,6 +52,7 @@ export function mergePolicyProfile(): ResolvedTurnProfile {
       deep: { model: MERGE_POLICY_JUDGE_MODEL, reasoningEffort: MERGE_POLICY_JUDGE_EFFORT },
     },
   };
+
   return resolveTurnProfile({
     envelope: {
       authority: { kind: 'account', accountId: 'acct-1' },

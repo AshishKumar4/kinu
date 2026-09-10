@@ -12,10 +12,13 @@ import type { VFS } from '../src/types/primitives';
 
 function context(): MeasurementContext {
   const files = new Map<string, Uint8Array>();
+
   const vfs: VFS = {
     readFile: async (path) => {
       const bytes = files.get(path);
+
       if (bytes === undefined) throw new Error(`missing ${path}`);
+
       return bytes;
     },
     writeFile: async (path, data) => {
@@ -24,12 +27,14 @@ function context(): MeasurementContext {
     readdir: async () => [],
     stat: async (path) => {
       const bytes = files.get(path);
+
       return bytes === undefined ? null : { size: bytes.byteLength, mtimeMs: 0, isDir: false };
     },
     unlink: async (path) => { files.delete(path); },
     mkdir: async () => undefined,
     exists: async (path) => files.has(path),
   };
+
   return {
     vfs,
     exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
@@ -59,6 +64,7 @@ function verifier(
     implementation: `fixture:${artifact}`,
     verify: async () => {
       onVerify?.();
+
       return { kind: 'measured', value, detail: `${value}` };
     },
   };
@@ -81,6 +87,7 @@ function candidate(overrides: Partial<SwarmCandidate> = {}): SwarmCandidate {
 describe('witness objectives', () => {
   test('the witness verifier runs independently of the proxy score', async () => {
     let witnessCalls = 0;
+
     const outcome = await measureChild({
       ctx: context(),
       verifier: verifier('/proxy', 5),
@@ -91,6 +98,7 @@ describe('witness objectives', () => {
     });
 
     expect(outcome.kind).toBe('scored');
+
     if (outcome.kind !== 'scored') throw new Error(`unexpected ${outcome.kind}`);
     expect(outcome.score).toBe(0.5);
     expect(outcome.witnessFound).toBe(true);
@@ -99,10 +107,12 @@ describe('witness objectives', () => {
 
   test('the witness still runs when the scalar proxy is unmeasurable', async () => {
     let witnessCalls = 0;
+
     const proxy: ResolvedVerifier = {
       ...verifier('/proxy', 0),
       verify: async () => ({ kind: 'unmeasurable', detail: 'no proxy number' }),
     };
+
     const outcome = await measureChild({
       ctx: context(),
       verifier: proxy,

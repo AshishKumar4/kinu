@@ -81,6 +81,7 @@ describe('validateMcpServerInput', () => {
     const out = validateMcpServerInput({
       name: 'n', serverUrl: 'https://a', headers: { Authorization: 'Bearer x' },
     });
+
     expect(out.headers).toEqual({ Authorization: 'Bearer x' });
   });
 
@@ -97,6 +98,7 @@ describe('validateMcpServerInput', () => {
     const out = validateMcpServerInput({
       name: 'n', serverUrl: 'https://a', allowedTools: ['create_issue', 'list_pulls'],
     });
+
     expect(out.allowedTools).toEqual(['create_issue', 'list_pulls']);
   });
 
@@ -186,6 +188,7 @@ describe('describeMcpTool', () => {
     const descriptor = describeMcpTool(server, {
       name: 't', title: '', annotations: { title: 'Create issue' }, inputSchema: {},
     });
+
     expect(descriptor.title).toBe('Create issue');
   });
 
@@ -210,7 +213,9 @@ describe('admitMcpDescriptors', () => {
       serverId: `${serverName}-id`, serverName, name,
       toolKey: mcpToolKey(serverName, name), inputSchema: { type: 'object' },
     };
+
     if (description !== undefined) built.description = description;
+
     return built;
   }
 
@@ -242,6 +247,7 @@ describe('admitMcpDescriptors', () => {
     const admission = admitMcpDescriptors([
       descriptor('zulu', 'b'), descriptor('alpha', 'b'), descriptor('alpha', 'a'),
     ], NO_NATIVE_TOOLS);
+
     expect(admission.admitted.map((d) => d.toolKey)).toEqual([
       mcpToolKey('alpha', 'a'), mcpToolKey('alpha', 'b'), mcpToolKey('zulu', 'b'),
     ]);
@@ -286,12 +292,15 @@ describe('admitMcpDescriptors', () => {
 
   test("the actor's own tools are priced FIRST — a bigger native surface admits less MCP", () => {
     const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
+
     const lean = admitMcpDescriptors(many, {
       contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(4)),
     });
+
     const heavy = admitMcpDescriptors(many, {
       contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(40)),
     });
+
     expect(heavy.admitted.length).toBeLessThan(lean.admitted.length);
   });
 
@@ -299,15 +308,18 @@ describe('admitMcpDescriptors', () => {
     const admission = admitMcpDescriptors([descriptor('aaa', 'tool')], {
       contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: stepContextLimit({ contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT }),
     });
+
     expect(admission.admitted).toEqual([]);
     expect(admission.deferred[0]?.server).toBe('aaa');
   });
 
   test('one essay cannot crowd out the other servers', () => {
     const essay = 'x'.repeat(400_000);
+
     const admission = admitMcpDescriptors([
       descriptor('aaa', 'loud', essay), descriptor('bbb', 'quiet', 'Short.'),
     ], NO_NATIVE_TOOLS);
+
     expect(admission.admitted.map((d) => d.name)).toEqual(['loud', 'quiet']);
     expect(admission.admitted[0]?.description?.length).toBeLessThan(essay.length);
     expect(admission.admitted[0]?.description?.endsWith('…')).toBe(true);
@@ -337,10 +349,12 @@ describe('admitMcpDescriptors', () => {
     // `<server>/<tool>` rather than showing a lone ellipsis.
     const fat = descriptor('aaa', 'tool', 'A description that will not survive.');
     fat.inputSchema = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(12_000) } } };
+
     const admission = admitMcpDescriptors(
       [fat, descriptor('bbb', 'small', 'Short.')],
       { contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 },
     );
+
     expect(admission.admitted.map((d) => d.name)).toEqual(['tool', 'small']);
     expect(admission.admitted[0]?.inputSchema).toEqual(fat.inputSchema);
     expect(admission.admitted[0]?.description).toBeUndefined();
@@ -483,6 +497,7 @@ describe('mcpCredentialTransport', () => {
       await opts.fetch('https://mcp.example.evil/sse');
     });
     expect(seen).toHaveLength(2);
+
     for (const headers of seen) expect(headers.get('authorization')).toBeNull();
   });
 
@@ -518,6 +533,7 @@ async function withFetch(
   body: () => Promise<void>,
 ): Promise<void> {
   const real = globalThis.fetch;
+
   // `typeof globalThis.fetch` carries `preconnect` beside the call signature, so
   // the stub is COMPLETED with the real one's rather than asserted into shape.
   const record = async (
@@ -525,9 +541,12 @@ async function withFetch(
     init?: RequestInit,
   ): Promise<Response> => {
     observe(url, init);
+
     return new Response('{}', { status: 200 });
   };
+
   globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+
   try { await body(); } finally { globalThis.fetch = real; }
 }
 
@@ -536,6 +555,7 @@ async function withFetch(
 describe('buildBuiltinTools mcp_ prefix guard', () => {
   test("BUILTIN_TOOLS today don't start with mcp_", async () => {
     const { BUILTIN_TOOLS } = await import('@kinu.run/core');
+
     for (const n of BUILTIN_TOOLS) {
       expect(isMcpToolKey(n)).toBe(false);
     }

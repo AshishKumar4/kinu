@@ -31,6 +31,7 @@ const MEMORY_DIR = 'memory/';
  */
 export function memoryIndexPath(vfsPath: string): string | null {
   const relative = vfsPath.replace(/^\/+/, '').replace(/^local\//, '');
+
   return relative.startsWith(MEMORY_DIR) ? relative : null;
 }
 
@@ -55,6 +56,7 @@ export const MEMORY_TAIL_MAX_CHARS = 2000;
  */
 export async function readMemoryTail(memory: Memory, maxChars = MEMORY_TAIL_MAX_CHARS): Promise<string | undefined> {
   const tail = (await memory.tail(MEMORY_PATH, maxChars * 3 + 3))?.slice(-maxChars);
+
   return tail && tail.length > 0 ? tail : undefined;
 }
 
@@ -67,6 +69,7 @@ export async function appendMemoryNote(
   const heading = options?.heading ?? 'Note';
   await memory.append(MEMORY_PATH, `\n### ${heading} (${date})\n${content}\n`);
   await memory.index(MEMORY_PATH);
+
   return 'Note saved to memory.';
 }
 
@@ -80,11 +83,14 @@ export async function appendMemoryNote(
 export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
   if (!await vfs.exists(dir)) return 0;
   let total = 0;
+
   for (const name of await vfs.readdir(dir)) {
     const full = `${dir}/${name}`;
     const st = await vfs.stat(full);
+
     if (!st) continue;
     total += st.isDir ? await memoryBytes(vfs, full) : st.size;
   }
+
   return total;
 }

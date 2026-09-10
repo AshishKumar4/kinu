@@ -20,6 +20,7 @@ import { LADDER, deployGates, claims, trackedTestFiles } from './ladder';
 import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
+
 const at = (file: string): string => readFileSync(REPO_ROOT + file, 'utf8');
 
 describe('red: the shapes that were shipped fifteen times', () => {
@@ -32,6 +33,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
         return files.filter((path) => TEST_FILE.test(path));
       }
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['private-pattern']);
     expect(found[0]?.detail).toContain('463 files while the rule governed 646');
   });
@@ -40,6 +42,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
     const found = auditGateProgram('scripts/probe.ts', `
       export const suites = (files: string[]) => files.filter((f) => /\\.test\\.tsx?$/.test(f));
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['private-pattern']);
   });
 
@@ -48,6 +51,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
       import { spawnSync } from 'node:child_process';
       const listed = spawnSync('git', ['ls-files', 'packages'], { encoding: 'utf8' });
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['private-enumeration']);
     expect(found[0]?.detail).toContain('tracked-only in secret-scan');
   });
@@ -57,6 +61,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
       import { readdirSync } from 'node:fs';
       export const walk = (dir: string) => readdirSync(dir, { withFileTypes: true });
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['private-enumeration']);
   });
 
@@ -82,6 +87,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
         process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', measured));
       }
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['unmeasured-publication']);
     expect(found[0]?.detail).toContain('healthiest possible number');
   });
@@ -94,6 +100,7 @@ describe('red: the shapes that were shipped fifteen times', () => {
         else process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', '7 things'));
       }
     `);
+
     expect(found.map((v) => v.kind)).toEqual(['unmeasured-publication', 'unmeasured-publication']);
   });
 
@@ -223,6 +230,7 @@ describe('the denominator, from both sides', () => {
     // gate the deploy silently lost.
     const ladderOnly = LADDER.filter((gate) => !deploy.includes(gate.run));
     expect(ladderOnly.map((gate) => gate.run)).toContain('bun run test:eval');
+
     for (const gate of ladderOnly) {
       if (gate.tier === 'evals') continue;
       expect(claims(gate.run, trackedTestFiles()).length).toBeGreaterThan(0);
@@ -266,8 +274,10 @@ describe('the denominator, from both sides', () => {
 describe('the live tree', () => {
   test('every governed gate program shares the one enumeration', () => {
     const programs = gatePrograms(gateCommands(), trackedFiles());
+
     const violations = programs.governed
       .flatMap((file) => auditGateProgram(file, at(file)));
+
     expect(violations.map((v) => `${v.file}:${String(v.line)} ${v.kind}`)).toEqual([]);
   });
 
@@ -293,6 +303,7 @@ describe('the live tree', () => {
     const governed = trackedFiles().filter(isTestFile);
     expect(suites.length).toBeGreaterThan(400);
     expect(governed.length).toBeGreaterThan(suites.length);
+
     for (const suite of suites) expect(isTestFile(suite)).toBe(true);
     // And the gap is real code, not a rounding difference: helpers carrying no
     // test suffix, which a runner never executes and the lint rule still governs.
@@ -304,6 +315,7 @@ describe('the live tree', () => {
     // dropped the entries rather than the gates — every assertion below is true of
     // nothing, and the escape hatch it documents becomes undocumented silently.
     expect(NON_REPOSITORY_SCANS.size).toBeGreaterThan(0);
+
     for (const [file, reason] of NON_REPOSITORY_SCANS) {
       expect(trackedFiles()).toContain(file);
       expect(reason.length).toBeGreaterThan(40);

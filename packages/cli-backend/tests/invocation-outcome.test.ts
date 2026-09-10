@@ -10,6 +10,7 @@ import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
 
 async function invoke(code: string, providers: CodemodeProvider[] = []) {
   let step = 0;
+
   const model = scriptedTurnModel({
     doGenerate: () => ({
       content: ++step === 1
@@ -23,11 +24,14 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
       warnings: [],
     }),
   });
+
   const tool = createNodeExecuteToolFactory({ extraProviders: providers })({
     native: {}, craftedTools: () => ({}), providers: [],
   });
+
   const accumulator = new TurnAccumulator();
   const events: ChatEvent[] = [];
+
   const extensions = new ExtensionHost().register({
     name: 'record-invocation',
     onToolResult: (event) => {
@@ -37,12 +41,15 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
             success: false, reason: event.reason, execution: event.execution });
     },
   });
+
   for await (const event of runChat({
     model, system: 'Run the requested program.', history: [{ role: 'user', content: 'go' }],
     tools: { execute_tools: tool }, extensions, stopWhen: stepCountIs(2),
   })) events.push(event);
   const result = events.find((event) => event.type === 'tool-result');
+
   if (result?.type !== 'tool-result') throw new Error('the invocation produced no result');
+
   return { result, accumulator };
 }
 
@@ -55,11 +62,17 @@ test('arbitrary error-shaped program values remain successful data through SDK a
 
 test('a handled nested command refusal does not fail its enclosing program', async () => {
   let calls = 0;
+
   const { result, accumulator } = await invoke('const answer = await workspace.exec("blocked"); return { handled: answer.reason };', [{
     name: 'workspace', types: '', tools: {
-      exec: { description: 'Refuse the command', execute: async () => { calls++; return { reason: 'denied', error: 'not run' }; } },
+      exec: { description: 'Refuse the command', execute: async () => {
+        calls++;
+
+        return { reason: 'denied', error: 'not run' };
+      } },
     },
   }]);
+
   expect(result).toMatchObject({ success: true });
   expect(JSON.parse(result.result)).toEqual({ result: { handled: 'denied' } });
   expect(calls).toBe(1);
@@ -68,6 +81,7 @@ test('a handled nested command refusal does not fail its enclosing program', asy
 
 test('unhandled program failures retain producer class, cause text, logs and one execution', async () => {
   let calls = 0;
+
   const { result, accumulator } = await invoke('console.log("before failure"); await probe.fail();', [{
     name: 'probe', types: '', tools: {
       fail: { description: 'Raise a classified command failure', execute: async () => {
@@ -76,6 +90,7 @@ test('unhandled program failures retain producer class, cause text, logs and one
       } },
     },
   }]);
+
   expect(result).toMatchObject({ success: false, reason: 'io', execution: { exitCode: 7 } });
   expect(result.result).toContain('underlying cause');
   expect(result.result).toContain('before failure');

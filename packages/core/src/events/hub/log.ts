@@ -154,24 +154,37 @@ const IngressSchema = v.picklist([
   'sandbox_cb', 'process_watch', 'file_watch', 'peer_async', 'mcp_streamable',
   'email_inbound', 'subordinate', 'self_emit', 'reply_request',
 ]);
+
 const VariantSchema = v.picklist([
   'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subordinate_task',
   'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
   'mcp_chat', 'mcp_third_party',
 ]);
+
 const TrustSchema = v.picklist(['external', 'authenticated', 'owner', 'self']);
+
 const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
+
 const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
+
 const AgentLogKindSchema = v.picklist([
   'event', 'phase', 'step', 'tool_call', 'tool_result', 'reactor_decision', 'reply_attempt',
 ]);
+
 const NullableString = v.nullable(v.string());
+
 const NullableNumber = v.nullable(v.number());
+
 const IdRowSchema = v.object({ id: v.string() });
+
 const TurnIdRowSchema = v.object({ turn_id: v.string() });
+
 const PayloadRowSchema = v.object({ payload: v.string() });
+
 const TraceRowSchema = v.object({ trace_id: v.string() });
+
 const CountRowSchema = v.object({ n: v.number() });
+
 const PhaseRowSchema = v.object({ payload: v.string(), received_at: v.number() });
 
 const EventRowSchema = v.object({
@@ -209,6 +222,7 @@ const AgentLogRowSchema = v.object({
 });
 
 const ChatPayloadSchema = v.object({ text: v.string() });
+
 const WebhookPayloadSchema = v.object({
   webhook_id: v.string(),
   http_method: v.string(),
@@ -217,6 +231,7 @@ const WebhookPayloadSchema = v.object({
   delivery_id: v.string(),
   body_path: v.optional(v.string()),
 });
+
 const ProcessDonePayloadSchema = v.object({
   process_id: v.string(),
   command: v.string(),
@@ -227,6 +242,7 @@ const ProcessDonePayloadSchema = v.object({
   full_stdout_handle: v.optional(v.string()),
   full_stderr_handle: v.optional(v.string()),
 });
+
 const TimerPayloadSchema = v.object({
   trigger_id: v.string(),
   scheduled_fire_at: v.number(),
@@ -234,6 +250,7 @@ const TimerPayloadSchema = v.object({
   user_payload: v.optional(v.unknown()),
   mission_label: v.optional(v.string()),
 });
+
 const PeerAgentPayloadSchema = v.object({
   from_agent_name: v.string(),
   from_user_id: v.string(),
@@ -244,6 +261,7 @@ const PeerAgentPayloadSchema = v.object({
   body_path: v.optional(v.string()),
   kinu_mode: WorkModeSchema,
 });
+
 const SubordinateTaskPayloadSchema = v.object({
   from_workspace: v.string(),
   kind: v.picklist(['task', 'message']),
@@ -253,6 +271,7 @@ const SubordinateTaskPayloadSchema = v.object({
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
 });
+
 /**
  * The handoff fields, as STORED.
  *
@@ -269,6 +288,7 @@ const HandoffPayloadEntries = {
   findings: v.optional(v.array(v.string())),
   open_work: v.optional(v.array(v.string())),
 } satisfies Record<SubordinateReportHandoffField, v.GenericSchema<string[] | undefined>>;
+
 const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
   status: v.picklist(SUBORDINATE_REPORT_STATUSES),
@@ -279,11 +299,13 @@ const SubordinateReportPayloadSchema = v.object({
   ...HandoffPayloadEntries,
   kinu_mode: WorkModeSchema,
 });
+
 const FileChangedPayloadSchema = v.object({
   path: v.string(),
   change: v.picklist(['created', 'modified', 'deleted']),
   size: v.optional(v.number()),
 });
+
 const EmailPayloadSchema = v.object({
   from: v.string(),
   to: v.string(),
@@ -299,19 +321,24 @@ const EmailPayloadSchema = v.object({
   })),
   body_path: v.optional(v.string()),
 });
+
 const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });
+
 const ReplyRequestPayloadSchema = v.object({
   question: v.string(),
   schema: v.optional(v.unknown()),
   awaiting_event_id: v.string(),
 });
+
 const McpChatPayloadSchema = v.object({
   client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
 });
+
 const McpThirdPartyPayloadSchema = v.object({
   client_id: v.string(), client_label: v.string(), method: v.string(),
   arguments: v.unknown(), request_id: v.string(),
 });
+
 const RevisitConditionSchema = v.variant('kind', [
   v.object({ kind: v.literal('at'), ts: v.number() }),
   v.object({ kind: v.literal('after_phase'), phase: v.picklist(['idle', 'merging']) }),
@@ -367,6 +394,7 @@ export class EventLog {
     const transform = applyVisibilityForStorage(
       d.payload, derived.payload_visibility, hmac_secret_for_visibility,
     );
+
     const storedPayload = preserveDelegatedMode(d, derived.payload_visibility, transform.stored);
 
     // 4. Atomic dedupe + insert. The UNIQUE index on dedupe_key makes this
@@ -374,6 +402,7 @@ export class EventLog {
     //    and we read the original.
     if (dedupe_key !== null) {
       const held = this.idForDedupeKey(dedupe_key);
+
       if (held !== null) return { id: held, admitted: false };
     }
 
@@ -411,9 +440,11 @@ export class EventLog {
    */
   idForDedupeKey(key: string): EventId | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id FROM agent_log WHERE actor_id = ? AND dedupe_key = ?`, this.actorId, key,
     ).toArray().map((row) => v.parse(IdRowSchema, row));
+
     return rows[0]?.id ?? null;
   }
 
@@ -423,12 +454,14 @@ export class EventLog {
    *  Honors deferred-revisit conditions if `resolve_deferred` is passed. */
   pending(filter: PendingFilter = {}): KinuEvent[] {
     this.actor.assertCurrent();
+
     // Same invariant as `query`, same reason: `LIMIT -1` reads the whole table
     // and `LIMIT NaN` is a datatype mismatch. The ceiling is the boundary's
     // question, not this read's.
     const limit = boundedInt(
       filter.limit, PENDING_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
     );
+
     const minPrio = filter.min_priority ?? 'background';
     const minPrioRank = PRIORITY_ORDER[minPrio];
 
@@ -444,6 +477,7 @@ export class EventLog {
         AND turn_id IS NULL
         AND (step_idx IS NULL OR step_idx >= 0)
     `;
+
     const bindings: SqlValue[] = [this.actorId];
 
     if (filter.variant) {
@@ -477,10 +511,12 @@ export class EventLog {
 
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
+
     // One corrupt payload must not wedge the drain: the row is reported with
     // its id and skipped, and the rest is returned.
     let events = rows.flatMap((row) => {
       const event = tryRowToEvent(row);
+
       return event === null ? [] : [event];
     });
 
@@ -515,6 +551,7 @@ export class EventLog {
    *  ({@link nextPendingDrainAt}). */
   private deferredRows(): Array<{ event: KinuEvent; cond: RevisitCondition }> {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
@@ -526,8 +563,10 @@ export class EventLog {
 
     return rows.flatMap((row) => {
       const payload = v.safeParse(JsonObjectSchema, parseJsonValue(row.payload));
+
       if (!payload.success) return [];
       const cond = v.safeParse(RevisitConditionSchema, payload.output.__defer_revisit);
+
       return cond.success ? [{ event: rowToEvent(row), cond: cond.output }] : [];
     });
   }
@@ -554,10 +593,13 @@ export class EventLog {
   nextPendingDrainAt(now = Date.now()): number | null {
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
       .some(wakesADrain);
+
     if (drainableNow) return now;
+
     const scheduled = this.deferredRows()
       .filter(({ event }) => wakesADrain(event))
       .flatMap(({ cond }) => cond.kind === 'at' && cond.ts > now ? [cond.ts] : []);
+
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
 
@@ -607,6 +649,7 @@ export class EventLog {
    */
   openDrainLeases(): TurnId[] {
     this.actor.assertCurrent();
+
     return this.sql.exec(
       `SELECT DISTINCT turn_id FROM agent_log
        WHERE actor_id = ? AND kind = 'event' AND turn_id LIKE 'evt-%'
@@ -619,6 +662,7 @@ export class EventLog {
    *  activation-time arm decision that must not materialize the roster. */
   hasOpenDrainLease(): boolean {
     this.actor.assertCurrent();
+
     return this.sql.exec(
       `SELECT 1 FROM agent_log
        WHERE actor_id = ? AND kind = 'event' AND turn_id LIKE 'evt-%'
@@ -654,9 +698,11 @@ export class EventLog {
     this.actor.assertCurrent();
     const cutoff = now - olderThanMs;
     const keep = [...answered];
+
     const exclusion = keep.length === 0
       ? ''
       : ` AND turn_id NOT IN (${keep.map(() => '?').join(', ')})`;
+
     const rows = this.sql.exec(
       `UPDATE agent_log
        SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
@@ -674,6 +720,7 @@ export class EventLog {
       cutoff,
       ...keep,
     ).toArray().map((row) => v.parse(IdRowSchema, row));
+
     return rows.map((row) => row.id);
   }
 
@@ -684,10 +731,12 @@ export class EventLog {
    *  payload semantically). `step_idx = -1` marks the event as deferred. */
   defer(eventId: EventId, revisitAt: RevisitCondition): void {
     this.actor.assertCurrent();
+
     const row = this.sql.exec(
       `SELECT payload FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
       this.actorId, eventId,
     ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
+
     if (row.length === 0) return;
     const payload = parseJsonObject(row[0].payload);
     payload.__defer_revisit = v.parse(JsonValueSchema, revisitAt);
@@ -704,10 +753,12 @@ export class EventLog {
    *  it's never re-dispatched. The dismissal reason is appended to payload. */
   dismiss(eventId: EventId, reason: string, by: 'reactor' | 'tool' | 'system'): void {
     this.actor.assertCurrent();
+
     const row = this.sql.exec(
       `SELECT payload FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
       this.actorId, eventId,
     ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
+
     if (row.length === 0) return;
     const payload = parseJsonObject(row[0].payload);
     payload.__dismissed = { reason, by, at: Date.now() };
@@ -737,9 +788,11 @@ export class EventLog {
    */
   query(filter: QueryFilter): KinuEvent[] {
     this.actor.assertCurrent();
+
     const limit = boundedInt(
       filter.limit, EVENT_QUERY_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
     );
+
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
              payload_visibility, payload, received_at, schema_version,
@@ -747,18 +800,27 @@ export class EventLog {
       FROM agent_log
       WHERE actor_id = ? AND kind = 'event'
     `;
+
     const bindings: SqlValue[] = [this.actorId];
+
     if (filter.trace_id) { sql += ' AND trace_id = ?'; bindings.push(filter.trace_id); }
+
     if (filter.turn_id)  { sql += ' AND turn_id = ?';  bindings.push(filter.turn_id); }
+
     if (filter.variant)  { sql += ' AND variant = ?';  bindings.push(filter.variant); }
+
     if (filter.since)    { sql += ' AND received_at >= ?'; bindings.push(filter.since); }
+
     sql += ' ORDER BY received_at DESC, id DESC';
     sql += ' LIMIT ?'; bindings.push(limit);
+
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
+
     // Same corrupt-row rule as `pending`: report with the row id, skip it.
     return rows.flatMap((row) => {
       const event = tryRowToEvent(row);
+
       return event === null ? [] : [event];
     });
   }
@@ -766,6 +828,7 @@ export class EventLog {
   /** Single-event read by id. */
   get(eventId: EventId): KinuEvent | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
               payload_visibility, payload, received_at, schema_version,
@@ -773,6 +836,7 @@ export class EventLog {
        FROM agent_log
        WHERE actor_id = ? AND kind = 'event' AND id = ?`, this.actorId, eventId,
     ).toArray().map((row) => v.parse(EventRowSchema, row));
+
     return rows.length > 0 ? rowToEvent(rows[0]) : null;
   }
 
@@ -781,21 +845,25 @@ export class EventLog {
   /** Trace id of a referenced event, or null if not found. */
   private lookupTraceId(eventId: EventId): TraceId | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT trace_id FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
       this.actorId, eventId,
     ).toArray().map((row) => v.parse(TraceRowSchema, row));
+
     return rows.length > 0 ? rows[0].trace_id : null;
   }
 
   /** Number of events in a trace (used by per-trace budget). */
   traceEventCount(traceId: TraceId): number {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT COUNT(*) AS n FROM agent_log
        WHERE actor_id = ? AND trace_id = ? AND kind = 'event'`,
       this.actorId, traceId,
     ).toArray().map((row) => v.parse(CountRowSchema, row));
+
     return rows[0]?.n ?? 0;
   }
 
@@ -826,6 +894,7 @@ export class EventLog {
       this.actorId, id, opts.kind, opts.turn_id, opts.step_idx, opts.parent_id, opts.trace_id,
       JSON.stringify(opts.payload), opts.now,
     );
+
     return id;
   }
 
@@ -833,15 +902,18 @@ export class EventLog {
    *  monotonic per write) with id desc as a tiebreaker. */
   currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT payload, received_at FROM agent_log
        WHERE actor_id = ? AND kind = 'phase' AND turn_id = ?
        ORDER BY received_at DESC, id DESC LIMIT 1`,
       this.actorId, turn_id,
     ).toArray().map((row) => v.parse(PhaseRowSchema, row));
+
     if (rows.length === 0) return null;
     const payload = parseJsonObject(rows[0].payload);
     const phase = v.safeParse(v.string(), payload.phase);
+
     return { phase: phase.success ? phase.output : 'unknown', at: rows[0].received_at };
   }
 
@@ -849,6 +921,7 @@ export class EventLog {
    *  + recovery + SSE replay. */
   turnSteps(turn_id: TurnId): AgentLogRow[] {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
               trust, priority, payload_visibility, payload, received_at, schema_version, dedupe_key
@@ -858,6 +931,7 @@ export class EventLog {
        ORDER BY step_idx, id`,
       this.actorId, turn_id,
     ).toArray().map((row) => v.parse(AgentLogRowSchema, row));
+
     return rows.map((row): AgentLogRow => ({
       ...row,
       payload: parseJsonValue(row.payload),
@@ -873,13 +947,16 @@ function preserveDelegatedMode(
   stored: v.InferOutput<typeof JsonValueSchema>,
 ): v.InferOutput<typeof JsonValueSchema> {
   if (policy === 'full' || policy === 'redact') return stored;
+
   if (
     descriptor.variant !== 'peer_agent'
     && descriptor.variant !== 'subordinate_task'
     && descriptor.variant !== 'subordinate_report'
   ) return stored;
   const envelope = v.safeParse(JsonObjectSchema, stored);
+
   if (!envelope.success) return stored;
+
   return { ...envelope.output, kinu_mode: descriptor.payload.kinu_mode };
 }
 
@@ -892,18 +969,21 @@ function tryRowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent | n
     return rowToEvent(row);
   } catch (err) {
     const failure = toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' });
+
     // Only a corrupt payload is tolerated: it is the one value the caller
     // treats as skip (flatMap null → []), so one bad row cannot wedge the
     // drain behind it. Any other class — a cancelled drain, a denied read,
     // an oom — is this read's own fault and propagates.
     if (failure.code !== 'bad_input') throw failure;
     diagnostics.failure('event.row_unreadable', failure, { id: row.id });
+
     return null;
   }
 }
 
 function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {
   const payload = parseJsonValue(row.payload);
+
   const base = {
     id: row.id,
     trace_id: row.trace_id,
@@ -927,6 +1007,7 @@ function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {
   }
 
   const readable = { ...base, payload_visibility: row.payload_visibility };
+
   switch (row.variant) {
     case 'chat':
       return { ...readable, variant: row.variant, payload: v.parse(ChatPayloadSchema, payload) };

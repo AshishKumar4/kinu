@@ -12,6 +12,7 @@ import type { ModelProvider, ModelInfo } from './types';
 import { authCacheKey, createAuthedFetch } from './util';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
 export const OPENROUTER_CRED_KEY = 'openrouter.bearer';
 
 export interface OpenRouterOptions {
@@ -43,20 +44,28 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
 
     async listModels(deps) {
       const auth = await deps.getAuth(OPENROUTER_CRED_KEY);
+
       if (!auth) {
         catalogCache = null;
+
         return [];
       }
+
       const authKey = authCacheKey(auth);
+
       if (catalogCache && catalogCache.authKey === authKey && Date.now() - catalogCache.at < ttl) {
         return catalogCache.models;
       }
+
       const fetchFn = deps.fetch ?? fetch;
       // No catch: an unreachable OpenRouter is not an OpenRouter with no models.
       const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
+
       if (!res.ok) return [];
       const body = v.safeParse(OpenRouterCatalogSchema, await res.json());
+
       if (!body.success) return [];
+
       const models: ModelInfo[] = (body.output.data ?? []).map(m => ({
         id: m.id,
         label: m.name ?? m.id,
@@ -65,7 +74,9 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
           ? ['tools', 'streaming', 'vision']
           : ['tools', 'streaming'],
       }));
+
       catalogCache = { at: Date.now(), authKey, models };
+
       return models;
     },
 
@@ -75,9 +86,11 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
         missingCredentialError: 'OpenRouter API key not configured',
         mutate: ({ headers }) => {
           if (opts.refererURL) headers.set('HTTP-Referer', opts.refererURL);
+
           if (opts.appTitle) headers.set('X-Title', opts.appTitle);
         },
       });
+
       return createOpenAICompatible({
         name: 'openrouter',
         baseURL: OPENROUTER_BASE_URL,

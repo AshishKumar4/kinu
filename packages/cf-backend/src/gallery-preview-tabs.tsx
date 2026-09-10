@@ -9,11 +9,13 @@ import { PreviewFrame } from '@/components/PreviewFrame';
 import { SLATE_GALLERY_URL } from '@/gallery-slate-fallback';
 
 const ROOT_PLAN: PlanReview = { id: 'plan-dashboard', sessionId: 'default', revision: 2, content: '# Dashboard delivery\n\nImplement the dashboard and verify its refresh action.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 1, updatedAt: 2, decidedAt: null };
+
 /** The plan a WHOLLY UNSCANNED actor submits. `courier` is on the workspace's
  *  roster but never on a `children` page here: the plan walk is budgeted, so a
  *  live actor outside the frontier is exactly the case an arrival hint exists
  *  for — no amount of "Older plans / more actors" reaches this one. */
 const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', revision: 3, content: '# Courier rollout\n\nStage the rollout and verify the receipt.', status: 'pending', annotations: [], feedback: null, handoffAccepted: false, createdAt: 30, updatedAt: 30, decidedAt: null };
+
 /** The reference that arrival carries, built THROUGH the wire schema — as
  *  the hosted subordinate rung builds the one it really broadcasts. A fixture literal
  *  that drifted from the contract would reach the hook as a frame it drops,
@@ -21,9 +23,11 @@ const ARRIVAL_PLAN: PlanReview = { id: 'plan-courier', sessionId: 'default', rev
 const ARRIVAL_REFERENCE = v.parse(WorkspacePlanReferenceSchema, {
   path: ['courier'], id: ARRIVAL_PLAN.id, revision: ARRIVAL_PLAN.revision,
 });
+
 /** One the workspace never issued: a real reference by SHAPE, so nothing short
  *  of the exact authorized read can tell it from the one above. */
 const STALE_REFERENCE = v.parse(WorkspacePlanReferenceSchema, { ...ARRIVAL_REFERENCE, revision: 99 });
+
 /** Not a reference at all — parsed by a schema that requires the wire schema to
  *  REJECT it. A malformed fixture that drifted into validity would quietly
  *  become a second stale-reference leg and leave the malformed path untested. */
@@ -34,9 +38,13 @@ const MALFORMED_REFERENCE = v.parse(
   )),
   { path: ['courier'], id: '', revision: 0 },
 );
+
 const SLATES: SlateSummary[] = [{ id: 'dashboard', title: 'Dashboard', bindings: [], port: 8789 }];
+
 const SANDBOX_URL = 'https://8080-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/';
+
 const DEVICE_URL = 'https://3000-device-aaaaaaaaaaaaaaaa.preview.example.test/';
+
 const NOTHING = () => {};
 
 /**
@@ -74,22 +82,29 @@ export function PreviewTabsGallery() {
   // surfaces read still comes from the fixture props below, so this exercises
   // the hook's socket edge and nothing else.
   const { workspacePlanArrival } = useKinu('preview-tabs');
+
   const rpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const reply = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(value)).json<T>();
+
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789 } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', additions: 1, deletions: 0, diff: '+export const ready = true;' }] : [] });
     else if (method === 'inspectSubordinate') {
       const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
       const path = request.path;
+
       if (request.view === 'plans') {
         if (failHistory) throw new Error('Plan history temporarily unavailable');
+
         const items = path.length === 0 ? (plan ? [plan, { ...ROOT_PLAN, revision: 1, status: 'superseded', content: '# Earlier dashboard plan' }] : [])
           : path.length > 1 ? [{ ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved', handoffAccepted: true }]
           : path[0] === 'worker' ? [workerPlan] : [{ ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved', handoffAccepted: true }];
+
         return reply({ view: 'plans', path, page: { status: 'end', items } });
       }
+
       if (request.view === 'children') {
         const names = !actors ? [] : path.length === 0 ? ['worker', 'archive'] : path.length === 1 && path[0] === 'worker' ? ['nested'] : [];
+
         // Whole roster rows: the browser PARSES this reply against
         // `SubordinateRosterEntrySchema`, so a row missing the actor columns is
         // a reply the pane drops rather than a walk it continues. The reference
@@ -97,6 +112,7 @@ export function PreviewTabsGallery() {
         // resolve one against — the walk reads `name` and `status` only.
         return reply({ view: 'children', path, page: { status: 'end', items: names.map(name => ({ name, actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: name === 'archive' ? 'dismissed' : 'idle', currentTask: null, createdAt: 1, dismissedAt: name === 'archive' ? 2 : null, lifetime: 'durable', taskEventId: null })) } });
       }
+
       if (request.view === 'plan') {
         // The exact reference read, which is the only thing that authorizes a
         // focus. The request is compared to the reference this gate ANNOUNCED,
@@ -104,29 +120,41 @@ export function PreviewTabsGallery() {
         // an invented id resolves to nothing rather than to a neighbouring
         // plan — and no second copy of the path decides it.
         const requested = v.safeParse(WorkspacePlanReferenceSchema, { path, id: request.id, revision: request.revision });
+
         return reply(requested.success && JSON.stringify(requested.output) === JSON.stringify(ARRIVAL_REFERENCE)
           ? { view: 'plan', path, plan: ARRIVAL_PLAN }
           : missingSubordinateHistory(path));
       }
+
       if (request.view === 'planTasks') return reply({ view: 'planTasks', path, tasks: request.revision === 2 || path.length > 0 ? [{ id: 't1', parentId: null, title: path.length > 0 ? 'Deliver ' + path.join(' / ') : 'Implement refresh action', status: 'active', createdAt: 1, updatedAt: 1, subtasks: [] }] : [] });
       throw new Error('Unexpected inspection view in preview gallery');
     }
-    else if (method === 'decidePlanReview') { const next = { ...ROOT_PLAN, status: 'approved' as const, handoffAccepted: true, updatedAt: 3 }; setPlan(next); return reply({ ok: true, plan: next, queued: true }); }
+    else if (method === 'decidePlanReview') {
+      const next = { ...ROOT_PLAN, status: 'approved' as const, handoffAccepted: true, updatedAt: 3 };
+      setPlan(next);
+
+      return reply({ ok: true, plan: next, queued: true });
+    }
     else if (method === 'savePlanReviewAnnotations') return reply({ ok: true, plan });
     else if (method === 'listAgentTasks') return reply([]);
     else if (method === 'getEvolutionChangelog') return reply({ entries: [], unseenCount: 0, seenAt: 0 });
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
     else throw new Error('Unexpected preview gallery RPC: ' + method);
   }, [plan, diff, failHistory, actors, workerPlan]);
+
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'decidePlanReview') {
       const next: PlanReview = { ...workerPlan, status: 'approved', handoffAccepted: true };
       setWorkerPlan(next);
+
       return new Response(JSON.stringify({ ok: true, plan: next, queued: true })).json<T>();
     }
+
     if (method === 'savePlanReviewAnnotations') return new Response(JSON.stringify({ ok: true, plan: workerPlan })).json<T>();
+
     return rpc<T>(method, args);
   }, [rpc, workerPlan]);
+
   return <div className="h-screen p-bg flex flex-col">
     <div className="flex gap-2 p-2 text-xs shrink-0 flex-wrap" data-plan-owner={owner}>
       <button data-break-plans onClick={() => setFailHistory(value => !value)}>Toggle history failure</button>

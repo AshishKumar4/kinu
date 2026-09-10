@@ -154,16 +154,23 @@ export function enumerateRepository(repoRoot: string): Enumeration {
     execFileSync('git', ['-C', repoRoot, 'ls-files', '-z', ...flags], {
       env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     }).split('\0').filter((f) => f.length > 0);
+
   const tracked = list('--cached');
+
   const additions = list('--others', '--exclude-standard')
     .filter((f) => existsSync(join(repoRoot, f)));
+
   const trackedIgnored = list('--cached', '--ignored', '--exclude-standard');
+
   for (const f of trackedIgnored) {
     console.error(`sources: WARNING: ${f} is tracked AND gitignored — ignore rules never hide `
       + 'a tracked file from a gate; either `git rm --cached` it or drop the ignore rule');
   }
+
   const files = [...tracked, ...additions].sort();
+
   if (files.length === 0) throw new Error('sources: git ls-files enumerated no file');
+
   return { files, trackedIgnored };
 }
 
@@ -171,6 +178,7 @@ export function enumerateRepository(repoRoot: string): Enumeration {
  *  the repository this module sits in. */
 export function trackedFiles(): readonly string[] {
   if (enumerated === undefined) enumerated = enumerateRepository(root).files;
+
   return enumerated;
 }
 
@@ -193,17 +201,22 @@ let scope: string | undefined;
 export function workspaceScope(): string {
   if (scope !== undefined) return scope;
   const found = new Set<string>();
+
   for (const file of trackedFiles()) {
     if (!/^packages\/[^/]+\/package\.json$/.test(file) || file === 'packages/agent-core/package.json') continue;
     const { name } = v.parse(PackageNameSchema, JSON.parse(readRepositoryFile(root, file)));
+
     if (name === undefined || !name.startsWith('@')) continue;
     found.add(name.slice(0, name.indexOf('/')));
   }
+
   if (found.size !== 1) {
     throw new Error('sources: expected exactly one workspace scope across packages/*/package.json, '
       + `found ${found.size === 0 ? 'none' : [...found].sort().join(', ')}`);
   }
+
   [scope] = found;
+
   return scope;
 }
 
@@ -278,6 +291,7 @@ export const isFirstRunSuite = (file: string): boolean =>
 
 /** Where the anti-slop plugin lives, and where its per-rule suites live. */
 export const ANTI_SLOP_ROOT = 'tools/oxlint/anti-slop/';
+
 export const ANTI_SLOP_RULES = `${ANTI_SLOP_ROOT}rules/`;
 
 /**
@@ -312,12 +326,14 @@ export const isParseable = (file: string): boolean => PARSEABLE.test(file) && !i
 const LintConfigSchema = v.object({
   ignorePatterns: v.array(v.pipe(v.string(), v.regex(/^[^*?[\]{}]+$/u))),
 });
+
 let lintIgnoreRoots: readonly string[] | undefined;
 
 /** The exact literal-root policy that the live Oxlint invocation applies. */
 export function isLintSource(file: string): boolean {
   if (!isParseable(file)) return false;
   lintIgnoreRoots ??= v.parse(LintConfigSchema, JSON.parse(readRepositoryFile(root, '.oxlintrc.json'))).ignorePatterns;
+
   return !lintIgnoreRoots.some(ignored => file === ignored || file.startsWith(`${ignored}/`));
 }
 
@@ -392,7 +408,9 @@ export const isBenchDefectPatch = (file: string): boolean =>
  *  bytes rather than silently narrowing its corpus. */
 export function readRepositoryFile(repoRoot: string, file: string): string {
   const onDisk = join(repoRoot, file);
+
   if (existsSync(onDisk)) return readFileSync(onDisk, 'utf8');
+
   return execFileSync('git', ['-C', repoRoot, 'cat-file', 'blob', `:${file}`], {
     env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
@@ -403,6 +421,7 @@ export function readRepositoryFile(repoRoot: string, file: string): string {
  *  files do you govern" are the same expression. */
 export function readMatching(predicate: (file: string) => boolean): Map<string, string> {
   const files = trackedFiles().filter(predicate);
+
   return new Map(files.map((f) => [f, readRepositoryFile(root, f)]));
 }
 
@@ -452,8 +471,11 @@ export function listHistoryRefs(repoRoot: string): readonly string[] {
   const output = execFileSync('git', ['-C', repoRoot, 'for-each-ref', '--format=%(refname)'], {
     env: gitEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
+
   const refs = output.split('\n').filter((ref) => ref.startsWith('refs/'));
+
   if (refs.length === 0) throw new Error('sources: git for-each-ref enumerated no local refs');
+
   return refs;
 }
 
@@ -462,11 +484,15 @@ export function listHistoryRefs(repoRoot: string): readonly string[] {
  * a remediation must reach. */
 export function refClassOf(ref: string): HistoryRefClass {
   const parts = ref.split('/');
+
   if (parts[1] === 'remotes' && parts.length > 3) {
     const remote = parts[2];
+
     if (remote === undefined) throw new Error(`sources: unreachable ref shape ${ref}`);
+
     return ['refs', 'remotes', remote].join('/');
   }
+
   return parts.slice(0, 2).join('/');
 }
 
@@ -478,20 +504,26 @@ interface HistoryRecord {
 function objectRecords(output: Buffer): HistoryRecord[] {
   const records: HistoryRecord[] = [];
   let pending: HistoryRecord | undefined;
+
   for (const record of output.toString('utf8').split('\0')) {
     if (record === '') continue;
+
     if (HISTORY_OID.test(record)) {
       if (pending !== undefined) records.push(pending);
       pending = { oid: record, path: '' };
       continue;
     }
+
     if (record.startsWith('path=') && pending !== undefined) {
       pending.path = record.slice('path='.length);
       continue;
     }
+
     throw new Error('sources: git rev-list returned an invalid object record');
   }
+
   if (pending !== undefined) records.push(pending);
+
   return records;
 }
 
@@ -502,22 +534,28 @@ function objectRecords(output: Buffer): HistoryRecord[] {
  */
 export function historyObjects(repoRoot: string, refs: readonly string[]): readonly HistoryObject[] {
   const byClass = new Map<HistoryRefClass, string[]>();
+
   for (const ref of refs) {
     const current = refClassOf(ref);
     const grouped = byClass.get(current);
+
     if (grouped === undefined) byClass.set(current, [ref]);
     else grouped.push(ref);
   }
+
   const pairs = new Map<string, { oid: string; path: string; refClasses: Set<HistoryRefClass> }>();
+
   for (const [current, classRefs] of byClass) {
     const output = execFileSync('git', ['-C', repoRoot, 'rev-list', '--objects', '-z', '--stdin'], {
       env: gitEnv(),
       input: `${classRefs.join('\n')}\n`,
       maxBuffer: 512 * 1024 * 1024,
     });
+
     for (const record of objectRecords(Buffer.from(output))) {
       const key = `${record.oid}\0${record.path}`;
       const existing = pairs.get(key);
+
       if (existing === undefined) {
         pairs.set(key, { ...record, refClasses: new Set([current]) });
       } else {
@@ -525,7 +563,9 @@ export function historyObjects(repoRoot: string, refs: readonly string[]): reado
       }
     }
   }
+
   if (pairs.size === 0) throw new Error('sources: git rev-list enumerated no history object');
+
   return [...pairs.values()]
     .map(({ oid, path, refClasses }) => ({ oid, path, refClasses: [...refClasses].sort() }))
     .sort((left, right) => left.path.localeCompare(right.path) || left.oid.localeCompare(right.oid));
@@ -554,12 +594,15 @@ class BufferedHistoryBytes {
   private async fill(): Promise<void> {
     while (true) {
       const next = await this.reader.read();
+
       if (next.done || next.value === undefined) {
         throw new Error('sources: git cat-file --batch closed before its response');
       }
+
       if (next.value.byteLength === 0) continue;
       this.chunks.push(Buffer.from(next.value.buffer, next.value.byteOffset, next.value.byteLength));
       this.available += next.value.byteLength;
+
       return;
     }
   }
@@ -570,20 +613,25 @@ class BufferedHistoryBytes {
 
   private indexOf(byte: number): number {
     let offset = 0;
+
     for (const chunk of this.chunks) {
       const index = chunk.indexOf(byte);
+
       if (index !== -1) return offset + index;
       offset += chunk.byteLength;
     }
+
     return -1;
   }
 
   async line(): Promise<Buffer> {
     let index = this.indexOf(10);
+
     while (index === -1) {
       await this.fill();
       index = this.indexOf(10);
     }
+
     return this.take(index + 1);
   }
 
@@ -591,28 +639,37 @@ class BufferedHistoryBytes {
     if (bytes === 0) return Buffer.alloc(0);
     await this.ensure(bytes);
     const first = this.chunks[0];
+
     if (first === undefined) throw new Error('sources: history byte buffer lost data it ensured');
+
     if (first.byteLength >= bytes) {
       const result = first.subarray(0, bytes);
       this.available -= bytes;
+
       if (first.byteLength === bytes) this.chunks.shift();
       else this.chunks[0] = first.subarray(bytes);
+
       return result;
     }
+
     const result = Buffer.allocUnsafe(bytes);
     let offset = 0;
     let remaining = bytes;
+
     while (remaining > 0) {
       const chunk = this.chunks[0];
+
       if (chunk === undefined) throw new Error('sources: history byte buffer lost data it ensured');
       const count = Math.min(chunk.byteLength, remaining);
       chunk.copy(result, offset, 0, count);
       offset += count;
       remaining -= count;
       this.available -= count;
+
       if (count === chunk.byteLength) this.chunks.shift();
       else this.chunks[0] = chunk.subarray(count);
     }
+
     return result;
   }
 
@@ -620,10 +677,12 @@ class BufferedHistoryBytes {
     while (bytes > 0) {
       await this.ensure(1);
       const chunk = this.chunks[0];
+
       if (chunk === undefined) throw new Error('sources: history byte buffer lost data it ensured');
       const count = Math.min(chunk.byteLength, bytes);
       this.available -= count;
       bytes -= count;
+
       if (count === chunk.byteLength) this.chunks.shift();
       else this.chunks[0] = chunk.subarray(count);
     }
@@ -650,35 +709,45 @@ export async function readHistoryObjects(
   if (!Number.isSafeInteger(maxBlobBytes) || maxBlobBytes < 0) {
     throw new Error('sources: invalid historical blob size cap');
   }
+
   const child: Subprocess<'pipe', 'pipe', 'ignore'> = Bun.spawn(
     ['git', '-C', repoRoot, 'cat-file', '--batch'],
     { env: gitEnv(), stdin: 'pipe', stdout: 'pipe', stderr: 'ignore' },
   );
+
   const stdin: FileSink = child.stdin;
   const bytes = new BufferedHistoryBytes(child.stdout.getReader());
+
   try {
     for (const object of objects) {
       await stdin.write(`${object.oid}\n`);
       await stdin.flush();
       const header = (await bytes.line()).toString('ascii');
       const match = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)\n$/.exec(header);
+
       if (match === null || !Number.isSafeInteger(Number(match[3]))) {
         throw new Error('sources: git cat-file --batch returned an invalid object header');
       }
+
       const type = match[2];
+
       if (type === undefined) throw new Error('sources: git cat-file --batch returned an invalid object header');
       const size = Number(match[3]);
+
       if (type !== 'blob' || size > maxBlobBytes) {
         await bytes.discard(size);
         await consumeHistoryTerminator(bytes);
         await visit(object, { type, size, bytes: undefined });
         continue;
       }
+
       const content = await bytes.take(size);
       await consumeHistoryTerminator(bytes);
       await visit(object, { type, size, bytes: content });
     }
+
     await stdin.end();
+
     if (await child.exited !== 0) throw new Error('sources: git cat-file --batch failed');
   } catch (error) {
     child.kill();

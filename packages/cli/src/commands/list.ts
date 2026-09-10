@@ -22,9 +22,11 @@ export async function listCommand(): Promise<void> {
   const localAgents = listLocalAgentNames();
   const configuredAgents = Object.values(loadConfigFile().agents ?? {});
   const cloudSession = resolveCloudSession();
+
   const cloudAgents = cloudSession
     ? await listCloudAgents(cloudSession.origin, cloudSession.token)
     : [];
+
   const agents = reconcileAgentRefs(localAgents, configuredAgents, cloudAgents);
 
   const agentInfos = agents.map((agent) => {
@@ -39,6 +41,7 @@ export async function listCommand(): Promise<void> {
     }
 
     const name = agent.localName ?? agent.name;
+
     if (agent.readError !== undefined) {
       return {
         name,
@@ -48,11 +51,13 @@ export async function listCommand(): Promise<void> {
         dbSize: databaseSize(name),
       };
     }
+
     try {
       // getLocalAgentInfo degrades field by field (a workspace predating a
       // table still reports everything else), so only an unopenable database
       // reaches the catch.
       const info = getLocalAgentInfo(name);
+
       return {
         name,
         mode: agent.mode,
@@ -71,6 +76,7 @@ export async function listCommand(): Promise<void> {
         toKinuError({ doing: 'reading a local workspace', cause: caught, otherwise: 'io' }),
         { workspace: name },
       );
+
       return { name, mode: agent.mode, purpose: `(unreadable: ${reason})`, scaffoldVersion: 0 };
     }
   });

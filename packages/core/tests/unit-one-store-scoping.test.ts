@@ -117,6 +117,7 @@ function world(): World {
   const execRaw = makeExecRaw(db);
   const exec = makeSqlExec(db);
   let live = true;
+
   return {
     db, sql, execRaw, exec,
     a: testActorHandle(sql, { actorId: 'actor-a' }),
@@ -225,9 +226,11 @@ describe('two actors, one database: lessons', () => {
     const idA = recordLesson(w.sql, w.a, {
       turnIds: ['turn-1'], text: 'from-a', source: 'turn_reflection', status: 'provisional', key: 'k1',
     });
+
     const idB = recordLesson(w.sql, w.b, {
       turnIds: ['turn-1'], text: 'from-b', source: 'turn_reflection', status: 'provisional', key: 'k1',
     });
+
     expect(idA).toBe(idB);
     expect(w.count('lessons')).toBe(2);
 
@@ -266,16 +269,20 @@ describe('two actors, one database: pattern_extractions', () => {
   test('one effect key holds a different held answer for each actor', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
+
     // The store for this table lives in the evolution engine; what is scoped
     // here is the row identity, so the exercise is the identity itself.
     for (const [actor, answer] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
       void w.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer, created_at)
         VALUES (${actor.actorId}, ${'turn-1:pattern'}, ${answer}, 1)`;
     }
+
     expect(w.count('pattern_extractions')).toBe(2);
+
     const read = (actor: ActorHandle): string | undefined => w.sql<{ answer: string }>`
       SELECT answer FROM pattern_extractions
       WHERE actor_id = ${actor.actorId} AND effect_key = ${'turn-1:pattern'}`[0]?.answer;
+
     expect(read(w.a)).toBe('from-a');
     expect(read(w.b)).toBe('from-b');
     w.close();
@@ -290,6 +297,7 @@ describe('two actors, one database: completed_turns', () => {
     initCompletedTurnTable(w.execRaw);
     const a = createCompletedTurnStore(w.sql, w.a);
     const b = createCompletedTurnStore(w.sql, w.b);
+
     const turn = {
       userMessage: 'ask', assistantResponse: 'answer', toolCalls: [], steps: 1,
       durationMs: 1, feedback: null, hadError: false,
@@ -332,6 +340,7 @@ describe('two actors, one database: replay_evals', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
     initReplayTables(w.execRaw);
+
     for (const [actor, response] of [[w.a, 'a-answer'], [w.b, 'b-answer']] as const) {
       recordTurnOutcome(w.sql, actor, {
         turnId: 'turn-1', outcome: 'accepted', confidence: 1, source: 'explicit',
@@ -345,6 +354,7 @@ describe('two actors, one database: replay_evals', () => {
       runTask: async () => 'fresh',
       sampleSize: 1, now: 2,
     });
+
     expect(summary?.sampleSize).toBe(1);
     expect(listReplayEvals(w.sql, w.a)).toHaveLength(1);
     expect(listReplayEvals(w.sql, w.b)).toHaveLength(0);
@@ -360,6 +370,7 @@ describe('two actors, one database: refinement_requests', () => {
     initRefinementTables(w.execRaw);
     const a = createRefinementStore(w.sql, w.a);
     const b = createRefinementStore(w.sql, w.b);
+
     const input = {
       trigger: 'evolution_debt' as const, scope: 'workspace' as const,
       turnIds: ['turn-1', 'turn-2'], debtKey: 'digest-1', now: 1,
@@ -405,6 +416,7 @@ describe('two actors, one database: gepa_runs and gepa_candidates', () => {
       scores: new Map([['i1', 1]]), feedback: new Map<string, string>(),
       aggregateScore: 1, createdAt: 1,
     });
+
     persistGepaCandidate(w.sql, w.a, { runId: runA, candidate: candidate('from-a'), iteration: 0, accepted: true });
     persistGepaCandidate(w.sql, w.b, { runId: runB, candidate: candidate('from-b'), iteration: 0, accepted: true });
 
@@ -439,6 +451,7 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
     for (const table of ['fibers', 'evolution_events', 'executor_output', 'activity_log']) {
       expect(w.count(table)).toBe(2);
     }
+
     expect(w.sql<{ snapshot: string }>`SELECT snapshot FROM fibers
       WHERE actor_id = ${w.a.actorId} AND id = ${'fib-1'}`[0]?.snapshot).toBe('a');
     expect(w.sql<{ message: string }>`SELECT message FROM evolution_events
@@ -459,14 +472,17 @@ describe('two actors, one database: terminal_effects', () => {
   test('one sequence id is a separate suffix for each actor', async () => {
     const w = world();
     initTerminalEffectTable(w.execRaw);
+
     // Claim only — the roster write is what the scoping is about, and it is
     // synchronous, so no wake and no effect body is involved.
     const a = new TerminalEffectLedger({
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
     });
+
     const b = new TerminalEffectLedger({
       sql: w.sql, actor: w.b, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
     });
+
     const owed = [{ name: 'turn_record' as const, scope: '', input: null, lane: 'inline' as const }];
 
     a.claim('turn-1', owed);
@@ -520,6 +536,7 @@ describe('two actors, one database: deferred_approvals', () => {
     initDeferredApprovalsTable(w.execRaw);
     const a = new DeferredApprovalStore(w.sql, w.a);
     const b = new DeferredApprovalStore(w.sql, w.b);
+
     const action = {
       id: 'appr-1', command: 'rm -rf /tmp/x', executor: 'workspace',
       reason: 'destructive', requestedAt: 1,
@@ -596,11 +613,13 @@ describe('two actors, one database: proposed_tasks', () => {
   test('one proposal id is a row per actor, and a status change stops at the owner', () => {
     const w = world();
     initCurriculumTable(w.execRaw);
+
     for (const [actor, task] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
       void w.sql`INSERT INTO proposed_tasks
           (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
         VALUES (${actor.actorId}, ${'prop-1'}, ${task}, ${'why'}, ${0.5}, ${'[]'}, 1, ${'pending'})`;
     }
+
     expect(w.count('proposed_tasks')).toBe(2);
 
     const rtA = runtimeFor(w, w.a);
@@ -623,6 +642,7 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
     const w = world();
     initPromptSectionTables(w.execRaw);
     const section = PROMPT_SECTIONS[0];
+
     if (section === undefined) throw new Error('the prompt-section registry is empty');
 
     for (const [actor, source, status] of [
@@ -632,6 +652,7 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
           (actor_id, section_id, version, source, rationale, status, incumbent_bytes, written_at)
         VALUES (${actor.actorId}, ${section.id}, 1, ${source}, ${'because'}, ${status}, 10, 1)`;
     }
+
     expect(w.count('prompt_section_versions')).toBe(2);
 
     expect(activePromptSectionOverrides(w.sql, w.a)[section.id]).toBe('a-source');
@@ -649,12 +670,14 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
         currentScore: 0.4, pendingScore: 0.6, winner, feedback: 'f', now: 1,
       });
     }
+
     expect(w.count('prompt_section_evaluations')).toBe(2);
     const key = `${section.id}:1`;
     expect(promptSectionTrialRecord(w.sql, w.a).get(key)).toEqual({ wins: 1, losses: 0, ties: 0 });
     expect(promptSectionTrialRecord(w.sql, w.b).get(key)).toEqual({ wins: 0, losses: 1, ties: 0 });
 
     const pendingB = getPendingPromptSection(w.sql, w.b, section.id);
+
     if (pendingB === null) throw new Error('B has a pending candidate for this section');
     expect(pendingB.trialsSoFar).toBe(1);
     expect(getPendingPromptSection(w.sql, w.a, section.id)).toBeNull();
@@ -673,6 +696,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
     initAlternateTakesTable(w.execRaw);
+
     const input = {
       task: 'ship it', turnId: 'turn-1', sessionId: 'default',
       liveText: 'live', branchText: 'branch', now: 1, settlementKey: 'branch-1',
@@ -680,6 +704,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
 
     const setA = recordBranchTakeSet(w.sql, w.a, input);
     const setB = recordBranchTakeSet(w.sql, w.b, input);
+
     if (setA === null || setB === null) throw new Error('both actors record their own take set');
     expect(w.count('alternate_takes')).toBe(2);
     expect(listAlternateTakeSets(w.sql, w.a)).toHaveLength(1);
@@ -695,6 +720,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
     initAlternateTakesTable(w.execRaw);
+
     for (const [actor, mark] of [[w.a, 'a'], [w.b, 'b']] as const) {
       void w.sql`INSERT INTO alternate_takes
           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
@@ -702,6 +728,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
         VALUES (${actor.actorId}, ${'take-1'}, ${null}, ${null}, ${mark}, ${'mcts'},
                 ${'n-1'}, ${null}, ${'[]'}, 10, ${null})`;
     }
+
     expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual(['take-1']);
 
     expect(claimAlternateTakesForTurn(w.sql, w.a, {
@@ -729,6 +756,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
       { nodeId: 'n-1', text: 'winner', score: 0.6, visits: 2, depth: 1 },
       { nodeId: 'n-2', text: 'rival', score: 0.59, visits: 2, depth: 1 },
     ]);
+
     for (const actor of [w.a, w.b]) {
       for (const nodeId of ['n-1', 'n-2']) {
         void w.sql`INSERT INTO search_nodes
@@ -736,12 +764,14 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
           VALUES (${actor.actorId}, ${nodeId}, ${null}, ${'root-1'}, ${'t'}, ${''}, ${''},
                   2, 0.6, 1, ${'terminal'})`;
       }
+
       void w.sql`INSERT INTO alternate_takes
           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
            candidates, created_at, picked_at)
         VALUES (${actor.actorId}, ${'take-1'}, ${'turn-1'}, ${'default'}, ${'t'}, ${'mcts'},
                 ${'n-1'}, ${null}, ${candidates}, 1, ${null})`;
     }
+
     expect(w.count('search_nodes')).toBe(4);
 
     const record = recordTakePick(w.sql, w.a, { takeId: 'take-1', nodeId: 'n-2', now: 2 });
@@ -750,6 +780,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     const status = (actor: ActorHandle, nodeId: string): string | undefined =>
       w.sql<{ status: string }>`SELECT status FROM search_nodes
         WHERE actor_id = ${actor.actorId} AND id = ${nodeId}`[0]?.status;
+
     expect(status(w.a, 'n-1')).toBe('pruned');
     expect(status(w.a, 'n-2')).toBe('terminal');
     // B's identically-named nodes never moved.
@@ -768,16 +799,19 @@ describe('two actors, one database: exploration_records', () => {
   test('the same artifact under the same objective is a record per actor', () => {
     const w = world();
     initExplorationRecordsTable(w.execRaw);
+
     const identity = {
       metric: 'reward', unit: 'points', direction: 'maximise' as const,
       scale: 'linear' as const,
       verifierDigest: verifierDigestOf({ kind: 'ratio', spec: { name: 'r' } }, 'source'),
     };
+
     const write = {
       identity, descriptor: null, artifact: 'program-1', value: 1, detail: 'd',
       measured: null, preset: 'p', label: null, rootId: 'root-1', configDigest: 'cfg',
       depth: 1, branches: 1, floor: null, costUsd: null, costTokens: null, at: 1,
     };
+
     const open = { kind: 'open' as const };
 
     expect(recordExploration(w.sql, w.a, { publication: open, write }).kind).toBe('recorded');
@@ -802,10 +836,12 @@ describe('two actors, one database: swarm_node_records', () => {
   test('one node id carries a different record for each actor', () => {
     const w = world();
     initSwarmNodeRecords(w.execRaw);
+
     const record = (conclusion: string): SwarmNodeRecord => ({
       outcome: { kind: 'incomplete', detail: 'the clock stopped it' },
       conclusion, aggregated: [], tokens: null,
     });
+
     recordSwarmNode(w.sql, w.a, { rootId: 'root-1', nodeId: 'n-1', record: record('a'), now: 1 });
     recordSwarmNode(w.sql, w.b, { rootId: 'root-1', nodeId: 'n-1', record: record('b'), now: 1 });
     expect(w.count('swarm_node_records')).toBe(2);
@@ -814,9 +850,11 @@ describe('two actors, one database: swarm_node_records', () => {
     expect(readSwarmNodeRecords(w.sql, w.b, 'root-1')).toHaveLength(1);
 
     markSwarmNodeMerged(w.sql, w.a, 'n-1', 9);
+
     const merged = (actor: ActorHandle): number | null => w.sql<{ merged_at: number | null }>`
       SELECT merged_at FROM swarm_node_records
       WHERE actor_id = ${actor.actorId} AND node_id = ${'n-1'}`[0]?.merged_at ?? null;
+
     expect(merged(w.a)).toBe(9);
     expect(merged(w.b)).toBeNull();
     w.close();
@@ -829,6 +867,7 @@ describe('two actors, one database: imported_experience', () => {
   test('both actors adopt the same library entry, and each settles only its own', () => {
     const w = world();
     initImportedExperienceTable(w.execRaw);
+
     const entry = {
       id: 'lib-1', kind: 'fact' as const, key: 'deploy_target',
       title: 'deploy target', evidence: 'used twice', sourceWorkspace: 'other',
@@ -886,6 +925,7 @@ describe('two actors, one database: actor_subordinates', () => {
     const b = new SubordinateRosterStore(w.exec, w.b);
     a.ensureSchema();
     b.ensureSchema();
+
     const entry = {
       name: 'reviewer', actorReference: null, birth: null, deleteRequested: false,
       createdBy: 'orchestrator' as const, status: 'idle' as const, currentTask: null,
@@ -941,6 +981,7 @@ describe('two actors, one database: agent_log', () => {
     initEventsHubTables(w.exec);
     const a = new EventLog(w.exec, w.a);
     const b = new EventLog(w.exec, w.b);
+
     const descriptor = {
       ingress: 'timer_alarm' as const,
       variant: 'timer' as const,
@@ -981,6 +1022,7 @@ describe('two actors, one database: agent_log', () => {
     initEventsHubTables(w.exec);
     const a = new EventLog(w.exec, w.a);
     const b = new EventLog(w.exec, w.b);
+
     for (const [log, mark] of [[a, 'a'], [b, 'b']] as const) {
       log.appendNonEventRow({
         kind: 'phase', turn_id: 'turn-1', step_idx: null, parent_id: null,
@@ -991,6 +1033,7 @@ describe('two actors, one database: agent_log', () => {
         trace_id: 'trace-1', payload: { text: mark }, now: 2,
       });
     }
+
     expect(w.count('agent_log')).toBe(4);
     expect(a.currentPhase('turn-1')?.phase).toBe('a');
     expect(b.currentPhase('turn-1')?.phase).toBe('b');
@@ -1006,6 +1049,7 @@ describe('two actors, one database: reply_channels', () => {
     initEventsHubTables(w.exec);
     const a = new ReplyChannelStore(w.exec, w.a);
     const b = new ReplyChannelStore(w.exec, w.b);
+
     const opts = {
       event_id: 'evt-1', kind: 'peer_back' as const, holder_addr: 'peer',
       payload_policy: 'full' as const,
@@ -1013,6 +1057,7 @@ describe('two actors, one database: reply_channels', () => {
 
     const idA = a.open(opts, 1_000);
     const idB = b.open(opts, 1_000);
+
     if (idA === null || idB === null) throw new Error('a peer_back channel is always persisted');
     expect(w.count('reply_channels')).toBe(2);
 
@@ -1034,6 +1079,7 @@ describe('two actors, one database: triggers', () => {
     const alarm = { scheduleAt: async () => {} };
     const a = new TriggerRegistry(w.exec, w.a, alarm);
     const b = new TriggerRegistry(w.exec, w.b, alarm);
+
     const spec = {
       kind: 'timer_cron' as const, spec: { cron: '0 * * * *' },
       creator_trust: 'owner' as const, next_fire_at: 1_000,
@@ -1070,16 +1116,20 @@ describe('two actors, one database: vfs_baseline', () => {
     const rtB = runtimeFor(w, w.b, vfs);
 
     await resetWorkspaceBaseline(rtA);
+
     const activeA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline
       WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
+
     if (activeA === undefined) throw new Error('A captured a baseline generation');
 
     // B captures its own baseline. Without the owner on the flip, this would
     // have deactivated A's rows and A's next diff would report the whole
     // workspace as newly added.
     await resetWorkspaceBaseline(rtB);
+
     const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline
       WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
+
     expect(stillActiveA).toBe(activeA);
 
     expect((await getWorkspaceDiff(rtA)).files).toHaveLength(0);
@@ -1190,6 +1240,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       expect(attempt).toThrow();
       expect(w.count(table)).toBe(before);
     }
+
     w.close();
   });
 });

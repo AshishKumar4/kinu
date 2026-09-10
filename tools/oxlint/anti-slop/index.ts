@@ -10,6 +10,7 @@ import { noEmptyCatchRule } from "./rules/no-empty-catch.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
+import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.ts";
@@ -25,6 +26,7 @@ import { noVacuousTypePredicateRule } from "./rules/no-vacuous-type-predicate.ts
 import { noWaitUntilInDurableObjectRule } from "./rules/no-wait-until-in-durable-object.ts";
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.ts";
 import { requireCauseOnRethrowRule } from "./rules/require-cause-on-rethrow.ts";
+import { requireReadableSpacingRule } from "./rules/require-readable-spacing.ts";
 import { requireRuntimeImportExtensionRule } from "./rules/require-runtime-import-extension.ts";
 import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion.ts";
 
@@ -47,6 +49,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-known-value-widening": noKnownValueWideningRule,
 		"no-module-mocking": noModuleMockingRule,
 		"no-object-parameters": noObjectParametersRule,
+		"no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,
 		"no-reflect-apply": noReflectApplyRule,
 		"no-reflect-get": noReflectGetRule,
 		"no-runtime-typeof": noRuntimeTypeofRule,
@@ -62,6 +65,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-wait-until-in-durable-object": noWaitUntilInDurableObjectRule,
 		"no-widen-then-assert": noWidenThenAssertRule,
 		"require-cause-on-rethrow": requireCauseOnRethrowRule,
+		"require-readable-spacing": requireReadableSpacingRule,
 		"require-runtime-import-extension": requireRuntimeImportExtensionRule,
 		"require-safety-comment-for-type-assertion": requireSafetyCommentForTypeAssertionRule,
 	},

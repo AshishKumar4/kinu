@@ -16,6 +16,7 @@ import {
 import { parseCliBearer } from '../src/cli/auth-store';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 /** 44 characters of the alphabet `nanoid` mints from: what a real token
  *  carries after its user id. */
 const SECRET = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdef';
@@ -102,6 +103,7 @@ describe('the rest of the strip', () => {
       'X-Kinu-Auth-Scope': 'owner',
       'x-guest-header': 'kept',
     });
+
     expect(out.get('proxy-authorization')).toBeNull();
     expect(out.get('x-kinu-user-id')).toBeNull();
     expect(out.get('x-kinu-auth-scope')).toBeNull();

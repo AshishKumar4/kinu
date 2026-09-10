@@ -14,13 +14,19 @@ import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
 import { tolerate } from '../obs/index';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+
 export const CODEX_ISSUER = 'https://auth.openai.com';
+
 export const CODEX_DEVICE_PORTAL = `${CODEX_ISSUER}/codex/device`;
+
 export const CODEX_TOKEN_URL = `${CODEX_ISSUER}/oauth/token`;
+
 export const CODEX_USER_AGENT = 'codex_cli_rs/0.0.0 (Kinu Agent)';
+
 export const CODEX_ORIGINATOR = 'codex_cli_rs';
 
 const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;
+
 const DEVICE_POLL_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/token`;
 
 const DeviceCodeStartResponseSchema = v.object({
@@ -28,10 +34,12 @@ const DeviceCodeStartResponseSchema = v.object({
   device_auth_id: v.pipe(v.string(), v.minLength(1)),
   interval: v.optional(v.union([v.string(), v.number()])),
 });
+
 const DevicePollResponseSchema = v.object({
   authorization_code: v.pipe(v.string(), v.minLength(1)),
   code_verifier: v.pipe(v.string(), v.minLength(1)),
 });
+
 const TokenExchangeResponseSchema = v.object({
   access_token: v.pipe(v.string(), v.minLength(1)),
   refresh_token: v.pipe(v.string(), v.minLength(1)),
@@ -65,15 +73,18 @@ export class CodexOAuthTokenError extends Error {
  *  can mistake a transient outage for a terminal revocation. */
 async function codexTokenEndpointError(res: Response): Promise<CodexOAuthTokenError> {
   const body = await res.text();
+
   const rejection = v.safeParse(
     v.object({ error: v.optional(v.string()) }),
     tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
   );
+
   return new CodexOAuthTokenError(
     rejection.success && rejection.output.error ? rejection.output.error : 'unknown',
     `Codex token refresh failed: ${res.status} ${sanitizeErrorBody(body)}`,
   );
 }
+
 const DevicePollErrorSchema = v.object({
   error: v.optional(v.string()),
   error_description: v.optional(v.string()),
@@ -85,18 +96,23 @@ const DevicePollErrorSchema = v.object({
  *  else is a failure the caller cannot wait out, and it throws as before. */
 async function devicePollRejection(res: Response): Promise<DeviceCodePoll> {
   const body = await res.text();
+
   const rejection = v.safeParse(
     DevicePollErrorSchema,
     tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
   );
+
   const code = rejection.success ? rejection.output.error : undefined;
   const reason = rejection.success ? rejection.output.error_description : undefined;
+
   if (code === 'access_denied') {
     return { status: 'denied', message: reason ?? 'Codex login denied. Run kinu setup again.' };
   }
+
   if (code === 'expired_token' || res.status === 404) {
     return { status: 'expired', message: reason ?? 'Codex login expired. Run kinu setup again.' };
   }
+
   if (res.status === 403) return { status: 'pending' };
   throw new Error(`Codex poll failed: ${res.status} ${sanitizeErrorBody(body)}`);
 }
@@ -139,13 +155,17 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: CODEX_CLIENT_ID }),
       });
+
       if (!res.ok) {
         throw new Error(`Codex device-code request failed: ${res.status} ${sanitizeErrorBody(await res.text())}`);
       }
+
       const body = v.safeParse(DeviceCodeStartResponseSchema, await res.json());
+
       if (!body.success) {
         throw new Error('Codex device-code response missing required fields');
       }
+
       return {
         userCode: body.output.user_code,
         deviceAuthId: body.output.device_auth_id,
@@ -160,11 +180,14 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
       });
+
       if (!pollRes.ok) return devicePollRejection(pollRes);
       const poll = v.safeParse(DevicePollResponseSchema, await pollRes.json());
+
       if (!poll.success) {
         throw new Error('Codex poll response missing authorization_code/code_verifier');
       }
+
       const exchange = await fetchFn(CODEX_TOKEN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -176,13 +199,17 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
           code_verifier: poll.output.code_verifier,
         }).toString(),
       });
+
       if (!exchange.ok) {
         throw new Error(`Codex token exchange failed: ${exchange.status} ${sanitizeErrorBody(await exchange.text())}`);
       }
+
       const tokens = v.safeParse(TokenExchangeResponseSchema, await exchange.json());
+
       if (!tokens.success) {
         throw new Error('Codex token exchange missing access_token/refresh_token');
       }
+
       return {
         status: 'granted',
         tokens: {
@@ -204,13 +231,17 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
           client_id: CODEX_CLIENT_ID,
         }).toString(),
       });
+
       if (!res.ok) {
         throw await codexTokenEndpointError(res);
       }
+
       const body = v.safeParse(TokenExchangeResponseSchema, await res.json());
+
       if (!body.success) {
         throw new Error('Codex refresh response missing access_token/refresh_token');
       }
+
       return {
         accessToken: body.output.access_token,
         refreshToken: body.output.refresh_token,
@@ -241,17 +272,21 @@ const JWT_PAYLOAD_SEGMENT = /^[A-Za-z0-9_-]+$/;
  *  and every request built from it would otherwise fail as an opaque 401. */
 function decodeJwtPayload(token: string): JsonObject | null {
   const segment = token.split('.')[1];
+
   if (segment === undefined || segment.length % 4 === 1 || !JWT_PAYLOAD_SEGMENT.test(segment)) return null;
   const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
   const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
+
   return tolerate(() => parseJsonObject(globalThis.atob(padded)), 'malformed-input') ?? null;
 }
 
 export function decodeCodexAccountId(accessToken: string): string | null {
   const payload = decodeJwtPayload(accessToken);
   const auth = payload?.['https://api.openai.com/auth'];
+
   if (auth === undefined || !isJsonObject(auth)) return null;
   const id = v.safeParse(v.pipe(v.string(), v.minLength(1)), auth.chatgpt_account_id);
+
   return id.success ? id.output : null;
 }
 
@@ -261,14 +296,19 @@ export function codexCredentialToHeaders(cred: OAuthCredential) {
     'User-Agent': CODEX_USER_AGENT,
     originator: CODEX_ORIGINATOR,
   };
+
   const metadataAccountId = cred.metadata?.accountId;
+
   const parsedMetadataAccountId = v.safeParse(
     v.pipe(v.string(), v.minLength(1)),
     metadataAccountId,
   );
+
   const accountId = decodeCodexAccountId(cred.accessToken)
     ?? (parsedMetadataAccountId.success ? parsedMetadataAccountId.output : null);
+
   if (!accountId) return headers;
+
   return { ...headers, 'ChatGPT-Account-ID': accountId };
 }
 
@@ -293,9 +333,12 @@ export const CODEX_REFRESH_LEAD_SEC = 300;
 
 export function codexAccessTokenExpiring(accessToken: string, skewSec = CODEX_REFRESH_LEAD_SEC): boolean {
   const payload = decodeJwtPayload(accessToken);
+
   if (!payload) return true;
   const parsedExp = v.safeParse(v.number(), payload.exp);
   const exp = parsedExp.success ? parsedExp.output : null;
+
   if (exp == null) return false;
+
   return Date.now() / 1000 + skewSec >= exp;
 }

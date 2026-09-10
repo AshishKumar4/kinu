@@ -23,7 +23,9 @@ const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
 ]);
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -33,6 +35,7 @@ afterEach(() => {
 function scratch(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -43,10 +46,13 @@ function seedWorkspace(path: string): void {
   db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
   db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
+
   for (let i = 0; i < 300; i++) {
     db.query(`INSERT INTO messages (id, content) VALUES (?, ?)`).run(`m${i}`, `note ${i} with "quotes"`);
   }
+
   const bytes = new Uint8Array(256);
+
   for (let i = 0; i < bytes.length; i++) bytes[i] = i;
   db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
   // Multi-byte text long enough that the reader's 64 KiB chunks land mid-
@@ -67,6 +73,7 @@ function runCli(home: string, args: string[], env: Record<string, string> = {}) 
 
 async function result(proc: ReturnType<typeof runCli>) {
   const exitCode = await proc.exited;
+
   return {
     exitCode,
     stdout: await new Response(proc.stdout).text(),
@@ -102,6 +109,7 @@ describe('kinu export / import', () => {
     expect(db.query(`SELECT content FROM messages WHERE id = 'unicode'`).get())
       .toEqual({ content: '→ café 🌍 '.repeat(9000) });
     const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get();
+
     if (!blob) throw new Error('restored logo missing');
     expect(Array.from(new Uint8Array(blob.data)).slice(0, 4)).toEqual([0, 1, 2, 3]);
     db.close();
@@ -117,25 +125,31 @@ describe('kinu export / import', () => {
     const source = archiveSqlFromDatabase(new Database(cloudDb, { readonly: true }));
 
     const calls: Array<{ method: string; cursor: ArchiveCursor | null }> = [];
+
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+
         if (url.pathname !== '/api/cli/workspaces/skywriter/rpc') return new Response('nope', { status: 404 });
+
         if (request.headers.get('authorization') !== 'Bearer ptc_stored_session') {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
+
         const body = v.parse(JsonObjectSchema, await request.json());
         const method = v.parse(v.string(), body.method);
         const args = v.parse(JsonArraySchema, body.args);
         calls.push({ method, cursor: v.parse(v.nullable(ArchiveCursorSchema), args[0] ?? null) });
+
         // Exactly what the orchestrator RPC does, with a page size small
         // enough that the CLI has to walk more than one page.
         const page = await readWorkspaceArchivePage(source, {
           workspace: 'skywriter', source: 'cloud',
           cursor: calls[calls.length - 1]!.cursor, maxBytes: 2048,
         });
+
         return Response.json({ result: page });
       },
     });
@@ -153,9 +167,11 @@ describe('kinu export / import', () => {
 
     try {
       const archive = join(out, 'skywriter.kinu.jsonl');
+
       const exported = await result(runCli(home, ['export', 'skywriter', '-o', archive], {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
       }));
+
       expect(exported.stderr).toBe('');
       expect(exported.exitCode).toBe(0);
       expect(exported.stdout).toContain('Exported skywriter (cloud)');
@@ -222,5 +238,6 @@ describe('kinu export / import', () => {
 function mkdirp(home: string, name: string): string {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
+
   return dir;
 }

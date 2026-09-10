@@ -20,7 +20,9 @@ export const ONBOARDING_STEP_IDS = [
   'keymap',
   'workspace',
 ] as const;
+
 export type OnboardingStepId = (typeof ONBOARDING_STEP_IDS)[number];
+
 export type WorkspaceLocationChoice = 'cloud' | 'local' | 'both';
 
 export interface TuiPreferences {
@@ -49,6 +51,7 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
   return {
     read() {
       if (!existsSync(path)) return DEFAULT_TUI_PREFERENCES;
+
       return parseTuiPreferences(readFileSync(path, 'utf8'), path);
     },
     write(preferences) {
@@ -73,10 +76,12 @@ const ThemeSelectionSchema = v.variant('mode', [
     lightThemeId: v.pipe(v.string(), v.minLength(1)),
   }),
 ]);
+
 const KeyOverrideSchema = v.record(
   v.string(),
   v.array(v.pipe(v.string(), v.trim(), v.minLength(1))),
 );
+
 const TuiPreferencesSchema = v.strictObject({
   theme: ThemeSelectionSchema,
   keymapPreset: v.picklist(KEYMAP_PRESET_IDS),
@@ -88,25 +93,33 @@ const TuiPreferencesSchema = v.strictObject({
 
 function parseTuiPreferences(json: string, source: string): TuiPreferences {
   let raw: unknown;
+
   try {
     raw = JSON.parse(json);
   } catch (error) {
     throw new Error(`${source}: invalid JSON`, { cause: error });
   }
+
   let parsed: v.InferOutput<typeof TuiPreferencesSchema>;
+
   try {
     parsed = v.parse(TuiPreferencesSchema, raw);
   } catch (error) {
     throw new Error(`${source} is not a valid Kinu TUI preference file.`, { cause: error });
   }
+
   const overrideEntries: Array<readonly [TuiActionId, readonly string[]]> = [];
+
   for (const [actionId, bindings] of Object.entries(parsed.keyOverrides)) {
     if (!isTuiActionId(actionId)) {
       throw new Error(`${source}.keyOverrides.${actionId} is not a known TUI action.`);
     }
+
     overrideEntries.push([actionId, Object.freeze(bindings)]);
   }
+
   const keyOverrides: KeymapOverrides = Object.fromEntries(overrideEntries);
+
   const common = {
     theme: Object.freeze(parsed.theme),
     keymapPreset: parsed.keymapPreset,
@@ -114,6 +127,7 @@ function parseTuiPreferences(json: string, source: string): TuiPreferences {
     wideSidebarOpen: parsed.wideSidebarOpen,
     skippedOnboardingSteps: Object.freeze([...new Set(parsed.skippedOnboardingSteps)]),
   };
+
   return Object.freeze(parsed.onboardingLocation === undefined
     ? common
     : { ...common, onboardingLocation: parsed.onboardingLocation });

@@ -44,13 +44,17 @@ export function createVfsTranscriptStore(getVfs: () => VFS): TranscriptStore {
     write: async (relativePath, content) => {
       const vfs = getVfs();
       const dir = relativePath.slice(0, relativePath.lastIndexOf('/'));
+
       try {
         await vfs.mkdir(dir, { recursive: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message.toLowerCase() : '';
+
         if (!msg.includes('exist')) throw err;
       }
+
       await vfs.writeFile(relativePath, content);
+
       return { absolutePath: relativePath };
     },
   };
@@ -112,6 +116,7 @@ const RawTailBoundarySchema = v.object({
   itemKey: v.string(),
   side: v.picklist(['before', 'after']),
 });
+
 const PlanStageSchema = v.object({
   name: v.string(),
   label: v.string(),
@@ -122,6 +127,7 @@ const PlanStageSchema = v.object({
   changedParts: v.number(),
   status: v.string(),
 });
+
 const PlanSnapshotSchema: v.GenericSchema<PlanSnapshot> = v.object({
   sessionId: v.string(),
   rangeHash: v.string(),
@@ -145,6 +151,7 @@ const PlanSnapshotSchema: v.GenericSchema<PlanSnapshot> = v.object({
 
 function parsePlanSnapshot(input: { value: unknown }): PlanSnapshot | null {
   const parsed = v.safeParse(PlanSnapshotSchema, input.value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -164,16 +171,21 @@ export function createCompactionStateStore(
 ): CompactionStateStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
+
   return {
     plans: {
       load: (sessionKey) => {
         authorize();
+
         const rows = sql<{ plan_json: string | null }>`
           SELECT plan_json FROM compaction_state
           WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
+
         const json = rows[0]?.plan_json;
+
         if (!json) return null;
         const parsed: unknown = JSON.parse(json);
+
         return parsePlanSnapshot({ value: parsed });
       },
       save: (sessionKey, snapshot) => {
@@ -187,6 +199,7 @@ export function createCompactionStateStore(
     archive: {
       list: (sessionKey) => {
         authorize();
+
         return sql<ArchiveRangeRow>`
           SELECT range_hash, path, start_turn, end_turn, user_turns, assistant_turns, first_user_ask
           FROM compaction_archive
@@ -211,18 +224,24 @@ export function createCompactionStateStore(
     },
     loadPromptTokens(sessionKey, historyLength) {
       authorize();
+
       const rows = sql<{ last_prompt_tokens: number | null; measured_at_length: number | null }>`
         SELECT last_prompt_tokens, measured_at_length FROM compaction_state
         WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
+
       const row = rows[0];
       const tokens = row?.last_prompt_tokens;
+
       if (tokens == null || tokens <= 0) return null;
       const measuredAt = row?.measured_at_length;
+
       if (measuredAt != null && historyLength < measuredAt) return null;
+
       return tokens;
     },
     savePromptTokens(sessionKey, tokens, historyLength) {
       authorize();
+
       if (!Number.isFinite(tokens) || tokens <= 0) return;
       const value = Math.floor(tokens);
       const length = Number.isFinite(historyLength) && historyLength > 0 ? Math.floor(historyLength) : 0;
@@ -241,12 +260,15 @@ export function createCompactionStateStore(
     },
     takeForceCompaction(sessionKey) {
       authorize();
+
       const rows = sql<{ force_compaction: number | null }>`
         SELECT force_compaction FROM compaction_state
         WHERE actor_id = ${actorId} AND session_key = ${sessionKey} LIMIT 1`;
+
       if (rows[0]?.force_compaction !== 1) return false;
       void sql`UPDATE compaction_state SET force_compaction = NULL
         WHERE actor_id = ${actorId} AND session_key = ${sessionKey}`;
+
       return true;
     },
   };

@@ -57,6 +57,7 @@ import { bindTaskPlan } from '../tasks/plan-scope';
 import { currentWorkMode, requireWorkModePermission, runWorkModeInvocation } from '../execution/work-mode';
 
 type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+
 interface SandboxFunctions {
   [name: string]: SandboxFunction;
 }
@@ -100,6 +101,7 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
 }`;
 
 export type ScaffoldToolOutput = Extract<UIMessageChunk, { type: 'tool-output-available' | 'tool-output-error' }>;
+
 export type ScaffoldModelEvent = ChatEvent | { type: 'native-tool-output'; output: ScaffoldToolOutput };
 
 /** What scaffold execution emits back to the caller. */
@@ -130,11 +132,15 @@ export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
  */
 export function scaffoldEventText(event: ScaffoldEvent): string | null {
   if (event.type === 'text_delta') return event.text;
+
   if ((event.type === 'chat_chunk' || event.type === 'model_chunk') && event.chunk.type === 'text-delta') return event.chunk.delta;
+
   if (event.type === 'ui_chunk' && isJsonObject(event.chunk)) {
     const delta = v.safeParse(v.string(), event.chunk.delta);
+
     if (event.chunk.type === 'text-delta' && delta.success) return delta.output;
   }
+
   return null;
 }
 
@@ -299,10 +305,12 @@ function buildHostProvider(opts: ScaffoldRunControl & {
 
   async function pushEvent(ev: ScaffoldEvent): Promise<void> {
     capturedEvents.push(ev);
+
     if (ev.type === 'done') {
       state.doneEmitted = true;
       state.finalResult = ev.result;
     }
+
     await emit(ev);
   }
 
@@ -310,28 +318,37 @@ function buildHostProvider(opts: ScaffoldRunControl & {
     emit: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
       const event = v.safeParse(ScaffoldEventSchema, args[0]);
+
       if (!event.success) return 'host.emit: invalid event';
       await pushEvent(event.output);
+
       return 'emitted';
     },
     callTool: async (...rawArgs: unknown[]) => {
       assertScaffoldActive(opts);
       const name = v.safeParse(v.string(), rawArgs[0]);
+
       if (!name.success) throw new KinuError('bad_input', 'host.callTool: name must be a string');
+
       if (!callTool) throw new KinuError('unavailable', 'host.callTool is unavailable in this runtime');
       const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
       const parsedArgs = v.safeParse(JsonValueSchema, rawArgs[1]);
+
       if (!parsedArgs.success) throw new KinuError('bad_input', 'host.callTool: arguments must be JSON', { cause: parsedArgs.issues });
       const toolArgs = parsedArgs.output;
+
       if (!isJsonObject(toolArgs)) throw new KinuError('bad_input', 'host.callTool: arguments must be a JSON object');
       await pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId });
+
       try {
         const result = await callTool(name.output, toolArgs);
         await pushEvent({ type: 'tool_result', toolCallId: callId, result, outcome: { success: true } });
+
         return result;
       } catch (err) {
         const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'tool_result', toolCallId: callId, error: msg, outcome: failedToolOutcome({ cause: err }) });
+
         return { error: msg };
       }
     },
@@ -341,9 +358,11 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       // responsibility. We push 'text_delta' events as chunks arrive.
       assertScaffoldActive(opts);
       const parsed = v.safeParse(LlmStreamOptionsSchema, args[0]);
+
       if (!parsed.success) return { error: 'host.llmStream: invalid options' };
       let acc = '';
       const streamId = nanoid();
+
       try {
         for await (const chunk of llmStream(parsed.output)) {
           if (chunk.type === 'native-tool-output') await pushEvent({ type: 'model_output', streamId, output: chunk.output });
@@ -352,10 +371,12 @@ function buildHostProvider(opts: ScaffoldRunControl & {
             await pushEvent({ type: 'model_chunk', streamId, chunk });
           }
         }
+
         return acc;
       } catch (err) {
         const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'error', message: `llmStream failed: ${msg}` });
+
         return { error: msg };
       }
     },
@@ -365,10 +386,13 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       // default loop without reimplementing it. The chunks are emitted
       // host-side — they do NOT round-trip through the sandbox per chunk.
       assertScaffoldActive(opts);
+
       if (!defaultInference) {
         return { error: 'host.defaultInference: unavailable in this runtime' };
       }
+
       const streamId = nanoid();
+
       try {
         for await (const chunk of defaultInference()) {
           if ('event' in chunk) await pushEvent({ type: 'chat_chunk', streamId, chunk: chunk.event });
@@ -377,21 +401,26 @@ function buildHostProvider(opts: ScaffoldRunControl & {
             await pushEvent({ type: 'ui_chunk', chunk: chunk.value });
           }
         }
+
         return 'done';
       } catch (err) {
         const msg = renderThrownChain({ cause: err });
         await pushEvent({ type: 'error', message: `defaultInference failed: ${msg}` });
+
         return { error: msg };
       }
     },
     history: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
+
       if (!history) return { error: 'host.history: unavailable in this runtime' };
       const parsed = v.safeParse(HistoryQuerySchema, args[0] ?? {});
       const query = parsed.success ? parsed.output : {};
+
       try {
         const page = { value: await history(query) };
         assertJsonValue(page);
+
         return page.value;
       } catch (err) {
         return { error: renderThrownChain({ cause: err }) };
@@ -400,7 +429,9 @@ function buildHostProvider(opts: ScaffoldRunControl & {
     readMemory: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
       const path = v.safeParse(v.string(), args[0]);
+
       if (!path.success) return { error: 'host.readMemory: path must be a string' };
+
       try { return await readMemory(path.output); }
       catch (err) { return { error: renderThrownChain({ cause: err }) }; }
     },
@@ -408,10 +439,16 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       assertScaffoldActive(opts);
       const path = v.safeParse(v.string(), args[0]);
       const content = v.safeParse(v.string(), args[1]);
+
       if (!path.success || !content.success) {
         return { error: 'host.appendMemory: path and content must be strings' };
       }
-      try { await appendMemory(path.output, content.output); return 'appended'; }
+
+      try {
+        await appendMemory(path.output, content.output);
+
+        return 'appended';
+      }
       catch (err) { return { error: renderThrownChain({ cause: err }) }; }
     },
   } satisfies Record<string, (...args: unknown[]) => Promise<JsonValue | undefined>>;
@@ -419,6 +456,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
   const bound = Object.fromEntries(Object.entries(fns).map(([name, invoke]) => [name,
     (...args: JsonValue[]) => runWorkModeInvocation(opts.workMode, () => invoke(...args)),
   ]));
+
   return { name: 'host', fns: bound, types: SCAFFOLD_HOST_TYPES };
 }
 
@@ -442,6 +480,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const { rt, task, emit, llmStream, callTool, scaffoldCodeOverride } = opts;
   const startedAt = Date.now();
   const capturedEvents: ScaffoldEvent[] = [];
+
   const state = {
     doneEmitted: false,
     finalResult: undefined,
@@ -449,18 +488,22 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
 
   // 1. Load scaffold code (with optional shadow-mode override).
   let code: string;
+
   try {
     code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
   } catch (err) {
     const msg = `scaffold read failed: ${renderThrownChain({ cause: err })}`;
     await emit({ type: 'error', message: msg });
+
     return {
       ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
     };
   }
+
   if (!code || code.trim().length === 0) {
     const msg = 'scaffold empty or unreadable';
     await emit({ type: 'error', message: msg });
+
     return {
       ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
     };
@@ -488,6 +531,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   // 4. Execute through the platform executor (codemode/DynamicWorkerExecutor on CF).
   const exec: Executor = rt.executor;
   const providers = assembleProviders(rt, hostProvider, opts, mode);
+
   for (const provider of providers) {
     for (const [name, invoke] of Object.entries(provider.fns)) provider.fns[name] = bindTaskPlan(invoke);
   }
@@ -499,6 +543,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   if (result.error) {
     const msg = result.error;
     await emit({ type: 'error', message: msg });
+
     return {
       ok: false,
       doneEmitted: state.doneEmitted,
@@ -596,17 +641,23 @@ function assembleProviders(
   const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [
     hostProvider,
   ];
+
   const routerProviders = rt.executionRouter?.getProviders() ?? [];
+
   for (const p of routerProviders) {
     const fns: SandboxFunctions = {};
+
     for (const [name, descriptor] of Object.entries(p.tools)) {
       fns[name] = (...args: JsonValue[]) => runWorkModeInvocation(mode, async () => {
         assertScaffoldActive(control);
         const result = await descriptor.execute(...args);
+
         return result === undefined ? undefined : decodeJsonValue({ value: result });
       });
     }
+
     out.push({ name: p.name, fns, types: p.types });
   }
+
   return out;
 }

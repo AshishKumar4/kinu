@@ -25,14 +25,17 @@ function makeExec(db: Database): SqlExec {
 }
 
 const DOMAIN = 'agents.example.com';
+
 type EmailEvent = Extract<KinuEvent, { variant: 'email' }>;
 
 function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
   const event = log.get(eventId);
+
   if (!event || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact')
     || event.variant !== 'email') {
     throw new Error(`expected readable email event ${eventId}`);
   }
+
   return event;
 }
 
@@ -44,6 +47,7 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
   const log = new EventLog(exec, actor);
   const replies = new ReplyChannelStore(exec, actor, {});
   const { vfs, files } = createMemoryVfs();
+
   const deps: EmailIngressDeps = {
     log, replies,
     owner_email: 'owner@example.com',
@@ -52,6 +56,7 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
     vfs,
     ...overrides,
   };
+
   return { deps, log, replies, sql: exec, files };
 }
 
@@ -103,6 +108,7 @@ async function strippedBody(text: string): Promise<string> {
     text,
     '',
   ].join('\r\n');
+
   return (await parseInboundMime(await new Blob([raw]).arrayBuffer())).body_text;
 }
 
@@ -119,6 +125,7 @@ describe('quoted history never reaches turn input', () => {
     expect(await strippedBody('> just a quote\n> nothing else')).toBe('> just a quote\n> nothing else');
   });
 });
+
 describe('parseInboundMime', () => {
   test('extracts subject, new text, threading headers, attachment metadata', async () => {
     const raw = [
@@ -147,6 +154,7 @@ describe('parseInboundMime', () => {
       '--B--',
       '',
     ].join('\r\n');
+
     const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
     expect(parsed.subject).toBe('Check the deploy');
     expect(parsed.body_text).toBe('Is staging green?');
@@ -167,6 +175,7 @@ describe('parseInboundMime', () => {
       '',
       '<div><p>Run the <b>tests</b></p><style>p{color:red}</style></div>',
     ].join('\r\n');
+
     const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
     expect(parsed.body_text).toBe('Run the tests');
   });
@@ -177,6 +186,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     const { deps, log, replies } = makeDeps();
     const result = await acceptInboundEmail(deps, incoming());
     expect(result).toMatchObject({ admitted: true, duplicate: false, sender_class: 'owner' });
+
     if (!result.admitted) throw new Error('unreachable');
 
     const event = requireEmailEvent(log, result.event_id);
@@ -220,6 +230,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     const { deps, log } = makeDeps({ allowlist: ['Friend@Example.com'] });
     const result = await acceptInboundEmail(deps, incoming({ from: 'friend@example.com' }));
     expect(result).toMatchObject({ admitted: true, sender_class: 'allowlisted' });
+
     if (!result.admitted) throw new Error('unreachable');
     const event = log.get(result.event_id)!;
     expect(event.trust).toBe('external');
@@ -231,6 +242,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     const first = await acceptInboundEmail(deps, incoming());
     const retry = await acceptInboundEmail(deps, incoming({ now: 9_000 }));
     expect(retry).toMatchObject({ admitted: true, duplicate: true });
+
     if (!first.admitted || !retry.admitted) throw new Error('unreachable');
     expect(retry.event_id).toBe(first.event_id);
     expect(log.pending()).toHaveLength(1);
@@ -252,14 +264,17 @@ describe('acceptInboundEmail — the trust gate', () => {
     const { deps, log, files } = makeDeps();
     const body = `URGENT-HEAD ${'detail '.repeat(400)}ACTION-TAIL`;
     const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
+
     if (!result.admitted) throw new Error('unreachable');
 
     const payload = requireEmailEvent(log, result.event_id).payload;
     expect(payload.body_path).toBeTruthy();
+
     if (!payload.body_path) throw new Error('expected spilled email body path');
     expect(files.get(payload.body_path)).toBe(body);
 
     const batch = buildDrainBatch(log.pending());
+
     if (!batch) throw new Error('expected pending email drain batch');
     expect(batch.text).toContain(payload.body_path);
     expect(batch.text).toContain('chars omitted');
@@ -270,9 +285,11 @@ describe('acceptInboundEmail — the trust gate', () => {
   test('mail that fits the brief is not spilled — a reference would be noise', async () => {
     const { deps, log } = makeDeps();
     const result = await acceptInboundEmail(deps, incoming());
+
     if (!result.admitted) throw new Error('unreachable');
     expect(requireEmailEvent(log, result.event_id).payload.body_path).toBeUndefined();
     const batch = buildDrainBatch(log.pending());
+
     if (!batch) throw new Error('expected pending email drain batch');
     expect(batch.text).toContain('Is staging green?');
   });
@@ -325,6 +342,7 @@ describe('threading identity is bounded at admission', () => {
     const { deps, log, replies } = makeDeps();
     const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
     const result = await acceptInboundEmail(deps, incoming({ references: chain.join(' ') }));
+
     if (!result.admitted) throw new Error('unreachable');
 
     const payload = requireEmailEvent(log, result.event_id).payload;
@@ -332,19 +350,23 @@ describe('threading identity is bounded at admission', () => {
     // One authority: the payload the model reads and the address the reply is
     // sent from cannot disagree about which thread this is.
     const channel = replies.findOpenByEvent(result.event_id)!;
+
     const addr = v.parse(
       v.object({ references: v.nullable(v.string()), message_id: v.nullable(v.string()) }),
       JSON.parse(channel.holder_addr),
     );
+
     expect(addr.references).toBe(payload.references);
     expect(result.thread.references).toBe(payload.references);
   });
 
   test('an unusable Message-ID is stored as absent rather than as itself', async () => {
     const { deps, log } = makeDeps();
+
     const result = await acceptInboundEmail(deps, incoming({
       message_id: 'not-a-message-id', in_reply_to: '<ok@x>',
     }));
+
     if (!result.admitted) throw new Error('unreachable');
     const payload = requireEmailEvent(log, result.event_id).payload;
     expect(payload.message_id).toBeNull();
@@ -361,6 +383,7 @@ describe('the inbox gate says when it is deaf', () => {
 
   test('while the window is exhausted, the turn is told — with the limit and the reset', () => {
     const notice = inboundEmailDropNotice(30, RESET_AT, RESET_AT - 20_000);
+
     if (!notice) throw new Error('expected active rate-limit notice');
     expect(notice.source).toBe('inbound email');
     expect(notice.reason).toContain('more than 30 messages');
@@ -396,8 +419,11 @@ describe('routeInboundEmail — the Worker seam', () => {
       '',
       'Is staging green?',
     ].join('\r\n');
+
     const body = new Response(raw).body;
+
     if (!body) throw new Error('expected response body stream');
+
     return {
       from: opts.from ?? 'owner@example.com',
       to: opts.to ?? `scout-a1b2c3@${DOMAIN}`,
@@ -410,11 +436,14 @@ describe('routeInboundEmail — the Worker seam', () => {
   test('delivers the parsed email to the agent named by the recipient', async () => {
     const deliveries: Array<Parameters<EmailDeliveryTarget['acceptEmailDelivery']>[0]> = [];
     const resolved: string[] = [];
+
     const result = await routeInboundEmail(mockMessage(), DOMAIN, async (name) => {
       resolved.push(name);
+
       return target({
         acceptEmailDelivery: async (opts) => {
           deliveries.push(opts);
+
           return { admitted: true, duplicate: false };
         },
       });
@@ -434,30 +463,41 @@ describe('routeInboundEmail — the Worker seam', () => {
 
   test('unroutable recipients are dropped without touching any agent', async () => {
     let resolves = 0;
+
     const result = await routeInboundEmail(
       mockMessage({ to: 'anyone@wrong-domain.example.com' }),
       DOMAIN,
-      async () => { resolves++; return target(); },
+      async () => {
+        resolves++;
+
+        return target();
+      },
     );
+
     expect(result.outcome).toBe('dropped');
     expect(resolves).toBe(0);
   });
 
   test('auto-reply / bulk mail (RFC 3834) is dropped before any agent is touched', async () => {
     let resolves = 0;
+
     const autoReplyHeaders: Array<Record<string, string>> = [
       { 'auto-submitted': 'auto-replied' },
       { precedence: 'bulk' },
       { 'list-id': '<newsletter.example.com>' },
       { 'x-auto-response-suppress': 'All' },
     ];
+
     for (const headers of autoReplyHeaders) {
       const result = await routeInboundEmail(mockMessage({ headers }), DOMAIN, async () => {
         resolves++;
+
         return target();
       });
+
       expect(result).toEqual({ outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'auto-reply (RFC 3834)' });
     }
+
     expect(resolves).toBe(0);
   });
 
@@ -465,6 +505,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     const result = await routeInboundEmail(
       mockMessage({ headers: { 'auto-submitted': 'no' } }), DOMAIN, async () => target(),
     );
+
     expect(result).toEqual({ outcome: 'admitted', agent: 'scout-a1b2c3' });
   });
 
@@ -472,6 +513,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     const result = await routeInboundEmail(mockMessage(), DOMAIN, async () => target({
       acceptEmailDelivery: async () => ({ admitted: false, reason: 'inbound email rate limit exceeded' }),
     }));
+
     expect(result).toEqual({
       outcome: 'dropped', agent: 'scout-a1b2c3', reason: 'inbound email rate limit exceeded',
     });
@@ -483,6 +525,7 @@ describe('routeInboundEmail — the Worker seam', () => {
     // owner/allowlist comparison ran inside the agent, after the parse.
     let pulled = false;
     const message = mockMessage({ from: 'stranger@elsewhere.example' });
+
     const watched = {
       ...message,
       // `highWaterMark: 0` so nothing is pulled until a READER asks, which is
@@ -506,13 +549,19 @@ describe('routeInboundEmail — the Worker seam', () => {
 
   test('a message over the byte ceiling is dropped without resolving an agent', async () => {
     let resolves = 0;
+
     // Sized clearly over any ceiling the route sets. The ceiling itself is
     // read from the refusal the route hands back, never restated here.
     const result = await routeInboundEmail(
       mockMessage({ rawSize: 10 * 1024 * 1024 }),
       DOMAIN,
-      async () => { resolves++; return target(); },
+      async () => {
+        resolves++;
+
+        return target();
+      },
     );
+
     expect(result).toEqual({
       outcome: 'dropped',
       agent: 'scout-a1b2c3',
@@ -527,15 +576,22 @@ describe('routeInboundEmail — the Worker seam', () => {
     // than assembled. Sized clearly over, for the same reason as above.
     const oversize = 'x'.repeat(3 * 1024 * 1024);
     const body = new Response(`Subject: big\r\n\r\n${oversize}`).body;
+
     if (!body) throw new Error('expected response body stream');
     let parsedFor: string | null = null;
+
     const result = await routeInboundEmail(
       { ...mockMessage(), raw: body, rawSize: 10 },
       DOMAIN,
       async () => target({
-        acceptEmailDelivery: async (opts) => { parsedFor = opts.from; return { admitted: true }; },
+        acceptEmailDelivery: async (opts) => {
+          parsedFor = opts.from;
+
+          return { admitted: true };
+        },
       }),
     );
+
     expect(result.outcome).toBe('dropped');
     expect(result.reason).toContain('message over the 2 MiB inbound limit');
     expect(parsedFor).toBeNull();

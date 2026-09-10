@@ -8,6 +8,7 @@ function modelCallingFile() {
   return scriptedTurnModel({ doGenerate: options => {
     const call = options.tools?.some(tool => tool.name === 'file')
       && !options.prompt.some(message => message.role === 'tool');
+
     return {
       content: call
         ? [{ type: 'tool-call', toolCallId: 'native-file-refusal', toolName: 'file', input: JSON.stringify({ action: 'transmogrify', path: '/' }) }]
@@ -22,10 +23,13 @@ function modelCallingFile() {
 function assertNativeFeedback(model: MockLanguageModelV3) {
   const next = model.doStreamCalls.find(call => call.prompt.some(message => message.role === 'tool'));
   const outputs = next?.prompt.flatMap(message => message.role === 'tool' ? message.content : []);
+
   const call = next?.prompt.flatMap(message => message.role === 'assistant' ? message.content : [])
     .find(part => part.type === 'tool-call' && part.toolName === 'file');
+
   if (call?.type !== 'tool-call') throw new Error('the next request lost its native tool call');
   const result = outputs?.find(part => part.type === 'tool-result' && part.toolCallId === call.toolCallId);
+
   if (result?.type !== 'tool-result' || result.output.type !== 'error-json') throw new Error('native error output was not structured');
   expect(JSON.stringify(result.output.value)).toStartWith('{"reason":');
   expect(outputs).toEqual(expect.arrayContaining([expect.objectContaining({
@@ -52,10 +56,12 @@ test('a delegated turn sends the same typed native error feedback in its NEXT pr
   // builder, which is what makes the refusal the loop's own rather than a
   // fixture's.
   const workspace = orchestratorHarness();
+
   const child = await hostedSubordinateHarness(workspace, {
     name: 'error-prover', displayName: 'Error prover', nameOrigin: 'user',
     mission: 'Try the file operation.',
   });
+
   const model = modelCallingFile();
   workspace.agent.overrideProviderRegistry({
     registry: createProviderRegistry(),

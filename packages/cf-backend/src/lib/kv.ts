@@ -31,7 +31,9 @@ export async function readKvJson<Schema extends v.GenericSchema>(
   schema: Schema,
 ): Promise<v.InferOutput<Schema> | null> {
   const raw = await kv.get(key);
+
   if (raw === null) return null;
+
   return v.parse(schema, JSON.parse(raw));
 }
 

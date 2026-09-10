@@ -49,12 +49,15 @@ function sandbox(): Sandbox {
   // catch it being wrong. Absent, this suite must not run at all rather than
   // measure a torn write that reports success.
   const transactionSync = localTransactions(db).storage?.transactionSync;
+
   if (transactionSync === undefined) {
     throw new Error('the local workspace exposes no synchronous transaction, so batch atomicity cannot be measured');
   }
+
   const sql = schemaSql.sql;
   initWorkspaceSchema(schemaSql);
   const actors = createTestActors(sql, schemaSql.execRaw);
+
   return {
     db, sql, actors,
     run: (code, actor = actors.main) => {
@@ -64,11 +67,13 @@ function sandbox(): Sandbox {
         events: () => new RunEventRecorder(sql, actor),
         runId: () => WORKSPACE_RUN_ID,
       });
+
       // `extraProviders` is the seam the production sites bind a codemode
       // namespace through (`local-session.ts`, `head-runtime.ts`);
       // `surface.providers` is the EXECUTOR list and takes a different shape.
       const factory = createNodeExecuteToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
       const tool = factory({ native: {}, craftedTools: () => ({}), providers: [] });
+
       return toolExecute(tool)({ code });
     },
     close: () => db.close(),
@@ -78,6 +83,7 @@ function sandbox(): Sandbox {
 describe('db.* in the local codemode sandbox', () => {
   test('a program declares a table, fills it and reads it back in one call', async () => {
     const s = sandbox();
+
     try {
       const out = await s.run(`
         // Record this run's findings so the next turn can query them
@@ -121,6 +127,7 @@ describe('db.* in the local codemode sandbox', () => {
 
   test('bytes survive the JSON boundary as base64 and are stored as a blob', async () => {
     const s = sandbox();
+
     try {
       const out = await s.run(`
         // Keep a small binary artefact beside its name
@@ -135,6 +142,7 @@ describe('db.* in the local codemode sandbox', () => {
         const [row] = await db.select('artefacts');
         return { sent: encoded, back: row.bytes, same: row.bytes === encoded };
       `);
+
       expect(out.error).toBeUndefined();
       expect(out.result).toMatchObject({ same: true });
       expect(s.sql<{ kind: string; size: number }>`
@@ -147,6 +155,7 @@ describe('db.* in the local codemode sandbox', () => {
 
   test('an all-or-nothing batch rolls back and the program keeps running', async () => {
     const s = sandbox();
+
     try {
       const out = await s.run(`
         // Write three rows atomically, then observe the refusal of a bad batch
@@ -185,6 +194,7 @@ describe('db.* in the local codemode sandbox', () => {
 
   test('a program handles a refusal and the enclosing call still succeeds', async () => {
     const s = sandbox();
+
     try {
       const out = await s.run(`
         // Try the host's own tables, then do the work that is actually allowed
@@ -223,6 +233,7 @@ describe('db.* in the local codemode sandbox', () => {
 
   test('two actors run the same program over one database and see only their own rows', async () => {
     const s = sandbox();
+
     try {
       const program = `
         // Claim a slot under a name every agent uses
@@ -233,6 +244,7 @@ describe('db.* in the local codemode sandbox', () => {
         await db.insert('slots', [{ slot: 'primary', owner: OWNER }]);
         return await db.select('slots');
       `;
+
       const scout = s.actors.sibling('scout');
       const mine = await s.run(program.replace('OWNER', "'main'"));
       const theirs = await s.run(program.replace('OWNER', "'scout'"), scout);
@@ -253,6 +265,7 @@ describe('db.* in the local codemode sandbox', () => {
 
   test('every landed mutation leaves one db_op event and a refused one leaves none', async () => {
     const s = sandbox();
+
     try {
       await s.run(`
         // Two writes that land and one batch that does not
@@ -264,9 +277,11 @@ describe('db.* in the local codemode sandbox', () => {
           { op: 'insert', table: 'events', rows: [{ k: 'b' }] },
         ]);
       `);
+
       const recorded = new RunEventRecorder(s.sql, s.actors.main)
         .read(WORKSPACE_RUN_ID, { limit: 50 })
         .flatMap((event) => (event.type === 'db_op' ? [`${event.op}:${event.rowsAffected}:${String(event.batch)}`] : []));
+
       expect(recorded).toEqual(['createTable:0:null', 'insert:1:null', 'delete:1:null']);
     }
     finally { s.close(); }

@@ -71,16 +71,19 @@ interface CircularValue {
 // executor factory that cli-backend ships in production.
 const nodeCraftedExecute: CraftedToolExecute = (t) => {
   let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
+
   return async (arg) => {
     if (!compiled) {
       const evaluated = v.parse(v.function(), new Function('return (' + t.code + ')')());
       compiled = async (input) => {
         const result = await evaluated(input);
+
         return v.safeParse(v.undefined(), result).success
           ? undefined
           : projectJsonValue({ value: result });
       };
     }
+
     return compiled(arg);
   };
 };
@@ -97,14 +100,18 @@ const nodeExecBuilder: ExecuteToolsBuilder = (surface) => {
         // bound under the ONE namespace core declares. A double that also bound
         // `codemode` would keep passing after the alias was removed.
         const crafted: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
+
         for (const [name, entry] of Object.entries(surface.craftedTools())) {
           crafted[name] = entry.execute;
         }
+
         const fn = new Function('workspace', 'tools', 'return (async () => { ' + a.code + ' })()');
         const rawResult = await fn({}, crafted);
+
         const result = v.safeParse(v.undefined(), rawResult).success
           ? undefined
           : projectJsonValue({ value: rawResult });
+
         return { result };
       } catch (error) {
         return { result: undefined, error: error instanceof Error ? error.message : String(error) };
@@ -132,14 +139,18 @@ function tools(
 // agents, web and report are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
 const CONDITIONAL_TOOLS = ['agents', 'web', 'report'] as const;
+
 const CONDITIONAL_TOOL_NAMES = new Set<string>(CONDITIONAL_TOOLS);
+
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (name) => !CONDITIONAL_TOOL_NAMES.has(name),
 );
 
 function codemodeExecute(provider: CodemodeProvider, name: string): (...args: JsonValue[]) => Promise<object | string | number | boolean | null | undefined> {
   const entry = provider.tools[name];
+
   if (!entry) throw new Error(`Expected ${provider.name}.${name} to be registered`);
+
   return async (...args) => await entry.execute(...args);
 }
 
@@ -150,24 +161,29 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const names = Object.keys(t);
 
     for (const canonical of BASE_TOOLS) expect(names).toContain(canonical);
+
     for (const conditional of CONDITIONAL_TOOLS) expect(names).not.toContain(conditional);
     expect(names.length).toBe(BASE_TOOLS.length);
   });
 
   test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
+
     const stubFacts = {
       upsert: () => 'created' as const, recall: () => null, forget: () => {},
       recentTopK: () => [], all: () => [],
     };
+
     const stubWebSearch = {
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
     };
+
     const stubHandoff = {
       eventId: 'evt-1', delivery: 'starts_now' as const,
       phase: { busy: false, lastActivityAt: null, workingOn: null },
     };
+
     const stubTeam: TeamToolDeps = {
       delegation: ROOT_DELEGATION_BUDGET,
       snapshot: () => [],
@@ -191,6 +207,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       message: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
     };
+
     const stubPeers = {
       listPeers: async () => [],
       ask: async () => ({ status: 'replied' as const, from: 'a', reply: 'stub' }),
@@ -200,9 +217,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         agent: 'a', created: true, status: 'replied' as const, from: 'a', reply: 'stub',
       }),
     };
+
     const stubReport = {
       report: async () => ({ delivered: true }),
     };
+
     const t = buildActorTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
@@ -216,7 +235,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       // backends give it rather than a stand-in that records nothing.
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     });
+
     const names = Object.keys(t);
+
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
     expect(names.length).toBe(BUILTIN_TOOLS.length);
   });
@@ -224,6 +245,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('each tool carries description + inputSchema', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
+
     for (const [, entry] of Object.entries(t)) {
       expect(entry.description).toMatch(/\S/);
       // Every schema arrives as a JSON Schema object the provider validates arguments against.
@@ -272,19 +294,23 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('memory keyed-fact actions round-trip through the facts store', async () => {
     const { rt } = createTestRuntime();
     const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
+
     const facts = {
       upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
         store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+
         return 'created' as const;
       },
       recall: (key: string) => store.get(key) ?? null,
       forget: (key: string) => { store.delete(key); },
       recentTopK: () => [], all: () => [],
     };
+
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
       facts,
     });
+
     const memory = { execute: toolExecute<MemoryToolInput, JsonValue>(t.memory) };
 
     expect(await memory.execute({ action: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 }))
@@ -307,21 +333,25 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // The byte-stable cache prefix advertises BUILTIN_TOOL_DESCRIPTIONS.memory;
     // the tool composes its own from the same spec, so the two must not drift.
     const { rt } = createTestRuntime();
+
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
+
     expect(t.memory.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
   });
 
   test('without a facts store the keyed-fact actions are not on the schema', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
+
     const schema = v.parse(v.object({
       jsonSchema: v.object({
         properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
       }),
     }), t.memory.inputSchema);
+
     expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
     // ...and the docstring does not advertise what the runtime cannot do.
     expect(t.memory.description).not.toContain('remember');
@@ -339,23 +369,28 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     userPrompt: 'ship it', plan: null, summary: null, patch: null, previewUrl: null,
     createdAt: 1, updatedAt: 1,
   };
+
   const releaseSource: ReleaseSource = {
     id: 'src-1', kind: 'local', label: 'workspace', repoUrl: null,
     defaultBranch: null, localDeviceId: null, localRoot: '/workspace',
     deployTarget: null, createdAt: 1, updatedAt: 1,
   };
+
   const releaseCheck: ReleaseCheck = {
     id: 'chk-1', changeId: 'chg-1', name: 'tests', status: 'passed',
     stdout: null, stderr: null, durationMs: null, createdAt: 1, updatedAt: 1,
   };
+
   const releaseApproval: ReleaseApproval = {
     id: 'approval-1', changeId: 'chg-1', approvalType: 'apply', decision: 'pending',
     approvedBy: null, note: null, argumentDigest: 'digest', createdAt: 1, decidedAt: null,
   };
+
   const releaseDeployment: ReleaseDeployment = {
     id: 'deployment-1', changeId: 'chg-1', environment: 'local',
     workerVersionId: null, deploymentId: null, rollbackTarget: null, deployedAt: 1,
   };
+
   const releaseLedgerDeps: ReleaseToolDeps = {
     board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
     bindSource: async () => releaseSource, create: async () => releaseChange,
@@ -379,6 +414,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         rollback: async () => ({ ok: true, restored: 'abc1234', verified: true, status: 'rolled_back' }),
       },
     };
+
     const provider = createReleaseCodemodeProvider(() => deps);
     expect(Object.keys(provider.tools).sort()).toEqual([
       'apply', 'bindSource', 'board', 'create', 'deploy', 'preview',
@@ -405,18 +441,23 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('release.* members dispatch through the SAME runReleaseAction the provider is built on', async () => {
     const recorded: RecordedReleaseCheck[] = [];
+
     const deps: ReleaseToolDeps = {
       ...releaseLedgerDeps,
       recordCheck: async (changeId, input) => {
         recorded.push({ changeId, input });
+
         return releaseCheck;
       },
     };
+
     const provider = createReleaseCodemodeProvider(() => deps);
+
     const result = await codemodeExecute(provider, 'recordCheck')(
       'chg-1',
       { name: 'tests', status: 'passed' },
     );
+
     expect(result).toEqual(releaseCheck);
     expect(recorded).toEqual([{ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } }]);
     // The dispatcher's own validation still applies — a missing changeId
@@ -427,10 +468,12 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('with an engine, record_check is refused as an assertion — run_checks earns it', async () => {
     let called = 0;
+
     const deps: ReleaseToolDeps = {
       ...releaseLedgerDeps,
       recordCheck: async () => {
         called += 1;
+
         return releaseCheck;
       },
       engine: {
@@ -444,9 +487,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         rollback: async () => ({ ok: true, restored: 'abc1234', verified: true, status: 'rolled_back' }),
       },
     };
+
     const result = await runReleaseAction(deps, {
       action: 'record_check', changeId: 'chg-1', check: { name: 'tests', status: 'passed' },
     });
+
     expect(result).toMatchObject({ error: expect.stringContaining('action=run_checks') });
     expect(called).toBe(0);
   });
@@ -470,23 +515,28 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
     const { rt } = createTestRuntime();
     const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
+
     const facts = {
       upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
         store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+
         return 'created' as const;
       },
       recall: (key: string) => store.get(key) ?? null,
       forget: (key: string) => { store.delete(key); },
       recentTopK: () => [], all: () => [],
     };
+
     const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts }));
     expect(Object.keys(provider.tools)).toContain('remember');
     await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
     expect(store.get('user.tz')?.value).toBe('UTC');
+
     const recalled = v.parse(v.object({
       found: v.boolean(), key: v.string(), value: v.unknown(), confidence: v.number(),
       source: v.string(), lastObservedAt: v.number(),
     }), await codemodeExecute(provider, 'recall')('user.tz'));
+
     expect(recalled).toEqual({ found: true, key: 'user.tz', value: 'UTC', confidence: 0.9, source: 'tool', lastObservedAt: 7 });
     await codemodeExecute(provider, 'forget')('user.tz');
     expect(store.has('user.tz')).toBe(false);
@@ -497,7 +547,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('report.* dispatches through the SAME ReportToolDeps.report the native `report` tool calls', async () => {
     let captured = {} satisfies { status?: string; content?: string };
-    const deps = { report: async (input: { status: 'progress' | 'completed' | 'blocked'; content: string }) => { captured = input; return { delivered: true }; } };
+
+    const deps = { report: async (input: { status: 'progress' | 'completed' | 'blocked'; content: string }) => {
+      captured = input;
+
+      return { delivered: true };
+    } };
+
     const provider = createReportCodemodeProvider(() => deps);
     const result = await codemodeExecute(provider, 'send')('completed', 'Fix landed; tests added.');
     expect(result).toEqual({ delivered: true });
@@ -506,7 +562,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
     const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
-    const deps: ReportToolDeps = { report: async (input) => { delivered.push(input); return { ok: true }; } };
+
+    const deps: ReportToolDeps = { report: async (input) => {
+      delivered.push(input);
+
+      return { ok: true };
+    } };
+
     const provider = createReportCodemodeProvider(() => deps);
 
     await codemodeExecute(provider, 'send')('blocked', 'Cannot proceed.', {
@@ -532,6 +594,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('the native `report` declares the handoff fields — except to a destination that reads only the body', () => {
     const { rt } = createTestRuntime();
+
     const propertiesOf = (report: ReportToolDeps): string[] => Object.keys(v.parse(
       v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
       buildBuiltinTools({ rt, report }).report?.inputSchema,
@@ -565,6 +628,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
+
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const pending = tool.execute({ command: 'echo hi', runtime });
       await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
@@ -579,6 +643,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const escalations = new TurnEscalationLedger();
     const t = tools(rt, escalations);
+
     const tool = {
       execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.run),
     };
@@ -625,9 +690,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
+
     const result = await tool.execute({
       code: "return typeof workspace + ',' + typeof tools;",
     });
+
     expect(result.result).toBe('object,object');
   });
 
@@ -639,9 +706,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     });
 
     const t = tools(rt);
+
     const tool = {
       execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.execute_tools),
     };
+
     const result = await tool.execute({ code: 'return await tools.double(21);' });
     expect(result.error).toBeUndefined();
     expect(result.result).toBe(42);
@@ -674,12 +743,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
     let injected: string[] = [];
+
     try {
       buildActorTools({
         rt,
         craftedToolExecute: nodeCraftedExecute,
         executeTools: (surface) => {
           injected = Object.keys(surface.craftedTools());
+
           return nodeExecBuilder(surface);
         },
         effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
@@ -687,6 +758,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     } finally {
       restore();
     }
+
     expect(injected).not.toContain('run');
     expect(injected).not.toContain('mcp_github_get');
     const skipped = log.emitted.filter((entry) => entry.event === 'craft.tool_skipped');
@@ -716,6 +788,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
 
   test('an excluded capability loses its namespace, not just its tool', () => {
     const narrowing = narrowToolSurface(RESTRICTED);
+
     // The pairs written out rather than re-derived from TOOL_REACH: the test
     // states which namespace each excluded capability owns, so a table that
     // silently re-pointed one would fail here instead of agreeing with itself.
@@ -726,6 +799,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       expect(narrowing.allowsTool(capability)).toBe(false);
       expect(narrowing.allowsNamespace(namespace)).toBe(false);
     }
+
     // And the providers actually go, which is the form a backend consumes:
     // handing this list to `execute_tools` is what binds the namespaces.
     expect(narrowing.narrowProviders([
@@ -773,9 +847,11 @@ describe('a role narrows the sandbox as well as the tool list', () => {
 
   test('the codemode-only set is derived from the reach table, not restated', () => {
     const nonNative = Object.entries(TOOL_REACH).filter(([, reach]) => !reach.native);
+
     const everyNamespace = [...new Set(
       nonNative.flatMap(([, reach]) => reach.codemode === null ? [] : [reach.codemode]),
     )].map((name) => ({ name }));
+
     expect([...codemodeCapabilitiesFor(everyNamespace)].sort())
       .toEqual(nonNative.map(([name]) => name).sort());
   });
@@ -799,14 +875,17 @@ describe('a role narrows the sandbox as well as the tool list', () => {
    *  the difference between "cannot be called" and "answers nothing". */
   function sandboxOver(providers: readonly CodemodeProvider[]): (code: string) => Promise<string> {
     const names = providers.map((p) => p.name);
+
     const values = providers.map((p) => Object.fromEntries(
       Object.entries(p.tools).map(([member, entry]) => [member, entry.execute]),
     ));
+
     // Parsed on the way out rather than asserted: every program below answers a
     // string, and a program that stopped doing so should fail here by name
     // instead of flowing on as an unchecked value.
     return async (code) => {
       const fn = new Function(...names, `return (async () => { ${code} })()`);
+
       return v.parse(v.string(), await fn(...values));
     };
   }
@@ -823,6 +902,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       provider('tasks', 'add', 'listed'),
       provider('workspace', 'readFile', 'bytes'),
     ];
+
     const narrowed = narrowToolSurface(RESTRICTED).narrowProviders(providers);
     const run = sandboxOver(narrowed);
 

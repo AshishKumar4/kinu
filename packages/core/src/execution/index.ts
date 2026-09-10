@@ -12,25 +12,34 @@ export type {
   ResourceLimits,
   ExecutionRouter,
 } from './types';
+
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
 
 export {
   commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './exec-result';
+
 export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
 } from './escalation';
+
 export { DefaultExecutionRouter } from './router';
+
 export { createInlineExecutor, type InlineExecutorDeps } from './inline';
+
 export { withApprovalGatedShell, gateProviderExec } from './approval';
+
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR,
 } from './sandbox';
+
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';
+
 export { explainNativeToolReferenceError } from './sandbox-errors';
+
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   deviceToolchainAnswer, freshDeviceToolchain,
@@ -44,10 +53,12 @@ export {
   type DeviceTier, type DeviceMode, type DeviceSandboxStatus,
   type DeviceSandboxCapability, type DeviceSandboxReason,
 } from './device-status';
+
 export {
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_PROBED_CAPABILITIES,
   TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
 } from './toolchain';
+
 export {
   DeviceTunnel, type TunnelSocket,
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
@@ -83,7 +94,11 @@ export {
   type ParentWorkspaceHandle, type ParentExecResult,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './parent';
+
 export { sandboxFiles } from './sandbox';
+
 export { nimbusSessionFiles } from './nimbus';
+
 export { AGENT_FS_CHUNK_BYTES } from './nimbus-agent-files';
+
 export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';

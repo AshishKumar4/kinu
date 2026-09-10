@@ -99,6 +99,7 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
         observe: (s) => {
           const messages = toolHeavyConversation();
           const turns = s.kinuCodec.encode(messages);
+
           return {
             topology: turns.map((t) => ({ role: t.role, items: t.items.map((i) => i.kind) })),
             keysContentDerived: JSON.stringify(turns.map((t) => t.key))
@@ -123,8 +124,10 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
         observe: (s) => {
           const turns = s.kinuCodec.encode(toolHeavyConversation());
           const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, kinuSpec);
+
           if (!plan) return { plan: null };
           const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
+
           return {
             stages: plan.stages.map((r) => ({ name: r.name, status: r.status, cleared: r.clearedTokens > 0 })),
             rawTailStartIndex: plan.rawTailStartIndex,
@@ -142,13 +145,16 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
         observe: (s) => {
           const turns = s.kinuCodec.encode(toolHeavyConversation());
           const plan = s.buildPlan(turns, { ...PLAN_INPUTS }, kinuSpec);
+
           if (!plan) return { plan: null };
           const snapshot = toPlanSnapshot(plan);
           const transformed = s.transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
           const replayed = s.replayPlanSnapshot(turns, snapshot, kinuSpec);
+
           const rewritten = s.kinuCodec.encode([
             { role: 'user', content: 'a completely different history' },
           ]);
+
           return {
             matches: s.matchesPlanSnapshot(turns, snapshot),
             byteStable: replayed !== null && visible(s, replayed) === visible(s, transformed),

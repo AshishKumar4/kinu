@@ -124,13 +124,16 @@ const OutcomeSchema = v.pipe(
  */
 export function outcomeRow(outcome: TaskOutcome): EvalScoreRow {
   const parsed = v.safeParse(OutcomeSchema, outcome);
+
   if (!parsed.success) {
     throw new Error(
       `invalid ${TASK_OUTCOME} verdict: ${parsed.issues.map((i) => i.message).join('; ')} `
       + `(received reached=${String(outcome.reached)}, total=${String(outcome.total)})`,
     );
   }
+
   const { reached, total, detail, measured } = parsed.output;
+
   const row: EvalScoreRow = {
     name: TASK_OUTCOME,
     asserts: 'the agent solved the task, measured against the task\'s own ground truth',
@@ -139,6 +142,7 @@ export function outcomeRow(outcome: TaskOutcome): EvalScoreRow {
     rate: reached / total,
     detail,
   };
+
   return measured === undefined ? row : { ...row, measured };
 }
 
@@ -162,9 +166,11 @@ export function subgoalsOutcome(
   subgoals: readonly EvalSubgoal[], measured?: Readonly<Record<string, number>>,
 ): TaskOutcome {
   const reached = subgoals.filter((subgoal) => subgoal.reached).length;
+
   const detail = subgoals
     .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`)
     .join('; ');
+
   return subgoalOutcome(reached, subgoals.length, detail, measured);
 }
 
@@ -198,6 +204,7 @@ export function ratioOutcome(
       + 'quantities in `measured` so the ratio can be re-derived.',
     );
   }
+
   return subgoalOutcome(Math.round(score * OUTCOME_SCALE), OUTCOME_SCALE, detail, measured);
 }
 
@@ -252,6 +259,7 @@ export interface BudgetMeasurement {
 /** One dimension's verdict, rendered into the row's detail line. */
 function budgetLine(name: string, limit: number, actual: number, unit: string): string {
   const verdict = actual <= limit ? 'ok' : 'OVER';
+
   return `${name} ${verdict} ${String(actual)}${unit}/${String(limit)}${unit}`;
 }
 
@@ -275,17 +283,22 @@ export function budgetRow(budget: EvalBudget, measured: BudgetMeasurement): Eval
   const lines: string[] = [];
   let eligible = 0;
   let passed = 0;
+
   const hold = (within: boolean, line: string): void => {
     eligible += 1;
+
     if (within) passed += 1;
     lines.push(line);
   };
+
   if (budget.steps !== undefined) {
     hold(measured.steps <= budget.steps, budgetLine('steps', budget.steps, measured.steps, ''));
   }
+
   if (budget.tokens !== undefined) {
     hold(measured.tokens <= budget.tokens, budgetLine('tokens', budget.tokens, measured.tokens, ''));
   }
+
   if (budget.toolErrorRate !== undefined) {
     if (measured.toolErrorRate === null) {
       lines.push('toolErrorRate UNMEASURED — no attributed tool outcome to take a rate over');
@@ -296,14 +309,17 @@ export function budgetRow(budget: EvalBudget, measured: BudgetMeasurement): Eval
         + `${rate.toFixed(3)}/${budget.toolErrorRate.toFixed(3)}`);
     }
   }
+
   if (budget.wallMs !== undefined) {
     hold(measured.wallMs <= budget.wallMs, budgetLine('wall', budget.wallMs, measured.wallMs, 'ms'));
   }
+
   const quantities = {
     steps: measured.steps,
     tokens: measured.tokens,
     wallMs: measured.wallMs,
   };
+
   const row: EvalScoreRow = {
     name: BUDGET_ADHERENCE,
     asserts: 'the episode stayed inside the ceilings its case declared for steps, tokens, '
@@ -314,7 +330,9 @@ export function budgetRow(budget: EvalBudget, measured: BudgetMeasurement): Eval
     detail: lines.length === 0 ? 'no ceiling declared — cost measured, held to nothing' : lines.join('; '),
     measured: quantities,
   };
+
   if (measured.toolErrorRate === null) return row;
+
   return { ...row, measured: { ...quantities, toolErrorRate: measured.toolErrorRate } };
 }
 
@@ -334,7 +352,9 @@ export function measuredToolErrorRate(rows: readonly EvalScoreRow[]): number | n
   // the suite's judge panel already selects scorers by these literals, so this
   // follows that convention rather than importing the scorer module here.
   const row = rows.find((candidate) => candidate.name === 'tool_outcomes');
+
   if (row === undefined || row.eligible === 0 || row.rate === null) return null;
+
   return 1 - row.rate;
 }
 
@@ -393,6 +413,7 @@ export const OUTPUT_CAP = 'output_cap';
  */
 export function outputCapRow(reason: string | null): EvalScoreRow {
   const asserts = 'the provider did not end the episode at its output limit';
+
   if (reason === null) {
     return {
       name: OUTPUT_CAP,
@@ -403,7 +424,9 @@ export function outputCapRow(reason: string | null): EvalScoreRow {
       detail: 'UNMEASURED — the episode closed no step, so it has no last finish reason to read',
     };
   }
+
   const capped = reason === OUTPUT_LIMIT_REACHED;
+
   return {
     name: OUTPUT_CAP,
     asserts,

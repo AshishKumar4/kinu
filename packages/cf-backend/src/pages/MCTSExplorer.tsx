@@ -43,6 +43,7 @@ export default function MCTSExplorer() {
     state.isStreaming,
     state.backgroundJobs,
   );
+
   const exact = useExactForkRun(state.rpc, runId, hasActiveWork);
   /**
    * With no `?run=`, the newest search is what the reader came to look at — but
@@ -57,15 +58,18 @@ export default function MCTSExplorer() {
   useEffect(() => {
     if (implied === null && newest !== null) setImplied(newest.id);
   }, [implied, newest]);
+
   const run = runId === null
     ? (runs?.find((entry) => entry.id === implied) ?? newest)
     : exact.run;
+
   // The permalink read answers the composed row — parameters and frontier with
   // it — while the list answers summaries. The drill-down shows what its own
   // read carried; the list path keeps the disclosure it has today.
   const entry = runId === null ? null : exact.entry;
   const selectionResource = runId === null ? resource : exact.resource;
   const reloadSelection = runId === null ? reload : exact.reload;
+
   const requestedRunMissing = runId !== null
     && exact.resource.status === "ready"
     && exact.run === null;
@@ -128,13 +132,16 @@ function ExplorerBody({
   frontier: ExplorationFrontier | null;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
   const {
     tree, headRun, resolution, fanIn, why, refusal, resource, reload,
   } = useForkRunTree(run, state.rpc, state.mctsTrees.get(run.id) ?? null, hasActiveWork);
+
   const liveness = runLiveness(headRun);
   const stats = tree ? treeStats(tree) : null;
   const winner = tree ? terminalForkNode(tree) : null;
   const selected = tree && selectedId ? findForkNode(tree, selectedId) : null;
+
   // One search, so one band. The canvas renderer takes a list because the
   // Exploration surface draws every search at once; drilling into one is that
   // same renderer with a list of one, never a second rendering of the tree.
@@ -148,6 +155,7 @@ function ExplorerBody({
       : [],
     [tree, run, liveness, refusal, fanIn, why],
   );
+
   const selection: ExplorerSelection | null =
     selectedId === null ? null : { runId: run.id, nodeId: selectedId };
 

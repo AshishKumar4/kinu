@@ -67,6 +67,7 @@ export function publicHtmlHeaders() {
  */
 function appDocumentCsp(url: URL, previewOrigin: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";
+
   return [
     ...BASE_CSP,
     // The chat transport is a WebSocket to this same host. CSP 3 folds ws/wss
@@ -98,8 +99,10 @@ export function withAppSecurityHeaders(
 ): Response {
   if (!response.headers.get('content-type')?.includes('text/html')) return response;
   const headers = new Headers(response.headers);
+
   for (const [key, value] of Object.entries(BASE_HEADERS)) headers.set(key, value);
   headers.set('content-security-policy', appDocumentCsp(url, previewOrigin));
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

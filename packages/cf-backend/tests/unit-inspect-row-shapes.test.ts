@@ -48,15 +48,19 @@ const CLOUD_READ_OR_PRINTER = /target\.cloudName,\s*'([A-Za-z0-9_]+)'|print(Rows
 function cloudRowReads(source: string): string[] {
   const rowReads: string[] = [];
   let unprinted: string[] = [];
+
   for (const marker of source.matchAll(CLOUD_READ_OR_PRINTER)) {
     const [, readName, printer] = marker;
+
     if (readName !== undefined) {
       unprinted.push(readName);
       continue;
     }
+
     if (printer === 'Rows') rowReads.push(...unprinted);
     unprinted = [];
   }
+
   return rowReads.sort();
 }
 
@@ -96,6 +100,7 @@ function orchestratorWithOneEvent(): HarnessOrchestratorAgent {
     operator_user_id: 'harness-owner',
     session_id: 'harness-session',
   }, SEEDED_AT);
+
   return agent;
 }
 

@@ -27,17 +27,21 @@ const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-test-'));
 // envelopes and deliver the two the shipped worker deliberately never emits (a
 // falsy-but-present error, a missing result).
 const realFork = childProcess.fork;
+
 let lastForked: ChildProcess | null = null;
+
 await mock.module('node:child_process', () => ({
   ...childProcess,
   fork: (...args: Parameters<typeof childProcess.fork>): ChildProcess => {
     lastForked = realFork(...args);
+
     return lastForked;
   },
 }));
 
 function forkedChild(): ChildProcess {
   if (!lastForked) throw new Error('the spawner forked no child process');
+
   return lastForked;
 }
 
@@ -52,9 +56,13 @@ function forkedChild(): ChildProcess {
 // the search ledger the branch's own rollouts land in is initialised here.
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
+
 const parentDbPath = `${dir}.db`;
+
 const parentDb = new Database(parentDbPath, { create: true });
+
 const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+
 initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
@@ -68,7 +76,9 @@ const replySchema = v.object({
   result: v.optional(JsonValueSchema),
   error: v.optional(v.string()),
 });
+
 const wireBodySchema = v.record(v.string(), JsonValueSchema);
+
 const wireMessagesSchema = v.array(v.object({ role: v.string(), content: v.string() }));
 
 /** What the endpoint answers with: a completion, or an upstream failure. */
@@ -78,7 +88,9 @@ interface ModelReply {
 }
 
 const BRANCH_ANSWER = 'one read-only approach: parse with a PEG, verify against the fixture corpus';
+
 const HISTORY = [{ role: 'user', content: 'ship a parser' }];
+
 const LANGUAGES: [string, ...string[]] = ['typescript'];
 
 /**
@@ -89,6 +101,7 @@ const LANGUAGES: [string, ...string[]] = ['typescript'];
  */
 function startModelEndpoint() {
   const bodies: Array<Record<string, JsonValue>> = [];
+
   const reply: ModelReply = {
     status: 200,
     body: {
@@ -100,13 +113,16 @@ function startModelEndpoint() {
       usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
     },
   };
+
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       bodies.push(v.parse(wireBodySchema, await request.json()));
+
       return Response.json(reply.body, { status: reply.status });
     },
   });
+
   return {
     bodies,
     reply,
@@ -123,6 +139,7 @@ function startModelEndpoint() {
 async function spawnWorker() {
   const spawner = createBranchSpawner(parentDbPath, { llm: null, parent: parentRuntime.actor });
   const handle = await spawner.spawn('protocol-only');
+
   return { proc: forkedChild(), release: () => handle.release() };
 }
 
@@ -135,6 +152,7 @@ describe('branch-worker protocol — no self-rating', () => {
     const endpoint = startModelEndpoint();
     const { spawn, abort } = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('uncapped-branch');
+
     try {
       const exploration = await handle.explore(HISTORY, [], LANGUAGES, 'plan', []);
       expect(exploration.text).toBe(BRANCH_ANSWER);
@@ -146,6 +164,7 @@ describe('branch-worker protocol — no self-rating', () => {
     }
 
     expect(endpoint.bodies).toHaveLength(2);
+
     for (const body of endpoint.bodies) {
       expect(body.model).toBe('test-model');
       // An output cap on a whole exploration truncates the proposal mid-sentence
@@ -153,6 +172,7 @@ describe('branch-worker protocol — no self-rating', () => {
       expect(body).not.toHaveProperty('max_tokens');
       expect(body).not.toHaveProperty('max_completion_tokens');
     }
+
     // Reflection is about the attempt THIS branch made — its own trace row, not
     // the bare task string.
     const reflectMessages = v.parse(wireMessagesSchema, endpoint.bodies[1]?.messages);
@@ -162,10 +182,13 @@ describe('branch-worker protocol — no self-rating', () => {
   test("an 'evaluate' message is not in the protocol, so the worker answers nothing", async () => {
     const { proc, release } = await spawnWorker();
     const seen: Array<JsonValue> = [];
+
     const listener = (message: JsonValue): void => {
       seen.push(message);
     };
+
     proc.on('message', listener);
+
     try {
       proc.send({ method: 'evaluate', id: 99, args: { task: 'rate yourself' } });
       // A real delay: the worker is a separate process, so no in-process
@@ -192,6 +215,7 @@ describe('branch-worker protocol — no self-rating', () => {
     const pid = child.pid;
     expect(pid).toBeGreaterThan(0);
     expect(child.exitCode).toBeNull();
+
     try {
       await handle.release();
       expect(child.exitCode === null && child.signalCode === null).toBe(false);
@@ -225,8 +249,10 @@ describe('branch worker failure replies', () => {
     const replies: Array<v.InferOutput<typeof replySchema>> = [];
     forkedChild().on('message', (message: JsonValue) => {
       const parsed = v.safeParse(replySchema, message);
+
       if (parsed.success) replies.push(parsed.output);
     });
+
     try {
       // A real provider failure whose own message is empty — the shape that
       // would travel back as `error: ''`.
@@ -258,6 +284,7 @@ describe('branch worker failure replies', () => {
     const { spawn, abort } = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawn('policy-branch');
     const proc = forkedChild();
+
     // The parent tags every call on a child with ascending ids from 1, and a
     // reply settles the wait with its id. This handle is fresh, so the forged
     // replies below name the reflection wait 1 and the explore wait 2.

@@ -20,14 +20,17 @@ import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity
 async function sourceWorkspace() {
   const { db, sql, vfs } = createTestWorkspace();
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
+
   const actor = new WorkspaceActorDirectory(sql, { workspaceId: 'SRC', ownerUserId: '' })
     .createMain({ name: 'atlas' });
+
   await writeSoul(vfs, sql, 'help with testing');
   // The cut is looked up in THIS actor's rows, so the seeded transcript names it.
   void sql`INSERT INTO messages (actor_id, id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
   void sql`INSERT INTO messages (actor_id, id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
+
   return { db, sql, vfs, actor };
 }
 
@@ -36,10 +39,16 @@ async function sourceWorkspace() {
 function recordingTransport(taken: readonly string[] = []) {
   const delivered: Array<{ name: string; untilMessageId: string }> = [];
   const probed: string[] = [];
+
   const transport: ForkTransport = {
-    async occupied(name) { probed.push(name); return taken.includes(name); },
+    async occupied(name) {
+      probed.push(name);
+
+      return taken.includes(name);
+    },
     async deliver(name, source) {
       delivered.push({ name, untilMessageId: source.untilMessageId });
+
       // The transport is handed sql + the cut, never an actor: the real transfer
       // resolves the source's main actor itself (`forkTransferFrames`), and this
       // recording stand-in reads the chain the same way.
@@ -47,10 +56,13 @@ function recordingTransport(taken: readonly string[] = []) {
         SELECT created_at FROM messages
         WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}
           AND id = ${source.untilMessageId} LIMIT 1`[0];
+
       if (!message) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+
       return { workspaceId: `DO-${name}`, forkPointMs: message.created_at };
     },
   };
+
   return { transport, delivered, probed };
 }
 
@@ -58,6 +70,7 @@ describe('forkWorkspace', () => {
   test('ships the source cut to the requested name and reports where it landed', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
+
     const out = await forkWorkspace(
       { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
@@ -76,6 +89,7 @@ describe('forkWorkspace', () => {
   test('an unnamed fork gets a fresh workspace address a preview hostname can carry, never pre-checked', async () => {
     const src = await sourceWorkspace();
     const t = recordingTransport();
+
     const out = await forkWorkspace(
       { sql: src.sql, actor: src.actor, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm2',
@@ -163,6 +177,7 @@ describe('forkWorkspace', () => {
   test('a transport that cannot answer the pre-check does not block the fork', async () => {
     const src = await sourceWorkspace();
     const delivered: string[] = [];
+
     const out = await forkWorkspace({
       sql: src.sql,
       actor: src.actor,
@@ -174,11 +189,14 @@ describe('forkWorkspace', () => {
         async deliver(name, source) {
           delivered.push(name);
           const row = source.sql<{ created_at: number }>`SELECT created_at FROM messages WHERE id = ${source.untilMessageId}`[0];
+
           if (!row) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
+
           return { workspaceId: 'DO-1', forkPointMs: row.created_at };
         },
       },
     }, 'm1', { name: 'my-fork' });
+
     expect(delivered).toEqual(['my-fork']);
     expect(out.workspaceId).toBe('DO-1');
     src.db.close();
@@ -199,6 +217,7 @@ describe('forkWorkspace', () => {
         async deliver(name, source) {
           const snapshot = await snapshotWorkspaceForFork(source.sql, source.vfs, source.untilMessageId);
           await writeForkSnapshot(tgt, tgtVfs, snapshot, { workspaceId: 'TGT', workspaceName: name, now: 5000 });
+
           return { workspaceId: 'TGT', forkPointMs: snapshot.cut.createdAtMs };
         },
       },

@@ -27,6 +27,7 @@ const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
  *  dialogs included, so `--c-overlay` and `--c-elevated` are in scope for
  *  them like every other surface. */
 const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
+
 const TEXT_ROLES = [
   '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent-fg',
   '--c-success', '--c-warning', '--c-danger', '--c-info',
@@ -45,15 +46,21 @@ type Rgb = { r: number; g: number; b: number; a: number };
 
 function parse(css: string): Rgb {
   const hex = css.match(/^#([0-9a-f]{6})$/i);
+
   if (hex) {
     const n = parseInt(hex[1]!, 16);
+
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 };
   }
+
   const rgb = css.match(/^rgba?\(([^)]+)\)$/i);
+
   if (rgb) {
     const [r, g, b, a] = rgb[1]!.split(',').map((v) => Number(v.trim()));
+
     return { r: r!, g: g!, b: b!, a: a ?? 1 };
   }
+
   throw new Error(`palette token is not a hex or rgb() literal: ${css}`);
 }
 
@@ -69,13 +76,16 @@ const CASCADE = [
  *  mention of itself in a comment. */
 function block(css: string, selector: string) {
   const at = css.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
+
   if (at === -1) throw new Error(`no ${selector} block in index.css`);
   const open = css.indexOf('{', at);
   let depth = 0, i = open;
+
   for (; i < css.length; i++) {
     if (css[i] === '{') depth++;
     else if (css[i] === '}' && --depth === 0) break;
   }
+
   return Object.fromEntries(
     [...css.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
   );
@@ -87,11 +97,15 @@ function block(css: string, selector: string) {
 function palette(blocks: readonly string[]) {
   const css = readFileSync(INDEX_CSS, 'utf8');
   const merged: Record<string, string> = {};
+
   for (const selector of blocks) Object.assign(merged, block(css, selector));
+
   for (const [k, v] of Object.entries(merged)) {
     const ref = v.match(/^var\((--c-[a-z0-9-]+)\)$/);
+
     if (ref) merged[k] = merged[ref[1]!]!;
   }
+
   return merged;
 }
 
@@ -104,7 +118,12 @@ const over = (fg: Rgb, bg: Rgb): Rgb => ({
 });
 
 function luminance({ r, g, b }: Rgb): number {
-  const ch = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const ch = (c: number) => {
+    const v = c / 255;
+
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+
   return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
 }
 
@@ -112,6 +131,7 @@ function contrast(fgCss: string, bgCss: string): number {
   const bg = parse(bgCss);
   const a = luminance(over(parse(fgCss), bg));
   const b = luminance(bg);
+
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
@@ -152,6 +172,7 @@ describe('palette contrast', () => {
           .map((s) => {
             const tinted = over(parse(p[`--c-${s}-tint`]!), parse(p['--c-bg']!));
             const css = `rgb(${tinted.r},${tinted.g},${tinted.b})`;
+
             return { badge: s, ratio: +contrast(p[`--c-${s}`]!, css).toFixed(2) };
           })
           .filter((r) => r.ratio < AA);

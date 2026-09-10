@@ -10,14 +10,17 @@ import {
 import type { JsonObject, JsonValue } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 // Fixed clock: a due config carries updateCheckedAt 0, a throttled one
 // carries NOW, so the 24h window is decided without reading a clock.
 const NOW = 2_000_000_000_000;
+
 const signedIn = { origin: 'https://example.test', accessToken: 'ptc_test', updateCheckedAt: 0 };
 
 function configHome(config: JsonObject): string {
   const home = scratchDir('version-check');
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+
   return home;
 }
 
@@ -45,12 +48,15 @@ async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: strin
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   if (exitCode !== 0) throw new Error(`script failed (${exitCode}): ${stderr}`);
+
   return v.parse(v.object({
     lines: v.array(v.string()),
     outcome: v.nullable(v.string()),
@@ -67,6 +73,7 @@ function homeConfig(home: string): { updateCheckedAt?: unknown; updateLatestSeen
 const serveVersion = (versionExpr: string) => `async () => new Response(JSON.stringify({ version: ${versionExpr} }), {
   headers: { 'content-type': 'application/json' },
 })`;
+
 const mustNotFetch = `async () => { throw new Error('the check must not spend a round-trip'); }`;
 
 describe('build comparison', () => {
@@ -100,10 +107,12 @@ describe('startup notice through runStartupUpdateCheck', () => {
 
   test('an unreachable origin stays silent but still throttles the next run', async () => {
     const home = configHome(signedIn);
+
     const { lines, outcome } = await runStartup(home, {
       isTTY: true,
       fetchExpr: `async () => { throw new Error('offline'); }`,
     });
+
     expect(outcome).toBeNull();
     expect(lines).toEqual([]);
     expect(homeConfig(home)).toMatchObject({ updateCheckedAt: NOW });
@@ -165,6 +174,7 @@ describe('fetchServedVersion is fail-soft', () => {
     expect(await fetchServedVersion('https://x.test', ok({ nope: true }))).toBeNull();
     expect(await fetchServedVersion('https://x.test', ok({ version: '  ' }))).toBeNull();
     const boom = async () => { throw new Error('offline'); };
+
     expect(await fetchServedVersion('https://x.test', boom)).toBeNull();
   });
 
@@ -172,16 +182,20 @@ describe('fetchServedVersion is fail-soft', () => {
     const stall = (_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_res, rej) => {
       init?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
     });
+
     expect(await fetchServedVersion('https://x.test', stall, 10)).toBeNull();
 
     // `kinu update` and `kinu doctor` ask for the real answer. Their probe
     // carries no signal at all, so no clock here can turn a slow origin into
     // "unreachable".
     let carried: AbortSignal | null | undefined = null;
+
     const record = async (_input: string | URL | Request, init?: RequestInit) => {
       carried = init?.signal;
+
       return new Response(JSON.stringify({ version: '0.1.0+abc' }), { headers: { 'content-type': 'application/json' } });
     };
+
     expect(await fetchServedVersion('https://x.test', record)).toEqual({ version: '0.1.0+abc' });
     expect(carried).toBeUndefined();
   });

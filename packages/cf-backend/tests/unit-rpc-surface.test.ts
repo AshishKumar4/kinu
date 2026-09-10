@@ -32,6 +32,7 @@ import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
 type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
+
 type RpcTarget = UserDOInstance | Leaf | Middle2;
 
 
@@ -45,6 +46,7 @@ type RpcTarget = UserDOInstance | Leaf | Middle2;
 function rpcReachableNames<Target extends object>(target: Target): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
+
   for (let proto: object | null = Object.getPrototypeOf(target);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -52,6 +54,7 @@ function rpcReachableNames<Target extends object>(target: Target): string[] {
       if (name !== 'constructor' && !own.has(name)) reachable.add(name);
     }
   }
+
   return [...reachable].sort();
 }
 
@@ -66,28 +69,36 @@ function surfaceLiteral(constName: string): string[] {
   const body = source('rpc-surface.ts').match(
     new RegExp(`const ${constName}[^=]*= \\[([\\s\\S]*?)\\] as const`),
   )?.[1];
+
   if (!body) throw new Error(`surface literal ${constName} is not declared in rpc-surface.ts`);
+
   return [...body.matchAll(/'([^']+)'/g)]
     .map((match) => match[1])
     .filter((name): name is string => name !== undefined)
     .sort();
 }
+
 /** What a stub-holder gets. Denial reproduces workerd's own wording. */
 async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[]) {
   if (!rpcReachableNames(target).includes(method)) {
     throw new Error(`The RPC receiver does not implement the method "${method}".`);
   }
+
   let owner: object | null = target;
+
   while (owner) {
     const callable = v.safeParse(
       v.function(),
       Object.getOwnPropertyDescriptor(owner, method)?.value,
     );
+
     if (callable.success) {
       return decodeJsonValue({ value: await callable.output.call(target, ...args) });
     }
+
     owner = Object.getPrototypeOf(owner);
   }
+
   throw new Error(`The RPC receiver does not implement the method "${method}".`);
 }
 
@@ -96,9 +107,12 @@ async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[])
  *  "the guard is what stops this" is asserted rather than assumed. */
 function unsealRpcSurface(instance: UserDOInstance): void {
   const prototype = Object.getPrototypeOf(instance);
+
   if (!prototype) throw new Error('UserDO prototype is missing');
+
   const shadowed = Object.getOwnPropertyNames(instance)
     .filter((name) => name in prototype);
+
   for (const name of shadowed) Reflect.deleteProperty(instance, name);
 }
 
@@ -131,9 +145,11 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
   test('a UserDO seals itself — no test may reconstruct the boundary for it', async () => {
     const harness = createTestUserDO();
     await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_untouched' });
+
     for (const internal of ['sqlx', 'readCredential', 'writeCredential', 'requireTier', 'ensureInit']) {
       await expect(callOverRpc(harness.userDO, internal, [])).rejects.toThrow('does not implement');
     }
+
     harness.close();
   });
 
@@ -187,16 +203,19 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
       .filter((m) => !isInternalMember(m))
       .map((m) => m.name)
       .filter((name) => !USER_DO_RPC_SURFACE.includes(name) && !SDK_HOOK_OVERRIDES.includes(name));
+
     expect(missing.sort()).toEqual([]);
   });
 
   test('a base-declared hook override is public in TypeScript and sealed over RPC', async () => {
     const harness = createTestUserDO();
+
     for (const name of SDK_HOOK_OVERRIDES) {
       expect(declaredMembers.some((m) => m.name === name && !isInternalMember(m))).toBe(true);
       await expect(callOverRpc(harness.userDO, name, ['https://kinu.example/callback']))
         .rejects.toThrow(`The RPC receiver does not implement the method "${name}".`);
     }
+
     harness.close();
   });
 
@@ -205,14 +224,17 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
       .filter(isInternalMember)
       .map((m) => m.name)
       .filter((name) => USER_DO_RPC_SURFACE.includes(name));
+
     expect(leaked.sort()).toEqual([]);
   });
 
   test('the surface names nothing the class does not have', () => {
     const declared = new Set(declaredMembers.map((m) => m.name));
+
     const stale = USER_DO_RPC_SURFACE
       .filter((name) => !PLATFORM_RPC_SURFACE.includes(name))
       .filter((name) => !declared.has(name));
+
     expect(stale.sort()).toEqual([]);
   });
 
@@ -253,8 +275,11 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
 // surface hold only what the class actually declares?
 
 const SRC = join(import.meta.dir, '..', 'src');
+
 const source = (file: string) => readFileSync(join(SRC, file), 'utf8');
+
 const PLATFORM_RPC_SURFACE = surfaceLiteral('PLATFORM_RPC_SURFACE');
+
 const AGENTS_FACET_RPC_SURFACE = surfaceLiteral('AGENTS_FACET_RPC_SURFACE');
 
 /** Every Durable Object class in the Worker, and the surface it must seal to.
@@ -324,10 +349,12 @@ describe('every Durable Object that holds something worth stealing is sealed', (
     // dropped out of the scan entirely, and so would any future Durable Object
     // built on the same base.
     const known = new Set([...SEALED_CLASSES.map((c) => c.klass), 'ActorAgent', 'KinuSandbox']);
+
     const classes = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.ts'))
       .flatMap((f) => [...source(f).matchAll(/^export (?:abstract )?class ([A-Za-z0-9_$]+) extends (Agent<|ActorAgent|Think<|Sandbox<|Devbox<)/gm)]
         .map((m) => m[1]));
+
     expect(classes.filter((name) => !known.has(name))).toEqual([]);
     // The scan must actually SEE the class it was written for. An alternation
     // that no longer matches any base is a guard that passes by finding
@@ -338,6 +365,7 @@ describe('every Durable Object that holds something worth stealing is sealed', (
 
 describe('the agent surfaces cannot drift from their classes', () => {
   const actorMembers = declaredClassMembers(source('actor-agent.ts'));
+
   const internalOrchestratorWire = [
     'getRunEventsWire',
     'runScaffoldOnceWire',
@@ -370,6 +398,7 @@ describe('the agent surfaces cannot drift from their classes', () => {
       [...source(file).matchAll(/\bagent\.([A-Za-z]\w*)\(/g)]
         .map((match) => match[1])
         .filter((name): name is string => name !== undefined));
+
     expect(called).toContain('prepareTerminal');
     expect(called).toContain('readExecutorFileChunk');
     expect(called).toContain('writeExecutorFileChunk');
@@ -396,9 +425,11 @@ describe('the agent surfaces cannot drift from their classes', () => {
     const declared = new Set(
       [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers].map((m) => m.name),
     );
+
     const stale = ORCHESTRATOR_RPC_SURFACE
       .filter((name) => !PLATFORM_RPC_SURFACE.includes(name) && !AGENTS_FACET_RPC_SURFACE.includes(name))
       .filter((name) => !declared.has(name));
+
     expect(stale.sort()).toEqual([]);
   });
 
@@ -406,6 +437,7 @@ describe('the agent surfaces cannot drift from their classes', () => {
     const internal = [...declaredClassMembers(source('orchestrator.ts')), ...actorMembers]
       .filter(isInternalMember)
       .map((m) => m.name);
+
     expect(internal.length).toBeGreaterThan(0);
     expect(internal.filter((name) => ORCHESTRATOR_RPC_SURFACE.includes(name)).sort()).toEqual([]);
   });
@@ -434,11 +466,14 @@ describe('the agent surfaces cannot drift from their classes', () => {
     const shared = [
       'getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork', 'getChatHistoryPage',
     ];
+
     const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));
     expect(onActor.sort()).toEqual([...shared].sort());
+
     const redeclared = declaredClassMembers(source('orchestrator.ts'))
       .map((m) => m.name)
       .filter((name) => shared.includes(name));
+
     expect(redeclared).toEqual([]);
   });
 });
@@ -465,25 +500,31 @@ function installedAgentsSources(): string[] {
  *  token, or is an identifier the same file declares as `const x = this`. */
 function crossStubFacetNames(sources: readonly string[]): string[] {
   const names = new Set<string>();
+
   for (const src of sources) {
     const selfAliases = new Set([...src.matchAll(/\bconst (\w+) = this;/g)].map((m) => m[1]));
+
     for (const line of src.split('\n')) {
       for (const match of line.matchAll(/\.(_cf_\w+)\s*\(/g)) {
         const name = match[1];
+
         if (name === undefined || match.index === undefined) continue;
         const receiver = line.slice(0, match.index).trim();
         const token = receiver.slice(receiver.search(/[\w$)\]]+$/));
+
         if (/(^|[^\w$])this$/.test(receiver) || selfAliases.has(token)) continue;
         names.add(name);
       }
     }
   }
+
   return [...names].sort();
 }
 
 /** Takes a method NAME and calls it on the receiver: listing one re-opens
  *  everything the seal closes, so each stays off the surface on purpose. */
 const UNIVERSAL_BRIDGES = ['_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath'];
+
 /** Invoked over a stub only by `McpAgent`'s serve path; no Kinu class is one. */
 const MCP_AGENT_ONLY = ['_cf_scheduleDestroy'];
 
@@ -493,6 +534,7 @@ describe('the SDK half of the surface is derived from the installed agents packa
   test('the facet surface is exactly the cross-stub protocol, minus the bridges', () => {
     const derived = crossStubFacetNames(sources)
       .filter((name) => !UNIVERSAL_BRIDGES.includes(name) && !MCP_AGENT_ONLY.includes(name));
+
     // The scan must SEE the protocol: a dist layout it no longer parses would
     // otherwise derive an empty list and hold the surface to nothing.
     expect(derived.length).toBeGreaterThan(10);
@@ -503,16 +545,20 @@ describe('the SDK half of the surface is derived from the installed agents packa
     // The exclusions above are claims about the SDK; a release that drops one
     // makes the exclusion dead, and one that adds a fifth bridge must be read.
     const all = crossStubFacetNames(sources);
+
     for (const name of [...UNIVERSAL_BRIDGES, ...MCP_AGENT_ONLY]) expect(all).toContain(name);
   });
 
   test('the platform surface carries the one name getAgentByName calls on the stub', () => {
     const routing = readFileSync(join(AGENTS_DIST, 'agent-routing.js'), 'utf8');
     const body = routing.match(/async function getAgentByName\([\s\S]*?\n}/)?.[0];
+
     if (!body) throw new Error('getAgentByName is not declared in agents/dist/agent-routing.js');
+
     const calledOnStub = [...body.matchAll(/\b\w*[sS]tub\.(\w+)\(/g)]
       .map((match) => match[1])
       .filter((name): name is string => name !== undefined);
+
     expect(calledOnStub.length).toBeGreaterThan(0);
     expect(calledOnStub.filter((name) => !PLATFORM_RPC_SURFACE.includes(name))).toEqual([]);
   });
@@ -564,7 +610,11 @@ class ThirdPartyBase {
   sql(strings: TemplateStringsArray, ...values: unknown[]): string {
     return `RAN ${strings.join('?')} ${JSON.stringify(values)}`;
   }
-  baseUsesSql(): string { const id = 7; return this.sql`SELECT ${id}`; }
+  baseUsesSql(): string {
+    const id = 7;
+
+    return this.sql`SELECT ${id}`;
+  }
   get liveState(): string { return 'state'; }
   overridable(): string { return 'base'; }
 }
@@ -614,6 +664,7 @@ describe('sealRpcSurface', () => {
 
   test('inherited members, protected members and TypeScript privates are all denied', async () => {
     const leaf = new Leaf();
+
     for (const name of ['sql', 'baseUsesSql', 'liveState', 'sharedWithSubclasses', 'leafInternal', 'selfCheck']) {
       await expect(callOverRpc(leaf, name, [])).rejects.toThrow(`does not implement the method "${name}"`);
     }

@@ -30,6 +30,7 @@ export type { ControlPlaneSql } from './sql';
  *  only ever return its first 200 rows would be a silent truncation, which is the
  *  defect this repo's paging contract exists to prevent. */
 export const CONTROL_PAGE_DEFAULT = 50;
+
 export const CONTROL_PAGE_MAX = 200;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -130,6 +131,7 @@ export type ControlFeedbackRow = FeedbackRecord;
  *  never recorded — which is a fact an operator surface must be able to show,
  *  and the reason the write happens first. */
 export const AUDIT_OUTCOMES = ['pending', 'ok', 'denied', 'failed'] as const;
+
 export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 
 /** The outcomes an attempt can SETTLE on. `pending` is excluded by
@@ -199,6 +201,7 @@ const UserSqlRowSchema = v.object({
   last_seen_at: v.number(),
   workspaces: v.number(),
 });
+
 type UserSqlRow = v.InferOutput<typeof UserSqlRowSchema>;
 
 const WorkspaceSqlRowSchema = v.object({
@@ -210,6 +213,7 @@ const WorkspaceSqlRowSchema = v.object({
   last_seen_at: v.number(),
   removed_at: v.nullable(v.number()),
 });
+
 type WorkspaceSqlRow = v.InferOutput<typeof WorkspaceSqlRowSchema>;
 
 const FeedbackSqlRowSchema = v.object({
@@ -225,6 +229,7 @@ const FeedbackSqlRowSchema = v.object({
   bytes: v.nullable(v.number()),
   user_agent: v.nullable(v.string()),
 });
+
 type FeedbackSqlRow = v.InferOutput<typeof FeedbackSqlRowSchema>;
 
 // `outcome` is read as a plain string and narrowed in `projectAudit`, so a
@@ -241,12 +246,14 @@ const AuditSqlRowSchema = v.object({
   outcome: v.string(),
   detail: v.string(),
 });
+
 type AuditSqlRow = v.InferOutput<typeof AuditSqlRowSchema>;
 
 /* ── Paging ──────────────────────────────────────────────────────────────── */
 
 function clampPage(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) return CONTROL_PAGE_DEFAULT;
+
   return Math.min(CONTROL_PAGE_MAX, Math.max(1, Math.trunc(limit)));
 }
 
@@ -276,9 +283,12 @@ export class MalformedCursorError extends Error {
 function readAnchor(cursor: PageRequest['cursor'], parts: number): ControlPlaneSqlValue[] | null {
   if (cursor === undefined) return null;
   const pieces = cursor.after.split('\u0000');
+
   if (pieces.length !== parts) throw new MalformedCursorError();
   const at = Number(pieces[0]);
+
   if (!Number.isFinite(at)) throw new MalformedCursorError();
+
   return [at, ...pieces.slice(1)];
 }
 
@@ -415,6 +425,7 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
     clampText(row.route, FEEDBACK_MAX_ROUTE_CHARS),
     row.workspace, row.objectKey, row.contentType, row.bytes,
     row.userAgent === null ? null : clampText(row.userAgent, FEEDBACK_MAX_USER_AGENT_CHARS));
+
   return { id: row.id };
 }
 
@@ -453,17 +464,22 @@ export function replaceUserWorkspaces(
         removed_at = NULL`,
       userId, row.name, row.displayName, row.createdAt, row.lastVisited);
   }
+
   const names = live.map((row) => row.name);
+
   const before = count(sql,
     `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
+
   const placeholders = names.map(() => '?').join(', ');
   run(sql,
     `UPDATE cp_workspaces SET removed_at = ?
      WHERE user_id = ? AND removed_at IS NULL
        ${names.length > 0 ? `AND name NOT IN (${placeholders})` : ''}`,
     now, userId, ...names);
+
   const after = count(sql,
     `SELECT COUNT(*) AS n FROM cp_workspaces WHERE user_id = ? AND removed_at IS NULL`, userId);
+
   return { present: live.length, tombstoned: before - after };
 }
 
@@ -487,6 +503,7 @@ export function overview(sql: ControlPlaneSql, now = Date.now()): ControlOvervie
 export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlUserRow> {
   const limit = clampPage(request.limit);
   const from = readAnchor(request.cursor, 2);
+
   const found = select(sql, UserSqlRowSchema,
     `SELECT u.user_id, u.email, u.display_name, u.first_seen_at, u.last_seen_at,
             (SELECT COUNT(*) FROM cp_workspaces w
@@ -496,6 +513,7 @@ export function listUsers(sql: ControlPlaneSql, request: PageRequest = {}): Page
       ORDER BY u.last_seen_at DESC, u.user_id ASC
       LIMIT ?`,
     ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
+
   return seekPage(found.map(projectUser), limit, (row) => anchor(row.lastSeenAt, row.userId));
 }
 
@@ -505,6 +523,7 @@ export function getUser(sql: ControlPlaneSql, userId: string): ControlUserRow | 
             (SELECT COUNT(*) FROM cp_workspaces w
               WHERE w.user_id = u.user_id AND w.removed_at IS NULL) AS workspaces
        FROM cp_users u WHERE u.user_id = ?`, userId)[0];
+
   return row ? projectUser(row) : null;
 }
 
@@ -528,14 +547,18 @@ export function listWorkspaces(
   const from = readAnchor(request.cursor, 3);
   const where: string[] = [];
   const bindings: ControlPlaneSqlValue[] = [];
+
   if (filter.userId !== undefined) { where.push(`w.user_id = ?`); bindings.push(filter.userId); }
+
   if (filter.includeRemoved !== true) where.push(`w.removed_at IS NULL`);
+
   if (from) {
     where.push(
       `((w.last_seen_at < ?) OR (w.last_seen_at = ? AND (w.user_id > ? OR (w.user_id = ? AND w.name > ?))))`,
     );
     bindings.push(from[0], from[0], from[1], from[1], from[2]);
   }
+
   const found = select(sql, WorkspaceSqlRowSchema,
     `SELECT w.user_id, u.email, w.name, w.display_name, w.created_at, w.last_seen_at, w.removed_at
        FROM cp_workspaces w LEFT JOIN cp_users u ON u.user_id = w.user_id
@@ -543,6 +566,7 @@ export function listWorkspaces(
       ORDER BY w.last_seen_at DESC, w.user_id ASC, w.name ASC
       LIMIT ?`,
     ...bindings, limit + 1);
+
   return seekPage(
     found.map(projectWorkspace), limit,
     (row) => anchor(row.lastSeenAt, row.userId, row.name),
@@ -552,6 +576,7 @@ export function listWorkspaces(
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
   const limit = clampPage(request.limit);
   const from = readAnchor(request.cursor, 2);
+
   const found = select(sql, FeedbackSqlRowSchema,
     `SELECT id, created_at, user_id, email, note, route, workspace,
             object_key, content_type, bytes, user_agent
@@ -560,12 +585,14 @@ export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): P
       ORDER BY created_at DESC, id ASC
       LIMIT ?`,
     ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
+
   return seekPage(found.map(projectFeedback), limit, (row) => anchor(row.createdAt, row.id));
 }
 
 export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlAuditRow> {
   const limit = clampPage(request.limit);
   const from = readAnchor(request.cursor, 2);
+
   const found = select(sql, AuditSqlRowSchema,
     `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
        FROM cp_audit
@@ -573,6 +600,7 @@ export function listAudit(sql: ControlPlaneSql, request: PageRequest = {}): Page
       ORDER BY at DESC, id ASC
       LIMIT ?`,
     ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
+
   return seekPage(found.map(projectAudit), limit, (row) => anchor(row.at, row.id));
 }
 
@@ -615,12 +643,14 @@ export function appendAudit(sql: ControlPlaneSql, draft: AuditDraft, now = Date.
     outcome: draft.outcome,
     detail: draft.detail,
   };
+
   run(sql,
     `INSERT INTO cp_audit
        (id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     row.id, row.at, row.actorEmail, row.actorUserId,
     row.operation, row.targetKind, row.target, row.outcome, row.detail);
+
   return row;
 }
 
@@ -645,12 +675,16 @@ export function settleAudit(
   run(sql,
     `UPDATE cp_audit SET outcome = ?, detail = ? WHERE id = ? AND outcome = 'pending'`,
     settlement.outcome, settlement.detail, settlement.id);
+
   const found = select(sql, AuditSqlRowSchema,
     `SELECT id, at, actor_email, actor_user, operation, target_kind, target, outcome, detail
        FROM cp_audit WHERE id = ?`,
     settlement.id);
+
   const row = found[0];
+
   if (row === undefined || row.outcome !== settlement.outcome) return null;
+
   return projectAudit(row);
 }
 

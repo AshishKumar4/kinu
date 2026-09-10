@@ -11,6 +11,7 @@ import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import { CRED_KERNEL, type SqlDatabase, type SqlRow, type SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
+
 /** A hosted child's slate caller: the hop path names the registered actor, and
  *  the credential is the child's own provisioned identity — looked up, never
  *  allocated here. Hiring provisioned the home and its uid row, so this is a
@@ -28,17 +29,24 @@ async function childCaller(db: Database, agentName: string, actorName: string): 
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: VendorSqlValue[]) {
       const statement = db.prepare<SqlRow, SQLQueryBindings[]>(query);
+
       const bound = bindings.map((value) => {
         if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
         if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
         return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
       });
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const identity = agentIdentity(sql, agentName);
+
   return { path: [{ name: actorName }], cred: agentCred(identity), workMode: 'build' };
 }
 
@@ -47,6 +55,7 @@ test('native MCP protocol failures reject while namespace responses retain their
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const workspace = 'native-mcp';
   const user = createTestUserDO({ durableObjectId: ownerUserId });
+
   try {
     const capability = await provisionTestWorkspace(user, workspace);
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
@@ -59,9 +68,12 @@ test('native MCP protocol failures reject while namespace responses retain their
     await user.userDO.userMcp_list(owner);
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
+
     const turn = await actor.agent.beforeTurn({ system: 'base', messages: [{ role: 'user', content: 'Read the issue.' }],
       tools: actor.agent.observeRawTools(), model: 'harness-model', continuation: false, body: {} });
+
     const native = turn?.tools?.mcp_github_read_issue;
+
     if (native === undefined) throw new Error('the native MCP tool was not admitted');
     const invoke = toolExecute<Record<string, never>, JsonValue>(native);
     const data = { isError: false, content: [{ type: 'text', text: '{"error":"data"}' }], structuredContent: { isError: true, reason: 'data-only' }, reason: 'denied', error: 'historical incident' } satisfies Parameters<typeof seedMcpAnswer>[0];
@@ -86,6 +98,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
   const ownerUserId = '0123456789abcdef0123456789abcdef';
   const workspace = 'slate-mcp';
   const user = createTestUserDO({ durableObjectId: ownerUserId });
+
   try {
     const capability = await provisionTestWorkspace(user, workspace);
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
@@ -102,9 +115,11 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     ]);
     const vfs = actor.agent.observeRuntime().storage.vfs;
     await vfs.mkdir('/home/user/slates/issues', { recursive: true });
+
     const bind = (server: string, tools?: string[]) => vfs.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
       main: 'server.ts', slate: { title: 'Issues', bindings: { GITHUB: { kind: 'mcp', server, tools } } },
     }));
+
     const call = (tool: string) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
 
     await bind('github');
@@ -144,9 +159,11 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     // one. Role narrowing of what a child CAN reach is pinned by the namespace
     // test below, where the route exists for both.
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
+
     const child = await hostedSubordinateHarness(actor, {
       name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'general', mission: 'Read issues',
     });
+
     const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'issue-reader');
     const childCall = (tool: string) => actor.agent.slateBindingCallAs(asChild, 'issues', 'GITHUB', { member: tool, args: [{}], invocation: null });
     expect(await childCall('read_issue')).toMatchObject({ ok: false, reason: 'denied' });
@@ -194,14 +211,18 @@ test('the agent slate operation commits, forks and restores its authored source'
   await files.mkdir(root, { recursive: true });
   await files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("first"); } };');
+
   const record = (result: SlateCallResult) => {
     if (!result.ok) throw new Error(result.reason + ': ' + result.error);
+
     return v.parse(v.object({ id: v.string() }), result.value);
   };
+
   const first = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
   await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("second"); } };');
   const second = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
   const history = await actor.agent.slate({ op: 'history', id: 'notes' });
+
   if (!history.ok) throw new Error(history.reason + ': ' + history.error);
   expect(v.parse(v.object({ versions: v.array(v.object({ id: v.string() })) }), history.value).versions)
     .toEqual([{ id: first.id }, { id: second.id }]);
@@ -221,14 +242,17 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   await files.writeFile('/home/user/slates/root-app/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.writeFile(path, 'export default { fetch() { return new Response("first"); } };');
   const committed = await parent.agent.slate({ op: 'commit', id: 'root-app' });
+
   if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
   const version = v.parse(v.object({ id: v.string() }), committed.value);
   const current = 'export default { fetch() { return new Response("second"); } };';
   await files.writeFile(path, current);
+
   const child = await hostedSubordinateHarness(parent, {
     name: 'slate-author', displayName: 'Slate author', nameOrigin: 'user',
     roleId: 'general', mission: 'Work inside the assigned private home',
   });
+
   // The authority itself, on the child's own file plane: the same uid the
   // binding below acts as, so an EACCES here and a denial there are one fact.
   await expect(child.actor.runtime.storage.vfs.writeFile(path, 'blocked'))
@@ -247,15 +271,19 @@ test('a binding held by a hosted actor reaches its own files and role, never the
     main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' } } },
   }));
   await rootFiles.writeFile('/home/user/private.md', 'root only');
+
   const child = await hostedSubordinateHarness(parent, {
     name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
     roleId: 'general', mission: 'Read what you may',
   });
+
   const agentName = subordinateAgentName(child.actor.handle.storageKey);
   const childHome = agentHome(agentName);
   const asChild = await childCaller(parent.db, agentName, 'reader-1');
+
   const call = (caller: SlateCaller, member: string, args: JsonValue[]) =>
     parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, invocation: null });
+
   expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
   expect(await rootFiles.readFile(`${childHome}/note.md`, { encoding: 'utf8' })).toBe('mine');
   // The origin's tree: readable (homes are 0o755) but a write is the child's own EACCES.
@@ -274,7 +302,9 @@ test('a binding held by a hosted actor reaches its own files and role, never the
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
     tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
   } as const;
+
   const changeRole = (role: string) => { child.actor.stores.config.setRoleSelection(role); };
+
   parent.agent.harnessInstallCatalog(scribe);
   changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
@@ -296,9 +326,11 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
   await rootFiles.writeFile('/home/user/slates/status/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } },
   }));
+
   const child = await hostedSubordinateHarness(parent, {
     name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', roleId: 'general', mission: 'Peek',
   });
+
   const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], invocation: null });
   expect(await call(ROOT_SLATE_CALLER)).toMatchObject({ ok: true, value: expect.any(Array) });
   expect(await call(await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'peeker'))).toMatchObject({ ok: false, reason: 'denied' });
@@ -310,6 +342,7 @@ test('source capture does not retain a previous caller supplementary group', asy
   await files.mkdir('/home/user/slates/group-source', { recursive: true });
   await files.writeFile('/home/user/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.writeFile('/home/user/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
+
   // Arranged as kernel, without the box: the permission bits are VFS state,
   // and the removed `workspaceBoxOp` monomorphic RPC was only ever a shell
   // around chown/chmod. Host-stamped through the harness, never agent-chosen.
@@ -318,6 +351,7 @@ test('source capture does not retain a previous caller supplementary group', asy
     'chown 0:3000 /home/user/slates/group-source/server.ts && chmod 640 /home/user/slates/group-source/server.ts',
     CRED_KERNEL,
   );
+
   expect(protectedFile).toMatchObject({ exitCode: 0 });
   const grouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
   const ungrouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };
@@ -335,9 +369,12 @@ test('a command the approval ladder stops answers every surface with its class, 
   const marker = '/home/user/never-written.txt';
   const gated = 'npm publish --dry-run && printf ran > ' + marker;
   const binding = (command = gated) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'shell', 'FILES', { member: 'exec', args: [command], invocation: null });
+
   const codemode = () => {
     const workspace = (actor.agent.observeRuntime().executionRouter?.getProviders() ?? []).find((provider) => provider.name === 'workspace');
+
     if (workspace === undefined) throw new Error('No workspace provider');
+
     return workspace.tools.exec.execute(gated);
   };
 

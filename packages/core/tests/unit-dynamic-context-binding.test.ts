@@ -35,6 +35,7 @@ function setup(): Fixture {
   });
   const actors = createTestActors(testSql.sql, testSql.execRaw);
   const sibling = actors.sibling('sibling');
+
   return {
     rt,
     stores: createAgentStores(() => testSql.sql, () => rt.actor, rt.storage.transactionSync),
@@ -146,10 +147,12 @@ describe('collectDynamicContext', () => {
 
   test('the two per-turn inputs pass through as given', () => {
     const o = setup();
+
     const ctx = collect(o, {
       memoryTail: '## Recent\n- shipped the gate',
       missingCapabilities: [{ source: 'github', reason: 'connect failed' }],
     });
+
     expect(ctx.memoryTail).toBe('## Recent\n- shipped the gate');
     expect(ctx.missingCapabilities).toEqual([{ source: 'github', reason: 'connect failed' }]);
   });
@@ -175,11 +178,13 @@ describe('the backend-only planes ride the typed source callbacks', () => {
 
   test('subordinates list ahead of the search roster both backends contribute', () => {
     const o = setup();
+
     const ctx = collect(o, {
       subordinateDelegates: () => [{
         kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
       }],
     });
+
     expect(ctx.delegates?.items[0]).toEqual({
       kind: 'subordinate', name: 'scout', phase: 'working', task: 'map it',
     });
@@ -188,13 +193,16 @@ describe('the backend-only planes ride the typed source callbacks', () => {
   test('approvals and backend-provided capability notices pass through per step', () => {
     let parked = 0;
     const o = setup();
+
     const ctx = collect(o, {
       approvals: () => {
         parked += 1;
+
         return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }], total: 1 };
       },
       missingCapabilities: [{ source: 'inbox', reason: 'no transport bound' }],
     });
+
     expect(ctx.approvals).toEqual({
       items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }],
       total: 1,
@@ -206,6 +214,7 @@ describe('the backend-only planes ride the typed source callbacks', () => {
     collect(o, {
       approvals: () => {
         parked += 1;
+
         return { items: [], total: 0 };
       },
     });

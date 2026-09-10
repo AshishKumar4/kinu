@@ -57,17 +57,21 @@ export function withHostedNodeExecution(box: NimbusSandboxHandle, node: HostedNo
     env: { ...options?.env, HOME: node.home, TMPDIR: node.tmp },
     cred: node.cred,
   });
+
   const execution: NimbusSandboxHandle = {
     ...box,
     exec: (command, options) => box.exec(command, optionsFor(options)),
   };
+
   if (box.startProcess) {
     const startProcess = box.startProcess;
     execution.startProcess = (command, options) => startProcess(command, optionsFor(options));
   }
+
   if (box.runCode) {
     const runCode = box.runCode;
     execution.runCode = (code, options) => runCode(code, optionsFor(options));
   }
+
   return execution;
 }

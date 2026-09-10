@@ -32,6 +32,7 @@ export interface CgroupSource {
 }
 
 const DEFAULT_ROOT = '/sys/fs/cgroup';
+
 const DEFAULT_PROC_SELF = '/proc/self/cgroup';
 
 /** memory.limit_in_bytes on an unlimited v1 cgroup is a page-aligned INT64_MAX
@@ -49,14 +50,19 @@ function read(path: string): string | null {
  */
 function selfPath(procSelfCgroup: string, controller: string | null): string {
   const content = read(procSelfCgroup);
+
   if (content === null) return '';
+
   for (const line of content.split('\n')) {
     const [, controllers, path] = line.split(':');
+
     if (path === undefined || path === '/') continue;
     const names = (controllers ?? '').split(',').filter(Boolean);
     const matches = controller === null ? names.length === 0 : names.includes(controller);
+
     if (matches) return path;
   }
+
   return '';
 }
 
@@ -72,43 +78,56 @@ function candidates(base: string, self: string): string[] {
 function parseCpus(quota: string | undefined, period: string | undefined): number | undefined {
   const q = Number(quota);
   const p = Number(period);
+
   if (!Number.isFinite(q) || !Number.isFinite(p) || q <= 0 || p <= 0) return undefined;
+
   return Math.ceil(q / p);
 }
 
 function parseMemory(raw: string | null): number | undefined {
   if (raw === null) return undefined;
   const bytes = Number(raw);
+
   if (!Number.isFinite(bytes) || bytes <= 0 || bytes >= V1_UNLIMITED_FLOOR) return undefined;
+
   return bytes;
 }
 
 function readCpus(root: string, procSelfCgroup: string): number | undefined {
   for (const dir of candidates(root, selfPath(procSelfCgroup, null))) {
     const unified = read(`${dir}/cpu.max`);
+
     if (unified !== null) {
       const [quota, period] = unified.split(/\s+/);
+
       return parseCpus(quota, period);
     }
   }
+
   // v1: quota and period must come from the SAME controller directory.
   for (const dir of candidates(`${root}/cpu`, selfPath(procSelfCgroup, 'cpu'))) {
     const quota = read(`${dir}/cpu.cfs_quota_us`);
     const period = read(`${dir}/cpu.cfs_period_us`);
+
     if (quota !== null && period !== null) return parseCpus(quota, period);
   }
+
   return undefined;
 }
 
 function readMemory(root: string, procSelfCgroup: string): number | undefined {
   for (const dir of candidates(root, selfPath(procSelfCgroup, null))) {
     const unified = read(`${dir}/memory.max`);
+
     if (unified !== null) return parseMemory(unified);
   }
+
   for (const dir of candidates(`${root}/memory`, selfPath(procSelfCgroup, 'memory'))) {
     const v1 = read(`${dir}/memory.limit_in_bytes`);
+
     if (v1 !== null) return parseMemory(v1);
   }
+
   return undefined;
 }
 
@@ -118,10 +137,15 @@ export function readCgroupLimits(source: CgroupSource = {}): ResourceLimits | nu
   const procSelfCgroup = source.procSelfCgroup ?? DEFAULT_PROC_SELF;
   const cpus = readCpus(root, procSelfCgroup);
   const memBytes = readMemory(root, procSelfCgroup);
+
   if (cpus === undefined && memBytes === undefined) return null;
+
   if (cpus !== undefined && memBytes !== undefined) return { cpus, memBytes };
+
   if (cpus !== undefined) return { cpus };
+
   if (memBytes !== undefined) return { memBytes };
+
   return null;
 }
 
@@ -132,5 +156,6 @@ let memoized: ResourceLimits | null | undefined;
  *  re-learn that. */
 export function hostResourceLimits(): ResourceLimits | null {
   if (memoized === undefined) memoized = readCgroupLimits();
+
   return memoized;
 }

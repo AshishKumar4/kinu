@@ -41,9 +41,11 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 // The entry's module graph reaches `agents`, which the harness stands in for;
 // the load is dynamic so the stand-in is registered first.
 mockAgentsSdk();
+
 await import('../src/server');
 
 type SupervisorProps = { doId: string; pid: number; writerId?: string; mutationOwner?: string };
+
 type SupervisorBinding = InstanceType<typeof SupervisorRPC>;
 
 /** The bag workerd hangs on a Durable Object's `ctx`, reduced to the one entry
@@ -77,7 +79,9 @@ interface DispatchedOp {
   readonly pid: number | undefined;
   readonly mutationOwner: string | undefined;
 }
+
 const REFUSAL = 'SupervisorRPC binding not available';
+
 const ACTOR_ID = 'facets-actor-0123456789abcdef';
 
 const databases: Database[] = [];
@@ -89,7 +93,9 @@ afterEach(() => {
 /** The filesystem binds BLOBs as ArrayBuffer; bun:sqlite binds only TypedArrays. */
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -101,13 +107,16 @@ function sqlBinding(value: SqlValue): SQLQueryBindings {
 function actorCtx(exports?: ActorExports): DurableObjectState {
   const database = new Database(':memory:');
   databases.push(database);
+
   const storage = {
     sql: {
       exec(query: string, ...bindings: SqlValue[]) {
         const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
         const bound = bindings.map(sqlBinding);
+
         if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
         statement.run(...bound);
+
         return [];
       },
     },
@@ -118,16 +127,20 @@ function actorCtx(exports?: ActorExports): DurableObjectState {
     deleteAll: async () => {},
     deleteAlarm: async () => {},
   };
+
   const context = {
     storage,
     id: { toString: () => ACTOR_ID, name: ACTOR_ID },
     waitUntil: () => {},
     getWebSockets: () => [],
   };
+
   // Unchecked and named: the members above are exactly what
   // `createHostedWorkspace` reads, and any other access throws by name.
   const ctx: DurableObjectState = Object.create(context);
+
   if (exports !== undefined) Object.assign(ctx, { exports });
+
   return ctx;
 }
 
@@ -155,6 +168,7 @@ function hostActor(): Actor {
   // Set by `createHostedWorkspace` below; the namespace object closes over
   // the cell the way the orchestrator closes over its own hosted workspace.
   let hosted: HostedWorkspace | undefined;
+
   const loader = {
     load(code: WorkerLoaderWorkerCode) {
       const source = v.parse(v.pipe(v.string(), v.nonEmpty()), code.modules['git-network-worker.js']);
@@ -165,40 +179,48 @@ function hostActor(): Actor {
       writeFileSync(join(dir, 'git-bundle.js'), GIT_BUNDLE_STUB);
       const moduleUrl = pathToFileURL(join(dir, 'git-network-worker.mjs')).href;
       let loaded: Promise<unknown> | undefined;
+
       return {
         getEntrypoint: () => ({
           fetch: async (request: Request) => {
             loaded ??= import(moduleUrl);
             const facet = v.parse(v.object({ default: v.object({ fetch: v.function() }) }), await loaded);
+
             return v.parse(v.instance(Response), await facet.default.fetch(request, facetEnv));
           },
         }),
       };
     },
   };
+
   // Unchecked and named: `WorkerLoader` is a workerd binding with no
   // constructible form, and the fabric reaches only `load`. The double rides
   // the prototype the way helpers/jsrpc-stub.ts builds stubs.
   const LOADER: WorkerLoader = Object.create(loader);
+
   const actorEnv: ActorBindings = {
     LOADER,
     OrchestratorAgent: {
       idFromString: (id) => id,
       get: (id) => {
         if (id !== ACTOR_ID) throw new Error('supervisor resolved the wrong host');
+
         return {
           supervisorOp: (envelope) => {
             if (hosted === undefined) throw new Error('facet arrived before the workspace');
             dispatched.push({ op: envelope.op, pid: envelope.pid, mutationOwner: envelope.mutationOwner });
+
             return hosted.supervisorOp(envelope);
           },
         };
       },
     },
   };
+
   const exports: ActorExports = {
     SupervisorRPC: ({ props }: { props: SupervisorProps }) => {
       supervisorBindings.push(props);
+
       return new SupervisorRPC({
         props,
         waitUntil: () => { throw new Error('unexpected supervisor background work'); },
@@ -206,6 +228,7 @@ function hostActor(): Actor {
       }, actorEnv);
     },
   };
+
   // The ctx the workspace is composed over IS the ctx carrying `.exports` —
   // in a Durable Object that object is one and the same, and the adoption
   // reads it off `transactions`.
@@ -214,6 +237,7 @@ function hostActor(): Actor {
     env: strictEnv(actorEnv),
     previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
   });
+
   return { hosted, facetLoads, supervisorBindings, dispatched };
 }
 
@@ -229,7 +253,9 @@ function strictEnv(bindings: ActorBindings): Env {
     ['OrchestratorAgent', bindings.OrchestratorAgent],
     ['NIMBUS_RUNTIME_CACHE', undefined],
   ]);
+
   const target: Env = Object.create(null);
+
   return new Proxy(target, {
     get(_target, property: string) {
       if (served.has(property)) return served.get(property);
@@ -277,11 +303,14 @@ export const git = {
 function tarFile(name: string, data: string): Uint8Array[] {
   const bytes = new TextEncoder().encode(data);
   const header = new Uint8Array(512);
+
   const octal = (value: number, width: number): string =>
     value.toString(8).padStart(width - 1, '0') + '\0';
+
   const write = (offset: number, value: string, width: number): void => {
     header.set(new TextEncoder().encode(value).subarray(0, width), offset);
   };
+
   write(0, name, 100);
   write(100, octal(0o644, 8), 8);
   write(108, octal(0, 8), 8);
@@ -295,12 +324,16 @@ function tarFile(name: string, data: string): Uint8Array[] {
   write(148, octal(header.reduce((sum, byte) => sum + byte, 0), 8), 8);
   const padded = new Uint8Array(Math.ceil(bytes.length / 512) * 512);
   padded.set(bytes);
+
   return [header, padded];
 }
 
 const REGISTRY_PKG = 'host-fixture';
+
 const REGISTRY_VERSION = '1.0.0';
+
 const REGISTRY_MANIFEST = `{"name":"${REGISTRY_PKG}","version":"${REGISTRY_VERSION}","main":"lib/index.js"}`;
+
 // package.json FIRST in the archive, as npm ships it. The streaming writer
 // holds the manifest back and lands it last, so a tree without one is a tree
 // the next install re-extracts rather than trusts.
@@ -310,10 +343,13 @@ const REGISTRY_TARBALL = (() => {
     ...tarFile('package/lib/index.js', 'module.exports = 1;\n'),
     new Uint8Array(1024),
   ];
+
   const total = parts.reduce((sum, part) => sum + part.length, 0);
   const out = new Uint8Array(total);
   let offset = 0;
+
   for (const part of parts) { out.set(part, offset); offset += part.length; }
+
   return new Uint8Array(gzipSync(out));
 })();
 
@@ -327,6 +363,7 @@ function serveRegistry(): LocalRegistry {
     port: 0,
     fetch(request): Response {
       const { pathname } = new URL(request.url);
+
       if (pathname === `/${REGISTRY_PKG}/latest` || pathname === `/${REGISTRY_PKG}/${REGISTRY_VERSION}`) {
         return Response.json({
           name: REGISTRY_PKG,
@@ -336,14 +373,17 @@ function serveRegistry(): LocalRegistry {
           },
         });
       }
+
       if (pathname === `/${REGISTRY_PKG}/-/${REGISTRY_PKG}-${REGISTRY_VERSION}.tgz`) {
         return new Response(REGISTRY_TARBALL, {
           headers: { 'Content-Type': 'application/octet-stream' },
         });
       }
+
       return new Response('not found', { status: 404 });
     },
   });
+
   return { url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
 
@@ -352,8 +392,10 @@ function refusingBindings(): ActorBindings {
   const loader = {
     load() { throw new Error('no facet may spawn'); },
   };
+
   // Unchecked and named: see `hostActor`.
   const LOADER: WorkerLoader = Object.create(loader);
+
   return {
     LOADER,
     OrchestratorAgent: {
@@ -370,6 +412,7 @@ describe('hosted workspace facets', () => {
       env: strictEnv(refusingBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
+
     const clone = await hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello');
     const output = `${clone.stdout}${clone.stderr}`;
     expect(clone.exitCode).toBe(1);
@@ -388,17 +431,22 @@ describe('hosted workspace facets', () => {
     expect(actor.facetLoads[0]?.supervisorBound).toBe(true);
     // Every binding the supervisor minted named this host and this process.
     expect(actor.supervisorBindings.length).toBeGreaterThan(0);
+
     for (const props of actor.supervisorBindings) {
       expect(props.doId).toBe(ACTOR_ID);
       expect(Number.isInteger(props.pid) && props.pid > 0).toBe(true);
     }
+
     // Every filesystem call arrived through the ONE method the host mounts,
     // stamped with the process behind it.
     expect(actor.dispatched.length).toBeGreaterThan(0);
+
     for (const call of actor.dispatched) {
       expect(Number.isInteger(call.pid) && (call.pid ?? 0) > 0).toBe(true);
     }
+
     const byOp = new Map<string, number>();
+
     for (const call of actor.dispatched) byOp.set(call.op, (byOp.get(call.op) ?? 0) + 1);
     expect(byOp.get('writeBatchStream') ?? 0).toBeGreaterThan(0);
     const writeOp = actor.dispatched.find((call) => call.op === 'writeBatchStream');
@@ -417,14 +465,17 @@ describe('hosted workspace facets', () => {
 
   test('npm install streams a package off a local registry into the workspace', async () => {
     const registry = serveRegistry();
+
     try {
       const actor = hostActor();
       const box = actor.hosted.box('npm');
       const made = await box.exec('mkdir -p /home/user/proj');
       expect(made.exitCode).toBe(0);
+
       const install = await box.exec(`cd /home/user/proj && npm install ${REGISTRY_PKG}`, {
         env: { NPM_REGISTRY: registry.url },
       });
+
       const output = `${install.stdout}${install.stderr}`;
       expect(output).not.toContain(REFUSAL);
       expect(install.exitCode).toBe(0);
@@ -448,7 +499,9 @@ describe('hosted file reads report absence by code, not by message', () => {
     // VFS `code`.
     const actor = hostActor();
     const files = actor.hosted.box('probe').files;
+
     if (!files) throw new Error('the hosted box carries no files plane');
+
     if (!files.mkdir) throw new Error('the hosted files plane carries no mkdir');
     await files.mkdir('/ENOENT-probe');
     await expect(files.read('/ENOENT-probe')).rejects.toThrow('EISDIR');

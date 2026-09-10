@@ -74,6 +74,7 @@ import {
 } from './syntax';
 
 const REPO = new URL('..', import.meta.url).pathname;
+
 const LOCK = join(REPO, 'scripts/silent-drop.lock.json');
 
 /** Declared as an ordered tuple rather than derived from the table's keys: the
@@ -155,6 +156,7 @@ export const DROPS = {
  * dropped the third bucket would measure one set and report another.
  */
 export const SINKS = ['log', 'wire', 'display', 'other'] as const;
+
 export type Sink = (typeof SINKS)[number];
 
 export interface Drop {
@@ -174,6 +176,7 @@ export interface Drop {
 const LOG_METHODS: ReadonlySet<string> = new Set([
   'log', 'warn', 'error', 'info', 'debug', 'trace', 'event', 'failure',
 ]);
+
 const LOG_RECEIVERS: ReadonlySet<string> = new Set([
   'console', 'diagnostics', 'logger', 'log', 'journal',
 ]);
@@ -189,17 +192,23 @@ const LiteralValue = v.object({
  *  here rather than off `ESTree` there. */
 function isSentinel(node: SyntaxNode | undefined): boolean {
   if (node === undefined) return true;
+
   if (node.type === 'ArrayExpression' || node.type === 'ObjectExpression') {
     return node.children.length === 0;
   }
+
   if (node.type === 'Identifier') return identifierText(node) === 'undefined';
+
   if (node.type === 'UnaryExpression') {
     return node.raw.type === 'UnaryExpression' && node.raw.operator === '-'
       && isSentinel(node.children[0]);
   }
+
   const literal = v.safeParse(LiteralValue, node.raw);
+
   if (!literal.success) return false;
   const { value } = literal.output;
+
   return value === null || value === false || value === 0 || value === '';
 }
 
@@ -207,6 +216,7 @@ function isSentinel(node: SyntaxNode | undefined): boolean {
  *  inside — whose `throw` says nothing about this scope's own path. */
 function ownNodes(scope: SyntaxNode): readonly SyntaxNode[] {
   const own: SyntaxNode[] = [];
+
   const descend = (node: SyntaxNode): void => {
     for (const child of node.children) {
       if (child.type === 'FunctionDeclaration' || child.type === 'FunctionExpression'
@@ -215,7 +225,9 @@ function ownNodes(scope: SyntaxNode): readonly SyntaxNode[] {
       descend(child);
     }
   };
+
   descend(scope);
+
   return own;
 }
 
@@ -241,7 +253,9 @@ interface Fate {
 }
 
 const PROJECTED_PROPERTIES: ReadonlySet<string> = new Set(['message', 'stack', 'toString']);
+
 const PROJECTING_CALLS: ReadonlySet<string> = new Set(['String']);
+
 /** A bare use of the binding in one of these positions is the VALUE flowing on
  *  whole. `ConditionalExpression` and `LogicalExpression` are here because
  *  `error instanceof Error ? error : String(error)` forwards the error on the arm
@@ -259,22 +273,36 @@ function fateOf(scope: SyntaxNode, binding: string): Fate {
   walk(scope, (node) => {
     if (node.type !== 'Identifier' || identifierText(node) !== binding) return;
     const parent = node.parent;
+
     if (parent === undefined) return;
+
     if (parent.type === 'MemberExpression' && parent.children[0] === node) {
       const property = identifierText(parent.children[1] ?? parent);
+
       if (property !== undefined && PROJECTED_PROPERTIES.has(property)) projections.push(parent);
+
       return;
     }
-    if (parent.type === 'TemplateLiteral') { projections.push(parent); return; }
+
+    if (parent.type === 'TemplateLiteral') {
+      projections.push(parent);
+
+      return;
+    }
+
     if (parent.type === 'NewExpression' || parent.type === 'CallExpression') {
       if (parent.children[0] === node) return;
       const callee = identifierCalleeName(parent);
+
       if (callee !== undefined && PROJECTING_CALLS.has(callee)) projections.push(parent);
       else forwarded = true;
+
       return;
     }
+
     if (FORWARDING_PARENTS.has(parent.type)) forwarded = true;
   });
+
   return { forwarded, projections };
 }
 
@@ -288,19 +316,26 @@ function sinkOf(projection: SyntaxNode): Sink {
   for (let at: SyntaxNode | undefined = projection.parent; at !== undefined; at = at.parent) {
     if (at.type === 'CallExpression') {
       const method = memberCalleeName(at);
+
       if (method !== undefined && LOG_METHODS.has(method)) return 'log';
       const callee = at.children[0];
+
       const receiver = callee?.type === 'MemberExpression'
         ? identifierText(callee.children[0] ?? callee)
         : undefined;
+
       if (receiver !== undefined && LOG_RECEIVERS.has(receiver)) return 'log';
       const plain = identifierCalleeName(at);
+
       return plain !== undefined && plain.startsWith('set') ? 'display' : 'wire';
     }
+
     if (at.type === 'NewExpression' || at.type === 'ThrowStatement'
       || at.type === 'ReturnStatement') return 'wire';
+
     if (at.type === 'JSXExpressionContainer') return 'display';
   }
+
   return 'other';
 }
 
@@ -310,10 +345,14 @@ function sinkOf(projection: SyntaxNode): Sink {
 function chainlessErrorConstruction(node: SyntaxNode): boolean {
   if (node.type !== 'NewExpression') return false;
   const callee = node.children[0];
+
   if (callee === undefined) return false;
+
   const name = identifierText(callee)
     ?? (callee.type === 'MemberExpression' ? identifierText(callee.children[1] ?? callee) : undefined);
+
   if (name === undefined || !name.endsWith('Error')) return false;
+
   return !node.children.slice(1).some((argument) => argument.type === 'ObjectExpression'
     && argument.children.some((property) => property.type === 'Property'
       && identifierText(property.children[0] ?? property) === 'cause'));
@@ -325,10 +364,13 @@ function chainlessErrorConstruction(node: SyntaxNode): boolean {
 function rejectionHandlerOf(call: SyntaxNode): SyntaxNode | undefined {
   const method = memberCalleeName(call);
   const args = call.children.slice(1);
+
   const handler = method === 'catch'
     ? args[0]
     : method === 'then' && args.length >= 2 ? args[1] : undefined;
+
   if (handler === undefined) return undefined;
+
   return handler.type === 'ArrowFunctionExpression' || handler.type === 'FunctionExpression'
     ? handler
     : undefined;
@@ -342,9 +384,12 @@ function chainHandlesRejection(expression: SyntaxNode): boolean {
   walk(expression, (node) => {
     if (node.type !== 'CallExpression') return;
     const method = memberCalleeName(node);
+
     if (method === 'catch' && node.children.length > 1) handled = true;
+
     if (method === 'then' && node.children.length > 2) handled = true;
   });
+
   return handled;
 }
 
@@ -375,10 +420,12 @@ interface AsyncDefinitions {
 function asyncDefinitions(root: SyntaxNode): AsyncDefinitions {
   const asynchronous = new Set<string>();
   const contained = new Set<string>();
+
   const consider = (name: string | undefined, fn: SyntaxNode): void => {
     if (name === undefined || !isAsync(fn)) return;
     asynchronous.add(name);
     const body = blockBodyOf(fn);
+
     if (body === undefined) return;
     // Containment is about the AWAITS, not about the shape of the body. The React
     // spelling is `setLoading(true); setErr(null); try { await … } catch { setErr(…) }
@@ -390,40 +437,55 @@ function asyncDefinitions(root: SyntaxNode): AsyncDefinitions {
     // which would reject the promise. Nothing in this tree does that, and modelling
     // it would mean deciding which sync calls can throw.
     const own = ownNodes(body);
+
     const guarded = own.filter((node) => {
       if (node.type !== 'TryStatement') return false;
       const handler = node.children.find((child) => child.type === 'CatchClause');
       const handlerBody = handler?.children.at(-1);
+
       return handlerBody !== undefined
         && !ownNodes(handlerBody).some((inner) => inner.type === 'ThrowStatement');
     });
+
     if (guarded.length === 0) return;
+
     const unguarded = own.some((node) => node.type === 'AwaitExpression'
       && !guarded.some((tried) => tried.start <= node.start && node.end <= tried.end));
+
     if (!unguarded) contained.add(name);
   };
+
   walk(root, (node) => {
     if (node.type === 'FunctionDeclaration' || node.type === 'MethodDefinition') {
       consider(declaredName(node), node);
+
       return;
     }
+
     if (node.type !== 'VariableDeclarator') return;
     const initialiser = node.children[1];
+
     if (initialiser === undefined) return;
     const name = identifierText(node.children[0] ?? node);
+
     if (initialiser.type === 'ArrowFunctionExpression' || initialiser.type === 'FunctionExpression') {
       consider(name, initialiser);
+
       return;
     }
+
     // `const load = useCallback(async () => { … }, [])` — the React spelling, and
     // what every `void load()` in this repo's UI actually resolves to.
     if (initialiser.type !== 'CallExpression') return;
+
     const wrapped = initialiser.children.slice(1).find(
       (argument) => argument.type === 'ArrowFunctionExpression'
         || argument.type === 'FunctionExpression',
     );
+
     if (wrapped !== undefined) consider(name, wrapped);
   });
+
   return { asynchronous, contained };
 }
 
@@ -432,9 +494,12 @@ function asyncDefinitions(root: SyntaxNode): AsyncDefinitions {
  *  this file's declarations. */
 function localCalleeName(call: SyntaxNode): string | undefined {
   const plain = identifierCalleeName(call);
+
   if (plain !== undefined) return plain;
   const callee = call.children[0];
+
   if (callee?.type !== 'MemberExpression') return undefined;
+
   return callee.children[0]?.type === 'ThisExpression'
     ? identifierText(callee.children[1] ?? callee)
     : undefined;
@@ -448,12 +513,16 @@ export function auditFile(file: string, text: string): readonly Drop[] {
   const { root, lineAt } = parse(file, text);
   const defined = asyncDefinitions(root);
   const found: Drop[] = [];
+
   const record = (kind: DropClass, node: SyntaxNode, sink: Sink): void => {
     let symbol = '<module>';
+
     for (let scope: SyntaxNode | undefined = node; scope !== undefined; scope = scope.parent) {
       const name = declaredName(scope);
+
       if (name !== undefined) { symbol = name; break; }
     }
+
     found.push({
       kind,
       sink,
@@ -471,11 +540,13 @@ export function auditFile(file: string, text: string): readonly Drop[] {
   const auditHandler = (scope: SyntaxNode, binding: string | undefined): boolean => {
     if (binding === undefined) return false;
     const { forwarded, projections } = fateOf(scope, binding);
+
     if (forwarded || projections.length === 0) return forwarded;
     // The outermost projection, once per handler: three `error.message` reads
     // feeding one log line are one dropped chain, not three.
     const site = projections[0] ?? scope;
     record('message_only', site, sinkOf(site));
+
     return false;
   };
 
@@ -497,25 +568,32 @@ export function auditFile(file: string, text: string): readonly Drop[] {
    */
   const auditAdapter = (fn: SyntaxNode): void => {
     const block = blockBodyOf(fn);
+
     const returned = block === undefined
       ? fn.children.at(-1)
       : block.children.length === 1 && block.children[0]?.type === 'ReturnStatement'
         ? block.children[0]
         : undefined;
+
     if (returned === undefined || returned.type === 'BlockStatement') return;
+
     // Parameters only: `children` also holds the body and any type annotation, and
     // the body is what we are about to search.
     const parameters = fn.children.filter(
       (child) => child !== block && child !== returned
         && (child.type === 'Identifier' || child.type === 'ObjectPattern'),
     );
+
     const bound: string[] = [];
+
     for (const parameter of parameters) {
       walk(parameter, (node) => {
         const name = node.type === 'Identifier' ? identifierText(node) : undefined;
+
         if (name !== undefined) bound.push(name);
       });
     }
+
     // The value must be EVIDENTLY an error. A `.message` field belongs to a
     // valibot `Issue`, a chat event and a timeline row as much as to an `Error`,
     // and 11 of the first 15 findings here were `(issue) => issue.message` over
@@ -526,17 +604,23 @@ export function auditFile(file: string, text: string): readonly Drop[] {
     // 26 of the real ones were written.
     const source = text.slice(fn.start, fn.end);
     const handlesAnError = /instanceof Error|:\s*unknown|<\w+>\s*\(/u.test(source);
+
     if (!handlesAnError) return;
+
     for (const name of bound) {
       let flattens = false;
       walk(returned, (node) => {
         if (node.type !== 'MemberExpression' || node.children[0]?.type !== 'Identifier') return;
+
         if (identifierText(node.children[0]) !== name) return;
         const property = identifierText(node.children[1] ?? node);
+
         if (property === 'message' || property === 'stack') flattens = true;
       });
+
       if (flattens && !fateOf(returned, name).forwarded) {
         record('projecting_helper', fn, 'wire');
+
         return;
       }
     }
@@ -550,6 +634,7 @@ export function auditFile(file: string, text: string): readonly Drop[] {
 
     if (node.type === 'CatchClause') {
       const body = node.children.at(-1);
+
       if (body === undefined || body.type !== 'BlockStatement') return;
       const own = ownNodes(body);
       const rethrows = own.some((statement) => statement.type === 'ThrowStatement');
@@ -558,21 +643,27 @@ export function auditFile(file: string, text: string): readonly Drop[] {
         const sentinel = own.find(
           (statement) => statement.type === 'ReturnStatement' && isSentinel(statement.children[0]),
         );
+
         if (sentinel !== undefined) record('logged_default', sentinel, 'wire');
       }
+
       const bound = node.children.length > 1 ? identifierText(node.children[0] ?? node) : undefined;
       auditHandler(body, bound);
+
       return;
     }
 
     if (node.type === 'CallExpression') {
       const handler = rejectionHandlerOf(node);
+
       if (handler !== undefined) {
         const block = blockBodyOf(handler);
         const scope = block ?? handler.children.at(-1);
+
         const parameter = handler.children.length > 1
           ? identifierText(handler.children[0] ?? handler)
           : undefined;
+
         const own = block === undefined ? [] : ownNodes(block);
         const rethrows = own.some((statement) => statement.type === 'ThrowStatement');
         const forwarded = scope === undefined ? false : auditHandler(scope, parameter);
@@ -583,40 +674,50 @@ export function auditFile(file: string, text: string): readonly Drop[] {
         if (block !== undefined && block.children.length > 0 && !rethrows && !forwarded) {
           const bare = block.children.length === 1
             && block.children[0]?.type === 'ReturnStatement';
+
           if (!bare) record('handler_absorbs', handler, 'wire');
         }
+
         for (const statement of own) {
           if (statement.type !== 'ThrowStatement') continue;
           const thrown = statement.children[0];
+
           if (thrown !== undefined && chainlessErrorConstruction(thrown)) {
             record('handler_drops_cause', statement, 'wire');
           }
         }
+
         return;
       }
     }
 
     if (node.type !== 'ExpressionStatement') return;
     const expression = node.children[0];
+
     if (expression === undefined) return;
 
     if (expression.type === 'UnaryExpression' && expression.raw.type === 'UnaryExpression'
       && expression.raw.operator === 'void') {
       const operand = expression.children[0];
+
       if (operand === undefined || operand.type !== 'CallExpression') return;
+
       if (chainHandlesRejection(operand)) return;
       // Judged only into silence: a name this file defines and proves cannot
       // reject is dropped, everything else — including a name that resolves
       // nowhere here — is reported.
       const callee = localCalleeName(operand);
+
       if (callee === undefined || !defined.contained.has(callee)) {
         record('voided_promise', node, 'wire');
       }
+
       return;
     }
 
     if (expression.type !== 'CallExpression') return;
     const callee = localCalleeName(expression);
+
     if (callee !== undefined && defined.asynchronous.has(callee)
       && !defined.contained.has(callee) && !chainHandlesRejection(expression)) {
       record('floating_rejection', node, 'wire');
@@ -631,7 +732,9 @@ export function auditFile(file: string, text: string): readonly Drop[] {
  *  describe different repositories. */
 export function auditCorpus(sources: ReadonlyMap<string, string>): readonly Drop[] {
   const drops: Drop[] = [];
+
   for (const [file, text] of sources) drops.push(...auditFile(file, text));
+
   return drops;
 }
 
@@ -645,24 +748,32 @@ export const keyOf = (drop: Drop): string =>
  *  and computing them twice is how two numbers that must agree stop agreeing. */
 export function census(drops: readonly Drop[]): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
+
   for (const kind of DROP_CLASSES) counts.set(kind, 0);
+
   for (const drop of drops) {
     counts.set(drop.kind, (counts.get(drop.kind) ?? 0) + 1);
     counts.set(`${drop.kind}/${drop.sink}`, (counts.get(`${drop.kind}/${drop.sink}`) ?? 0) + 1);
   }
+
   return counts;
 }
 
 function detailOf(drops: readonly Drop[]): ReadonlyMap<string, string> {
   const sites = new Map<string, Drop[]>();
+
   for (const drop of drops) {
     const existing = sites.get(keyOf(drop));
+
     if (existing === undefined) sites.set(keyOf(drop), [drop]);
     else existing.push(drop);
   }
+
   const detail = new Map<string, string>();
+
   for (const [key, group] of sites) {
     const first = group[0];
+
     if (first === undefined) continue;
     const described = DROPS[first.kind];
     detail.set(key, finding({
@@ -673,6 +784,7 @@ function detailOf(drops: readonly Drop[]): ReadonlyMap<string, string> {
       fix: described.fix,
     }));
   }
+
   return detail;
 }
 
@@ -688,27 +800,35 @@ async function main(): Promise<number> {
       .reduce((total, text) => total + (text.match(/\bcatch\b/gu)?.length ?? 0), 0)],
     ['classes searched', DROP_CLASSES.length],
   ]);
+
   const keys = drops.map(keyOf);
 
   if (process.argv.includes('--table')) {
     const counts = census(drops);
     console.log(`silent-drop: ${measured}`);
+
     for (const kind of DROP_CLASSES) {
       console.log(`  ${String(counts.get(kind) ?? 0).padStart(4)}  ${kind}`
         + `  [past ${DROPS[kind].blindTo}]`);
+
       for (const sink of SINKS) {
         const count = counts.get(`${kind}/${sink}`) ?? 0;
+
         if (count > 0) console.log(`        ${String(count).padStart(4)}  -> ${sink}`);
       }
     }
+
     console.log(`  ${String(drops.length).padStart(4)}  instances over ${new Set(keys).size} sites`);
+
     return 0;
   }
 
   if (process.argv.includes('--lock')) {
     console.log(`silent-drop: locked ${writeLock(keys, LOCK)} site(s) — ${measured}`);
+
     return 0;
   }
+
   return report('silent-drop', reconcile(keys, LOCK), detailOf(drops),
     'bun scripts/silent-drop.ts --lock', measured);
 }

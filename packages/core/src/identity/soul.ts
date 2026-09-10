@@ -44,8 +44,10 @@ export const DEFAULT_SOUL_MD = [
  *  Compared on a prefix because `summarizeSoul` truncates long missions. */
 export function isPlaceholderMission(mission: string | null | undefined): boolean {
   const text = mission?.trim() ?? '';
+
   if (!text) return true;
   const key = missionKey(text);
+
   return PLACEHOLDER_MISSIONS.some((placeholder) => missionKey(placeholder) === key);
 }
 
@@ -74,6 +76,7 @@ export const WORKSPACE_CREATED_EVENT = 'workspace_created';
  */
 export function workspaceGenesisSignal(mission: string | null | undefined): AgentSignal | null {
   if (isPlaceholderMission(mission)) return null;
+
   return {
     kind: WORKSPACE_CREATED_EVENT,
     requiresOwnTurn: true,
@@ -112,20 +115,26 @@ export function renderSoulMarkdown(input: { name: string; mission?: string }): s
 function soulSummaryFromMarkdown(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
   const missionIndex = lines.findIndex((line) => /^##\s+mission\s*$/i.test(line.trim()));
+
   if (missionIndex >= 0) {
     const missionLines: string[] = [];
+
     for (const line of lines.slice(missionIndex + 1)) {
       if (/^##\s+/.test(line.trim())) break;
       const trimmed = line.trim();
+
       if (trimmed) missionLines.push(trimmed);
     }
+
     const mission = missionLines.join(' ').trim();
+
     if (mission) return mission;
   }
 
   const firstContent = lines
     .map((line) => line.trim())
     .find((line) => line && !line.startsWith('#'));
+
   return firstContent ?? '';
 }
 
@@ -133,7 +142,9 @@ function soulSummaryFromMarkdown(markdown: string): string {
  *  {@link summarizeSoul} and its streaming twin, so the two cannot drift. */
 function clampSummary(text: string, maxLength: number): string {
   const summary = text.replace(/\s+/g, ' ').trim();
+
   if (summary.length <= maxLength) return summary;
+
   return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
@@ -158,11 +169,14 @@ const SOUL_SCAN_CHUNK_BYTES = 64 * 1024;
 export function summarizeSoulBytes(bytes: Uint8Array, maxLength = 220): string {
   const decoder = new TextDecoder();
   const scan = new SoulSummaryScan(maxLength);
+
   for (let at = 0; at < bytes.byteLength; at += SOUL_SCAN_CHUNK_BYTES) {
     const end = Math.min(at + SOUL_SCAN_CHUNK_BYTES, bytes.byteLength);
     scan.read(decoder.decode(bytes.subarray(at, end), { stream: true }));
   }
+
   scan.read(decoder.decode());
+
   return scan.summary();
 }
 
@@ -194,12 +208,16 @@ class SoulSummaryScan {
 
   read(text: string): void {
     let at = 0;
+
     for (;;) {
       const newline = text.indexOf('\n', at);
+
       if (newline < 0) {
         this.feed(text.slice(at));
+
         return;
       }
+
       this.feed(text.slice(at, newline));
       this.endLine();
       at = newline + 1;
@@ -209,6 +227,7 @@ class SoulSummaryScan {
   summary(): string {
     this.endLine();
     const chosen = this.mission !== '' ? this.mission : this.firstContent ?? '';
+
     return clampSummary(chosen, this.maxLength);
   }
 
@@ -218,10 +237,13 @@ class SoulSummaryScan {
     if (piece === '') return;
     const collapsed = piece.replace(/\s+/g, ' ');
     const body = collapsed.trim();
+
     if (body === '') {
       this.spacePending = this.spacePending || this.lineStarted;
+
       return;
     }
+
     if (this.lineStarted && (this.spacePending || collapsed.startsWith(' '))) this.append(' ');
     this.append(body);
     this.lineStarted = true;
@@ -230,10 +252,13 @@ class SoulSummaryScan {
 
   private append(text: string): void {
     const room = this.cap - this.line.length;
+
     if (room <= 0) {
       this.lineOverflowed = true;
+
       return;
     }
+
     if (text.length > room) this.lineOverflowed = true;
     this.line += text.slice(0, room);
   }
@@ -247,21 +272,32 @@ class SoulSummaryScan {
     this.spacePending = false;
 
     if (this.inMission) {
-      if (/^##\s/.test(line)) { this.inMission = false; return; }
+      if (/^##\s/.test(line)) {
+        this.inMission = false;
+
+        return;
+      }
+
       if (line === '') return;
+
       if (this.mission.length >= this.cap) return;
       this.mission = this.mission === '' ? line : `${this.mission} ${line}`;
+
       if (this.mission.length > this.cap) this.mission = this.mission.slice(0, this.cap);
+
       return;
     }
+
     // Only the FIRST mission heading opens the section, exactly as the
     // whole-document form's `findIndex` does. A line that ran past the cap
     // carries more than the heading and is therefore not one.
     if (!this.missionSeen && !overflowed && line.toLowerCase() === '## mission') {
       this.missionSeen = true;
       this.inMission = true;
+
       return;
     }
+
     if (this.firstContent === null && line !== '' && !line.startsWith('#')) {
       this.firstContent = line;
     }
@@ -282,6 +318,7 @@ class SoulSummaryScan {
 export async function readSoul(vfs: VFS): Promise<string | null> {
   if (!await vfs.exists(SOUL_PATH)) return null;
   const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
+
   return text.trim() ? text : null;
 }
 
@@ -295,6 +332,7 @@ export function readMission(sql: SqlExecutor): string | null {
   const mission = sql<{ mission: string | null }>`
     SELECT mission FROM workspace_identity LIMIT 1
   `[0]?.mission?.trim();
+
   return mission || null;
 }
 
@@ -321,5 +359,6 @@ export async function seedSoul(
 ): Promise<string> {
   const soul = renderSoulMarkdown(input);
   await writeSoul(vfs, sql, soul);
+
   return soul;
 }

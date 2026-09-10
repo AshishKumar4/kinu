@@ -102,16 +102,21 @@ export async function suggestAgentIdentityFromMission(
   opts: SuggestAgentIdentityOptions = {},
 ): Promise<SuggestedWorkspaceIdentity> {
   const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
+
   try {
     const raw = opts.generate
       ? await opts.generate(mission, opts.signal)
       : await generateTitleJson(mission, opts);
+
     const title = parseWorkspaceTitle(raw);
+
     if (opts.signal?.aborted) throw opts.signal.reason;
+
     return title ? { ...fallback, displayName: title } : fallback;
   } catch (error) {
     if (opts.signal?.aborted) throw opts.signal.reason;
     diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
+
     return fallback;
   }
 }
@@ -127,6 +132,7 @@ export async function createCloudAgentFromMission(
   options: CreateCloudAgentFromMissionOptions,
 ): Promise<CloudAgent> {
   const userNamed = Boolean(input.name) && input.nameOrigin !== 'auto';
+
   const identity = userNamed
     ? { name: input.name, displayName: input.displayName ?? input.name }
     : await suggestAgentIdentityFromMission(input.purpose, {
@@ -136,14 +142,19 @@ export async function createCloudAgentFromMission(
         auth: input.auth,
         generate: options.generate,
       });
+
   const createInput: CreateCloudAgentInput = {
     name: identity.name,
     displayName: identity.displayName,
     purpose: input.purpose,
   };
+
   if (input.model) createInput.model = input.model;
+
   if (input.reasoningEffort) createInput.reasoningEffort = input.reasoningEffort;
+
   if (input.role) createInput.role = input.role;
+
   return options.create(createInput);
 }
 
@@ -174,11 +185,13 @@ export function defaultCreateMode(): AgentMode {
 export async function createCliAgent(input: CreateCliAgentInput): Promise<CreatedCliAgent> {
   ensureAgentHome();
   const purpose = input.purpose.trim();
+
   if (!purpose) throw new Error('Mission required.');
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
     const defaults = loadConfigFile();
+
     const agent = await createCloudAgentFromMission({
       ...input,
       purpose,
@@ -187,6 +200,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     }, {
       create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
+
     upsertAgentConfig({
       name: agent.name,
       mode: 'cloud',
@@ -195,20 +209,25 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       alias: input.alias || undefined,
     });
     const aliasPath = input.alias ? writeAliasShim(agent.name, input.alias) : undefined;
+
     return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
   }
 
   const name = input.name;
+
   if (!name) throw new Error('Agent name required for a local workspace.');
   const displayName = input.displayName ?? name;
   const cwd = canonicalProjectRoot(input.cwd);
   const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
   validateWorkspaceId(workspaceId);
   const claimed = resolveAgentRef(name);
+
   if (claimed && claimed.mode !== 'local') {
     throw new Error(`"${name}" is already a cloud workspace. Choose another name.`);
   }
+
   const dbPath = agentDbPath(name);
+
   if (existsSync(dbPath)) throw new Error(nameTaken(name, dbPath, claimed));
   // Read before the workspace exists, so it reports who this agent JOINS.
   const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
@@ -230,6 +249,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const partial = `${dbPath}.partial`;
   discardPartialWorkspace(partial);
   const db = new Database(partial, { create: true });
+
   try {
     db.exec('PRAGMA journal_mode = WAL');
     // Address and title are two fields, because they are two things. The slug
@@ -243,10 +263,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     const agentConfig = rt.actor.config;
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
     const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
+
     if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
     // Title and whose it is, in one write. The origin is what the title policy
     // reads to decide whether it may ever name this agent itself.
     agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
+
     if (input.role && input.role !== DEFAULT_ROLE_ID) {
       const changed = changeActiveRole({
         config: agentConfig,
@@ -254,10 +276,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         to: input.role,
         actor: 'user',
       });
+
       if (changed.kind !== 'applied') {
         throw new Error(roleChangeOutcomeText(input.role, changed, DEFAULT_ROLE_ID));
       }
     }
+
     // Everything this database holds has to be IN it before the rename that
     // publishes it, and it has to be readable with nothing beside it. A
     // WAL-mode database keeps its writes in the `-wal` sidecar until a
@@ -279,6 +303,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     db.exec('PRAGMA journal_mode = DELETE');
   } catch (error) {
     db.close();
+
     // Compensation is not allowed to swallow the failure it is compensating
     // for, and it is not allowed to be swallowed either: a partial that cannot
     // be removed is a name that will refuse to be created again.
@@ -291,8 +316,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         { cause: error },
       );
     }
+
     throw error;
   }
+
   db.close();
   // THE PUBLICATION. Past this line the workspace is complete and openable, so
   // a failure below is no longer a ghost: an agent.db with no ref in the config
@@ -315,6 +342,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
   ensureLocalDaemonRunning();
+
   return {
     name, displayName, mode: 'local', purpose, model: llmConfig.model,
     dbPath, aliasPath, cwd, workspaceId, peers,
@@ -344,12 +372,14 @@ export async function createLocalPeerAgent(
   validateWorkspaceId(workspaceId);
   const peers = localWorkspaceMembers(workspaceId, cwd);
   const purpose = inheritedPeerMission(peers);
+
   if (!purpose) {
     throw new Error(
       `No agent in workspace "${workspaceId}" to inherit a mission from. `
       + 'Create the first one with: kinu create',
     );
   }
+
   const created: CreateCliAgentInput = {
     // Same permanent-address shape the cloud path mints: a neutral memorable
     // pair plus id digits, never mission text.
@@ -361,7 +391,9 @@ export async function createLocalPeerAgent(
     cwd,
     workspaceId,
   };
+
   if (input.role) created.role = input.role;
+
   return createCliAgent(created);
 }
 
@@ -371,15 +403,19 @@ export async function createLocalPeerAgent(
 function inheritedPeerMission(peers: readonly { name: string }[]): string | null {
   for (const peer of peers) {
     const dbPath = agentDbPath(peer.name);
+
     if (!existsSync(dbPath)) continue;
     const db = new Database(dbPath, { readonly: true });
+
     try {
       const mission = readMission(makeSql(db));
+
       if (mission) return mission;
     } finally {
       db.close();
     }
   }
+
   return null;
 }
 
@@ -398,15 +434,19 @@ export interface RenamedLocalAgent {
  * origin. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
   const title = displayName.trim();
+
   if (!title) throw new Error('A name is required.');
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);
   const db = new Database(dbPath);
+
   try {
     openWorkspaceMainActor(makeSql(db)).config.setDisplayNameOrigin(title, 'user');
   } finally {
     db.close();
   }
+
   return { name, displayName: title };
 }
 
@@ -425,11 +465,13 @@ function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspace
   const placement = held?.cwd && held.workspaceId
     ? ` It belongs to workspace "${held.workspaceId}" in ${held.cwd}.`
     : '';
+
   return `Workspace "${name}" already exists at ${dbPath}.${placement} Choose another name.`;
 }
 
 async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {
   const { resolver } = createConfiguredLocalModelResolver(opts);
+
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
     system: WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -439,6 +481,7 @@ async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOpti
     // JSON, so a cap starves them into empty text (the fallback-name bug).
     // Cheapness comes from low reasoning effort, not output caps.
   });
+
   return result.text;
 }
 
@@ -448,6 +491,7 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
   } catch (err) {
     if (!allowInteractiveAuth || !process.stdin.isTTY || !process.stdout.isTTY) throw err;
     await authCommand({ origin });
+
     return requireAuthConfig();
   }
 }
@@ -464,8 +508,10 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
  */
 function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
   const configured = rawModel ?? loadConfigFile().model;
+
   if (configured) return configured;
   const derived = defaultSpecForEndpoint(llm);
+
   if (derived) return derived;
   throw new Error(`No model for "${llm.name}": name one with --model, or run kinu setup.`);
 }

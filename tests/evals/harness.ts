@@ -173,6 +173,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const taskList = new TaskListStore(sql, rt.actor, rt.storage.transactionSync);
   const config = rt.actor.config;
   const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
+
   // This builds a TOOL SURFACE — the tools, the action enum and the system
   // prompt — for arms that assert their shape. It holds no session, and local
   // node hosting is session-bound by design (`LocalAgentSession.hostNode`: the
@@ -189,7 +190,9 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       + 'drive the rung through a target that implements hostNode',
     )),
   };
+
   const agents: AgentsToolDeps = { mode: 'build', swarm };
+
   const tools = buildActorTools({
     rt,
     craftedToolExecute: createNodeCraftedExecute(),
@@ -206,8 +209,10 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     facts,
     webSearch,
   });
+
   const builtinTools = Object.keys(tools).filter(isBuiltinToolName);
   const agentsActions = agentsActionsFor(agents);
+
   return {
     tools,
     builtinTools,
@@ -229,6 +234,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     }),
   };
 }
+
 /**
  * The tool-traffic half of one `generateText` turn, collected the same way by
  * every suite that drives the inner API.
@@ -254,15 +260,19 @@ export function createStepToolCallLog(): StepToolCallLog {
     onStepFinish(step) {
       log.steps += 1;
       const byId = new Map<string, ToolCallRecord>();
+
       for (const call of step.toolCalls) {
         const record: ToolCallRecord = { name: call.toolName, args: v.parse(JsonObjectSchema, call.input), result: null };
         log.records.push(record);
         byId.set(call.toolCallId, record);
       }
+
       for (const part of step.content) {
         if (part.type !== 'tool-result' && part.type !== 'tool-error') continue;
         const record = byId.get(part.toolCallId);
+
         if (!record) continue;
+
         if (part.type === 'tool-result') {
           if (part.preliminary) continue;
           record.result = projectJsonValue({ value: part.output });
@@ -274,6 +284,7 @@ export function createStepToolCallLog(): StepToolCallLog {
       }
     },
   };
+
   return log;
 }
 
@@ -287,6 +298,7 @@ export function createStepToolCallLog(): StepToolCallLog {
  */
 export function makeSessionWriter(): SessionWriter {
   const msgs: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
+
   return {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       msgs.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map((p) => p.text).join('') });
@@ -295,11 +307,13 @@ export function makeSessionWriter(): SessionWriter {
       if (!leafId) return msgs.map((m) => ({ role: m.role, content: m.content }));
       const result: Array<{ role: string; content: string }> = [];
       let cur = msgs.find((m) => m.id === leafId);
+
       while (cur) {
         result.unshift({ role: cur.role, content: cur.content });
         const parentId = cur.parentId;
         cur = parentId ? msgs.find((m) => m.id === parentId) : undefined;
       }
+
       return result;
     },
   };
@@ -362,6 +376,7 @@ interface ObservedRequest {
  *  branch of the wrapper below can be annotated: a literal typed as the union
  *  gets no contextual parameter types, and the callbacks fall to `any`. */
 type ModelV2 = Extract<LanguageModel, { specificationVersion: 'v2' }>;
+
 type ModelV3 = Extract<LanguageModel, { specificationVersion: 'v3' }>;
 
 /**
@@ -414,6 +429,7 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
       'recordRequestSurface needs a resolved LanguageModel, not a model id string: '
       + 'a string is resolved inside the SDK, where the request cannot be observed');
   }
+
   const offered = new Set<string>();
   let calls = 0;
   let systemChars = 0;
@@ -421,27 +437,48 @@ export function recordRequestSurface(model: LanguageModel): RecordedRequestSurfa
 
   const observe = (options: ObservedRequest): void => {
     calls += 1;
+
     for (const entry of options.tools ?? []) offered.add(entry.name);
+
     const system = options.prompt
       .flatMap((message) => {
         const parsed = v.safeParse(SYSTEM_MESSAGE, message);
+
         return parsed.success ? [parsed.output.content] : [];
       })
       .join('\n');
+
     systemChars = Math.max(systemChars, system.length);
+
     if (system.includes(AGENTS_INDEX_MARKER)) agentsIndexed = true;
   };
 
   const recording: LanguageModel = model.specificationVersion === 'v2'
     ? ({
       ...model,
-      doGenerate: (options) => { observe(options); return model.doGenerate(options); },
-      doStream: (options) => { observe(options); return model.doStream(options); },
+      doGenerate: (options) => {
+        observe(options);
+
+        return model.doGenerate(options);
+      },
+      doStream: (options) => {
+        observe(options);
+
+        return model.doStream(options);
+      },
     } satisfies ModelV2)
     : ({
       ...model,
-      doGenerate: (options) => { observe(options); return model.doGenerate(options); },
-      doStream: (options) => { observe(options); return model.doStream(options); },
+      doGenerate: (options) => {
+        observe(options);
+
+        return model.doGenerate(options);
+      },
+      doStream: (options) => {
+        observe(options);
+
+        return model.doStream(options);
+      },
     } satisfies ModelV3);
 
   return {
@@ -534,6 +571,7 @@ function toScoreJson(rows: readonly EvalScoreRow[]): BehaviourScoreJson[] {
       name: row.name, asserts: row.asserts, eligible: row.eligible,
       passed: row.passed, rate: row.rate, detail: row.detail,
     };
+
     return row.measured === undefined ? json : { ...json, measured: { ...row.measured } };
   });
 }
@@ -602,6 +640,7 @@ export function readLedgerTotals(db: Database): LedgerTotals {
  */
 export function readRunEvents(db: Database): RunEvent[] {
   const sql = makeSql(db);
+
   return walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql)));
 }
 
@@ -623,9 +662,11 @@ export function readRunEvents(db: Database): RunEvent[] {
  */
 export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson {
   const sql = makeSql(db);
+
   const { totalEvents, bound, events } = projectRunEventProvenance(
     walkRunEvents(new RunEventRecorder(sql, openWorkspaceMainActor(sql))),
   );
+
   return {
     totalEvents,
     bound,
@@ -633,10 +674,15 @@ export function collectRunEventProvenance(db: Database): BehaviourProvenanceJson
       const row: BehaviourProvenanceEventJson = {
         runId: event.runId, timestamp: event.timestamp, eventIndex: event.eventIndex, type: event.type,
       };
+
       if (event.name !== undefined) row.name = event.name;
+
       if (event.durationMs !== undefined) row.durationMs = event.durationMs;
+
       if (event.failureClass !== undefined) row.failureClass = event.failureClass;
+
       if (event.outcome !== undefined) row.outcome = event.outcome;
+
       return row;
     }),
   };
@@ -698,8 +744,10 @@ export class DegenerateRuntimeError extends Error {
  */
 export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
   const router = rt.executionRouter;
+
   if (!router) throw new DegenerateRuntimeError(taskId, 'rt.executionRouter is absent');
   const providers = router.getProviders();
+
   if (providers.length === 0) {
     throw new DegenerateRuntimeError(taskId, 'rt.executionRouter has zero registered providers');
   }
@@ -804,12 +852,14 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     roles: BUILTIN_PROFILE_CATALOG.roles,
     tiers: { default: { model: llm.model } },
   };
+
   const envelope: ProfileCatalogEnvelope = {
     authority: { kind: 'local' },
     version: 0,
     digest: profileCatalogDigest(catalog),
     catalog,
   };
+
   // `revision` must change when the availability picture does
   // (profiles/resolve.ts:46-53). This picture is one pinned model for the life
   // of the suite, so the model id IS the revision.
@@ -817,12 +867,15 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
     revision: `eval-pinned:${llm.model}`,
     availableModels: [llm.model],
   };
+
   const config = rt.actor.config;
   const role = config.getRoleSelection();
+
   if (!rt.setProfileResolver) {
     throw new Error('this runtime exposes no setProfileResolver, so its model lanes cannot be '
       + 'wired and every judge, fast and reflection call would fail before reaching a model');
   }
+
   rt.setProfileResolver(() => Promise.resolve(resolveAgentTurnProfile({
     envelope,
     provider,
@@ -852,11 +905,13 @@ export function installPreTurnProfile(rt: CLIRuntime, llm: LLMProviderConfig): v
  */
 export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
   const shell = rt.shell;
+
   if (!shell) {
     throw new DegenerateRuntimeError(taskId,
       'rt.shell is absent, so this task\'s verifier could not run its measurement harness '
       + 'and every attempt would score zero for a reason that is not about the agent');
   }
+
   return shell;
 }
 
@@ -938,8 +993,11 @@ export async function runBehaviourTask(
   // mechanism-only corpus row and both defined is impossible by construction.
   const probe: BehaviourProbe | undefined = probeFor(task);
   const shell = hard === undefined ? undefined : requireVerifierShell(task.id, rt);
+
   if (hard !== undefined) await seedHardTask(hard, rt.storage.vfs);
+
   if (probe !== undefined) await seedProbe(probe, rt.storage.vfs);
+
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
   const session = new LocalAgentSession({
@@ -949,6 +1007,7 @@ export async function runBehaviourTask(
     noAutoEvolve: !opts.arm.evolution,
     oneShot: true,
   });
+
   // The episode's wall clock, send to settled. The verifier below runs commands
   // through `rt.shell`, so the clock stops BEFORE grading: a slow verifier is
   // the instrument's cost, not the agent's, and charging it to the episode
@@ -998,6 +1057,7 @@ export async function runBehaviourTask(
         files: {
           readText: async (path) => {
             let content: string | Uint8Array;
+
             try {
               content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
             } catch (error) {
@@ -1006,9 +1066,11 @@ export async function runBehaviourTask(
               if (isVfsError(error) && error.code === 'ENOENT') return null;
               throw error;
             }
+
             // A file whose bytes are not text cannot be the exact text the
             // probe asked for — also a miss, measured rather than thrown.
             const text = v.safeParse(v.string(), content);
+
             return text.success ? text.output : null;
           },
         },
@@ -1018,6 +1080,7 @@ export async function runBehaviourTask(
       vfs: rt.storage.vfs,
       exec: (command) => shell.exec(command),
     })];
+
   // THE COST, beside the outcome and the mechanisms. Measured, never enforced:
   // nothing above changes what the agent may do, and an over-budget episode
   // still reports whether it solved the task. Steps and tokens come off the
@@ -1030,6 +1093,7 @@ export async function runBehaviourTask(
   // the model had, so it fails — and it says so under its own name, because a
   // truncated reply and a wrong reply send a reader to different places.
   const cap = outputCapRow(bound.lastStepReason);
+
   const budget = budgetRow(task.budget ?? {}, {
     steps: totals.steps,
     tokens: totals.tokensIn + totals.tokensOut,

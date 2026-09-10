@@ -84,14 +84,17 @@ is a claim to check, not evidence. Say which tree, which command, and which revi
 The anti-slop plugin is **vendored**, not a dependency: upstream
 [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) is `private: true` and publishes no
 npm package. `tools/oxlint/anti-slop/upstream.json` pins the upstream commit and a digest per
-vendored file, and `drift.test.ts` fails naming any file that diverged. Three rules are
-deliberately stronger than upstream and are declared there with their reason; changing one fails
-the gate rather than passing as a sync. To take a newer upstream:
+vendored file, and `drift.test.ts` fails naming any file that diverged. Five rules are
+deliberately stronger than upstream (a carve-out upstream added is not taken here) and are
+declared there with their reason; changing one fails the gate rather than passing as a sync. The
+manifest's `$notVendored` names the upstream files left out on purpose, with the measurement
+behind each, so their absence is read as policy rather than drift. To take a newer upstream:
 
 ```bash
 git clone https://github.com/dmmulroy/anti-slop /tmp/anti-slop
-# merge upstream's rules/ and src/rules/*.test.ts into tools/oxlint/anti-slop/, keeping the
-# declared local deltas, then re-pin:
+# merge upstream's rules/, shared/ and src/rules/*.test.ts into tools/oxlint/anti-slop/, keeping
+# the declared local deltas (a change upstream makes that ACCEPTS something the vendored copy
+# rejects is kept out and declared, never taken), then re-pin:
 ANTI_SLOP_UPSTREAM=/tmp/anti-slop node --experimental-strip-types \
   tools/oxlint/anti-slop/drift.test.ts --update
 bun run test:anti-slop

@@ -137,6 +137,7 @@ const ROOT_ONLY_TABLES = [
  *  Built here rather than imported from cli-backend, which core may not reach. */
 function schemaSql(db: InstanceType<typeof Database>): WorkspaceSchemaSql {
   const wrapped = wrapDatabase(db);
+
   return { execRaw: wrapped.execRaw, sql: wrapped.sql, exec: makeSqlExec(db) };
 }
 
@@ -162,8 +163,10 @@ function declaredColumns(db: InstanceType<typeof Database>) {
 
 function initialized(init: (db: WorkspaceSchemaSql) => void): Set<string> {
   const db = new Database(':memory:');
+
   try {
     init(schemaSql(db));
+
     return tablesOf(db);
   } finally {
     db.close();
@@ -185,6 +188,7 @@ describe('workspace schema is the only path', () => {
         absent: [...initialized(init)].filter((table) => !workspaceTier.has(table)).sort(),
       }))
       .filter((row) => row.absent.length > 0);
+
     expect(missing).toEqual([]);
   });
 
@@ -192,9 +196,11 @@ describe('workspace schema is the only path', () => {
     // An initializer that creates nothing makes its row above free, and a
     // truncated map would make every row free.
     expect(Object.keys(OWNED).length).toBeGreaterThanOrEqual(30);
+
     const empty = Object.entries(OWNED)
       .filter(([, init]) => initialized(init).size === 0)
       .map(([name]) => name);
+
     expect(empty).toEqual([]);
   });
 
@@ -218,9 +224,11 @@ describe('workspace schema is the only path', () => {
     // folds its shadows away from.
     const db = new Database(':memory:');
     initWorkspaceSchema(schemaSql(db));
+
     const rows = db.query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE name IN ('memory_chunks', 'memory_chunks_fts') ORDER BY name`,
     ).all();
+
     expect(rows).toEqual([{ name: 'memory_chunks' }, { name: 'memory_chunks_fts' }]);
     db.close();
   });

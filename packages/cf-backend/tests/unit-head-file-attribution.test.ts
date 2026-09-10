@@ -50,8 +50,10 @@ function barrier(count: number): () => Promise<void> {
   let arrived = 0;
   let release = (): void => undefined;
   const open = new Promise<void>((resolve) => { release = () => { resolve(); }; });
+
   return async () => {
     arrived += 1;
+
     if (arrived >= count) release();
     await open;
   };
@@ -77,6 +79,7 @@ async function headFixture(
   const entry = await workspace.agent.actorDirectory({
     action: 'register', creationId: id, name: explorationActorKey(id), kind: 'head', lifetime: 'task',
   });
+
   return {
     notes: `${agentHome(headAgentName(parseActorKey(entry.storageKey).id))}/notes.md`,
     input: {
@@ -118,7 +121,9 @@ function writingModel(heads: readonly HeadFixture[], arrive: () => Promise<void>
     doGenerate: async (options): Promise<ScriptedTurnResult> => {
       const prompt = JSON.stringify(options.prompt);
       const head = heads.find((candidate) => prompt.includes(candidate.input.task));
+
       if (!head) throw new Error('the head prompt named no task this fixture scripted');
+
       if (options.prompt.some((message) => message.role === 'tool')) {
         return {
           content: [{ type: 'text' as const, text: `wrote ${head.notes}` }],
@@ -126,7 +131,9 @@ function writingModel(heads: readonly HeadFixture[], arrive: () => Promise<void>
           usage: USAGE, warnings: [],
         };
       }
+
       await arrive();
+
       return {
         content: [{
           type: 'tool-call' as const,

@@ -11,6 +11,7 @@ function createStore(seed: Record<string, string>) {
 	const fs = createMemoryVfs(seed);
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
+
 	return { fs, store };
 }
 
@@ -28,6 +29,7 @@ describe("MemoryStore reads distinguish absence from breakage", () => {
 		expect(await store.readFile("memory/MEMORY.md")).toBe("# notes");
 
 		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };
+
 		await expect(store.readFile("memory/MEMORY.md")).rejects.toThrow("EIO");
 	});
 
@@ -36,9 +38,11 @@ describe("MemoryStore reads distinguish absence from breakage", () => {
 		expect(await store.listLogFiles()).toEqual(["memory/logs/2026-08-17.md"]);
 
 		fs.readdir = async (path: string) => { throw enoent(path); };
+
 		expect(await store.listLogFiles()).toEqual([]);
 
 		fs.readdir = async () => { throw new Error("EIO: the store is unreachable"); };
+
 		await expect(store.listLogFiles()).rejects.toThrow("EIO");
 	});
 
@@ -47,9 +51,11 @@ describe("MemoryStore reads distinguish absence from breakage", () => {
 		expect(await store.listFiles()).toEqual(["MEMORY.md"]);
 
 		fs.readdir = async (path: string) => { throw enoent(path); };
+
 		expect(await store.listFiles()).toEqual([]);
 
 		fs.readdir = async () => { throw new Error("EIO: the store is unreachable"); };
+
 		await expect(store.listFiles()).rejects.toThrow("EIO");
 	});
 });

@@ -78,6 +78,7 @@ function ledgerOnly() {
   const sql = makeSql(db);
   initSearchTables(makeExecRaw(db));
   initMctsSearchTable(makeExecRaw(db));
+
   return new MctsSearchStore(sql, createTestActorsOver(db).main);
 }
 
@@ -185,6 +186,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     });
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${actor.actorId}, 'mid-level', 'mid-level', ${TASK}, 'root')`;
+
     return { sql, ledger, actor };
   }
 
@@ -212,9 +214,11 @@ describe('swarm progress reads the durable tree, not the row', () => {
     ]);
     expect(ledger.get('mid-level')).toMatchObject({ iteration: 3, budget: 3 });
     expect(ledger.list(10)[0]).toMatchObject({ iteration: 3, budget: 3 });
+
     const cols = sql<{ iteration: number; budget: number }>`
       SELECT iteration, budget FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0];
+
     expect(cols).toEqual({ iteration: 0, budget: 6 });
   });
 
@@ -236,9 +240,11 @@ describe('swarm progress reads the durable tree, not the row', () => {
     expand(sql, actor, [['c1', 'mid-level']], 1);
 
     ledger.touch('mid-level', 0, 5_000);
+
     const row = sql<{ updated_at: number; status: string; iteration: number; budget: number; epoch: number }>`
       SELECT updated_at, status, iteration, budget, epoch FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0];
+
     expect(row?.updated_at).toBe(5_000);
     expect(row).toMatchObject({ status: 'running', iteration: 0, budget: 6, epoch: 0 });
 
@@ -280,6 +286,7 @@ describe('harvesting a capped swarm', () => {
     beganSwarm(ledger, 'harvest-root', 1_000);
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${actor.actorId}, 'harvest-root', 'harvest-root', ${TASK}, 'root')`;
+
     return { sql, ledger, actor, sibling: actors.sibling };
   }
 
@@ -360,6 +367,7 @@ describe('harvesting a capped swarm', () => {
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES (${actor.actorId}, 'sealed', 'harvest-root', 'harvest-root', ${TASK},
               'candidate answer', 1)`;
+
     const breach = {
       floor: {
         value: 1_200,
@@ -371,6 +379,7 @@ describe('harvesting a capped swarm', () => {
       margin: 0.599,
       hypotheses: ['floor_wrong', 'verifier_gameable'] as const,
     };
+
     recordSwarmNode(sql, actor, {
       rootId: 'harvest-root',
       nodeId: 'sealed',
@@ -454,6 +463,7 @@ describe('the durable record envelope is versioned', () => {
       VALUES (${rt.actor.actorId}, 'root', 'root', ${TASK}, 'root')`;
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
       VALUES (${rt.actor.actorId}, 'n1', 'root', 'root', ${TASK}, 'answer one', 1)`;
+
     return { sql, ledger, journal, actor: rt.actor };
   }
 
@@ -473,9 +483,11 @@ describe('the durable record envelope is versioned', () => {
     recordSwarmNode(fixture.sql, fixture.actor, {
       rootId: 'root', nodeId: 'n1', record: A_RECORD, now: 2_000,
     });
+
     const [stored] = fixture.sql<{ record_json: string }>`
       SELECT record_json FROM swarm_node_records
         WHERE actor_id = ${fixture.actor.actorId} AND node_id = 'n1'`;
+
     expect(JSON.parse(stored.record_json).v).toBe(RECORD_SCHEMA_VERSION);
     expect(reenter(fixture)?.nodes.find((node) => node.id === 'n1')?.record).toEqual(A_RECORD);
   });
@@ -595,6 +607,7 @@ function config(): SwarmConfig {
     carry: { kind: 'none' },
   };
 }
+
 /** The CAPS both halves of a suite must agree on: the TOOL input and the resolved
  *  call have to name the same two, or the re-drive replays a different search from
  *  the one the first attempt ran. */
@@ -625,16 +638,21 @@ function resolved(caps: SearchCaps = DEEP_SEARCH): ResolvedSwarm {
     objective: objective(), config: config(),
     depth: caps.depth, branches: caps.branches,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
 /* ── the model: a node that works, and (optionally) one that freezes ───────── */
 
 const CALL_INPUT_TOKENS = 100;
+
 const CALL_OUTPUT_TOKENS = 40;
+
 /** `usageTotal` is input + output. */
 const CALL_TOKENS = CALL_INPUT_TOKENS + CALL_OUTPUT_TOKENS;
 
@@ -686,16 +704,22 @@ function nodeModel(opts: {
     modelId: 'fake-resume-node',
     doGenerate: async ({ prompt }) => {
       let lastUser = -1;
+
       for (const [index, message] of prompt.entries()) {
         if (message.role === 'user') lastUser = index;
       }
+
       const own = prompt.slice(lastUser + 1).filter((message) => message.role === 'assistant').length;
+
       if (own === 0) {
         starts += 1;
         inherited.push(prompt.slice(0, lastUser).filter((m) => m.role === 'assistant').length);
+
         if (opts.freezeFromStart !== undefined && starts >= opts.freezeFromStart) {
           frozenStarts += 1;
+
           if (frozenStarts >= (opts.frozenNodes ?? FROZEN_NODES)) gate.resolve();
+
           // THE EVICTION. Never settled and never rejected — the resolvers are simply
           // dropped — so the run stops exactly where a destroyed isolate would stop it,
           // it holds no timer for the event loop to wait on, and its durable rows stay
@@ -703,10 +727,12 @@ function nodeModel(opts: {
           return Promise.withResolvers<never>().promise;
         }
       }
+
       generations += 1;
 
       const content: LanguageModelV3Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
+
       if (own === 0) {
         content.push({ type: 'text', text: 'Reading the current implementation first.' });
         content.push({
@@ -725,6 +751,7 @@ function nodeModel(opts: {
         content.push({ type: 'text', text: 'Reported: a single linear scan.' });
         finish = 'stop';
       }
+
       return {
         content,
         finishReason: { unified: finish, raw: undefined },
@@ -740,6 +767,7 @@ function nodeModel(opts: {
   const script = {
     calls: () => generations, starts: () => starts, inherited, frozen: gate.promise,
   } satisfies Script;
+
   return { model, script };
 }
 
@@ -773,6 +801,7 @@ async function workspace(): Promise<{
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+
   return { rt, db, activation: () => hostedSeatsOver({ rt, db }).hostNode };
 }
 
@@ -780,11 +809,14 @@ async function workspace(): Promise<{
  *  re-drive the runner started. */
 function inlineFiber() {
   const runs: Promise<unknown>[] = [];
+
   const fiber: Schedule['fiber'] = async (_name, fn) => {
     const body = fn({ stash: () => {}, snapshot: null });
     runs.push(body);
+
     return body;
   };
+
   return { fiber, settled: () => Promise.all(runs) };
 }
 
@@ -792,16 +824,23 @@ function inlineFiber() {
  *  agent learns at its next step" means when no turn is running. */
 function idleAgent() {
   const enqueued: ProgrammaticTurn[] = [];
+
   const host: BackendHost = {
     broadcast: () => {},
-    enqueueTurn: async (turn) => { enqueued.push(turn); return { status: 'queued' }; },
+    enqueueTurn: async (turn) => {
+      enqueued.push(turn);
+
+      return { status: 'queued' };
+    },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   return { enqueued, signals: new SignalDelivery(host) };
 }
 
 const MISSION_LABEL = 'nightly';
+
 /** Both children in the frozen level must start before the test reads its journal. */
 const FROZEN_NODES = 2;
 
@@ -816,22 +855,26 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const sql = rt.storage.sql;
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
+
     const governor = new MissionGovernor({
       storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
       // The MISSION's own actor: a mission ledger is per actor, and the run
       // whose spend this governs is the caller's, not any node's.
       actor: rt.actor,
     });
+
     governor.declare(MISSION_LABEL, {});
     governor.activate([MISSION_LABEL]);
 
     // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const log = createRecordingLogger();
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode: activation(), model: first.model, mode: 'build', logger: log },
       resolved(),
     );
+
     // It is never awaited: `await` never returns when its activation is evicted. Held so
     // the reference is deliberate rather than a dropped promise.
     expect(frozen).toBeInstanceOf(Promise);
@@ -851,6 +894,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     // …and the run holds the two level-2 nodes it was starting, journalled `running`
     // with nothing left that could report them. Exactly the incident's shape.
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
+
     // The ids of those two, held so the re-entry can be checked against them by
     // IDENTITY and not merely by count. A run that retires these and mints two more
     // passes every count assertion below and is exactly the reported defect.
@@ -859,6 +903,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId} AND depth = 2
       ORDER BY rowid ASC`
       .map((row) => row.id);
+
     expect(frozenNodeIds).toHaveLength(FROZEN_NODES);
     // Nothing charged: this attempt was handed no mission scope, so every token below is
     // the SECOND attempt's and a re-charge of settled nodes cannot hide in the total.
@@ -874,13 +919,16 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
     const notified: string[] = [];
+
     const deps: AgentsToolDeps = {
       mode: 'build',
       // A SECOND activation's host — see `workspace`.
       swarm: { rt, hostNode: activation(), model: second.model },
       budget: governor,
     };
+
     const agents = createAgentsTool(deps);
+
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
@@ -889,6 +937,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
       onSettled: (job) => notified.push(job.status),
     });
+
     // The row the detach left behind: `running`, carrying the stored tool input, with no
     // executor in this isolate. `recoverOrphans` is what a cold activation runs.
     const jobId = 'bgjob-swarm';
@@ -919,6 +968,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       SELECT id, status, error_message, depth FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
       ORDER BY depth ASC, rowid ASC`;
+
     expect(journalled).toHaveLength(4);
     // …and the two the first attempt spawned are the same two the second one ran.
     expect(journalled.filter((row) => row.depth === 2).map((row) => row.id))
@@ -931,6 +981,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     // before it reported. This search was re-entered from its durable rows, and the
     // nodes after it are the continuation."
     expect(journalled.map((row) => row.status)).toEqual(['completed', 'completed', 'completed', 'completed']);
+
     for (const row of journalled) expect(row.error_message).toBeNull();
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal
@@ -1007,6 +1058,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     // `context:'inherit'` that prefix can only have come out of the journal, because the
     // parent's own `ModelMessage[]` died with the first attempt.
     expect(second.script.inherited).toHaveLength(2);
+
     for (const turns of second.script.inherited) expect(turns).toBeGreaterThan(0);
 
     // THE ZOMBIE IS FENCED. If the first attempt's activation ever came back, its
@@ -1063,10 +1115,12 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     // ── ATTEMPT ONE: every node freezes on its first call ──────────────────
     const first = nodeModel({ freezeFromStart: 1, frozenNodes: FLAT_SEARCH.branches });
+
     const frozen = runSwarm(
       { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(FLAT_SEARCH),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
 
@@ -1076,10 +1130,12 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     // journal rows claiming to be running, one ledger row at iteration 0.
     expect(treeOf(sql)).toHaveLength(1);
     expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 0, epoch: 0 });
+
     const spawnedIds = sql<{ id: string }>`
       SELECT id FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId} ORDER BY rowid ASC`
       .map((row) => row.id);
+
     expect(spawnedIds).toHaveLength(FLAT_SEARCH.branches);
 
     // ── ATTEMPT TWO, through the REAL runner path ──────────────────────────
@@ -1088,10 +1144,12 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
+
     // A SECOND activation's host — see `workspace`.
     const agents = createAgentsTool({
       mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
+
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
@@ -1099,11 +1157,13 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       resume: (kind, input, mode, signal) =>
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
     });
+
     const jobId = 'bgjob-flat-swarm';
     jobs.create({
       id: jobId, kind: 'agents', workMode: 'build', now: Date.now(),
       input: JSON.stringify(swarmCall(FLAT_SEARCH)),
     });
+
     // Both halves of a cold activation, in the order it runs them: the journal
     // reconciliation, with the job sweep as its resume gate.
     const retired = await reconcileInterruptedForks({
@@ -1112,9 +1172,11 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       search: ledger,
       resume: async () => {
         await runner.recoverOrphans();
+
         return [rootId];
       },
     });
+
     await settled();
 
     // FIVE LOGICAL NODES, AND THEY ARE THE SAME FIVE. This is the assertion the
@@ -1123,9 +1185,11 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       SELECT id, status, error_message FROM head_journal
       WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
       ORDER BY rowid ASC`;
+
     expect(journalled.map((row) => row.id)).toEqual(spawnedIds);
     expect(journalled.map((row) => row.status))
       .toEqual(Array.from({ length: FLAT_SEARCH.branches }, () => 'completed'));
+
     // NO FAKE TERMINAL ROW: no row carries a retirement reason of any kind, because
     // no row was retired — each was re-entered.
     for (const row of journalled) expect(row.error_message).toBeNull();
@@ -1203,10 +1267,12 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     // ── ATTEMPT ONE, killed inside its level-2 wave ────────────────────────
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode: activation(), model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
 
@@ -1221,11 +1287,13 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const jobs = new BackgroundJobStore(makeSql(db), rt.actor);
     const agent = idleAgent();
     const { fiber, settled } = inlineFiber();
+
     // A SECOND activation's host: the first one's frozen turns are still admitted
     // on its in-memory sessions, and an eviction is what destroys them.
     const agents = createAgentsTool({
       mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
+
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
@@ -1233,6 +1301,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       resume: (kind, input, mode, signal) =>
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
     });
+
     jobs.create({
       id: 'bgjob-swarm', kind: 'agents', workMode: 'build', now: Date.now(),
       input: JSON.stringify(swarmCall()),
@@ -1245,9 +1314,11 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       signals: agent.signals,
       resume: async () => {
         await runner.recoverOrphans();
+
         return [rootId];
       },
     });
+
     await settled();
 
     // NOTHING WAS RETIRED, because the re-drive claimed the run.
@@ -1288,10 +1359,12 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const sql = rt.storage.sql;
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1334,10 +1407,12 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1348,6 +1423,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const claimed = await reconcileInterruptedForks({
       journal, signals: agent.signals, search: ledger, resume: async () => [rootId],
     });
+
     expect(claimed).toEqual([]);
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal
@@ -1388,6 +1464,7 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
       resume: async (roots) => {
         calls += 1;
         expect(roots).toEqual([]);
+
         return [];
       },
     });
@@ -1418,10 +1495,12 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1450,10 +1529,12 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     const first = nodeModel({ freezeFromStart: 3 });
+
     const frozen = runSwarm(
       { rt, hostNode, model: first.model, mode: 'build', logger: createRecordingLogger() },
       resolved(),
     );
+
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
@@ -1484,6 +1565,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
       search: ledger,
       resume: async (roots) => {
         offered.push([...roots]);
+
         return roots;
       },
     });
@@ -1546,10 +1628,12 @@ describe('a named swarm is called by its name', () => {
     const { rt, activation } = await workspace();
     const hostNode = activation();
     const sql = rt.storage.sql;
+
     const named = resolveSwarm({
       preset: 'custom', label: 'resume-proof', name: 'token duel', task: TASK,
       objective: objective(), config: config(), depth: 1, branches: 2,
     });
+
     if ('reason' in named) throw new Error(`the suite's own composition does not resolve: ${named.error}`);
     const model = nodeModel();
     await runSwarm(
@@ -1612,6 +1696,7 @@ const StoredReportSchema = v.object({
 
 function jobResultReport(result: string | null) {
   if (result === null) throw new Error('the resumed job stored no result');
+
   return v.parse(StoredReportSchema, JSON.parse(result)).report;
 }
 
@@ -1647,13 +1732,16 @@ describe('a second search over a task already running is refused', () => {
     beganSwarm(ledger, 'root-in-flight', Date.now());
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${rt.actor.actorId}, 'root-in-flight', 'root-in-flight', ${TASK}, 'root')`;
+
     for (const id of ['c1', 'c2']) {
       void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
         VALUES (${rt.actor.actorId}, ${id}, 'root-in-flight', 'root-in-flight', ${TASK}, 'node', 1)`;
     }
+
     expect(ledger.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['root-in-flight']);
 
     const second = nodeModel();
+
     const result = await runSwarm(
       { rt, hostNode, model: second.model, mode: 'build', logger: log },
       resolved(),
@@ -1662,6 +1750,7 @@ describe('a second search over a task already running is refused', () => {
     // REFUSED, and the refusal is actionable: it names the run, says where it got to,
     // and says the result arrives on its own. A caller told only "no" re-spawns again.
     expect('reason' in result).toBe(true);
+
     if ('reason' in result) {
       expect(result.error).toContain('root-in-flight');
       expect(result.error).toContain('iteration 2');
@@ -1674,6 +1763,7 @@ describe('a second search over a task already running is refused', () => {
     const seededTree = sql<{ id: string }>`SELECT id FROM search_nodes
                                              WHERE actor_id = ${rt.actor.actorId}
                                              ORDER BY id`.map((r) => r.id);
+
     expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
       .toEqual(['root-in-flight']);
     expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });

@@ -36,21 +36,26 @@ afterEach(() => {
  *  BLOBs as ArrayBuffer, bun:sqlite binds only TypedArrays. */
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
 function openWorkspaceDatabase() {
   const database = new Database(':memory:');
   databases.push(database);
+
   return {
     database,
     sql: {
       exec(query: string, ...bindings: SqlValue[]) {
         const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
         const bound = bindings.map(sqlBinding);
+
         if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
         statement.run(...bound);
+
         return [];
       },
     },
@@ -59,16 +64,19 @@ function openWorkspaceDatabase() {
 
 async function hostedWorkspace(): Promise<NimbusWorkspace> {
   const { database, sql } = openWorkspaceDatabase();
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
     cwd: '/home/user',
   });
+
   // The two arguments after the filesystem are the Durable Object's own context
   // and env, which only the NETWORK subcommands reach (clone/fetch/pull/push go
   // through the git-network facet). Local history needs neither.
   registerGitCommands(workspace.registry, workspace.vfs, undefined, {});
+
   return workspace;
 }
 

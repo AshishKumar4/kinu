@@ -16,7 +16,9 @@ import { orchestratorHarness } from './helpers/actor-harness';
 function deviceFiles() {
   const harness = orchestratorHarness();
   const provider = harness.agent.observeRuntime().executionRouter?.getProvider('laptop');
+
   if (!provider?.files) throw new Error('the runtime registered no device file view');
+
   return provider.files;
 }
 
@@ -28,6 +30,7 @@ async function closedWith<Result>(work: () => Promise<Result>): Promise<KinuErro
     if (caught instanceof KinuError) return caught;
     throw new Error('the operation failed, but not with a classified error', { cause: caught });
   }
+
   throw new Error('the operation was expected to fail closed');
 }
 

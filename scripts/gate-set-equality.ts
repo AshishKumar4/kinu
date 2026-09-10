@@ -193,14 +193,19 @@ export interface Violation {
  */
 export function gateCommands(): readonly string[] {
   const scripts = packageScripts();
+
   const resolve = (command: string, depth: number): string[] => {
     const words = command.trim().split(/\s+/).filter((w) => w.length > 0);
     const key = words[0] === 'bun' && words[1] === 'run' ? words[2] : undefined;
     const body = key === undefined ? undefined : scripts[key];
+
     if (body === undefined || depth >= 8) return [command.trim()];
+
     return body.split('&&').flatMap((part) => resolve(part, depth + 1));
   };
+
   const declared = [...LADDER.map((gate) => gate.run), ...deployGates()];
+
   return [...new Set(declared.flatMap((command) => resolve(command, 0)))];
 }
 
@@ -233,19 +238,24 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
   for (const command of commands) {
     const words = command.split(/\s+/).filter((w) => w.length > 0);
     const runner = words[0] === 'bun' && words[1] === 'test' ? 'suite' : 'program';
+
     for (const word of words.slice(1)) {
       const match = FILE_TOKEN.exec(word);
+
       if (match?.[1] === undefined) continue;
       const token = match[1];
+
       const matched = token.includes('*')
         ? tracked.filter((path) => globMatches(token, path))
         : tracked.filter((path) => path === token);
+
       if (matched.length === 0) {
         throw new Error(
           `gate-set-equality: \`${command}\` names \`${token}\`, which matches no enumerated file.`
           + ' A gate whose target resolves to nothing runs nothing and reports success.',
         );
       }
+
       for (const path of matched) {
         // `node --check packages/pc-agent/src/index.js` is a gate command naming a
         // PRODUCT file. Product code is what gates measure, never a gate, so the
@@ -268,12 +278,16 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
   const frontier = [...governed, ...suites];
   const seen = new Set(frontier);
   const known = new Set(tracked);
+
   while (frontier.length > 0) {
     const from = frontier.pop();
+
     if (from === undefined || !isParseable(from)) continue;
+
     for (const specifier of localImports(from, known)) {
       if (!GATE_DIRECTORIES.some((dir) => specifier.startsWith(dir))) continue;
       governed.add(specifier);
+
       if (seen.has(specifier)) continue;
       seen.add(specifier);
       frontier.push(specifier);
@@ -285,13 +299,16 @@ export function gatePrograms(commands: readonly string[], tracked: readonly stri
   // repository and carry a denominator — `upstream.json` already names them
   // `kinuRuleGates`.
   for (const path of suites) governed.delete(path);
+
   for (const path of suites) if (path.endsWith('.gate.test.ts')) governed.add(path);
+
   return { governed: [...governed].sort(), shell: [...shell].sort(), suites: [...suites].sort() };
 }
 
 /** `bun test` accepts `*` within one path segment. */
 function globMatches(token: string, path: string): boolean {
   const pattern = new RegExp(`^${token.replace(/[.]/g, '\\.').replace(/\*/g, '[^/]*')}$`);
+
   return pattern.test(path);
 }
 
@@ -305,13 +322,17 @@ function localImports(file: string, tracked: ReadonlySet<string>): string[] {
   const text = readFileSync(root + file, 'utf8');
   const dir = file.slice(0, file.lastIndexOf('/') + 1);
   const resolved: string[] = [];
+
   for (const specifier of moduleSpecifiers(parse(file, text).root)) {
     if (!specifier.startsWith('.')) continue;
     const base = collapsePath(dir + specifier);
+
     const target = IMPORT_CANDIDATES.map((suffix) => base + suffix)
       .find((path) => tracked.has(path));
+
     if (target !== undefined) resolved.push(target);
   }
+
   return resolved;
 }
 
@@ -332,6 +353,7 @@ const SELECTS = [
   'packages/core/src/index.ts', 'scripts/ladder.test.ts', 'packages/cf-backend/src/App.tsx',
   'packages/pc-agent/tests/daemon.test.js', 'tests/evals/delegation.eval.ts', 'tools/x.mjs',
 ];
+
 const REJECTS = [
   'plain', 'KINU_HOME', 'https://example.com/v1/models', '@cf/deepseek-ai/deepseek-v4-pro',
   'CREATE TABLE IF NOT EXISTS traces (', 'run_required_gate "Secret scan" bun scripts/x', '42',
@@ -343,6 +365,7 @@ function selectsFilenames(pattern: string): boolean {
   // language — which must be loud, not a quiet `false` that reads as "not a
   // filename predicate" and passes the file.
   const probe = new RegExp(pattern);
+
   return SELECTS.some((path) => probe.test(path)) && !REJECTS.some((text) => probe.test(text));
 }
 
@@ -369,9 +392,11 @@ export function auditGateProgram(file: string, text: string): Violation[] {
   const declared = NON_REPOSITORY_SCANS.get(file);
   const found: Violation[] = [];
   const { root: tree, lineAt } = parse(file, text);
+
   const add = (node: SyntaxNode, kind: Kind, detail: string): void => {
     found.push({ file, line: lineAt(node.start), kind, detail });
   };
+
   let discoveries = 0;
 
   walk(tree, (node) => {
@@ -379,37 +404,47 @@ export function auditGateProgram(file: string, text: string): Violation[] {
 
     if (raw.type === 'Literal' && raw.value === 'ls-files' && isCallArgument(node)) {
       discoveries += 1;
+
       if (declared === undefined) {
         add(node, 'private-enumeration',
           'spawns `git ls-files` of its own. Import `trackedFiles` from sources.ts — this is the '
           + 'call that was tracked-only in secret-scan and exit-code-blind in ladder');
       }
+
       return;
     }
 
     if (raw.type === 'CallExpression') {
       const name = identifierCalleeName(node) ?? memberCalleeName(node);
+
       if (name !== undefined && DISCOVERY.has(name)) {
         discoveries += 1;
+
         if (declared === undefined) {
           add(node, 'private-enumeration',
             `walks the tree with \`${name}\` of its own. \`trackedFiles()\` is the enumeration; `
             + 'filter it — a filter can never be wider than the enumeration, a second walk can');
         }
+
         return;
       }
+
       if (name !== undefined && GLOB_SCANS.has(name) && receiverIsGlob(node)) {
         discoveries += 1;
+
         if (declared === undefined) {
           add(node, 'private-enumeration',
             'scans the tree with its own glob. `trackedFiles()` sees what git sees, which is what '
             + 'every other gate is measured against');
         }
+
         return;
       }
+
       const regex = name !== undefined && PREDICATE_METHODS.has(name)
         ? regexOperand(node)
         : undefined;
+
       if (regex !== undefined && selectsFilenames(regex)) {
         add(node, 'private-pattern',
           `selects files with its own \`/${regex}/\`. Import a named predicate from sources.ts: `
@@ -431,6 +466,7 @@ export function auditGateProgram(file: string, text: string): Violation[] {
   }
 
   found.push(...unmeasuredPublications(file, tree, lineAt));
+
   return found.sort((a, b) => a.line - b.line);
 }
 
@@ -448,14 +484,17 @@ export function auditGateProgram(file: string, text: string): Violation[] {
 function isCallArgument(node: SyntaxNode): boolean {
   let child = node;
   let parent = node.parent;
+
   while (parent !== undefined) {
     if (parent.raw.type === 'CallExpression' || parent.raw.type === 'NewExpression') {
       return parent.children[0] !== child;
     }
+
     if (parent.raw.type !== 'ArrayExpression') return false;
     child = parent;
     parent = parent.parent;
   }
+
   return false;
 }
 
@@ -464,15 +503,20 @@ function isCallArgument(node: SyntaxNode): boolean {
 function regexOperand(call: SyntaxNode): string | undefined {
   const callee = call.children[0];
   const receiver = callee?.raw.type === 'MemberExpression' ? callee.children[0] : undefined;
+
   for (const candidate of [receiver, call.children[1]]) {
     if (candidate === undefined) continue;
     const inline = regexPattern(candidate);
+
     if (inline !== undefined) return inline;
     const named = identifierText(candidate);
+
     if (named === undefined) continue;
     const bound = boundRegex(call, named);
+
     if (bound !== undefined) return bound;
   }
+
   return undefined;
 }
 
@@ -480,14 +524,17 @@ function regexOperand(call: SyntaxNode): string | undefined {
  *  same as an inline literal — a constant is how every one of these was spelled. */
 function boundRegex(from: SyntaxNode, name: string): string | undefined {
   let top: SyntaxNode = from;
+
   while (top.parent !== undefined) top = top.parent;
   let source: string | undefined;
   walk(top, (node) => {
     if (node.raw.type !== 'VariableDeclarator') return;
     const [id, init] = node.children;
+
     if (id === undefined || identifierText(id) !== name || init === undefined) return;
     source = regexPattern(init) ?? source;
   });
+
   return source;
 }
 
@@ -496,16 +543,21 @@ function boundRegex(from: SyntaxNode, name: string): string | undefined {
 function receiverIsGlob(call: SyntaxNode): boolean {
   const callee = call.children[0];
   const receiver = callee?.raw.type === 'MemberExpression' ? callee.children[0] : undefined;
+
   if (receiver?.raw.type !== 'NewExpression') return false;
   const constructed = receiver.children[0];
+
   return constructed !== undefined && sourceName(constructed) === 'Glob';
 }
 
 /** `Bun.Glob` and `Glob` both read as `Glob` here. */
 function sourceName(callee: SyntaxNode): string | undefined {
   const raw = callee.raw;
+
   if (raw.type === 'Identifier') return raw.name;
+
   if (raw.type === 'MemberExpression' && raw.property.type === 'Identifier') return raw.property.name;
+
   return undefined;
 }
 
@@ -513,6 +565,7 @@ function sourceName(callee: SyntaxNode): string | undefined {
  *  `scripts/`; the `.ts` arm is the raw-Node closure's spelling, kept so a gate program that ever
  *  lands inside it is still audited rather than silently exempt. */
 const RATCHET = /\.\/gate-ratchet(?:\.ts)?$/;
+
 const PUBLISHERS: ReadonlySet<string> = new Set(['writeLock', 'report']);
 
 /**
@@ -542,6 +595,7 @@ function unmeasuredPublications(
         && moduleSpecifiers(statement).some((spec) => RATCHET.test(spec)))
       .flatMap((statement) => importedNames(statement)),
   );
+
   if (fromRatchet.size === 0) return [];
 
   const measurements: number[] = [];
@@ -549,11 +603,14 @@ function unmeasuredPublications(
   walk(tree, (node) => {
     if (node.raw.type !== 'CallExpression') return;
     const name = identifierCalleeName(node);
+
     if (name === undefined || !fromRatchet.has(name)) return;
+
     if (name === 'assertMeasured') measurements.push(node.start);
     else if (PUBLISHERS.has(name)) publications.push({ node, name });
   });
   const earliest = measurements.length === 0 ? undefined : Math.min(...measurements);
+
   return publications
     .filter(({ node }) => earliest === undefined || node.start < earliest)
     .map(({ node, name }) => ({
@@ -629,13 +686,16 @@ if (import.meta.main) {
     + ` — ${measured}, ${String(clean)} of ${String(programs.governed.length)} clean`
     + `, ${String(programs.shell.length)} shell program(s) out of reach`,
   );
+
   if (violations.length > 0) {
     console.error(
       `\n${String(offending)} gate program(s) select repository files on their own authority.`,
     );
   }
+
   if (violations.length === 0) {
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
+
   process.exit(violations.length === 0 ? 0 : 1);
 }

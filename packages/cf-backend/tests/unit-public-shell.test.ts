@@ -34,6 +34,7 @@ import {
   CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
 } from '../src/components/landing/landing-movie-timeline';
+
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
 
 /** The palette blocks that apply to each theme, in source order. Same model as
@@ -51,14 +52,17 @@ const CASCADE = {
  *  itself inside a comment. */
 function block(selector: string) {
   const at = INDEX_CSS.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
+
   if (at === -1) throw new Error(`no ${selector} block in index.css`);
   const open = INDEX_CSS.indexOf('{', at);
   let depth = 0;
   let i = open;
+
   for (; i < INDEX_CSS.length; i++) {
     if (INDEX_CSS[i] === '{') depth++;
     else if (INDEX_CSS[i] === '}' && --depth === 0) break;
   }
+
   return Object.fromEntries(
     [...INDEX_CSS.slice(open, i).matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
   );
@@ -68,9 +72,12 @@ function block(selector: string) {
  *  is a test that would silently measure nothing, so it throws. */
 function resolved(theme: string) {
   const selectors = Object.entries(CASCADE).find(([name]) => name === theme)?.[1];
+
   if (selectors === undefined) throw new Error(`no cascade modelled for ${theme}`);
   const out: Record<string, string> = {};
+
   for (const selector of selectors) Object.assign(out, block(selector));
+
   return out;
 }
 
@@ -82,26 +89,33 @@ function shippedStyle(): string {
   const page = publicPage({ title: 't', body: '' });
   const start = page.indexOf('<style>');
   const end = page.indexOf('</style>');
+
   if (start === -1 || end === -1 || end < start) throw new Error('public page carries no stylesheet');
+
   return page.slice(start + '<style>'.length, end);
 }
 
 /** One `selector{...}` rule of the shipped stylesheet, as name → value. */
 function shippedBlock(style: string, selector: string) {
   const at = style.indexOf(`${selector}{`);
+
   if (at === -1) throw new Error(`shipped stylesheet carries no ${selector} block`);
   const open = style.indexOf('{', at);
   let depth = 0;
   let i = open;
+
   for (; i < style.length; i++) {
     if (style[i] === '{') depth++;
     else if (style[i] === '}' && --depth === 0) break;
   }
+
   return Object.fromEntries(
     style.slice(open + 1, i).split(';').flatMap((entry) => {
       const colon = entry.indexOf(':');
+
       if (colon === -1) return [];
       const name = entry.slice(0, colon).trim();
+
       return name.startsWith('--') ? [[name, entry.slice(colon + 1).trim()]] : [];
     }),
   );
@@ -126,8 +140,10 @@ describe('public shell tokens are the app palette', () => {
     test(`${mode} matches index.css`, () => {
       const app = resolved(mode);
       const selector = selectors.at(-1);
+
       if (selector === undefined) throw new Error(`no block modelled for ${mode}`);
       const emitted = shippedBlock(style, selector);
+
       for (const [token, value] of Object.entries(emitted)) {
         if (token.startsWith('--r-')) continue;
         expect(app[token], `${token} in ${selector}`).toBe(value);
@@ -140,8 +156,10 @@ describe('public shell tokens are the app palette', () => {
     // resolve to whichever theme declared it last — the failure mode
     // `index.css` states its own completeness rule against.
     const names = Object.keys(shippedBlock(style, ':root')).filter((name) => !name.startsWith('--r-'));
+
     for (const theme of Object.keys(CASCADE)) {
       const app = resolved(theme);
+
       for (const token of names) expect(app[token], `${token} in ${theme}`).toBeString();
     }
   });
@@ -155,13 +173,17 @@ describe('public shell tokens are the app palette', () => {
     const rungs = block('@theme');
     const shipped = shippedBlock(style, ':root');
     const remToPx = (rem: string) => `${Number(rem.replace(/rem.*$/, '').trim()) * 16}px`;
+
     for (const [role, rung] of [['--r-control', '--radius-sm'], ['--r-row', '--radius-md']] as const) {
       const rungValue = rungs[rung];
+
       if (rungValue === undefined) throw new Error(`no ${rung} rung in index.css`);
       expect(shipped[role], `${role} resolves through ${rung}`).toBe(remToPx(rungValue));
     }
+
     for (const role of ['--r-card', '--r-overlay'] as const) {
       const rootValue = root[role];
+
       if (rootValue === undefined) throw new Error(`no ${role} role in index.css`);
       expect(shipped[role], `${role} is its own literal`).toBe(remToPx(rootValue));
     }
@@ -204,6 +226,7 @@ describe('public shell tokens are the app palette', () => {
     // must travel with the files because OFL requires it.
     const page = publicPage({ title: 't', body: '' });
     const face = new RegExp(`@font-face\\{font-family:"${family}";src:url\\("([^"]+)"\\)`).exec(page);
+
     if (face?.[1] === undefined) throw new Error(`no @font-face for ${family} in the shell`);
     const file = resolve(import.meta.dir, '../public', `.${face[1]}`);
     const bytes = readFileSync(file);
@@ -228,9 +251,11 @@ describe('the pre-paint theme script', () => {
     const page = publicPage({ title: 't', body: '' });
     const match = /<script>([\s\S]*?)<\/script>/.exec(page);
     const text = match?.[1];
+
     if (text === undefined || !text.includes('data-mode')) {
       throw new Error('public page carries no theme boot script');
     }
+
     return text;
   }
 
@@ -239,6 +264,7 @@ describe('the pre-paint theme script', () => {
 
     const attrs: Record<string, string> = {};
     const root = { attrs, style: { colorScheme: '' } };
+
     const scope = {
       document: {
         documentElement: {
@@ -249,11 +275,13 @@ describe('the pre-paint theme script', () => {
       localStorage: { getItem: (key: string) => stored[key] ?? null },
       window: { matchMedia: (query: string) => ({ matches: query.includes('light') && prefersLight }) },
     };
+
     // The snippet is an IIFE over three globals, which is why it can be checked
     // by call rather than by reading it.
     // SAFETY: the snippet is this repo's own text, evaluated against the three
     // stub globals declared immediately above.
     new Function('document', 'localStorage', 'window', shippedBoot())(scope.document, scope.localStorage, scope.window);
+
     return { mode: root.attrs['data-mode'], colorScheme: root.style.colorScheme };
   }
 
@@ -366,8 +394,10 @@ describe('the mark', () => {
   test('both README banners draw the mark that ships', () => {
     const shipped = [...mark(24, KINU_MARK).matchAll(/<path d="([^"]+)"/g)].map((m) => m[1]);
     expect(shipped, `${KINU_MARK} renders no path`).not.toBeEmpty();
+
     for (const file of ['banner.svg', 'banner-dark.svg']) {
       const svg = readFileSync(resolve(import.meta.dir, '../../../docs/assets', file), 'utf8');
+
       for (const d of shipped) expect(svg, `${file} is missing ${KINU_MARK}`).toContain(`<path d="${d}"`);
     }
   });
@@ -396,6 +426,7 @@ describe('the README demo film', () => {
     /** False when the frame overwrites its rectangle, which is what we require. */
     readonly blends: boolean;
   }
+
   interface Film {
     readonly width: number; readonly height: number;
     /** 0 is the WebP spelling of "loop forever". */
@@ -412,12 +443,16 @@ describe('the README demo film', () => {
   function readFilm(webp: Buffer): Film {
     let width = 0, height = 0, loops = -1, animated = false;
     const frames: Frame[] = [];
+
     for (let at = 12; at + 8 <= webp.byteLength;) {
       const tag = webp.subarray(at, at + 4).toString();
       const size = webp.readUInt32LE(at + 4);
       const body = webp.subarray(at + 8, at + 8 + size);
+
       if (tag === 'VP8X') { width = u24(body, 4) + 1; height = u24(body, 7) + 1; }
+
       if (tag === 'ANIM') { animated = true; loops = body.readUInt16LE(4); }
+
       if (tag === 'ANMF') {
         frames.push({
           // The frame origin is stored halved, so the encoder can only place a
@@ -429,8 +464,10 @@ describe('the README demo film', () => {
           blends: (body[15]! & 0x02) === 0,
         });
       }
+
       at += 8 + size + (size & 1);
     }
+
     return { width, height, loops, animated, frames };
   }
 
@@ -488,6 +525,7 @@ describe('the landing walkthrough timeline', () => {
       'manifestStart', 'manifestDone', 'serverStart', 'serverDone', 'clientStart',
       'clientDone', 'previewStart', 'previewDone', 'slateOpen', 'finalText', 'end',
     ] as const;
+
     const times = order.map((cue) => MOVIE_CUES[cue]);
     expect([...times].sort((a, b) => a - b)).toEqual(times);
     expect(MOVIE_END).toBe(MOVIE_CUES.end);

@@ -10,9 +10,11 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 mockAgentsSdk();
+
 const { handleMcpRequest } = await import('../src/mcp-server');
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 
 interface TestNamespace<Stub> {
@@ -34,6 +36,7 @@ interface McpTestBindings<UserStub, AgentStub> {
 function testEnv<UserStub, AgentStub>(bindings: McpTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: Bearer-authenticated MCP requests read exactly the two constructed
   // namespaces and credential key; AUTH_KV is present but unreachable without a cookie.
   return env as Env;
@@ -41,6 +44,7 @@ function testEnv<UserStub, AgentStub>(bindings: McpTestBindings<UserStub, AgentS
 
 function mcpEnv() {
   const calls: string[] = [];
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, token: string) {
       return token === TOKEN
@@ -50,9 +54,15 @@ function mcpEnv() {
     async hasWorkspace(_caller: UserCaller, name: string) { return name === 'jarvis'; },
     async ensureWorkspaceCapability() {},
   };
+
   const agent = {
-    async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId, capabilityHash: 'sha-existing' }; },
+    async claimOwner(userId: string) {
+      calls.push(`claim:${userId}`);
+
+      return { owner: userId, capabilityHash: 'sha-existing' };
+    },
   };
+
   const env = testEnv({
     // Present but never reached in these tests (no session cookie is sent);
     // its presence makes the unauthenticated path a clean AuthError 401.
@@ -61,6 +71,7 @@ function mcpEnv() {
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   return { env, calls };
 }
 
@@ -69,7 +80,9 @@ function initializeRequest(agentName: string, token?: string) {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
   });
+
   if (token) headers.set('authorization', `Bearer ${token}`);
+
   return new Request(`https://kinu.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
     headers,

@@ -23,6 +23,7 @@ import { PROBE_CUT_MESSAGE_ID, PROBE_SOUL_MISSION, PROBE_SOURCE_NAME } from './f
 /** A stub held across a reset is itself broken by the reset; the id survives.
  *  Re-acquiring is what a real caller does on its next request. */
 const source = (name: string) => env.FORK_SOURCE.get(env.FORK_SOURCE.idFromName(name));
+
 const target = (name: string) => env.FORK_TARGET.get(env.FORK_TARGET.idFromName(name));
 
 /** The cut point's own stamp, as the pane stores it. The fork point is the cut
@@ -145,6 +146,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     const corrupt = await source(name).deliver({
       target: name, from: rows.nextSeq, stop: 'end', corrupt: 'frame',
     });
+
     expect(corrupt.refusal).toMatch(
       new RegExp(`fork transfer frame ${rows.nextSeq} digest does not match its content`),
     );
@@ -225,6 +227,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     const resealed = await source(name).deliver({
       target: name, from: range.nextSeq, stop: 'end', corrupt: 'resealed',
     });
+
     expect(resealed.refusal).toContain(
       'fork transfer file "memory/deep/proof.bin" does not match the digest the source declared',
     );

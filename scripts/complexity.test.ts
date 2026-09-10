@@ -31,6 +31,7 @@ const root = new URL('..', import.meta.url).pathname;
 /** One function's complexity, by the census, over a one-function fixture. */
 function score(body: string): number {
   const measured = measureFile('packages/probe/src/probe.ts', body);
+
   return measured[0]?.complexity ?? 0;
 }
 
@@ -73,6 +74,7 @@ describe('the counted set', () => {
         if (a) return () => inner(a);
         return () => inner(0);
       }`);
+
     const byName = new Map(measured.map((entry) => [entry.name, entry.complexity]));
     expect(byName.get('outer')).toBe(2);
     expect(byName.get('outer>inner')).toBe(2);
@@ -88,6 +90,7 @@ describe('the name a function is locked under', () => {
           useKeyboard((key: string) => { if (key) return; });
         }
       }`);
+
     expect(measured.map((entry) => entry.name).sort()).toEqual([
       'Widget.render',
       'Widget.render>useKeyboard',
@@ -100,6 +103,7 @@ describe('the name a function is locked under', () => {
     // lock that cannot say WHICH of them grew is a lock nobody can act on.
     const measured = measureFile('packages/probe/src/probe.ts', `
       export function run(): void { walk(() => 1); walk(() => 2); }`);
+
     expect(new Set(measured.map(keyOf)).size).toBe(measured.length);
   });
 });
@@ -110,6 +114,7 @@ describe('the name a function is locked under', () => {
 function injected(branches: number): string {
   const lines = Array.from({ length: branches }, (_, index) =>
     `  if (input === ${String(index)}) return ${String(index)};`);
+
   return `export function injectedDispatch(input: number): number {\n${lines.join('\n')}\n  return -1;\n}\n`;
 }
 
@@ -127,8 +132,10 @@ interface Fixture {
 function budgetFor(text: string, held = 3): Fixture {
   const measured = census(new Map([[PROBE, text]]));
   const spread = distribution(measured);
+
   const line = [...measured].map((entry) => entry.complexity)
     .sort((a, b) => b - a)[Math.min(held - 1, measured.length - 1)] ?? 1;
+
   return {
     measured,
     budget: {
@@ -189,9 +196,11 @@ describe('a locked function', () => {
     const grown = census(new Map([[PROBE, `${BASELINE}${injected(40).replace(
       '  return -1;', '  if (input === 99) return 99;\n  return -1;',
     )}`]]));
+
     const verdict = judge(grown, {
       ...locked.budget, ceiling: 1000,
     });
+
     expect(verdict.grown.map(({ entry, was }) => `${entry.name} ${String(was)}->${String(entry.complexity)}`))
       .toEqual(['injectedDispatch 41->42']);
   });
@@ -229,26 +238,34 @@ function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { k
     },
     rules: { complexity: ['error', { max: 0 }] },
   }));
+
   const run = Bun.spawnSync({
     cmd: ['./node_modules/.bin/oxlint', '-c', config, '-f', 'json', ...files],
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const output = run.stdout.toString();
+
   if (output.length === 0) {
     throw new Error(`oxlint produced no report: ${run.stderr.toString().slice(0, 800)}`);
   }
+
   const DiagnosticText = /^(.*?) has a complexity of (\d+)\./;
+
   const parsed: { diagnostics: { message: string; filename: string; labels: { span: { offset: number } }[] }[] }
     /* SAFETY: oxlint's own JSON reporter output, read for two fields this
        function immediately validates by regex; a shape change makes the regex
        miss and the parity assertion below fail loudly rather than silently. */
     = JSON.parse(output);
+
   const byFile = new Map<string, Map<number, { kind: string; complexity: number }>>();
+
   for (const diagnostic of parsed.diagnostics) {
     const match = DiagnosticText.exec(diagnostic.message);
     const span = diagnostic.labels[0]?.span;
+
     if (match === null || span === undefined) continue;
     const perFile = byFile.get(diagnostic.filename) ?? new Map<number, { kind: string; complexity: number }>();
     perFile.set(span.offset, {
@@ -257,6 +274,7 @@ function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { k
     });
     byFile.set(diagnostic.filename, perFile);
   }
+
   return byFile;
 }
 
@@ -273,9 +291,11 @@ function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { k
 function byteOffsets(text: string): Int32Array {
   const offsets = new Int32Array(text.length + 1);
   let bytes = 0;
+
   for (let index = 0; index < text.length; index += 1) {
     offsets[index] = bytes;
     const code = text.codePointAt(index) ?? 0;
+
     if (code < 0x80) bytes += 1;
     else if (code < 0x800) bytes += 2;
     else if (code < 0x10000) bytes += 3;
@@ -285,7 +305,9 @@ function byteOffsets(text: string): Int32Array {
       index += 1;
     }
   }
+
   offsets[text.length] = bytes;
+
   return offsets;
 }
 
@@ -293,9 +315,11 @@ function byteOffsets(text: string): Int32Array {
  *  questions of the same walk, and re-walking 1,900 files per question cost
  *  3.5s of the suite's 8.4s for no extra evidence. */
 const LIVE_FILES = readMatching(isParseable);
+
 const LIVE_BY_FILE = new Map<string, Measured[]>(
   [...LIVE_FILES].map(([file, text]) => [file, measureFile(file, text)]),
 );
+
 const LIVE = [...LIVE_BY_FILE.values()].flat();
 
 describe('the census and oxlint report the same number', () => {
@@ -305,22 +329,28 @@ describe('the census and oxlint report the same number', () => {
     const missing: string[] = [];
     const different: string[] = [];
     let compared = 0;
+
     for (const [file, text] of LIVE_FILES) {
       const offsets = byteOffsets(text);
       const reported = theirs.get(file) ?? new Map();
+
       for (const entry of LIVE_BY_FILE.get(file) ?? []) {
         const theirEntry = reported.get(offsets[entry.offset] ?? -1);
+
         if (theirEntry === undefined) {
           missing.push(`${file}:${String(entry.line)} ${entry.name}`);
           continue;
         }
+
         compared += 1;
+
         if (theirEntry.complexity !== entry.complexity) {
           different.push(`${file}:${String(entry.line)} ${entry.name} `
             + `census=${String(entry.complexity)} oxlint=${String(theirEntry.complexity)}`);
         }
       }
     }
+
     expect(compared).toBeGreaterThan(40_000);
     expect(missing.slice(0, 5)).toEqual([]);
     expect(different.slice(0, 5)).toEqual([]);
@@ -332,13 +362,16 @@ describe('the census and oxlint report the same number', () => {
     // initializer is not a function; a TS overload signature and an `abstract`
     // member have no body. All of them score 1 against a budget line of 39.
     const extras: { kind: string; complexity: number }[] = [];
+
     for (const [file, text] of LIVE_FILES) {
       const offsets = byteOffsets(text);
       const mine = new Set((LIVE_BY_FILE.get(file) ?? []).map((entry) => offsets[entry.offset] ?? -1));
+
       for (const [offset, entry] of theirs.get(file) ?? new Map()) {
         if (!mine.has(offset)) extras.push(entry);
       }
     }
+
     expect(extras.length).toBeGreaterThan(0);
     expect(extras.filter((entry) => entry.complexity > 1)).toEqual([]);
   });
@@ -378,8 +411,10 @@ describe('over the live tree', () => {
     // entry names a function nothing in the tree declares, which is how a lock
     // rots into a list of historical names.
     const current = new Map(measured.map((entry) => [keyOf(entry), entry.complexity]));
+
     const absent = budget.inventory.filter((entry) => !current.has(entry.key))
       .map((entry) => entry.key);
+
     expect(absent).toEqual([]);
   });
 

@@ -44,6 +44,7 @@ const COMPACTED: ModelMessage[] = [{ role: 'user', content: 'summary of the long
  *  than restated, so this suite budgets against the one allocation every
  *  producer divides instead of a second copy of the arithmetic. */
 const LIMITS = { contextWindow: 200_000, modelOutputLimit: 40_000 };
+
 const LIMIT = stepContextLimit(LIMITS);
 
 function base() {
@@ -88,15 +89,20 @@ type WireBody = v.InferOutput<typeof WireBodySchema>;
 /** The system channel's text, whichever shape the body carries it in. */
 function systemTextOf(body: WireBody): string {
   const system = body.system;
+
   if (system === undefined) return '';
+
   if (Array.isArray(system)) return system.map((block) => block.text ?? '').join('');
+
   return system;
 }
 
 /** One message reduced to what it costs: its block types, and their text. */
 function countedBlocks(message: WireBody['messages'][number]): Array<{ type: string; text: string }> {
   const content = message.content;
+
   if (!Array.isArray(content)) return [{ type: 'text', text: content }];
+
   return content.map((block) => ({ type: block.type, text: block.text ?? '' }));
 }
 
@@ -109,13 +115,16 @@ function toolIdentity(entry: NonNullable<WireBody['tools']>[number]): string {
  *  evidence for "compacted exactly once". */
 function compactionProbe() {
   const triggers: string[] = [];
+
   const extensions = new ExtensionHost().register({
     name: 'test.compact',
     transformContext: async (ctx) => {
       triggers.push(ctx.trigger);
+
       return ctx.trigger === 'force' ? COMPACTED : undefined;
     },
   });
+
   return { extensions, triggers };
 }
 
@@ -123,14 +132,17 @@ function compactionProbe() {
 function scriptedCounter(counts: readonly number[]) {
   const seen: CountableRequest[] = [];
   let call = 0;
+
   // Typed at its own definition rather than through an annotation on the
   // factory: the seam's contract belongs to the function that implements it.
   const count = async (request: CountableRequest): Promise<InputTokenCount> => {
     seen.push(request);
     const tokens = counts[Math.min(call, counts.length - 1)] ?? 0;
     call += 1;
+
     return { kind: 'counted', tokens };
   };
+
   return { seen, count };
 }
 
@@ -144,6 +156,7 @@ function scriptedCounter(counts: readonly number[]) {
 async function refusalOf(assembly: Promise<readonly ModelMessage[]>): Promise<Error | null> {
   try {
     await assembly;
+
     return null;
   } catch (caught) {
     return caught instanceof Error ? caught : new Error(String(caught));
@@ -158,12 +171,14 @@ describe('exact turn admission', () => {
   test('a request that fits is admitted, counted once, and compaction never forced', async () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT]);
+
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
       admission: { count: counter.count, limits: LIMITS },
     });
+
     expect(out).toEqual(HISTORY);
     expect(triggers).toEqual(['auto']);
     expect(counter.seen.length).toBe(1);
@@ -172,12 +187,14 @@ describe('exact turn admission', () => {
   test('an oversized request is compacted once and re-counted before submission', async () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT]);
+
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
       trigger: 'auto',
       admission: { count: counter.count, limits: LIMITS },
     });
+
     // The COMPACTED request is what leaves the assembly, and it was counted.
     expect(out).toEqual(COMPACTED);
     expect(triggers).toEqual(['auto', 'force']);
@@ -188,6 +205,7 @@ describe('exact turn admission', () => {
   test('a post-compaction request that still does not fit is refused, not submitted', async () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 50_000, LIMIT + 1]);
+
     const failure = await refusalOf(assembleTurnMessages({
       ...base(),
       extensions,
@@ -213,10 +231,12 @@ describe('exact turn admission', () => {
     // list that would re-arm it.
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1, LIMIT + 1]);
+
     const failure = await refusalOf(assembleTurnMessages({
       ...base(), extensions, trigger: 'auto',
       admission: { count: counter.count, limits: LIMITS },
     }));
+
     // Asserted before the classification, so an assembly that refused NOTHING
     // cannot pass this by classifying the empty string.
     expect(failure).toBeInstanceOf(Error);
@@ -232,6 +252,7 @@ describe('exact turn admission', () => {
   test('a turn that arrived already force-compacted is refused without compacting again', async () => {
     const { extensions, triggers } = compactionProbe();
     const counter = scriptedCounter([LIMIT + 1]);
+
     const failure = await refusalOf(assembleTurnMessages({
       ...base(),
       extensions,
@@ -249,6 +270,7 @@ describe('exact turn admission', () => {
   test('a provider with no count endpoint is assembled ungated, never on an estimate', async () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
+
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
@@ -256,11 +278,13 @@ describe('exact turn admission', () => {
       admission: {
         count: async () => {
           asked += 1;
+
           return { kind: 'unsupported', provider: 'openai', reason: NO_COUNT_ENDPOINT };
         },
         limits: LIMITS,
       },
     });
+
     expect(asked).toBe(1);
     expect(out).toEqual(HISTORY);
     // No gate, and no compaction on the strength of a number nobody measured.
@@ -270,9 +294,11 @@ describe('exact turn admission', () => {
   test('what is counted is the assembled request: system, messages, and the tools that ride it', async () => {
     const { extensions } = compactionProbe();
     const counter = scriptedCounter([1_000]);
+
     const tools = {
       look: tool({ description: 'look', inputSchema: z.object({ q: z.string() }) }),
     };
+
     await assembleTurnMessages({
       ...base(),
       extensions,
@@ -318,16 +344,19 @@ describe('provider count support', () => {
   test('anthropic counts the assembled request through its own endpoint', async () => {
     let body: unknown;
     let url = '';
+
     const deps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (input, init) => {
         url = input instanceof Request ? input.url : String(input);
         body = JSON.parse(String(init?.body ?? '{}'));
+
         return new Response(JSON.stringify({ input_tokens: 4242 }), {
           status: 200, headers: { 'content-type': 'application/json' },
         });
       }),
     };
+
     const request: CountableRequest = {
       system: 'SYS',
       messages: [
@@ -374,11 +403,13 @@ describe('provider count support', () => {
       ...NO_DEPS,
       fetch: asFetchFunction(async () => { throw new Error('the endpoint must not be asked'); }),
     };
+
     const answer = await countRequestInputTokens(createAnthropicProvider(), 'claude-opus-4-7', deps, {
       system: 'SYS',
       // No media type, so the count body cannot say what this image costs.
       messages: [{ role: 'user', content: [{ type: 'image', image: 'AAAA' }] }],
     });
+
     expect(answer.kind).toBe('unsupported');
     expect(answer.kind === 'unsupported' && answer.reason).toContain('image part');
   });
@@ -392,9 +423,11 @@ describe('provider count support', () => {
       // as the model request would.
       fetch: asFetchFunction(async () => new Response('{"error":{"message":"bad body"}}', { status: 400 })),
     };
+
     const answer = await countRequestInputTokens(createAnthropicProvider(), 'claude-opus-4-7', deps, {
       system: 'SYS', messages: [{ role: 'user', content: 'ask' }],
     });
+
     // Reported as uncounted — the request is exactly as submittable as it was
     // before anyone asked, so admission proceeds ungated rather than the turn
     // failing on its own preflight.
@@ -415,6 +448,7 @@ describe('provider count support', () => {
    */
   test('the count body matches the AI SDK own Anthropic request, field for field', async () => {
     const system = 'SYS';
+
     const history: ModelMessage[] = [
       { role: 'user', content: 'read the file and report' },
       {
@@ -432,25 +466,31 @@ describe('provider count support', () => {
         }],
       },
     ];
+
     const tools = { look: tool({ description: 'look something up', inputSchema: z.object({ q: z.string() }) }) };
 
     // What the vendor's own adapter submits for this turn. The 400 is the
     // point: the request is the observation.
     let vendorBody: unknown;
+
     const vendorDeps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
         vendorBody = JSON.parse(String(init?.body ?? '{}'));
+
         return new Response('{"error":{"message":"captured, not served"}}', { status: 400 });
       }),
     };
+
     const model = createAnthropicProvider().createModel('claude-opus-4-7', vendorDeps);
     let refused: unknown;
+
     try {
       for await (const _event of runChat({ model, system, history, tools })) { /* the request is the observation */ }
     } catch (caught) {
       refused = caught;
     }
+
     // Accounted, not swallowed: the turn MUST have reached the wire, or the
     // comparison below would be against an empty capture.
     expect(refused).toBeInstanceOf(Error);
@@ -462,16 +502,20 @@ describe('provider count support', () => {
 
     // What the counter sends for the same input.
     let countBody: unknown;
+
     const countDeps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
         countBody = JSON.parse(String(init?.body ?? '{}'));
+
         return new Response(JSON.stringify({ input_tokens: 1 }), { status: 200 });
       }),
     };
+
     const counted = await countRequestInputTokens(
       createAnthropicProvider(), 'claude-opus-4-7', countDeps, { system, messages: history, tools },
     );
+
     expect(counted.kind).toBe('counted');
     expect(countBody).toBeDefined();
 

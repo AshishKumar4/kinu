@@ -10,6 +10,7 @@ import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpe
 
 test('Slate source operations require Nimbus atomic-embedding rollback coherence', async () => {
   const ws = createTestWorkspace();
+
   try {
     const session = await createWorkspaceBundle(ws.db).session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
@@ -18,20 +19,25 @@ test('Slate source operations require Nimbus atomic-embedding rollback coherence
     let allowed = true;
     const sourceWriteFailure = new Error('source write failed');
     let failWrite = false;
+
     const files = new SlateFiles({
       ...vfs,
       writeFile(...args: Parameters<typeof vfs.writeFile>) {
         vfs.writeFile(...args);
+
         if (failWrite && args[0].endsWith('/server.js')) throw sourceWriteFailure;
       },
     }, content);
+
     const slates = new WorkspaceSlates({
       workspaceId: new WorkspaceId('workspace'), store, files,
       mutations: { async mutate(_request, mutation) {
         if (!allowed) throw new Error('turn no longer owns mutation');
+
         return session.vfs.withTransaction(mutation);
       } },
     });
+
     const id = new SlateId('notes');
     const directory = slateDirectory(id);
     vfs.mkdir(directory, { recursive: true });

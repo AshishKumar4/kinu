@@ -43,6 +43,7 @@ export const RunIdentitySchema = v.looseObject({
   actualVersionDigest: v.string(),
   bunVersion: v.optional(v.string()),
 });
+
 export type RunIdentity = v.InferOutput<typeof RunIdentitySchema>;
 
 /** Typed infrastructure failure: the running container is not the image this
@@ -74,6 +75,7 @@ export const CommandSchema = v.object({
   cwd: v.optional(v.string()),
   timeoutMs: v.optional(v.number()),
 });
+
 export type ProbeCommand = v.InferOutput<typeof CommandSchema>;
 
 /** Stable driver-owned identity for one durable process record. */
@@ -88,6 +90,7 @@ export const StartProcessSchema = v.strictObject({
   operationId: OperationIdSchema,
   command: v.pipe(v.string(), v.minLength(1)),
 });
+
 export type StartProcessRequest = v.InferOutput<typeof StartProcessSchema>;
 
 /** `/poll` is intentionally smaller than `/start`: a redrive can only observe
@@ -95,6 +98,7 @@ export type StartProcessRequest = v.InferOutput<typeof StartProcessSchema>;
 export const PollProcessSchema = v.strictObject({
   operationId: OperationIdSchema,
 });
+
 export type PollProcessRequest = v.InferOutput<typeof PollProcessSchema>;
 
 export type ProbeRequest = ProbeCommand | StartProcessRequest | PollProcessRequest;
@@ -171,11 +175,13 @@ export async function destroyProbeRuntime(
 ): Promise<void> {
   const failures: unknown[] = [];
   let processes: readonly { readonly id: string }[] = [];
+
   try {
     processes = await listProcesses();
   } catch (error) {
     failures.push(error);
   }
+
   for (const process of processes) {
     try {
       await killProcess(process.id);
@@ -183,16 +189,19 @@ export async function destroyProbeRuntime(
       failures.push(error);
     }
   }
+
   try {
     await destroySandbox();
   } catch (error) {
     failures.push(error);
   }
+
   try {
     await clearStorage();
   } catch (error) {
     failures.push(error);
   }
+
   if (failures.length > 0) {
     throw new AggregateError(failures, 'failed to terminate every fuse probe process before destroy');
   }
@@ -220,13 +229,16 @@ async function processResponse(
   started?: boolean,
 ): Promise<Response> {
   const settled = process.status !== 'starting' && process.status !== 'running';
+
   const state = {
     operationId,
     status: process.status,
     exitCode: settled ? process.exitCode ?? null : null,
     started,
   };
+
   if (!settled) return Response.json(state);
+
   return Response.json({ ...state, ...(await process.getLogs()) });
 }
 
@@ -237,38 +249,50 @@ export function handleProbeOp(pathname: string, box: ProbeBox, command: ProbeReq
   switch (pathname) {
     case '/start': {
       const request = startRequest(command);
+
       return box.getProcess(request.operationId).then(async (existing) => {
         if (existing !== null) return processResponse(request.operationId, existing, false);
+
         const process = await box.startProcess(request.command, {
           processId: request.operationId,
           autoCleanup: false,
         });
+
         return processResponse(request.operationId, process, true);
       });
     }
+
     case '/poll': {
       const request = pollRequest(command);
+
       return box.getProcess(request.operationId).then(async (process) => {
         if (process === null) {
           return Response.json({ error: `process ${request.operationId} not found` }, { status: 404 });
         }
+
         return processResponse(request.operationId, process);
       });
     }
+
     case '/exec': {
       const request = commandRequest(command);
+
       return (async () => {
         const started = Date.now();
         const options: ProbeExecOptions = { timeout: request.timeoutMs ?? 30_000 };
         const res = await box.exec(request.command ?? '', options);
+
         return Response.json({ ...res, wallMs: Date.now() - started });
       })();
     }
+
     case '/put': {
       const request = commandRequest(command);
+
       return box.writeFile(request.path ?? '', request.contentBase64 ?? '', { encoding: 'base64' })
         .then(() => Response.json({ ok: true }));
     }
+
     case '/stop':
       return box.stop('SIGTERM').then(() => Response.json({ ok: true }));
     case '/destroy':

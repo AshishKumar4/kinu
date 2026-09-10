@@ -17,37 +17,50 @@ import { DurableObject } from 'cloudflare:workers';
 
 // The one production class hosted here — see steer-probe.ts for the charter exception.
 export { SteerProbeDO } from './steer-probe';
+
 // The eviction probes — the same charter exception, for the recovery machinery.
 export { EvictionProbeDO, WitnessDO } from './eviction-probe';
+
 export { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
+
 // The step-cap probes — the same charter exception, for the turn loop's bound.
 export { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
+
 // The spend aggregate — the same charter exception, for the one production read
 // whose method is platform SQLite features (`WITH`, `json_extract`).
 export { SpendProbeDO } from './spend-probe';
+
 export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
+
 // The send-admission probe — the same charter exception, for the durable
 // submission ledger two concurrent clients race.
 export { SendAdmissionProbeDO } from './send-admission-probe';
+
 // The durable device-command ledger — the same charter exception, for a
 // precedence protocol whose whole subject is surviving an activation reset.
 export { DeviceLedgerProbeDO } from './device-inflight-probe';
+
 // The terminal-effect ledger — the same charter exception, for what one settled
 // turn still owes after the isolate running its effects dies.
 export { TerminalEffectProbeDO } from './terminal-effect-probe';
+
 // The `db` capability — the same charter exception, for two mechanisms only the
 // platform provides: `ctx.storage.transactionSync` (which is the whole of the
 // all-or-nothing batch and of evidence rolling back with its mutation) and
 // `… RETURNING` (which is how a row count crosses the SqlExecutor seam).
 export { DbCapabilityProbeDO } from './db-capability-probe';
+
 // The Files-tab EIO probe — the same charter exception: the real workspace
 // file plane under the runtime whose CSP is the defect.
 export { FilesEioProbeDO } from './files-eio-probe';
+
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
+
 // The production sandbox egress entrypoint, exported here exactly as
 // `src/server.ts` exports it, so `codemode-sandbox.test.ts` can prove the
 // `exports` loopback resolves it under the compatibility date we deploy.
 export { CodemodeEgress } from '../../src/codemode-egress';
+
 import * as v from 'valibot';
 
 /**
@@ -240,6 +253,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
    */
   private admitBody(id: string, failRoster: boolean): void {
     this.ctx.storage.sql.exec('INSERT INTO event_log (id) VALUES (?)', id);
+
     if (failRoster) throw new Error('unknown subordinate "relay"');
     this.ctx.storage.sql.exec(
       "UPDATE actor_subordinates SET status = 'idle' WHERE name = 'relay'",
@@ -278,6 +292,7 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
   /** What a parent would drain, and what its roster would say. */
   async admitted(): Promise<{ events: number; rosterStatus: string }> {
     this.ensureSchema();
+
     return {
       events: this.ctx.storage.sql.exec<{ n: number }>(
         'SELECT COUNT(*) AS n FROM event_log',
@@ -344,6 +359,7 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1], [`device:${deviceId}`]);
     pair[1].serializeAttachment({ device: deviceId });
+
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -358,6 +374,7 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
    */
   recordProbe(deviceId: string, asSet: boolean): void {
     const socket = this.liveSocket(deviceId);
+
     if (!socket) throw new Error(`no live socket for ${deviceId}`);
     const present = ['node', 'python3'];
     socket.serializeAttachment({
@@ -372,8 +389,10 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
    *  because it outlives the code that wrote it. */
   probeRecord(deviceId: string): DeviceAttachment | null {
     const socket = this.liveSocket(deviceId);
+
     if (!socket) return null;
     const parsed = v.safeParse(DeviceAttachmentSchema, socket.deserializeAttachment());
+
     return parsed.success ? parsed.output : null;
   }
 
@@ -389,6 +408,7 @@ export class SocketDO extends DurableObject<Cloudflare.Env> {
     for (const ws of this.ctx.getWebSockets(`device:${deviceId}`)) {
       if (ws.readyState === WebSocket.OPEN) return ws;
     }
+
     return null;
   }
 
@@ -476,12 +496,14 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
     const fires = (await this.ctx.storage.get<number>('fires')) ?? 0;
     await this.ctx.storage.put('fires', fires + 1);
     const failuresLeft = (await this.ctx.storage.get<number>('failuresLeft')) ?? 0;
+
     if (failuresLeft > 0) {
       await this.ctx.storage.put('failuresLeft', failuresLeft - 1);
       // Uncaught out of `alarm()` is the whole point: it is what hands the retry
       // decision to the runtime instead of keeping it in the library.
       throw new Error('alarm-body-failed');
     }
+
     await this.ctx.storage.put('completedAt', Date.now());
   }
 
@@ -507,8 +529,10 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
  */
 async function routeSend(request: Request, env: Cloudflare.Env, url: URL): Promise<Response> {
   const [, name, key] = url.pathname.split('/').filter((segment) => segment.length > 0);
+
   if (name === undefined || key === undefined) return new Response('bad send path', { status: 400 });
   const stub = env.SEND_ADMISSION_PROBE.get(env.SEND_ADMISSION_PROBE.idFromName(name));
+
   return Response.json(await stub.submit(await request.text(), key));
 }
 
@@ -533,8 +557,10 @@ async function routeSend(request: Request, env: Cloudflare.Env, url: URL): Promi
 export default {
   async fetch(request: Request, env: Cloudflare.Env): Promise<Response> {
     const url = new URL(request.url);
+
     if (url.pathname.startsWith('/send/')) return routeSend(request, env, url);
     const body = await request.arrayBuffer();
+
     return Response.json({
       contentLength: request.headers.get('content-length'),
       transferEncoding: request.headers.get('transfer-encoding'),

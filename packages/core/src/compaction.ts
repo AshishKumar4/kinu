@@ -35,6 +35,7 @@ export function wrapCompactionSummary(summary: string): string {
 export function stripCheckpointPreamble(summary: string): string {
   if (!summary.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return summary.trim();
   const bodyStart = summary.indexOf('\n\n');
+
   return bodyStart === -1 ? '' : summary.slice(bodyStart + 2).trim();
 }
 
@@ -89,6 +90,7 @@ function rules(budgetTokens: number): string {
 function activeTaskBlock(latestUserAsk?: string): string {
   if (!latestUserAsk?.trim()) return '';
   const ask = evidenceWindow(latestUserAsk, EVIDENCE_BUDGETS.storedUserMessage);
+
   return `THE USER'S MOST RECENT REQUEST (copy this verbatim into "## Active Task"):
 """
 ${ask}

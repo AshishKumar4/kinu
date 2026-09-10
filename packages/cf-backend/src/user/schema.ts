@@ -206,6 +206,7 @@ export function initUserTables(sql: SqlExec): void {
       updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+
   // NAME IS THE IDENTITY. Server names address the tools
   // (`mcp_<server>_<tool>`), so two servers sharing one name mint colliding
   // tool keys. This index is what makes that unrepresentable.
@@ -235,6 +236,7 @@ export function initUserTables(sql: SqlExec): void {
     SELECT lower(name) AS name FROM user_mcp_servers
       GROUP BY lower(name) HAVING COUNT(*) > 1
   `).toArray().length;
+
   if (collidingNames === 0) {
     sql.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_user_mcp_servers_name_unique

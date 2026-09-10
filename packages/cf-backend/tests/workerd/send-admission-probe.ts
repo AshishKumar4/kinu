@@ -86,6 +86,7 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
     const rows = [...this.ctx.storage.sql.exec<{ value: number }>(
       'SELECT value FROM probe_counters WHERE name = ?', name,
     )];
+
     return rows[0]?.value ?? 0;
   }
 
@@ -106,12 +107,15 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
       doStream: async () => {
         this.bump('provider_calls');
         const failing = this.counter('armed_failures') > 0;
+
         if (failing) {
           this.ctx.storage.sql.exec(
             'UPDATE probe_counters SET value = value - 1 WHERE name = ?', 'armed_failures',
           );
         }
+
         const answer = `answered ${String(this.counter('provider_calls'))}`;
+
         const parts: ModelStreamPart[] = failing
           ? [
             { type: 'stream-start', warnings: [] },
@@ -124,9 +128,11 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
             { type: 'text-end', id: 't0' },
             { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: USAGE },
           ];
+
         return { stream: convertArrayToReadableStream(parts) };
       },
     });
+
     return this._model;
   }
 
@@ -149,6 +155,7 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
       [{ id: `send-${idempotencyKey}`, role: 'user', parts: [{ type: 'text', text }] }],
       { idempotencyKey },
     );
+
     return { submissionId: result.submissionId, accepted: result.accepted, status: result.status };
   }
 
@@ -210,9 +217,12 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
     const claim = async (): Promise<boolean> => {
       if (await this.ctx.storage.get<boolean>('reactive_claim') === true) return false;
       await this.ctx.storage.put('reactive_claim', true);
+
       return true;
     };
+
     const outcomes = await Promise.all(Array.from({ length: callers }, () => claim()));
+
     return outcomes.filter(Boolean).length;
   }
 }

@@ -37,6 +37,7 @@ const profile: CompactionProfile = {
 function fakeEphemeral(supersededTokens = 0) {
   let remaining = supersededTokens;
   const drops: number[] = [];
+
   return {
     drops,
     /** More superseded blocks piled up since the last drop. */
@@ -45,6 +46,7 @@ function fakeEphemeral(supersededTokens = 0) {
       const freed = remaining;
       remaining = 0;
       drops.push(freed);
+
       return freed;
     },
   };
@@ -69,11 +71,13 @@ function rig(overrides: RigOverrides = {}): Rig {
   const prompts: string[] = [];
   const outcomes: CompactionOutcomeEvent[] = [];
   const ephemeral = fakeEphemeral();
+
   const extension = createCompactionExtension({
     ports,
     archive,
     summarize: async (prompt) => {
       prompts.push(prompt);
+
       return validSummary(String(prompts.length));
     },
     ephemeral,
@@ -81,8 +85,10 @@ function rig(overrides: RigOverrides = {}): Rig {
     onOutcome: (event) => outcomes.push(event),
     ...overrides,
   });
+
   const transform = (messages: ModelMessage[], ctxOverrides: Partial<TransformContext> = {}) => {
     if (!extension.transformContext) throw new Error('extension must implement transformContext');
+
     return extension.transformContext({
       sessionKey: SESSION,
       messages,
@@ -92,6 +98,7 @@ function rig(overrides: RigOverrides = {}): Rig {
       ...ctxOverrides,
     });
   };
+
   return {
     ports, archive, prompts, outcomes, transform,
     ephemeral: overrides.ephemeral ?? ephemeral,
@@ -141,11 +148,13 @@ describe('trigger gating', () => {
 describe('the first rung — superseded ephemeral context', () => {
   test('nothing is pruned below the trigger: the ordinary path never touches the plane', async () => {
     const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(5_000) });
+
     // Repeated turns well under the trigger, each a fresh transform — a
     // speculative rung would have fired on any of them.
     for (let i = 0; i < 3; i++) {
       expect(await transform(history(3, 200), { providerReportedTokens: 8_499 })).toBeUndefined();
     }
+
     expect(ephemeral.drops).toEqual([]);
     expect(outcomes).toHaveLength(0);
   });
@@ -214,6 +223,7 @@ describe('plan build', () => {
     const messages = history(15, 3_000); // ~45k chars of tool output ≈ 11k tokens > 8.5k trigger
     const result = await transform(messages);
     expect(result).toBeDefined();
+
     if (!result) throw new Error('expected a rewrite');
 
     // Shrunk for real, on the codec's own scale.
@@ -223,14 +233,18 @@ describe('plan build', () => {
 
     // The raw tail (from the 2nd-from-last user turn) is byte-verbatim.
     const tail = messages.slice(-6);
+
     for (let i = 0; i < 6; i++) expect(result[result.length - 6 + i]).toBe(tail[i]);
 
     // A reference message cites the transcript path the plan persisted.
     const snapshot = ports.plans.snapshots.get(SESSION);
+
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
+
     const reference = result.find(
       (m) => m.role === 'user' && isString(m.content) && m.content.includes(snapshot.transcriptRelativePath),
     );
+
     expect(reference).toBeDefined();
 
     // Transcript holds the raw pruned output for read-back.
@@ -246,6 +260,7 @@ describe('plan build', () => {
     const { transform } = rig();
     const messages = history(15, 3_000);
     const result = await transform(messages);
+
     if (!result) throw new Error('expected a rewrite');
     const flat = JSON.stringify(result);
     expect(flat).not.toContain('output-0 ');
@@ -272,9 +287,11 @@ describe('replay', () => {
     const { outcomes, transform } = rig();
     const messages = history(15, 3_000);
     const first = await transform(messages);
+
     if (!first) throw new Error('expected a rewrite');
     const grown = [...messages, user('one more small question'), assistant([{ type: 'text', text: 'answer' }])];
     const second = await transform(grown);
+
     if (!second) throw new Error('expected a rewrite');
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
     // Same transformed prefix, new tail appended.
@@ -313,14 +330,17 @@ describe('replay', () => {
     const messages = history(15, 3_000);
     await transform(messages);
     const snapshot = ports.plans.snapshots.get(SESSION);
+
     if (!snapshot) throw new Error('expected snapshot');
     // A foreign snapshot (sessionId=agent-test-session) under another key is
     // ignored by the ownership check; a fresh plan is built and saved.
     ports.plans.snapshots.set('other-session', snapshot);
+
     const ext = createCompactionExtension({
       ports, archive: memoryArchive(), summarize: async () => validSummary('other'),
       ephemeral: fakeEphemeral(), profile,
     });
+
     const result = await ext.transformContext?.({
       sessionKey: 'other-session',
       messages,
@@ -328,6 +348,7 @@ describe('replay', () => {
       contextWindow: 10_000,
       trigger: 'auto',
     });
+
     expect(result).toBeDefined();
     expect(ports.plans.snapshots.get('other-session')?.sessionId).toBe('other-session');
   });
@@ -337,6 +358,7 @@ describe('replay', () => {
     const messages = history(15, 3_000);
     const first = await transform(messages);
     const snapshot = ports.plans.snapshots.get(SESSION);
+
     if (!snapshot) throw new Error('expected snapshot');
     ports.plans.snapshots.set(SESSION, JSON.parse(JSON.stringify(snapshot)));
     const second = await transform(messages);
@@ -380,14 +402,17 @@ describe('archive manifest', () => {
     user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
     assistant([{ type: 'text', text: `noted ${i}` }]),
   ];
+
   const fatHistory = (turns: number): ModelMessage[] =>
     Array.from({ length: turns }, (_, i) => fatUser(i)).flat();
 
   test('the checkpoint message carries a manifest line for the archived range', async () => {
     const { archive, ports, transform } = rig();
     const result = await transform(fatHistory(8));
+
     if (!result) throw new Error('expected a rewrite');
     const snapshot = ports.plans.snapshots.get(SESSION);
+
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
 
     const ranges = archive.list(SESSION);
@@ -406,6 +431,7 @@ describe('archive manifest', () => {
     const checkpoint = result.find(
       (m) => isString(m.content) && m.content.includes('[Context Summary]'),
     );
+
     expect(checkpoint?.content).toInclude('## Compaction Archive');
     expect(checkpoint?.content).toInclude(
       '- turns 1-12 (6 user / 6 assistant) — "requirement 0: detail detail',
@@ -428,6 +454,7 @@ describe('archive manifest', () => {
     await transform(messages);
     const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
     const result = await transform(grown);
+
     if (!result) throw new Error('expected a rebuild');
 
     const ranges = archive.list(SESSION);
@@ -435,9 +462,11 @@ describe('archive manifest', () => {
     expect(ranges[1]).toMatchObject({ startTurn: 13, endTurn: 18, userTurns: 3, assistantTurns: 3 });
     expect(ranges[1].firstUserAsk).toStartWith('requirement 6:');
     expect(ranges[1].path).not.toBe(ranges[0].path);
+
     const checkpoint = result.find(
       (m) => isString(m.content) && m.content.includes('## Compaction Archive'),
     );
+
     expect(checkpoint?.content).toInclude('- turns 1-12 ');
     expect(checkpoint?.content).toInclude('- turns 13-18 ');
   });
@@ -461,11 +490,14 @@ describe('summaries', () => {
     const { prompts, transform } = rig();
     // Fat assistant TEXT (not tool output): only the assistant-runs stage can shrink it.
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) {
       messages.push(user(`chapter ${i}?`));
       messages.push(assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]));
     }
+
     const result = await transform(messages);
+
     if (!result) throw new Error('expected a rewrite');
     const runPrompts = prompts.filter((p) => p.includes('Summarize this historical assistant turn'));
     expect(runPrompts.length).toBeGreaterThan(0);
@@ -474,11 +506,14 @@ describe('summaries', () => {
 
   test('an advanced boundary re-summarizes iteratively from the previous checkpoint', async () => {
     const { prompts, transform } = rig();
+
     const fatUser = (i: number): ModelMessage[] => [
       user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
       assistant([{ type: 'text', text: `noted ${i}` }]),
     ];
+
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
     await transform(messages); // first prefix-summary plan (checkpoint-wrapped)
     const promptsBeforeGrowth = prompts.length;
@@ -486,9 +521,11 @@ describe('summaries', () => {
     const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
     await transform(grown); // regrown past trigger → boundary advances → rebuild
     const growthPrompts = prompts.slice(promptsBeforeGrowth);
+
     const rollingPrompts = growthPrompts.filter((p) =>
       p.includes('Roll this prior prefix summary forward'),
     );
+
     expect(rollingPrompts).toHaveLength(1);
     expect(rollingPrompts[0]).toContain(validSummary('1'));
     expect(rollingPrompts[0]).toContain(CONTEXT_CHECKPOINT_PREFIX);
@@ -497,18 +534,23 @@ describe('summaries', () => {
 
   test('a rejected rolling summary does not bypass the scheduler for a second attempt', async () => {
     const summaryPrompts: string[] = [];
+
     const { transform } = rig({
       summarize: async (prompt) => {
         summaryPrompts.push(prompt);
+
         if (summaryPrompts.length === 1) return validSummary('initial');
         throw new Error('rolling summary unavailable');
       },
     });
+
     const fatUser = (i: number): ModelMessage[] => [
       user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
       assistant([{ type: 'text', text: `noted ${i}` }]),
     ];
+
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
     await transform(messages);
 
@@ -523,11 +565,14 @@ describe('summaries', () => {
     // Fat USER messages: no prune stage touches user turns, so the ladder
     // must fall through to the last-resort prefix summary.
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) {
       messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
       messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
     }
+
     const result = await transform(messages);
+
     if (!result) throw new Error('expected a rewrite');
 
     const prefixPrompts = prompts.filter((p) => p.includes('## Active Task'));
@@ -551,6 +596,7 @@ describe('summaries', () => {
 
   test('a split first turn upgrades the exact compacted fragment', async () => {
     const { ports, prompts, transform } = rig();
+
     const result = await transform([{
       role: 'user',
       content: [
@@ -558,6 +604,7 @@ describe('summaries', () => {
         { type: 'text', text: 'newest requirement stays raw' },
       ],
     }]);
+
     expect(result).toBeDefined();
     expect(prompts.filter((prompt) => prompt.includes('## Active Task'))).toHaveLength(1);
     expect(ports.plans.snapshots.get(SESSION)?.rawTailItemBoundary).toBeDefined();
@@ -570,11 +617,14 @@ describe('summaries', () => {
         throw new Error('llm down');
       },
     });
+
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) {
       messages.push(user(`requirement ${i}: ${'detail '.repeat(1_000)}`));
       messages.push(assistant([{ type: 'text', text: `noted ${i}` }]));
     }
+
     const result = await transform(messages);
     expect(result).toBeDefined();
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
@@ -586,11 +636,14 @@ describe('summaries', () => {
   test('too-short summaries are discarded in favor of previews', async () => {
     const { transform } = rig({ summarize: async () => 'too short' });
     const messages: ModelMessage[] = [];
+
     for (let i = 0; i < 8; i++) {
       messages.push(user(`chapter ${i}?`));
       messages.push(assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]));
     }
+
     const result = await transform(messages);
+
     if (!result) throw new Error('expected a rewrite');
     expect(JSON.stringify(result)).not.toContain('too short');
     // Collapsed runs fall back to truncated previews of the original text.

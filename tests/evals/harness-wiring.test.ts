@@ -109,6 +109,7 @@ type ScriptedStep =
  * other fake in this repo implements (`TestLanguageModelV2`).
  */
 type ModelV2 = Extract<LanguageModel, { specificationVersion: 'v2' }>;
+
 type StreamPartV2 =
   Awaited<ReturnType<ModelV2['doStream']>>['stream'] extends ReadableStream<infer Part>
     ? Part
@@ -123,6 +124,7 @@ type StreamPartV2 =
 function scripted(steps: readonly ScriptedStep[]): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let index = 0;
+
   const model: ModelV2 = {
     specificationVersion: 'v2',
     provider: 'fake',
@@ -132,10 +134,12 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
     doStream: () => {
       const step = steps[index];
       index += 1;
+
       return Promise.resolve({
         stream: new ReadableStream<StreamPartV2>({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (step) {
               controller.enqueue({
                 type: 'tool-call',
@@ -150,6 +154,7 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
             }
+
             controller.close();
           },
         }),
@@ -157,9 +162,12 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
       });
     },
   };
+
   return model;
 }
+
 const dir = mkdtempSync(join(tmpdir(), 'harness-wiring-'));
+
 const opened: Database[] = [];
 
 // The harness hands back every store it opened and closes none of them, because
@@ -175,13 +183,16 @@ const opened: Database[] = [];
 // 210 in / 294 out`.
 afterAll(() => {
   resetLiveModelSpend();
+
   for (const db of opened) db.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
 function scoreOf(scores: readonly BehaviourScoreJson[], name: string): BehaviourScoreJson {
   const found = scores.find((s) => s.name === name);
+
   if (!found) throw new Error(`no ${name} score — scoreTrajectory stopped reporting it`);
+
   return found;
 }
 
@@ -191,6 +202,7 @@ async function runCase(
   const out = await runBehaviourTask(task, {
     dir, model: scripted(steps), llm: LLM, arm: ARM, opened,
   });
+
   return out.scores;
 }
 
@@ -219,6 +231,7 @@ async function openRuntimeProbe(name: string): Promise<{
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
   requireSandboxedExecutors(name, rt);
   const surface = buildEvalAgentSurface({ rt, model: scripted([]), llm: LLM });
+
   return { db, rt, surface };
 }
 
@@ -255,6 +268,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
   test('workspace.listTools exposes exactly the callable inherited craft set before reuse', async () => {
     const { rt, surface } = await openRuntimeProbe('crafted-production-set');
     const executeEntry = surface.tools.execute_tools;
+
     if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
@@ -262,9 +276,11 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     expect(createDouble).toEqual({
       result: { ok: true, name: 'doubleIt', action: 'created' },
     });
+
     const createIncrement = await execute({
       code: 'return await workspace.createTool("increment", "adds one", "async (n) => n + 1");',
     });
+
     expect(createIncrement).toEqual({
       result: { ok: true, name: 'increment', action: 'created' },
     });
@@ -283,6 +299,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
       }),
       await execute({ code: 'return await workspace.listTools();' }),
     );
+
     const listedTools = [...listed.result].sort((a, b) => a.name.localeCompare(b.name));
     expect(listedTools).toEqual([
       { name: 'doubleIt', description: 'doubles a number', qualityScore: CRAFT_NEUTRAL_PRIOR },
@@ -361,6 +378,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
         'agents-action': observedActionEnum(surface.tools.agents),
       },
     });
+
     expect(report.findings.filter((f) => f.plane === 'tool')).toEqual([]);
 
     // ACTION plane: compared against the same enum minus exactly the six
@@ -369,11 +387,14 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // this filter would then hide it from the comparison while the assertion
     // below still demands the surface resolve every non-host action it declares.
     const actionFindings = report.findings.filter((f) => f.plane === 'agents-action');
+
     const scoped = actionFindings
       .filter((f) => !HOST_INSTALLED_ACTIONS.some((action) => action === f.name));
+
     if (scoped.length > 0 || actionFindings.length > HOST_INSTALLED_ACTIONS.length) {
       console.log(renderConformanceFindings({ ...report, findings: actionFindings }));
     }
+
     expect(scoped).toEqual([]);
 
     // The structural half of the scoping claim: the surface carries fork deps
@@ -398,6 +419,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
   test('every codemode namespace production wires is reachable from execute_tools', async () => {
     const { surface } = await openRuntimeProbe('parity-codemode-namespaces');
     const executeEntry = surface.tools.execute_tools;
+
     if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
@@ -411,10 +433,12 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // assertion reads that shape rather than guessing an array.
     expect(await execute({ code: 'return Array.isArray((await tasks.list()).tasks);' }))
       .toEqual({ result: true });
+
     const saved = v.parse(
       v.object({ result: v.string() }),
       await execute({ code: 'await memory.save("parity", "reachable"); return "saved";' }),
     );
+
     expect(saved.result).toContain('saved');
   }, 0);
 
@@ -427,6 +451,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // `agents` silently dropped it — and the exploration eval then scored a model
     // on reaching for a capability its prompt never mentioned.
     expect(system).toContain('- **agents**:');
+
     // Every builtin on the surface is NAMED in the prompt's tool section, so the
     // two projections cannot disagree about what exists.
     for (const name of surface.builtinTools) expect(system).toContain(name);
@@ -434,6 +459,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
 
   test('the request evidence reports the tool list the provider actually received', async () => {
     const { rt, surface } = await openRuntimeProbe('parity-request-evidence');
+
     // `scripted` streams only, because LocalAgentSession drives streamText; this
     // probe drives generateText directly, so it needs the one-shot generate
     const answering: ModelV2 = {
@@ -449,6 +475,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
       }),
       doStream: () => Promise.reject(new Error('this probe generates only')),
     };
+
     const recorder = recordRequestSurface(answering);
 
     await generateText({
@@ -479,6 +506,7 @@ describe('published run-event provenance', () => {
   test('it is bounded, ordered, useful, and carries no prompt or secret content', async () => {
     const secret = 'sk-provenance-canary-0123456789';
     const prompt = `Diagnose one failing block. The synthetic credential is ${secret}.`;
+
     const output = await runBehaviourTask({
       id: 'wiring-provenance',
       task: prompt,
@@ -546,6 +574,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // Written and read back in the same turn, so the fixture carries its own
     // bulk rather than depending on what a corpus environment happens to seed.
     const bulk = 'x'.repeat(400_000);
+
     const scores = await run('wiring-spill', [
       { tool: 'file', input: { action: 'write', path: 'huge.txt', content: bulk } },
       { tool: 'file', input: { action: 'read', path: 'huge.txt' } },
@@ -647,9 +676,11 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     // And it failed for the RIGHT reason: the episode really issued both calls
     // and both were refused, rather than the fixture never reaching the host.
     const db = opened[opened.length - 1];
+
     if (!db) throw new Error('the harness opened no store');
     const rows = toolCallRows(db).filter((r) => r.name === 'execute_tools');
     expect(rows).toHaveLength(2);
+
     for (const row of rows) {
       // Refusal comes from the SDK invocation outcome, not from matching
       // an error-shaped string returned as ordinary tool data.
@@ -706,12 +737,16 @@ function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }
   // indistinguishable from a row the read never reached.
   const events: RunEvent[] = [];
   let cursor: SeekCursor | null = null;
+
   for (;;) {
     const page = listRuns(recorder, cursor);
+
     for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+
     if (page.status === 'end') break;
     cursor = page.next;
   }
+
   return events.filter(
     (e): e is Extract<RunEvent, { type: 'tool_call_end' }> => e.type === 'tool_call_end',
   );
@@ -749,6 +784,7 @@ describe('tool-failure attribution over a real turn', () => {
     ], ['workspace']);
 
     const db = opened[opened.length - 1];
+
     if (!db) throw new Error('the harness opened no store');
     const rows = toolCallRows(db);
     const census = censusToolFailures(rows);
@@ -763,6 +799,7 @@ describe('tool-failure attribution over a real turn', () => {
     // action is read as a field, and the bound still holds.
     const fileRows = rows.filter((r) => r.name === 'file');
     expect(fileRows.length).toBeGreaterThan(0);
+
     for (const row of fileRows) {
       const args = v.parse(JsonObjectSchema, row.args);
       expect(args.action).toBeTypeOf('string');
@@ -816,9 +853,12 @@ describe('tool-failure attribution over a real turn', () => {
 describe('hard-task wiring — env resolves to a seeded task and a scored outcome', () => {
   const task = HARD_TASKS.reduce((cheapest, t) =>
     (t.problem.targetOps < cheapest.problem.targetOps ? t : cheapest));
+
   const evalCase = hardTaskCases().find((c) => c.id === task.id);
+
   if (!evalCase) throw new Error(`${task.id} produced no eval case`);
   const reference = task.seed.find((f) => f.path === REFERENCE_FILE);
+
   if (!reference) throw new Error(`${task.id} seeds no reference`);
 
   test('the reference is readable, the stub is replaceable, and the result is measured', async () => {
@@ -868,6 +908,7 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     const scores = await run('wiring-unverified', [
       { tool: 'file', input: { action: 'write', path: 'notes.txt', content: 'x' } },
     ]);
+
     // The comparator drops such a pair BY NAME (`baseline-unverified`). Charging
     // it as a zero would turn a missing verifier into a fact about the agent.
     expect(scores.find((s) => s.name === 'task_outcome')).toBeUndefined();
@@ -1028,6 +1069,7 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
     taskId: 'ws-inventory', repetition: 0, outcome: 'scored', scores: [],
     turns: 2, toolCalls: 3, tokensIn: 41_000, tokensOut: 2_300, ms: 1_234,
   };
+
   const FINISHED_STEPS = 12;
 
   /** The case it DIED under: started, tallied, and never settled. */
@@ -1035,6 +1077,7 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
     taskId: 'ws-fix-broken', repetition: 0, outcome: 'incomplete',
     reason: 'previous process ended before the case settled',
   };
+
   const CRASHED_STEPS = 4;
 
   const keyOf = (o: EvalObservation) => caseKey(o.taskId, o.repetition);
@@ -1059,18 +1102,23 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
       .map(({ taskId, repetition }) => ({ taskId, repetition })));
 
     store.markStarted(keyOf(FINISHED));
+
     for (let step = 0; step < FINISHED_STEPS; step += 1) {
       store.markActivity(keyOf(FINISHED), { modelSteps: 1 });
     }
+
     store.markProgress(
       keyOf(FINISHED), v.parse(JsonValueSchema, { observation: FINISHED }), 'scored',
     );
 
     store.markStarted(keyOf(CRASHED));
+
     for (let step = 0; step < CRASHED_STEPS; step += 1) {
       store.markActivity(keyOf(CRASHED), { modelSteps: 1 });
     }
+
     store.flush();
+
     return root;
   }
 
@@ -1080,9 +1128,11 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
     const resumeDir = findResumableEvalDir(
       root, PREFIX, SIGNATURE, new Set([keyOf(FINISHED), keyOf(CRASHED)]),
     );
+
     if (resumeDir === null) throw new Error('the seeded run should have been resumable');
     const store = openEvalProgress(resumeDir, SIGNATURE);
     store.markInFlightIncomplete('previous process ended before the case settled');
+
     return store;
   }
 
@@ -1334,12 +1384,14 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
     // makes one outage two different failures depending on which reader you
     // asked.
     let boundary: Error | null = null;
+
     try {
       await infraBoundary('turn on staging/eval-ws', () =>
         Promise.reject(new Error('the workspace socket closed')));
     } catch (error) {
       boundary = error instanceof Error ? error : null;
     }
+
     if (boundary === null) throw new Error('unreachable: the boundary must reject with an Error');
     expect(disposeFailedCase(boundary)).toEqual({ kind: 'resumable', outcome: 'incomplete' });
     // The control: the same sentence WITHOUT the boundary's label is a plain
@@ -1374,6 +1426,7 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
 describe('the spawned-CLI driver roots its child outside the repository', () => {
   test('kinu create records a scratch project directory, never the repo root', async () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-driver-cwd-'));
+
     try {
       await createCliWorkspace({
         home,
@@ -1393,7 +1446,9 @@ describe('the spawned-CLI driver roots its child outside the repository', () => 
         }),
         JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')),
       );
+
       const agent = config.agents['cwd-probe'];
+
       if (agent === undefined) throw new Error('`kinu create` recorded no agent to read');
 
       // THE DEFECT FIRST, so a regression reads as itself rather than as a

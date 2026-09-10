@@ -15,6 +15,7 @@ const expectedRules = [
   "anti-slop/no-known-value-widening",
   "anti-slop/no-module-mocking",
   "anti-slop/no-object-parameters",
+  "anti-slop/no-reduce-accumulator-copy",
   "anti-slop/no-reflect-apply",
   "anti-slop/no-reflect-get",
   "anti-slop/no-runtime-typeof",
@@ -30,6 +31,7 @@ const expectedRules = [
   "anti-slop/no-wait-until-in-durable-object",
   "anti-slop/no-widen-then-assert",
   "anti-slop/require-cause-on-rethrow",
+  "anti-slop/require-readable-spacing",
   "anti-slop/require-runtime-import-extension",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];

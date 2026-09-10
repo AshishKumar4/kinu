@@ -28,6 +28,7 @@ import type { CappedTurnProbeDO, UnboundedTurnProbeDO } from './step-cap-probe';
 
 
 const DEADLINE_MS = 60_000;
+
 const POLL_MS = 50;
 
 /**
@@ -40,11 +41,14 @@ async function driveTurn(
   name: string,
 ): Promise<TurnObservation> {
   const stub = ns.get(ns.idFromName(name));
+
   const response = await stub.fetch(`https://probe/agents/probe/${name}`, {
     headers: { Upgrade: 'websocket' },
   });
+
   expect(response.status).toBe(101);
   const socket = response.webSocket;
+
   if (!socket) throw new Error('no socket on the 101 response');
   socket.accept();
   socket.send(JSON.stringify({
@@ -64,15 +68,20 @@ async function driveTurn(
   const start = Date.now();
   let last = -1;
   let stable = 0;
+
   for (;;) {
     const observed = await stub.observeTurn();
+
     if (observed.steps > 0 && observed.steps === last) {
       stable += 1;
+
       if (stable >= 6) return observed;
     } else {
       stable = 0;
     }
+
     last = observed.steps;
+
     if (Date.now() - start > DEADLINE_MS) return observed;
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
@@ -129,6 +138,7 @@ describe('what the seal makes of each of those turns', () => {
       interrupted: false,
       lastFinishReason: observed.lastFinishReason ?? undefined,
     };
+
     expect(facts.lastFinishReason).toBe(TOOL_CALLS_PENDING);
     // The reason is unchanged: the classifier names what the driver observed, and
     // the defect is reported through diagnostics rather than as a user-facing

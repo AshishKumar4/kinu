@@ -137,12 +137,17 @@ interface Props {
 
 /** Row pitch. One text line plus air — labels cannot collide at any tree size. */
 const ROW = 22;
+
 /** Depth pitch. Wide enough for a node, its fold handle and a label. */
 const COL = 206;
+
 const HANDLE_X = NODE_R_MAX + 8;
+
 const LABEL_X = NODE_R_MAX + 22;
+
 /** Air between a label's end and whatever the next column puts on its row. */
 const LABEL_GAP = 8;
+
 /**
  * Room a label may use, in scene units.
  *
@@ -157,7 +162,9 @@ const LABEL_GAP = 8;
  * character count cannot know either number.
  */
 const LABEL_ROOM_INNER = COL - LABEL_X - LABEL_GAP;
+
 const LABEL_ROOM_LEAF = COL * 2 - LABEL_X - LABEL_GAP;
+
 /**
  * The zoom at which the picture stops being one: the busiest search's dots
  * merge into a smear well before this, so fitting is allowed to go no smaller.
@@ -166,8 +173,11 @@ const LABEL_ROOM_LEAF = COL * 2 - LABEL_X - LABEL_GAP;
  * into dust.
  */
 const OVERVIEW_MIN_SCALE = 0.3;
+
 const RULER_H = 20;
+
 const FIT_PAD = 16;
+
 /**
  * The docked row under the scene holding the key and the controls.
  *
@@ -179,9 +189,12 @@ const FIT_PAD = 16;
  * screen.
  */
 const LEGEND_H = 30;
+
 /** Air inside a band's boundary, and the line of type naming the search. */
 const BAND_PAD = 10;
+
 const BAND_TITLE_H = 26;
+
 /**
  * How long a node keeps its working mark after its last journal write.
  *
@@ -191,6 +204,7 @@ const BAND_TITLE_H = 26;
  * while the reader is still looking at it.
  */
 const WORKING_MS = 2_500;
+
 /** Between two boundaries. A hairline of separation, not a gutter — the whole
  *  point of one canvas is that the space between trees is not wasted. */
 const BAND_GAP = 6;
@@ -206,7 +220,9 @@ function foldKey(runId: string, nodeId: string): string {
 /** One allocation for every search that has no journal, so a poll over a
  *  workspace of them does not churn a Map per band per render. */
 const EMPTY_NODE_MAP: ReadonlyMap<string, number> = new Map();
+
 const EMPTY_TEXT_MAP: ReadonlyMap<string, string> = new Map();
+
 /** The unfolded scene, for the pure height question the host asks before the
  *  reader has folded anything. */
 const NO_FOLDS: ReadonlySet<string> = new Set<string>();
@@ -238,18 +254,24 @@ function labelFont(): LabelFont {
 	const mono = cs.getPropertyValue("--font-mono").trim() || "monospace";
 	const body = getComputedStyle(document.body).fontFamily || "sans-serif";
 	const ctx = document.createElement("canvas").getContext("2d");
+
 	if (ctx === null) {
 		// No 2d context — a headless or hardened environment. Fall back to the
 		// mean advance of the faces at these sizes, so labels are clipped a
 		// little conservatively rather than not at all.
 		fontCache = { name: (text) => text.length * 5.9, badge: (text) => text.length * 5.4 };
+
 		return fontCache;
 	}
+
 	const measure = (font: string) => (text: string): number => {
 		ctx.font = font;
+
 		return ctx.measureText(text).width;
 	};
+
 	fontCache = { name: measure(`11px ${body}`), badge: measure(`9px ${mono}`) };
+
 	return fontCache;
 }
 
@@ -280,9 +302,11 @@ function nodeLabel(
 ): NodeLabel {
 	const folded = collapsed.has(foldKey(region.runId, node.data.id));
 	const scored = node.data.status === "failed" || node.data.value !== null;
+
 	const score = !scored ? ""
 		: node.data.status === "failed" ? "failed"
 		: `${Math.round(Math.min(1, Math.max(0, node.data.value ?? 0)) * 100)}%`;
+
 	const fold = folded ? ` +${subtreeCount(node.data)}` : "";
 	const join = fanIn.has(node.data.id) ? ` ⋈${fanIn.get(node.data.id) ?? 0}` : "";
 	const badge = `${fold}${join}`;
@@ -290,10 +314,12 @@ function nodeLabel(
 	// gets a leaf's room — which is also where the `+n` it just gained needs it.
 	const room = node.data.children.length === 0 || folded ? LABEL_ROOM_LEAF : LABEL_ROOM_INNER;
 	const spend = font.badge(score) + font.badge(badge);
+
 	const name = clipToWidth(
 		`${score === "" ? "" : " "}${cleanNodeLabel(node.data.action, region.name)}`,
 		room - spend, font.name,
 	);
+
 	return { score, name, badge, end: LABEL_X + spend + font.name(name) };
 }
 
@@ -346,6 +372,7 @@ function layoutRegions(
 ): RenderState {
 	const layout = d3.tree<ForkNode>().nodeSize([ROW, COL])
 		.separation((a, b) => (a.parent === b.parent ? 1 : 1.6));
+
 	const placed: RegionLayout[] = [];
 	let maxDepth = 0;
 	// Boundaries are flush columns rather than ragged to each tree's own width:
@@ -358,25 +385,31 @@ function layoutRegions(
 	// spent scale on — and too little for the leaf labels that are now allowed
 	// two columns.
 	let widest = 0;
+
 	for (const region of regions) {
 		const hierarchy = d3.hierarchy(region.root, (d) => (
 			collapsed.has(foldKey(region.runId, d.id)) ? [] : d.children
 		));
+
 		const data = layout(hierarchy);
 		const nodes = data.descendants();
+
 		// The store owns every non-root column. D3 owns rows and links; the root is d0.
 		for (const node of nodes) node.y = (node.parent === null ? 0 : node.data.depth) * COL;
 		const depth = d3.max(nodes, (node) => (node.parent === null ? 0 : node.data.depth)) ?? 0;
 		const [rowStart, rowEnd] = d3.extent(nodes, (d) => d.x);
+
 		if (rowStart === undefined || rowEnd === undefined) continue;
 		maxDepth = Math.max(maxDepth, depth);
 		const fanIn = region.fanIn ?? EMPTY_NODE_MAP;
 		const labels = new Map<string, NodeLabel>();
+
 		for (const node of nodes) {
 			const label = nodeLabel(node, region, collapsed, fanIn, font);
 			labels.set(node.data.id, label);
 			widest = Math.max(widest, node.y + label.end);
 		}
+
 		placed.push({
 			runId: region.runId, root: region.root, nodes, links: data.links(),
 			name: region.name,
@@ -397,6 +430,7 @@ function layoutRegions(
 	const x0 = -NODE_R_MAX - BAND_PAD;
 	const x1 = Math.max(widest + BAND_PAD, COL);
 	let cursor = 0;
+
 	for (const region of placed) {
 		const treeH = region.rows.end - region.rows.start + ROW;
 		const bandH = BAND_TITLE_H + treeH + BAND_PAD;
@@ -425,6 +459,7 @@ function layoutRegions(
  */
 export function naturalCanvasHeight(regions: readonly SwarmTreeRegion[]): number {
 	const { extent } = layoutRegions(regions, NO_FOLDS, labelFont());
+
 	return RULER_H + FIT_PAD * 2 + (extent.y1 - extent.y0) + LEGEND_H;
 }
 
@@ -437,11 +472,13 @@ export function naturalCanvasHeight(regions: readonly SwarmTreeRegion[]): number
 function scoreRamp(): (t: number) => string {
 	const cs = getComputedStyle(document.documentElement);
 	const tok = (name: string) => cs.getPropertyValue(name).trim();
+
 	return d3.piecewise(d3.interpolateLab, [tok("--c-danger"), tok("--c-warning"), tok("--c-success")]);
 }
 
 function scoreToken(value: number): string {
 	const band = scoreBand(value);
+
 	return band === "success" ? "var(--c-success)" : band === "warning" ? "var(--c-warning)" : "var(--c-danger)";
 }
 
@@ -449,6 +486,7 @@ function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// A failed branch has no score to show — it never produced one — so it is
 	// drawn hollow rather than coloured by a zero it did not earn.
 	if (node.status === "failed") return "var(--c-surface)";
+
 	// WORKING IS THE ACCENT, as it is everywhere else in the product: the
 	// sidebar's "Working now", the composer's Running, a subordinate at work, the
 	// run dot on the Exploration list and the dot on this node's own transcript
@@ -457,9 +495,11 @@ function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// hair from `--c-text-3` (#5E5344), which made a working node and a settled
 	// unscored one the same brown.
 	if (node.status === "running") return "var(--c-accent)";
+
 	// Unscored: the same argument as `failed`, for every branch of a fork that
 	// ranked none of them. Neutral, not a ramp position.
 	if (node.value === null) return "var(--c-border-strong)";
+
 	return ramp(Math.min(1, Math.max(0, node.value)));
 }
 
@@ -482,16 +522,21 @@ function applyEmphasis(
 	group.selectAll<SVGPathElement, d3.HierarchyPointLink<ForkNode>>("path.mcts-link")
 		.attr("stroke", (d) => {
 			if (lit(d.target.data.id)) return "var(--c-accent)";
+
 			if (d.target.data.status === "failed") return "var(--c-danger)";
+
 			return "var(--c-border-strong)";
 		})
 		.attr("stroke-opacity", (d) => {
 			if (lit(d.target.data.id)) return 0.95;
+
 			if (d.target.data.status === "pruned") return 0.4;
+
 			return 0.6;
 		})
 		.attr("stroke-width", (d) => {
 			const w = region.competed ? linkWidth(d.target.data.visits, region.visitMax) : 1.2;
+
 			return lit(d.target.data.id) ? Math.max(2, w) : w;
 		});
 
@@ -499,15 +544,20 @@ function applyEmphasis(
 	nodes.select<SVGCircleElement>("circle.mcts-dot")
 		.attr("stroke", (d) => {
 			if (selectedId === d.data.id) return "var(--c-accent)";
+
 			if (d.data.status === "terminal") return "var(--c-accent)";
+
 			if (d.data.status === "failed") return "var(--c-danger)";
+
 			return "none";
 		})
 		.attr("stroke-width", (d) => (selectedId === d.data.id ? 2.5 : d.data.status === "terminal" ? 2 : 1.4))
 		.attr("opacity", (d) => (selectedId === d.data.id || onPath.has(d.data.id) ? 1 : d.data.status === "pruned" ? 0.45 : 1))
 		.attr("filter", (d) => {
 			if (selectedId === d.data.id) return "url(#mctsSelectGlow)";
+
 			if (d.data.status === "terminal") return "url(#mctsGlow)";
+
 			return null;
 		});
 
@@ -597,6 +647,7 @@ export function SwarmTree({
 	 */
 	const fit = useCallback((animate: boolean) => {
 		const state = stateRef.current;
+
 		if (!svgRef.current || !zoomRef.current || !state || state.regions.length === 0) return;
 		const target = state.regions.find((r) => r.runId === selectedRunId) ?? state.regions[0]!;
 		const { x0, x1, y0, y1 } = target.band;
@@ -640,6 +691,7 @@ export function SwarmTree({
 		const ty = RULER_H + FIT_PAD - (fitsWhole ? scene.y0 : y0) * k;
 		const svg = d3.select(svgRef.current);
 		const to = d3.zoomIdentity.translate(tx, ty).scale(k);
+
 		if (animate) svg.transition().duration(280).call(zoomRef.current.transform, to);
 		else svg.call(zoomRef.current.transform, to);
 	}, [width, sceneH, selectedRunId]);
@@ -662,17 +714,21 @@ export function SwarmTree({
 	const scaleBy = useCallback((factor: number) => {
 		const svgEl = svgRef.current;
 		const zoom = zoomRef.current;
+
 		if (!svgEl || !zoom) return;
 		const from = d3.zoomTransform(svgEl);
 		const [minK, maxK] = zoom.scaleExtent();
 		const k = Math.min(maxK, Math.max(minK, from.k * factor));
+
 		if (k === from.k) return;
 		// Anchored on the canvas centre, so the thing the reader is looking at is
 		// the thing that stays put.
 		const [cx, cy] = [width / 2, sceneH / 2];
+
 		const to = d3.zoomIdentity
 			.translate(cx - (cx - from.x) * (k / from.k), cy - (cy - from.y) * (k / from.k))
 			.scale(k);
+
 		userMoved.current = true;
 		d3.select(svgEl).transition().duration(180).call(zoom.transform, to);
 	}, [width, sceneH]);
@@ -711,6 +767,7 @@ export function SwarmTree({
 	const fittedFor = useRef("");
 	useEffect(() => {
 		const key = `${selectedRunId}\u0000${regions.map((region) => region.runId).join("\u0001")}`;
+
 		if (fittedFor.current === key) return;
 		fittedFor.current = key;
 		userMoved.current = false;
@@ -723,16 +780,20 @@ export function SwarmTree({
 	useEffect(() => {
 		const svg = d3.select(svgRef.current!);
 		const defs = svg.append("defs");
+
 		for (const [id, blur] of [["mctsGlow", "3.5"], ["mctsSelectGlow", "5"]] as const) {
 			const f = defs.append("filter").attr("id", id)
 				.attr("x", "-60%").attr("y", "-60%").attr("width", "220%").attr("height", "220%");
+
 			f.append("feGaussianBlur").attr("stdDeviation", blur).attr("result", "blur");
 			f.append("feMerge").selectAll("feMergeNode").data(["blur", "SourceGraphic"]).join("feMergeNode").attr("in", (d) => d);
 		}
+
 		const g = svg.append("g");
 		gRef.current = g.node();
 		const ruler = svg.append("g").attr("class", "mcts-ruler");
 		rulerRef.current = ruler.node();
+
 		const zoom = d3.zoom<SVGSVGElement, unknown>()
 			.scaleExtent([0.05, 6])
 			.on("zoom", (event: d3.D3ZoomEvent<SVGSVGElement, unknown>) => {
@@ -741,14 +802,18 @@ export function SwarmTree({
 				g.selectAll("g.mcts-labels").attr("data-lod", event.transform.k >= LABEL_MIN_SCALE ? "" : null);
 				positionBandTitles(titlesRef.current, event.transform);
 				positionRuler(ruler, stateRef.current, event.transform);
+
 				const target = stateRef.current?.regions.find((r) => r.runId === selectedRunRef.current)
 					?? stateRef.current?.regions[0];
+
 				setViewNote(target === undefined
 					? null
 					: viewNoteFor(target.band, event.transform.k, widthRef.current - FIT_PAD * 2));
 			});
+
 		zoomRef.current = zoom;
 		svg.call(zoom);
+
 		return () => {
 			svg.on(".zoom", null);
 			svg.selectAll("*").remove();
@@ -765,6 +830,7 @@ export function SwarmTree({
 	// here.
 	useEffect(() => {
 		const rootGroup = gRef.current;
+
 		if (rootGroup === null) return;
 		const g = d3.select(rootGroup);
 		g.selectAll("*").remove();
@@ -785,6 +851,7 @@ export function SwarmTree({
 			.attr("data-run", (d) => d.runId)
 			.style("cursor", "pointer")
 			.on("click", (_event: MouseEvent, d) => onSelectRunRef.current?.(d.runId));
+
 		bands.append("rect")
 			.attr("x", (d) => d.band.x0).attr("y", (d) => d.band.y0)
 			.attr("width", (d) => d.band.x1 - d.band.x0)
@@ -802,6 +869,7 @@ export function SwarmTree({
 		// question. Counter-scaling it inside the SVG only trades that for a
 		// caption that grows over the band beneath it.
 		const overlay = titlesRef.current;
+
 		if (overlay) {
 			overlay.replaceChildren(...state.regions.map((region) => {
 				const meta = titles.get(region.runId);
@@ -836,12 +904,14 @@ export function SwarmTree({
 				note.title = meta?.note ?? "";
 				el.appendChild(name);
 				el.appendChild(note);
+
 				return el;
 			}));
 		}
 
 		for (const region of state.regions) {
 			const dim = region.runId !== selectedRunId;
+
 			const rg = g.append("g")
 				.attr("class", "mcts-region")
 				.attr("data-run", region.runId)
@@ -942,6 +1012,7 @@ export function SwarmTree({
 				.attr("transform", (d) => `translate(${d.y},${d.x})`);
 
 			const foldable = labels.filter((d) => d.data.children.length > 0);
+
 			const handle = foldable.append("g")
 				.attr("class", "mcts-handle")
 				.attr("transform", `translate(${HANDLE_X},0)`)
@@ -953,10 +1024,13 @@ export function SwarmTree({
 					setCollapsed((prev) => {
 						const next = new Set(prev);
 						const key = foldKey(region.runId, d.data.id);
+
 						if (!next.delete(key)) next.add(key);
+
 						return next;
 					});
 				});
+
 			handle.append("circle").attr("r", 5.5)
 				.attr("fill", "var(--c-surface)").attr("stroke", "var(--c-border)").attr("stroke-width", 1);
 			handle.append("text")
@@ -971,6 +1045,7 @@ export function SwarmTree({
 				.attr("x", LABEL_X).attr("dy", "0.33em").attr("font-size", "11px")
 				.attr("paint-order", "stroke")
 				.attr("stroke", "var(--c-surface)").attr("stroke-width", 3).attr("stroke-linejoin", "round");
+
 			// Score first, in the score's own colour: a column of percentages is
 			// scannable in a way a hundred prose fragments are not. A branch with no
 			// score contributes no tspan at all, so the label starts at its text
@@ -1030,6 +1105,7 @@ export function SwarmTree({
 				hover?.runId === region.runId ? hover.nodeId : null,
 			);
 		}
+
 		// The rebuild above replaced every node element, so the working marks went
 		// with them. Same restoration `applyEmphasis` gets, for the same reason.
 		applyWorking(rootGroup, workingRef.current);
@@ -1039,6 +1115,7 @@ export function SwarmTree({
 		// positioned, so they must be placed for the CURRENT transform whether or
 		// not a refit follows — `fit`'s transition then keeps moving them.
 		positionBandTitles(titlesRef.current, transform);
+
 		if (refit.current !== "no" || !userMoved.current) {
 			const animate = refit.current === "animate";
 			refit.current = "no";
@@ -1056,10 +1133,13 @@ export function SwarmTree({
 	useEffect(() => {
 		selectionRef.current = selection;
 		const state = stateRef.current;
+
 		if (!gRef.current || !state) return;
 		const g = d3.select(gRef.current);
+
 		for (const region of state.regions) {
 			const rg = g.select<SVGGElement>(`g.mcts-region[data-run="${CSS.escape(region.runId)}"]`);
+
 			if (rg.empty()) continue;
 			const hover = hoverRef.current;
 			applyEmphasis(
@@ -1068,25 +1148,33 @@ export function SwarmTree({
 				hover?.runId === region.runId ? hover.nodeId : null,
 			);
 		}
+
 		if (!selection || !svgRef.current || !zoomRef.current) return;
 		const region = state.regions.find((r) => r.runId === selection.runId);
+
 		if (!region) return;
 		const target = region.byId.get(selection.nodeId);
+
 		if (!target) {
 			// Keyed by search at THIS layer: the fold set spans every band, so the
 			// model's ancestor ids become fold keys here rather than there.
 			const hidden = ancestorIds(region.root, selection.nodeId)
 				.map((id) => foldKey(region.runId, id))
 				.filter((key) => collapsed.has(key));
+
 			if (hidden.length > 0) {
 				setCollapsed((prev) => {
 					const next = new Set(prev);
+
 					for (const key of hidden) next.delete(key);
+
 					return next;
 				});
 			}
+
 			return;
 		}
+
 		// A fitted view already shows every node, so there is nothing to bring
 		// into view — and the fit is a TRANSITION, so the check below would read
 		// the PRE-fit transform, decide the node is off-screen, and pan away from
@@ -1095,6 +1183,7 @@ export function SwarmTree({
 		if (!userMoved.current) return;
 		const t = d3.zoomTransform(svgRef.current);
 		const [sx, sy] = [t.applyX(target.y), t.applyY(target.x + region.shiftY)];
+
 		if (sx > 40 && sx < width - 40 && sy > RULER_H + 20 && sy < sceneH - 20) return;
 		d3.select(svgRef.current).transition().duration(320).call(
 			zoomRef.current.transform,
@@ -1130,6 +1219,7 @@ export function SwarmTree({
 	const lastCount = useRef(new Map<string, number>());
 	const workingRef = useRef<ReadonlySet<string>>(NO_WORKING);
 	const workingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
 	/** Recompute who is working, paint it, and come back when the next mark
 	 *  expires. Self-scheduling, so a node that stops working stops pulsing
 	 *  without anything having to notice that it stopped. */
@@ -1137,12 +1227,15 @@ export function SwarmTree({
 		const now = Date.now();
 		const working = new Set<string>();
 		let soonest = Number.POSITIVE_INFINITY;
+
 		for (const [id, at] of movedAt.current) {
 			const left = WORKING_MS - (now - at);
+
 			if (left <= 0) continue;
 			working.add(id);
 			soonest = Math.min(soonest, left);
 		}
+
 		workingRef.current = working;
 		applyWorking(gRef.current, working);
 		clearTimeout(workingTimer.current);
@@ -1150,13 +1243,16 @@ export function SwarmTree({
 			? setTimeout(sweep, soonest)
 			: undefined;
 	}, []);
+
 	useEffect(() => {
 		const now = Date.now();
+
 		for (const [id, count] of activity) {
 			if (lastCount.current.get(id) === count) continue;
 			lastCount.current.set(id, count);
 			movedAt.current.set(id, now);
 		}
+
 		sweepWorking();
 	}, [activity, sweepWorking]);
 	useEffect(() => () => { clearTimeout(workingTimer.current); }, []);
@@ -1278,6 +1374,7 @@ function positionBandTitles(
 	// which is installed once, so a captured size would be the first one
 	// forever. The overlay is inset to the scene, so it IS the scene's box.
 	const { clientHeight: height, clientWidth: width } = overlay;
+
 	for (const el of overlay.querySelectorAll<HTMLElement>(":scope > div")) {
 		const x = transform.applyX(Number(el.dataset.x));
 		const y = transform.applyY(Number(el.dataset.y));
@@ -1334,6 +1431,7 @@ function positionRuler(
 		.attr("text-anchor", "middle")
 		.attr("display", (d) => {
 			const x = transform.applyX(d * COL);
+
 			return x < 8 || x > (ruler.node()?.ownerSVGElement?.clientWidth ?? 0) - 8 ? "none" : null;
 		})
 		.text((d) => `d${d}`);
@@ -1360,6 +1458,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 	const { node, fanIn, why, runName } = tip;
 	const TIP_W = 260;
 	const flip = tip.x + TIP_W + 24 > width;
+
 	return (
 		<div
 			className="absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu text-xs animate-scale-in"

@@ -39,6 +39,7 @@ export class SteerProbeDO extends Think<Cloudflare.Env> {
       provider: 'fake', modelId: 'steer-probe',
       doGenerate: (options) => {
         const stepTwo = options.prompt.some((m) => m.role === 'tool');
+
         return stepTwo
           ? {
             content: [{ type: 'text' as const, text: 'done after steer' }],
@@ -50,6 +51,7 @@ export class SteerProbeDO extends Think<Cloudflare.Env> {
           };
       },
     });
+
     return this._model;
   }
 
@@ -60,11 +62,13 @@ export class SteerProbeDO extends Think<Cloudflare.Env> {
         inputSchema: jsonSchema({ type: 'object', properties: {} }),
         execute: async () => {
           this.engaged = true;
+
           if (!this.waitPromise) {
             const { promise, resolve } = Promise.withResolvers<string>();
             this.waitPromise = promise;
             this.waitRelease = resolve;
           }
+
           return this.waitPromise;
         },
       }),

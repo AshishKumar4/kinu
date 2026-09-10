@@ -7,12 +7,14 @@ describe('TUI streaming buffer', () => {
     const scheduled: Array<() => void> = [];
     const timerHandle = setTimeout(() => {}, 0);
     clearTimeout(timerHandle);
+
     const buffer = createStreamingBufferController(
       (value) => updates.push(value),
       50,
       {
         setTimeout(callback) {
           scheduled.push(callback);
+
           return timerHandle;
         },
         clearTimeout() {

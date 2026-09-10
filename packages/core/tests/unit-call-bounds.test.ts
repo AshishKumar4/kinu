@@ -28,6 +28,7 @@ async function composedFires(
   // an element; the pin below fails if that ever changes.
   const stepList = Array.from({ length: steps }, () => ({} as StepResult<ToolSet>));
   const results = await Promise.all(conditions.map((condition) => condition({ steps: stepList })));
+
   return results.some((result) => result);
 }
 
@@ -72,6 +73,7 @@ describe('no per-turn bound exists: the COMPOSED stop condition never fires on s
       stepCountIs(UNBOUNDED_MAX_STEPS),
       UNBOUNDED_STEPS,
     ];
+
     expect(await composedFires(composed, 10)).toBe(false);
     expect(await composedFires(composed, 11)).toBe(false);
     expect(await composedFires(composed, 500)).toBe(false);
@@ -103,6 +105,7 @@ describe('owned work carries no default elapsed deadline', () => {
 
   test('the evaluator options expose no judgeCallTimeoutMs field', () => {
     type HasJudgeTimeout = 'judgeCallTimeoutMs' extends keyof EvaluateBranchOptions ? true : false;
+
     const hasJudgeTimeout: HasJudgeTimeout = false;
     expect(hasJudgeTimeout).toBe(false);
   });
@@ -112,8 +115,11 @@ describe('owned work carries no default elapsed deadline', () => {
     // settlement. The shadow trial's AutoJudgeConfig carries no knob either —
     // cost is bounded by how many trials are QUEUED, never by starving a run.
     expect('SCAFFOLD_TURN_TIMEOUT_MS' in scaffoldExecutor).toBe(false);
+
     type ScaffoldOptions = Parameters<typeof scaffoldExecutor.runScaffold>[0];
+
     type HasScaffoldTimeout = 'timeoutMs' extends keyof ScaffoldOptions ? true : false;
+
     const hasScaffoldTimeout: HasScaffoldTimeout = false;
     expect(hasScaffoldTimeout).toBe(false);
     expect('scaffoldTimeoutMs' in autoJudge.DEFAULT_AUTO_JUDGE_CONFIG).toBe(false);
@@ -123,7 +129,9 @@ describe('owned work carries no default elapsed deadline', () => {
     // settleEvolution JOINS the turn lane with no elapsed bound: background
     // evolution work is never abandoned by the clock.
     expect('DEFAULT_SETTLE_TIMEOUT_MS' in agentOrchestrator).toBe(false);
+
     type HasSettleTimeout = 'settleTimeoutMs' extends keyof AgentOrchestratorDeps ? true : false;
+
     const hasSettleTimeout: HasSettleTimeout = false;
     expect(hasSettleTimeout).toBe(false);
   });

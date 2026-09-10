@@ -28,14 +28,18 @@ const PROVIDER_LIST_HINT = 'See what is connected: kinu provider list';
 
 const CREDENTIAL_HINT =
   `The provider rejected the credential. Reconnect it: kinu provider connect <provider>. ${PROVIDER_LIST_HINT}`;
+
 const ACCOUNT_HINT =
   'The provider account cannot serve requests (billing or quota). Fix it with the provider, '
   + `or switch: kinu provider connect <provider>. ${PROVIDER_LIST_HINT}`;
+
 const MODEL_HINT =
   'That model is not available on the connected provider. Pick another with /model in chat, '
   + 'or pass --model <provider>/<id>.';
+
 const RATE_LIMIT_HINT =
   'The provider is rate-limiting this account. Retry shortly, or switch model with /model in chat.';
+
 const CONTEXT_HINT =
   'The turn exceeded the model context window. Start a fresh session, or choose a larger-context '
   + 'model with /model.';
@@ -106,11 +110,14 @@ const CLASSES: ReadonlyArray<{ match: RegExp; hint: string }> = [
  */
 export function guideFailure(failure: { readonly cause: unknown }): GuidedFailure {
   const message = describeProviderError({ cause: failure.cause });
+
   if (/kinu [a-z]/.test(message)) return { message };
   const facts = providerFailureFacts({ cause: failure.cause });
+
   // Code before status: it is the more specific of the two when both arrive.
   const hint = (facts.providerCode === undefined ? undefined : HINT_BY_PROVIDER_CODE.get(facts.providerCode))
     ?? (facts.status === undefined ? undefined : HINT_BY_STATUS.get(facts.status))
     ?? CLASSES.find((entry) => entry.match.test(message))?.hint;
+
   return hint === undefined ? { message } : { message, hint };
 }

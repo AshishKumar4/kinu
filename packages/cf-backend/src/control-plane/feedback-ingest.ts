@@ -38,8 +38,10 @@ export async function recordFeedback(
   if (!hasControlPlane(env)) {
     return { error: 'This deployment has no control plane to record feedback in.' };
   }
+
   try {
     const caller = await internalCaller(env);
+
     return await controlPlaneStub(env).recordFeedback(caller, row);
   } catch (cause) {
     // A lost report is our failure, not the reporter's, so it is reported as a
@@ -50,6 +52,7 @@ export async function recordFeedback(
       cause,
       otherwise: 'unavailable',
     }), { feedbackId: row.id, hasScreenshot: row.objectKey !== null });
+
     return { error: renderThrownChain({ cause }) };
   }
 }

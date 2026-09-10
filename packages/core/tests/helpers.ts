@@ -44,6 +44,7 @@ export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspace
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
   initCodemodeStateTable(execRaw);
+
   return new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' }).createMain({ name });
 }
 
@@ -71,6 +72,7 @@ export function createTestWorkspace(): TestWorkspace {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
+
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
 
@@ -114,17 +116,22 @@ export function makeSql(db: Database): SqlExecutor {
       (acc, s, i) => acc + s + (i < values.length ? '?' : ''),
       '',
     );
+
     // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
     const bound: SQLQueryBindings[] = values.map((value) =>
       value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     // DELETE … RETURNING is a write that yields rows, exactly as the
     // production executors answer it (agent-utils craft store spends this).
     const stmt = db.prepare<T, SQLQueryBindings[]>(query);
+
     if (!isRead && !/\bRETURNING\b/i.test(query)) {
       stmt.run(...bound);
+
       return [];
     }
+
     return stmt.all(...bound);
   };
 }
@@ -134,13 +141,16 @@ export function makeExecRaw(db: Database): RawSqlExec {
 }
 
 type NativeSqlValue = string | number | boolean | null | Uint8Array;
+
 type NativeSqlRow = Record<string, NativeSqlValue>;
+
 type NativeWorkspaceSqlRow = Record<string, string | number | bigint | null | Uint8Array>;
 
 function canonicalSqlValue(value: NativeSqlValue): SqlValue {
   if (!(value instanceof Uint8Array)) return value;
   const copy = new Uint8Array(value.byteLength);
   copy.set(value);
+
   return copy.buffer;
 }
 
@@ -150,14 +160,19 @@ export function makeSqlExec(db: Database): SqlExec {
     exec(query, ...bindings) {
       const bound: SQLQueryBindings[] = bindings.map((value) =>
         value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+
       const stmt = db.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
+
       if (stmt.columnNames.length === 0) {
         stmt.run(...bound);
+
         return { toArray: () => [] };
       }
+
       const rows: SqlExecRow[] = stmt.all(...bound).map((row) => Object.fromEntries(
         Object.entries(row).map(([column, value]) => [column, canonicalSqlValue(value)]),
       ));
+
       return { toArray: () => rows };
     },
   };
@@ -187,12 +202,15 @@ export function createMemoryVFS(db: Database): WorkspaceVFS {
  */
 function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<VfsNativeReads, 'readRange'> {
   let seeded: Promise<void> | null = null;
+
   const chain = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
       seeded ??= seed();
       await seeded;
+
       return fn(...args);
     };
+
   return {
     readFile: chain((p: string, o?: { encoding?: string }) => vfs.readFile(p, o)),
     readRange: chain((p: string, offset: number, length: number) => vfs.readRange(p, offset, length)),
@@ -211,11 +229,14 @@ export function createWorkspaceBundle(db: Database) {
     exec<Binding>(query: string, ...bindings: Binding[]) {
       const bound = bindings.map(nativeSqlBinding);
       const stmt = db.prepare<NativeWorkspaceSqlRow, SQLQueryBindings[]>(query);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
       stmt.run(...bound);
+
       return [];
     },
   };
+
   return createWorkspace({
     sql,
     transactions: { storage: { transactionSync: <T,>(cb: () => T): T => db.transaction(cb)() } },
@@ -225,9 +246,12 @@ export function createWorkspaceBundle(db: Database) {
 
 function nativeSqlBinding<Binding>(value: Binding): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (value instanceof Uint8Array) return value;
   const scalar = v.safeParse(v.union([v.string(), v.number(), v.boolean(), v.null()]), value);
+
   if (scalar.success) return scalar.output;
+
   if (v.safeParse(v.undefined(), value).success) return null;
   throw new TypeError('Unsupported SQLite test binding');
 }
@@ -237,6 +261,7 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
   return {
     prepare<T = unknown>(query: string) {
       const statement = db.prepare<T, SQLQueryBindings[]>(query);
+
       return {
         all: (...params) => statement.all(...params.map(nativeSqlBinding)),
         run: (...params) => { statement.run(...params.map(nativeSqlBinding)); },
@@ -274,6 +299,7 @@ export function createMockLLM(responses: Record<string, string> = {}): LLM {
     },
     async complete(prompt) {
       const key = Object.keys(responses).find(k => prompt.includes(k));
+
       return responses[key ?? ''] ?? '{"score": 0.5, "rationale": "mock"}';
     },
   };
@@ -288,6 +314,7 @@ export function createMockExecutor(): Executor {
       // Just check if the code parses
       try {
         new Function(code);
+
         return { result: true };
       } catch (e) {
         return { result: undefined, error: e instanceof Error ? e.message : String(e) };
@@ -304,14 +331,18 @@ export function createEvalExecutor(): Executor {
       if (!Array.isArray(providers)) {
         return { result: undefined, error: 'eval executor requires resolved providers' };
       }
+
       try {
         const evaluate = new Function(
           ...providers.map((provider) => provider.name),
           `return (async () => {\n${code}\n})();`,
         );
+
         const rawResult: unknown = await evaluate(...providers.map((provider) => provider.fns));
+
         if (rawResult === undefined) return { result: undefined };
         const result = v.safeParse(JsonValueSchema, rawResult);
+
         return result.success
           ? { result: result.output }
           : { result: undefined, error: 'eval executor returned a non-JSON value' };
@@ -335,12 +366,15 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     name: string; description: string; params: string | null; code: string;
     scope: string; created_at: number; updated_at: number;
   }
+
   const CraftRowSchema: v.GenericSchema<CraftRow> = v.object({
     name: v.string(), description: v.string(), params: v.nullable(v.string()), code: v.string(),
     scope: v.string(), created_at: v.number(), updated_at: v.number(),
   });
+
   const CraftParamsSchema = v.record(v.string(), v.string());
   const CraftScopeSchema = v.picklist(['local', 'shared']);
+
   const toTool = (row: CraftRow): CraftedTool => ({
     name: row.name,
     description: row.description,
@@ -350,6 +384,7 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+
   const rows = <Binding>(query: string, ...bindings: Binding[]): CraftRow[] =>
     db.query<NativeSqlRow, SQLQueryBindings[]>(query).all(...bindings.map(nativeSqlBinding))
       .map((row) => v.parse(CraftRowSchema, row));
@@ -363,11 +398,14 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     },
     update(name, patch) {
       if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
+
       if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
+
       if (patch.params !== undefined) db.run('UPDATE crafted_tools SET params = ?, updated_at = ? WHERE name = ?', [patch.params ? JSON.stringify(patch.params) : null, Date.now(), name]);
     },
     get(name) {
       const row = rows('SELECT * FROM crafted_tools WHERE name = ?', name)[0];
+
       return row ? toTool(row) : undefined;
     },
     delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
@@ -375,6 +413,7 @@ export function createMemoryCraftStore(db: Database): CraftStore {
     search(query, limit = 10) {
       // Word-level search: match tools where any query word appears in description
       const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
       return rows('SELECT * FROM crafted_tools')
         .filter(t => words.some(w => t.description.toLowerCase().includes(w)))
         .slice(0, limit)
@@ -407,10 +446,12 @@ export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule
       const id = crypto.randomUUID();
       db.run('INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, NULL, ?)',
         [actor.actorId, id, name, Date.now()]);
+
       const stash = (data: JsonValue) => {
         db.run('UPDATE fibers SET snapshot = ? WHERE actor_id = ? AND id = ?',
           [JSON.stringify(data), actor.actorId, id]);
       };
+
       try {
         return await fn({ stash, snapshot: null });
       } finally {
@@ -432,6 +473,7 @@ export function createTestRuntime(opts?: {
   // building a second bundle over the same database would be two filesystems
   // again, which is the thing this design removed.
   const workspace = createWorkspaceBundle(db);
+
   // The scaffold seed is a real file write, so it is a promise. `afterSeed` runs it on the first
   // VFS call and orders every later call behind it: a test that writes its own scaffold cannot be
   // overtaken by the seed landing afterwards, and a test that never touches the filesystem never
@@ -439,6 +481,7 @@ export function createTestRuntime(opts?: {
   const { readRange, ...vfs } = afterSeed(workspace.vfs, () =>
     workspace.vfs.mkdir('scaffold', { recursive: true })
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
+
   // The PRODUCTION schema FIRST, for the reason spelled out on
   // createTestWorkspace: a hand-picked subset tests a shape no workspace ever
   // has, and the code under test is then forced to tolerate absences only this
@@ -455,6 +498,7 @@ export function createTestRuntime(opts?: {
   const llm = createMockLLM(opts?.llmResponses);
   const executor = createMockExecutor();
   const schedule = createMemorySchedule(db, actor);
+
   const identity: Identity = {
     id: 'test-agent-id',
     name: 'test-agent',
@@ -500,11 +544,13 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
       // Walk up via parentId
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);
+
       while (current) {
         result.unshift({ role: current.role, content: current.content });
         const parentId = current.parentId;
         current = parentId ? messages.find(m => m.id === parentId) : undefined;
       }
+
       return result;
     },
   };
@@ -517,6 +563,7 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
 export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
+
   return out;
 }
 
@@ -544,12 +591,15 @@ export async function captureConsole<Result>(fn: () => Promise<Result>): Promise
   const stdout: string[] = [];
   const stderr: string[] = [];
   console.log = (...args: unknown[]) => { stdout.push(String(args[0])); };
+
   console.error = (...args: unknown[]) => { stderr.push(String(args[0])); };
+
   try {
     await fn();
   } finally {
     console.log = originalLog;
     console.error = originalError;
   }
+
   return { stdout, stderr };
 }

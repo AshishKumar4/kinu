@@ -9,6 +9,7 @@ import {
 export const VALIDATION_DIAGNOSTICS_FILE = 'validation-diagnostics.json';
 
 const NonNegativeIntegerSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
+
 const PositiveIntegerSchema = v.pipe(NonNegativeIntegerSchema, v.minValue(1));
 
 const ValidationDiagnosticAttemptSchema = v.pipe(
@@ -40,13 +41,16 @@ export const ValidationDiagnosticsSchema = v.strictObject({
 });
 
 export type ValidationDiagnostics = v.InferOutput<typeof ValidationDiagnosticsSchema>;
+
 export type ValidationSplit = v.InferOutput<typeof ValidationDiagnosticAttemptSchema>['split'];
 
 function validationDiagnostics(input: JsonValue): ValidationDiagnostics {
   const parsed = v.safeParse(ValidationDiagnosticsSchema, input);
+
   if (!parsed.success) {
     throw new Error(`invalid validation diagnostics: ${parsed.issues.map((issue) => issue.message).join('; ')}`);
   }
+
   return parsed.output;
 }
 
@@ -74,6 +78,7 @@ function createValidationDiagnosticsRecorder(options: {
   validateRetries: number;
 }): ValidationDiagnosticsRecorder {
   const path = join(options.diagnosticsDir, VALIDATION_DIAGNOSTICS_FILE);
+
   let document = validationDiagnostics(decodeJsonValue({ value: {
     schemaVersion: 1,
     kind: 'bench-validation-diagnostics',
@@ -89,6 +94,7 @@ function createValidationDiagnosticsRecorder(options: {
     writeFileSync(temp, `${JSON.stringify(document, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     renameSync(temp, path);
   };
+
   persist();
 
   return {
@@ -138,6 +144,7 @@ export interface ValidationSummary {
 function attemptResult(pair: WellFormedAttempt) {
   const ok = !pair.broken.passed && pair.oracle.passed;
   const failing = pair.broken.checks.find((check) => !check.passed)?.id ?? 'none';
+
   return {
     ok,
     detail: ok
@@ -149,10 +156,12 @@ function attemptResult(pair: WellFormedAttempt) {
 export async function runValidation(options: RunValidationOptions): Promise<ValidationSummary> {
   const log = options.log ?? console.log;
   const diagnostics = createValidationDiagnosticsRecorder(options);
+
   const validate = (task: BenchTask, split: ValidationSplit): Promise<TaskValidation> =>
     validateWithRetries(options.validateRetries, async (attempt) => {
       const pair = await options.runAttempt(task, attempt - 1);
       diagnostics.record({ taskId: task.id, split, attempt, ...pair });
+
       return attemptResult(pair);
     });
 
@@ -161,21 +170,25 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
     : options.devTasks.filter((task) => options.only?.includes(task.id) === true);
 
   log(`Validating ${options.corpusPath}`);
+
   if (options.only !== undefined) {
     // Named, so a reader of the summary cannot mistake it for a verdict on the
     // corpus. `--id` exists to re-prove a re-anchored patch, and a narrowed run
     // quoted as "the corpus validates" is the same defect one level up.
     log(`NARROWED to ${String(options.only.length)} named id(s): ${options.only.join(', ')}`);
   }
+
   log('Each task must FAIL with nothing done and PASS under the oracle.');
   log(`A failing task is re-checked up to ${options.validateRetries} more time(s) before it is called BAD.\n`);
 
   const badIds: string[] = [];
   const flakyDev: string[] = [];
   log(`dev split (${dev.length} tasks):`);
+
   for (const task of dev) {
     const result = await validate(task, 'dev');
     const onlyOnRetry = result.ok && (result.passedOnAttempt ?? 1) > 1;
+
     if (!result.ok) badIds.push(task.id);
     else if (onlyOnRetry) flakyDev.push(task.id);
     log(`  ${!result.ok ? 'BAD ' : onlyOnRetry ? 'FLKY' : 'ok  '} ${task.id.padEnd(28)} ${result.detail}`);
@@ -184,7 +197,9 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
   const sealedResult = await options.sealed.validate((task) => validate(task, 'sealed'), options.only);
   badIds.push(...sealedResult.invalid);
   log(`\nsealed split (${sealedResult.checked} tasks): ${sealedResult.checked - sealedResult.invalid.length} valid`);
+
   for (const id of sealedResult.invalid) log(`  BAD  ${id}`);
+
   for (const id of sealedResult.flaky) log(`  FLKY ${id}`);
 
   // `dev.length`, not `options.devTasks.length`: a narrowed run that reported the
@@ -192,11 +207,15 @@ export async function runValidation(options: RunValidationOptions): Promise<Vali
   const total = dev.length + sealedResult.checked;
   const flakyIds = [...flakyDev, ...sealedResult.flaky];
   log(`\n${total - badIds.length}/${total} tasks valid.`);
+
   if (flakyIds.length > 0) {
     log(`${flakyIds.length} task(s) only passed on a retry — non-deterministic, and a single scored attempt on them can record a false fail:`);
+
     for (const id of flakyIds) log(`  ${id}`);
     log('Run compare with --repeats > 1 so these show up as unstable rather than as a score.');
   }
+
   if (badIds.length > 0) log('A task that passes with nothing done, or that the oracle cannot pass, is not a task.');
+
   return { total, badIds, flakyIds, ok: badIds.length === 0 };
 }

@@ -23,6 +23,7 @@ import type { HardTask } from './cost-model';
 import { HARD_TASKS } from './tasks';
 
 export * from './cost-model';
+
 export { HARD_TASKS } from './tasks';
 
 /**
@@ -78,6 +79,7 @@ export function hardTaskCases(): EvalCase[] {
  *  corpus is the normal state, not an error. */
 export function hardTaskFor(task: Pick<EvalCase, 'id' | 'env'>): HardTask | undefined {
   if (task.env !== HARD_TASK_ENV) return undefined;
+
   return HARD_TASKS.find((t) => t.id === task.id);
 }
 
@@ -107,5 +109,6 @@ export async function verifyHardTask(
   task: HardTask, ctx: VerifierContext,
 ): Promise<EvalScoreRow> {
   const scored = await task.verify(ctx);
+
   return outcomeRow(ratioOutcome(scored.score, scored.detail, scored.measured));
 }

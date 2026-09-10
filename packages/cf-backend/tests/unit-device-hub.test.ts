@@ -28,6 +28,7 @@ interface FakeSocket extends DeviceSocket {
 
 function fakeSocket(open = true): FakeSocket {
   let attachment: JsonValue | undefined;
+
   return {
     readyState: open ? 1 : 3,
     sent: [],
@@ -42,6 +43,7 @@ function fakeSocket(open = true): FakeSocket {
 /** Mimics DurableObjectState hibernatable-websocket bookkeeping. */
 function fakeCtx(): DeviceSocketCtx & { accepted: Array<{ ws: FakeSocket; tags: string[] }> } {
   const accepted: Array<{ ws: FakeSocket; tags: string[] }> = [];
+
   return {
     accepted,
     acceptWebSocket(ws: FakeSocket, tags: string[]) { accepted.push({ ws, tags }); },
@@ -84,6 +86,7 @@ describe('DeviceSocketHub', () => {
     expect(first.closed).toEqual([{ code: 1000, reason: 'replaced by a new connection' }]);
     expect(hub.liveSocket('dev-a')).toBe(second);
     const tunnel = hub.tunnel('dev-a');
+
     if (!tunnel) throw new Error('expected device tunnel');
     const pending = tunnel.rpc('exec', ['ls']);
     expect(second.sent).toHaveLength(1);
@@ -104,6 +107,7 @@ describe('DeviceSocketHub', () => {
     expect(woken.connectedDeviceId()).toBe('dev-a');
 
     const tunnel = woken.tunnel('dev-a');
+
     if (!tunnel) throw new Error('expected restored device tunnel');
     const reply = tunnel.rpc('exec', ['echo hi']);
     const frame = v.parse(v.object({ id: v.string() }), JSON.parse(socket.sent[0] ?? 'null'));
@@ -117,6 +121,7 @@ describe('DeviceSocketHub', () => {
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
     const tunnel = hub.tunnel('dev-a');
+
     if (!tunnel) throw new Error('expected device tunnel');
     const pending = tunnel.rpc('exec', ['sleep 99']);
     ws.readyState = 3;
@@ -134,6 +139,7 @@ describe('DeviceSocketHub', () => {
     hub.accept('dev-a', first);
     hub.accept('dev-a', second); // closes `first`; its close event arrives later
     const tunnel = hub.tunnel('dev-a');
+
     if (!tunnel) throw new Error('expected replacement device tunnel');
     const pending = tunnel.rpc('exec', ['ls']);
 
@@ -166,11 +172,14 @@ describe('DeviceSocketHub toolchain probe', () => {
   /** Answer the frame the hub just sent, as a daemon would. */
   function answerLast(hub: DeviceSocketHub, ws: FakeSocket, reply: Record<string, JsonValue>) {
     const raw = ws.sent[ws.sent.length - 1];
+
     const frame = v.parse(
       v.object({ id: v.string(), method: v.string(), params: v.array(v.unknown()) }),
       JSON.parse(raw ?? 'null'),
     );
+
     hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, ...reply }));
+
     return frame;
   }
 
@@ -179,6 +188,7 @@ describe('DeviceSocketHub toolchain probe', () => {
     const hub = new DeviceSocketHub(ctx);
     const ws = fakeSocket();
     hub.accept('dev-a', ws);
+
     return { ctx, hub, ws };
   }
 
@@ -303,6 +313,7 @@ describe('/pc/connect upgrade wiring', () => {
     const harness = createTestUserDO();
     const { token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
     const owner = await testOwner();
+
     const connect = (query: string, upgrade: boolean): Promise<Response> => harness.userDO.fetch(new Request(
       `https://kinu.example.com${DEVICE_CONNECT_PATH}${query}`,
       upgrade ? { headers: { Upgrade: 'websocket' } } : {},
@@ -318,6 +329,7 @@ describe('/pc/connect upgrade wiring', () => {
 
     // A ticket the owner minted for this device upgrades the socket.
     const issued = await harness.userDO.issueDeviceConnectTicket(owner, token);
+
     if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
     expect((await connect(`?ticket=${issued.ticket}`, true)).status).toBe(101);
     expect(harness.acceptedSockets).toHaveLength(1);
@@ -340,7 +352,9 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
     const row = harness.db.prepare<{ e: number | null }, [string]>(
       'SELECT expires_at AS e FROM user_devices WHERE id = ?',
     ).get(deviceId);
+
     if (!row) throw new Error(`missing device ${deviceId}`);
+
     return row.e;
   }
 

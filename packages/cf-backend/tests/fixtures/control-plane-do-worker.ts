@@ -52,6 +52,7 @@ export { ControlPlaneDO };
 const CallerKindSchema = v.picklist([
   'admin', 'ingest', 'forged', 'empty', 'absent', 'foreign',
 ]);
+
 type CallerKind = v.InferOutput<typeof CallerKindSchema>;
 
 /** A token of the right shape and the wrong value — the forgery that matters,
@@ -151,6 +152,7 @@ const StepSchema = v.variant('method', [
   v.object({ method: v.literal('listWorkspaces'), caller: CallerKindSchema, request: v.optional(PageRequestSchema) }),
   v.object({ method: v.literal('listAudit'), caller: CallerKindSchema, request: v.optional(PageRequestSchema) }),
 ]);
+
 type Step = v.InferOutput<typeof StepSchema>;
 
 const StepsSchema = v.array(StepSchema);
@@ -196,9 +198,11 @@ async function callStep(
   switch (step.method) {
     case 'observeUser':
       await stub.observeUser(caller, step.observation);
+
       return null;
     case 'observeWorkspace':
       await stub.observeWorkspace(caller, step.observation);
+
       return null;
     case 'recordAudit':
       return projectJsonValue({ value: await stub.recordAudit(caller, step.entry) });
@@ -223,6 +227,7 @@ async function runStep(env: ControlPlaneEnv, step: Step): Promise<ControlPlaneSe
   // step had already opened the object, and re-addressing per call is what every
   // production caller does anyway.
   const stub = controlPlaneStub(env);
+
   try {
     return { settled: 'resolved', value: await callStep(stub, caller, step) };
   } catch (cause) {
@@ -253,11 +258,15 @@ async function runStep(env: ControlPlaneEnv, step: Step): Promise<ControlPlaneSe
 export default {
   async fetch(request: Request, env: ControlPlaneEnv): Promise<Response> {
     const parsed = v.safeParse(StepsSchema, await request.json());
+
     if (!parsed.success) {
       return Response.json({ error: v.summarize(parsed.issues) }, { status: 400 });
     }
+
     const settlements: ControlPlaneSettlement[] = [];
+
     for (const step of parsed.output) settlements.push(await runStep(env, step));
+
     return Response.json(settlements);
   },
 };

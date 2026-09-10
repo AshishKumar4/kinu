@@ -9,6 +9,7 @@ import { createTestActor } from './helpers';
 
 function setup() {
   const { sql, execRaw } = createTestSql();
+
   return createTestActor(sql, execRaw, crypto.randomUUID(), 'config-test').config;
 }
 
@@ -410,6 +411,7 @@ describe('AgentConfigStore — every key has a write path', () => {
 
   test('no key is readable-but-unwritable', () => {
     const c = setup();
+
     for (const write of WRITERS) write(c);
     const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
 
@@ -421,6 +423,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     // Proves the assertion above is load-bearing: drop one writer and the key
     // it owns shows up as unwritable.
     const c = setup();
+
     for (const write of WRITERS.slice(1)) write(c);
     const written = new Set([...Object.keys(c.all()), ...GENERIC_WRITE_PATH]);
     expect(Object.values(AGENT_CONFIG_KEYS).filter((k) => !written.has(k)))

@@ -80,6 +80,7 @@ const corsHeaders = {
   "Access-Control-Expose-Headers": "mcp-session-id",
   "Access-Control-Max-Age": "86400",
 };
+
 interface PeerMessageInput { agent: string; message: string; topic?: string }
 
 /** The callable surface this HTTP adapter uses. Keeping the boundary explicit
@@ -111,11 +112,13 @@ interface McpAgentClient {
 
 function withCors(response: Response): Response {
   for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
+
   return response;
 }
 
 async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient> {
   const stub = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+
   return {
     searchMemoryHybrid: (query, limit) => stub.searchMemoryHybrid(query, limit),
     saveNoteFromMcp: (content) => stub.saveNoteFromMcp(content),
@@ -158,12 +161,14 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
+
         const text = hits.length === 0
           ? "(no matches)"
           : hits.map((h) =>
               `[${h.path}:${h.startLine}-${h.endLine}] ` +
               `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
             ).join("\n\n");
+
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `search_memory error: ${renderThrownChain({ cause: err })}` }] };
@@ -181,6 +186,7 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         await agent.saveNoteFromMcp(content);
+
         return { content: [{ type: "text", text: "Note saved." }] };
       } catch (err) {
         return { content: [{ type: "text", text: `save_note error: ${renderThrownChain({ cause: err })}` }] };
@@ -200,12 +206,15 @@ function buildServer(env: Env, agentName: string): McpServer {
         const out = await agent.getToolList();
         const lines: string[] = [];
         lines.push(`## Built-in (${out.builtIn.length})`);
+
         for (const b of out.builtIn) lines.push(`- ${b}`);
         lines.push("");
         lines.push(`## Crafted (${out.crafted.length})`);
+
         for (const c of out.crafted) {
           lines.push(`- ${c.name} (q=${c.qualityScore.toFixed(2)}, uses=${c.usageCount}) — ${c.description}`);
         }
+
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_skills error: ${renderThrownChain({ cause: err })}` }] };
@@ -225,6 +234,7 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ task, useShadowOverride }) => {
       try {
         const agent = await resolveAgent(env, agentName);
+
         // The agents-SDK stub doesn't resolve the @callable's return type, so
         // annotate from the source-of-truth ScaffoldRunResult shape.
         const result = decodeScaffoldRunWire(
@@ -233,12 +243,14 @@ function buildServer(env: Env, agentName: string): McpServer {
             useShadowOverride ? { useShadowOverride: true } : undefined,
           ),
         );
+
         const summary = [
           `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
           result.error ? `error: ${result.error}` : '',
           `events:`,
           ...result.events.slice(0, 10).map((e) => `  - ${e.type}: ${JSON.stringify(e).slice(0, 120)}`),
         ].filter(Boolean).join("\n");
+
         return { content: [{ type: "text", text: summary }] };
       } catch (err) {
         return { content: [{ type: "text", text: `run_scaffold_once error: ${renderThrownChain({ cause: err })}` }] };
@@ -256,6 +268,7 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const status = await agent.getShadowStatus();
+
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text", text: `get_shadow_status error: ${renderThrownChain({ cause: err })}` }] };
@@ -278,12 +291,14 @@ function buildServer(env: Env, agentName: string): McpServer {
         const agent = await resolveAgent(env, agentName);
         const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
         const lines = page.items.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
+
         if (lines.length === 0) return { content: [{ type: "text", text: "(no runs yet)" }] };
         // A model reading a truncated list as the whole history is the same
         // defect as a surface doing it, so the boundary is stated in words.
         lines.push(page.status === 'more'
           ? `(more runs before these — call again with after: ${JSON.stringify(page.next.after)})`
           : "(that is every run)");
+
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_runs error: ${renderThrownChain({ cause: err })}` }] };
@@ -304,12 +319,15 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ runId, since, limit }) => {
       try {
         const agent = await resolveAgent(env, agentName);
+
         const events = decodeRunEventWire(
           await agent.getRunEventsWire(runId, { since, limit: limit ?? 100 }),
         );
+
         const text = events.length === 0
           ? "(no events)"
           : events.map((e) => `[${e.eventIndex}] ${e.type}: ${JSON.stringify(e).slice(0, 200)}`).join("\n");
+
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_run_events error: ${renderThrownChain({ cause: err })}` }] };
@@ -337,9 +355,11 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
+
         const msg = result.status === "queued"
           ? "Task queued — the agent will run it on its turn loop."
           : "Task skipped — a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
+
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
         return { content: [{ type: "text", text: `run_task error: ${renderThrownChain({ cause: err })}` }] };
@@ -363,11 +383,14 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const peerMessage: PeerMessageInput = { agent: peer, message };
+
         if (topic) peerMessage.topic = topic;
         const outcome: PeerSendOutcome = await agent.sendPeerFromMcp(peerMessage);
+
         const text = outcome.status === "rejected"
           ? `send_peer rejected: ${outcome.reason}`
           : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
+
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `send_peer error: ${renderThrownChain({ cause: err })}` }] };
@@ -385,9 +408,11 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const peers = await agent.listPeersFromMcp();
+
         const text = peers.length === 0
           ? "(no other agents on this owner's roster)"
           : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
+
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return { content: [{ type: "text", text: `list_peers error: ${renderThrownChain({ cause: err })}` }] };
@@ -414,21 +439,28 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ action, bindingId, prompt, plan, changeId, status }) => {
       try {
         const agent = await resolveAgent(env, agentName);
+
         if (action === "list") {
           const board: ReleaseBoard = await agent.getReleaseBoard(20);
+
           return { content: [{ type: "text", text: JSON.stringify(board, null, 2) }] };
         }
+
         if (action === "create") {
           if (!bindingId || !prompt) {
             return { content: [{ type: "text", text: "release create requires bindingId and prompt." }] };
           }
+
           const change: ReleaseChange = await agent.createReleaseChange({ bindingId, userPrompt: prompt, plan: plan ?? null });
+
           return { content: [{ type: "text", text: `Created change ${change.id} (${change.status}) for binding ${change.bindingId}.` }] };
         }
+
         // advance
         if (!changeId || !status) {
           return { content: [{ type: "text", text: "release advance requires changeId and status." }] };
         }
+
         // Same governance gate as the builtin release tool: on this
         // backend the execution engine owns validating/preview_ready/applying/
         // deployed/rolled_back — those states are earned by real execution,
@@ -443,7 +475,9 @@ function buildServer(env: Env, agentName: string): McpServer {
             }],
           };
         }
+
         const advanced: ReleaseChange = await agent.transitionReleaseChange(changeId, status);
+
         return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
       } catch (err) {
         return { content: [{ type: "text", text: `release error: ${renderThrownChain({ cause: err })}` }] };
@@ -465,6 +499,7 @@ function buildServer(env: Env, agentName: string): McpServer {
       try {
         const agent = await resolveAgent(env, agentName);
         const content = await agent.getMemoryContent();
+
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
       } catch (err) {
         return { contents: [{ uri: uri.href, text: `(error: ${renderThrownChain({ cause: err })})`, mimeType: "text/plain" }] };
@@ -480,25 +515,31 @@ function buildServer(env: Env, agentName: string): McpServer {
 async function authenticateMcpCaller(request: Request, env: Env): Promise<{ userId: string } | Response> {
   if (readBearer(request)) {
     const result = await authenticateCliToken(request, env);
+
     if (!result.ok) return withCors(Response.json({ error: result.error }, { status: 401 }));
+
     if (result.identity.kind !== 'session') {
       // Scoped CI access tokens are CLI-API-only; the MCP surface stays
       // bound to interactive session tokens.
       return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
     }
+
     return { userId: result.identity.userId };
   }
+
   try {
     return { userId: (await authenticateRequest(request, env)).userId };
   } catch (e) {
     const status = e instanceof AuthError ? e.status : 500;
     const message = renderThrownChain({ cause: e });
+
     return withCors(Response.json({ error: message }, { status }));
   }
 }
 
 export async function handleMcpRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
+
   if (!url.pathname.startsWith("/mcp/v1/")) return null;
 
   if (request.method === "OPTIONS") {
@@ -508,6 +549,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
   // /mcp/v1/<agentName>[/...] — agentName is the second segment after /mcp/v1/
   const segments = url.pathname.replace(/^\/mcp\/v1\//, "").split("/").filter(Boolean);
   const agentName = segments[0] ? decodeURIComponent(segments[0]) : '';
+
   if (!agentName) {
     return withCors(Response.json(
       { error: "missing agent name in MCP path; use /mcp/v1/<agentName>" },
@@ -516,8 +558,10 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
   }
 
   const caller = await authenticateMcpCaller(request, env);
+
   if (caller instanceof Response) return caller;
   const owned = await claimOwnedWorkspace(env, caller.userId, agentName);
+
   if (!owned.ok) {
     return withCors(Response.json({ error: owned.error }, { status: owned.status }));
   }
@@ -527,6 +571,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
     const server = buildServer(env, agentName);
     await server.connect(transport);
     const resp = await transport.handleRequest(request);
+
     return withCors(resp);
   } catch (err) {
     return withCors(Response.json({ error: renderThrownChain({ cause: err }) }, { status: 500 }));

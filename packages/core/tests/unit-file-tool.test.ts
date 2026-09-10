@@ -29,6 +29,7 @@ describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
     const out = applyFileEdits('a\nTARGET\nb\n', [{ oldText: 'TARGET', newText: 'REPLACED' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('a\nREPLACED\nb\n');
     expect(out.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
@@ -37,6 +38,7 @@ describe('applyFileEdits', () => {
   test('refuses an anchor that appears more than once, naming the count', () => {
     const out = applyFileEdits('x\nx\n', [{ oldText: 'x', newText: 'y' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('ambiguous');
     expect(out.message).toContain('appears 2 times');
@@ -46,6 +48,7 @@ describe('applyFileEdits', () => {
   test('refuses an anchor that is absent, and says to re-read', () => {
     const out = applyFileEdits('hello\n', [{ oldText: 'goodbye', newText: 'x' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('not_found');
     expect(out.message).toContain('does not appear');
@@ -54,6 +57,7 @@ describe('applyFileEdits', () => {
   test('refuses an empty anchor rather than matching everywhere', () => {
     const out = applyFileEdits('hello\n', [{ oldText: '', newText: 'x' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('empty_anchor');
   });
@@ -64,7 +68,9 @@ describe('applyFileEdits', () => {
       [{ oldText: 'alpha', newText: 'ALPHA' }, { oldText: 'missing', newText: 'x' }],
       '/f',
     );
+
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('not_found');
     expect(out.message).toContain('edits[1].old_text');
@@ -78,7 +84,9 @@ describe('applyFileEdits', () => {
       [{ oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' }],
       '/f',
     );
+
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('two\nthree\n');
   });
@@ -89,7 +97,9 @@ describe('applyFileEdits', () => {
       [{ oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' }],
       '/f',
     );
+
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('overlap');
     expect(out.message).toContain('edits[0] and edits[1]');
@@ -98,6 +108,7 @@ describe('applyFileEdits', () => {
   test('a replacement that changes nothing is a failure, not a silent no-op', () => {
     const out = applyFileEdits('same\n', [{ oldText: 'same', newText: 'same' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('no_change');
   });
@@ -105,6 +116,7 @@ describe('applyFileEdits', () => {
   test('preserves CRLF line endings and a BOM the model never typed', () => {
     const out = applyFileEdits('﻿a\r\nTARGET\r\nb\r\n', [{ oldText: 'TARGET', newText: 'NEW' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('﻿a\r\nNEW\r\nb\r\n');
   });
@@ -112,6 +124,7 @@ describe('applyFileEdits', () => {
   test('an anchor typed with LF still matches a CRLF file', () => {
     const out = applyFileEdits('x\r\ny\r\n', [{ oldText: 'x\ny', newText: 'z' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('z\r\n');
   });
@@ -122,6 +135,7 @@ describe('applyFileEdits', () => {
     // ambiguity the count exists to refuse.
     const out = applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('ambiguous');
     expect(out.message).toContain('appears 2 times');
@@ -132,6 +146,7 @@ describe('applyFileEdits', () => {
     // class of silent collateral damage as pi's fuzzy path.
     const out = applyFileEdits('crlf\r\nlf\nTARGET\r\n', [{ oldText: 'TARGET', newText: 'NEW' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('crlf\r\nlf\nNEW\r\n');
   });
@@ -139,6 +154,7 @@ describe('applyFileEdits', () => {
   test('a multi-line replacement takes the file\'s ending, and only for what it inserts', () => {
     const out = applyFileEdits('a\r\nb\r\n', [{ oldText: 'a', newText: 'x\ny' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('x\r\ny\r\nb\r\n');
   });
@@ -147,6 +163,7 @@ describe('applyFileEdits', () => {
     expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ reason: 'not_found' });
     const out = applyFileEdits('last line', [{ oldText: 'last', newText: 'final' }], '/f');
     expect(out.ok).toBe(true);
+
     if (!out.ok) return;
     expect(out.content).toBe('final line');
   });
@@ -157,6 +174,7 @@ describe('applyFileEdits', () => {
     const original = 'const a = “quoted”;\nconst b = "plain";\n';
     const out = applyFileEdits(original, [{ oldText: 'const a = "quoted";', newText: 'x' }], '/f');
     expect(out.ok).toBe(false);
+
     if (out.ok) return;
     expect(out.reason).toBe('not_found');
   });
@@ -182,6 +200,7 @@ describe('readFileSlice', () => {
   test('continuing from the named offset reaches the end', () => {
     const first = readFileSlice(file, { path: '/f', maxChars: 20 });
     const offsetMatch = /offset=(\d+)/.exec(first.output);
+
     if (!offsetMatch) throw new Error('truncated read did not include its continuation offset');
     const next = Number(offsetMatch[1]);
     const second = readFileSlice(file, { path: '/f', offset: next, maxChars: 10_000 });
@@ -241,13 +260,16 @@ describe('readFileSlice', () => {
     const big = Array.from({ length: 40 }, (_, i) => `row ${i + 1}`).join('\n') + '\n';
     let offset = 1;
     let rebuilt = '';
+
     for (let guard = 0; guard < 50; guard++) {
       const slice = readFileSlice(big, { path: '/f', offset, maxChars: 30 });
       rebuilt += slice.output.split('\n\n[')[0];
+
       if (slice.last >= slice.total) break;
       rebuilt += '\n';
       offset = slice.last + 1;
     }
+
     expect(rebuilt).toBe(big);
   });
 
@@ -318,11 +340,14 @@ describe('TurnFileLedger', () => {
 
 function memoryVfs(seed: Record<string, string> = {}): VFS & { files: Map<string, string> } {
   const files = new Map(Object.entries(seed));
+
   return {
     files,
     async readFile(path: string) {
       const content = files.get(path);
+
       if (content === undefined) throw makeVfsError('ENOENT', `no such file, open '${path}'`, path);
+
       return content;
     },
     async writeFile(path: string, data: string | Uint8Array) { files.set(path, String(data)); },
@@ -342,6 +367,7 @@ type FileToolTestInput = FileToolInput | { action: string; path: string | number
 
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
   const entry = createFileTool({ vfs, ledger, budget: new TurnContextBudget() });
+
   return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
 }
 
@@ -353,10 +379,12 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call } = toolFor(vfs);
     expect(await call({ action: 'read', path: 'a.ts' })).toBe('const x = 1;\n');
+
     const edited = await call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
+
     expect(edited).toEqual({ ok: true, path: 'a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
@@ -364,10 +392,12 @@ describe('file tool', () => {
   test('an edit without a read is refused, and the refusal names the call to make', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call, ledger } = toolFor(vfs);
+
     const result = call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
+
     await expect(result).rejects.toThrow('action=read path=a.ts');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\n');
     expect(ledger.snapshot().failures).toEqual({ unread: 1 });
@@ -378,10 +408,12 @@ describe('file tool', () => {
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
     vfs.files.set('a.ts', 'const x = 1;\nconst y = 2;\n');
+
     const result = call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }],
     });
+
     await expect(result).rejects.toThrow('changed since you read it');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
     expect(ledger.snapshot().failures).toEqual({ stale: 1 });
@@ -391,9 +423,11 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
+
     const result = call({
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
     });
+
     await expect(result).rejects.toThrow('appears 2 times');
     expect(vfs.files.get('a.ts')).toBe('x\nx\n');
     expect(ledger.snapshot()).toMatchObject({ attempts: 1, applied: 0, failures: { ambiguous: 1 }, abandonedPaths: 1 });
@@ -438,6 +472,7 @@ describe('file tool', () => {
     const shown = v.parse(StringResultSchema, await call({ action: 'read', path: 'a.cs' }));
     expect(shown.startsWith('\uFEFF')).toBe(false);
     const firstLine = shown.split('\n')[0];
+
     if (firstLine === undefined) throw new Error('file read returned no first line');
     expect(await call({ action: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
       .toMatchObject({ ok: true });
@@ -468,6 +503,7 @@ describe('file tool', () => {
 
   test('a memory write re-indexes however the path is spelled', async () => {
     const indexed: string[] = [];
+
     const memory: Memory = {
       async write() {},
       async append() {},
@@ -476,10 +512,12 @@ describe('file tool', () => {
       async read() { return null; },
       async tail() { return null; },
     };
+
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
       const entry = createFileTool({ vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ action: 'write', path, content: 'x' });
     }
+
     expect(indexed).toEqual(['memory/a.md', 'memory/a.md', 'memory/a.md']);
   });
 
@@ -564,14 +602,18 @@ describe('a `file` failure is attributable from the durable row alone', () => {
     const acc = new TurnAccumulator({ onToolCallEvent: (e) => events.push(e) });
     let output: JsonValue | undefined;
     const args = v.parse(JsonObjectSchema, input);
+
     try {
       output = await call(input);
       acc.recordToolCall({ toolName: 'file', input: args, success: true, output });
     } catch (error) {
       acc.recordToolCall({ toolName: 'file', input: args, error, ...failedToolOutcome({ cause: error }) });
     }
+
     const emitted = events[0];
+
     if (!emitted) throw new Error('the accumulator emitted no tool_call_end');
+
     return {
       output,
       failure: classifyToolFailure({
@@ -583,9 +625,11 @@ describe('a `file` failure is attributable from the durable row alone', () => {
 
   test('an unread edit lands as file·edit·unread, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
+
     const { failure } = await ledgerRow(call, {
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
+
     expect(failure).toEqual({
       tool: 'file', action: 'edit', reason: 'unread', refused: true, workFailed: false, runtimeMissing: false,
     });
@@ -594,9 +638,11 @@ describe('a `file` failure is attributable from the durable row alone', () => {
   test('an absent anchor lands as file·edit·not_found, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
     await call({ action: 'read', path: 'a.ts' });
+
     const { failure } = await ledgerRow(call, {
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'const y = 9;', new_text: 'z' }],
     });
+
     expect(failure).toEqual({
       tool: 'file', action: 'edit', reason: 'not_found', refused: true, workFailed: false, runtimeMissing: false,
     });
@@ -605,9 +651,11 @@ describe('a `file` failure is attributable from the durable row alone', () => {
   test('a repeated anchor lands as file·edit·ambiguous, refused', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'x\nx\n' }));
     await call({ action: 'read', path: 'a.ts' });
+
     const { failure } = await ledgerRow(call, {
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
     });
+
     expect(failure).toMatchObject({ action: 'edit', reason: 'ambiguous', refused: true });
   });
 
@@ -638,9 +686,11 @@ describe('a `file` failure is attributable from the durable row alone', () => {
   test('a successful edit produces no failure at all', async () => {
     const { call } = toolFor(memoryVfs({ 'a.ts': 'const x = 1;\n' }));
     await call({ action: 'read', path: 'a.ts' });
+
     const { failure } = await ledgerRow(call, {
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
+
     expect(failure).toBeNull();
   });
 });

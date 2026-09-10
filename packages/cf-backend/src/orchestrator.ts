@@ -323,10 +323,12 @@ const KINU_TIMER_CALLBACK = '_kinuTimerTick';
  *  write and a broadcast, where the other sweeps take one DELETE. A pass that
  *  fills either budget arms the maintenance wake for the rest. */
 const STALE_SCHEDULE_HORIZON_MS = FIBER_RECOVERY_MAX_AGE_MS;
+
 const ORPHAN_SEAL_MAX_ROWS = 256;
 
 // These windows bound the Activity response. Stored history remains append-only.
 const ACTIVITY_STEP_WINDOW = 400;
+
 const ACTIVITY_LOG_WINDOW = 200;
 
 /**
@@ -353,20 +355,25 @@ const FileRestoreChangeSchema = v.object({
   path: v.string(),
   kind: v.picklist(['modify', 'create', 'delete']),
 });
+
 const FileCheckpointEntrySchema = v.object({
   id: v.string(), dir: v.string(), at: v.number(), turnId: v.nullable(v.string()),
   sessionId: v.nullable(v.string()), reason: v.string(),
 });
+
 const FileRestorePlanSchema = v.object({
   dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
 });
+
 const FileRestoreResultSchema = v.object({
   dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
   preRestoreId: v.nullable(v.string()),
 });
+
 const CheckpointAvailabilitySchema = v.object({
   available: v.boolean(), reason: v.optional(v.string()),
 });
+
 /** The route validator for `?variant=`, built FROM core's array rather than
  *  beside it. Hand-list the literals here and a new variant compiles in core and
  *  then silently fails validation on this route, because a picklist of strings
@@ -374,6 +381,7 @@ const CheckpointAvailabilitySchema = v.object({
  *  declaration and `EventVariant` derives from it, so the two cannot
  *  disagree. */
 const EventVariantSchema = v.picklist(EVENT_VARIANTS);
+
 /** One row of the events read: the log's row minus its own plumbing
  *  (`schema_version`, `dedupe_key`, `reply_channel`), which no operator surface
  *  shows. Derived from core's event so a field renamed there fails here rather
@@ -399,16 +407,20 @@ function drainTurnsAnswered(
   injected: SettledSignals,
 ): ReadonlySet<string> {
   const answered = new Set<string>();
+
   if (drainTurnId) answered.add(drainTurnId);
+
   for (const signal of injected.absorbed) {
     if (signal.replyTurnId) answered.add(signal.replyTurnId);
   }
+
   return answered;
 }
 
 /** A caller-supplied row limit, clamped to [1, max]. */
 function clampLimit(requested: number | undefined, max: number): number {
   if (requested === undefined || !Number.isFinite(requested)) return max;
+
   return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
@@ -434,11 +446,13 @@ export class OrchestratorAgent extends ActorAgent {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       onFilesChanged: (paths) => {
         const ids = this.slates.filesChanged(paths);
+
         if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
       refreshPreview: (port) => this.slates.refreshPreview(port),
       slateInvocation: (port) => this.slates.previewInvocation(port),
     });
+
     return this._workspace;
   }
 
@@ -451,6 +465,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  workspace is claimed — there is no owner library to reach before that. */
   private getExperienceDeps(): ExperienceActionDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
+
     return {
       rt: this.rt,
       facts: this.facts,
@@ -469,6 +484,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  than a closure so the stub call checks at method depth. */
   private async publishExperienceEntry(candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const { stub, caller } = await this.userHub();
+
     return stub.publishExperience(caller, candidate);
   }
 
@@ -477,12 +493,14 @@ export class OrchestratorAgent extends ActorAgent {
     options: { query?: string; kind?: ExperienceKind; limit?: number },
   ): Promise<ExperienceEntry[]> {
     const { stub, caller } = await this.userHub();
+
     return stub.searchExperience(caller, options);
   }
 
   /** One owner-library read through this activation's hub. */
   private async getExperienceEntry(id: string): Promise<ExperienceEntry | null> {
     const { stub, caller } = await this.userHub();
+
     return stub.getExperienceEntry(caller, id);
   }
 
@@ -501,9 +519,11 @@ export class OrchestratorAgent extends ActorAgent {
   async experienceAction(input: ExperienceActionInput) {
     this.ensureSchema();
     const deps = this.getExperienceDeps();
+
     if (!deps) {
       return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
     }
+
     return runExperienceAction(deps, input);
   }
 
@@ -587,6 +607,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   protected actorHost(): ActorHost {
     this._actorHost ??= createWorkspaceActorHost(this.workspaceHostSeams());
+
     return this._actorHost;
   }
 
@@ -658,6 +679,7 @@ export class OrchestratorAgent extends ActorAgent {
           workspaceId: this.actorHandle().workspaceId,
           parentActorId: this.actorHandle().actorId,
         });
+
         return live !== null && live.session.inFlight;
       },
       setTimer: (fn, ms) => { this.host.setTimer(fn, ms); },
@@ -689,6 +711,7 @@ export class OrchestratorAgent extends ActorAgent {
     const admitted = await admitHostedTask(this.subordinateSeams(), actor.reference, {
       kind: 'message', body: input.text, mode: 'build',
     });
+
     return { status: admitted.admitted ? 'queued' : 'skipped' };
   }
 
@@ -700,11 +723,14 @@ export class OrchestratorAgent extends ActorAgent {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), kind, lifetime: 'task',
         });
+
         if (loop) this._chosenLoopOrigins.set(entry.reference.actorId, loop);
+
         return entry.reference;
       },
       watchWrites: (reference, writes) => {
         this._actorWriteObservers.set(reference.actorId, writes);
+
         return () => { this._actorWriteObservers.delete(reference.actorId); };
       },
       // THIS actor's own role and tier, not the root's. The seam takes an
@@ -727,13 +753,16 @@ export class OrchestratorAgent extends ActorAgent {
           loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch,
         });
+
         return (finished) => factory.toolFor(finished);
       },
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
       publishDelta: (kind, delta) => { this.publishHeadStreamFrame({ headId: '', kind, delta }); },
       mission: (input) => {
         const labels = input.missionLabels ?? [];
+
         if (labels.length === 0) return null;
+
         // In-process now: the ledger is this object's, and a hosted head runs
         // in this isolate, so the guard/debit port is a pair of calls rather
         // than the cross-Durable-Object RPC a facet had to make.
@@ -807,6 +836,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
+
     const factory = createExecuteToolsFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
@@ -816,6 +846,7 @@ export class OrchestratorAgent extends ActorAgent {
       // than a copy of it taken at construction.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
+
     const report: ReportToolDeps = {
       report: async (input) => {
         const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
@@ -823,17 +854,21 @@ export class OrchestratorAgent extends ActorAgent {
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
           handoff: input.handoff,
         });
+
         turn.reports.spoke = true;
         // Only a run-SETTLING report counts as the answer. The same predicate
         // the ingress settles a waiter on, so the child cannot come to believe
         // it has answered while its caller is still waiting.
         turn.reports.settled ||= reportSettlesRun(input.status, 'report_tool');
+
         return { id: relayed.id, disposition: relayed.disposition };
       },
     };
+
     // NAMED, because both halves of the profile read it: the surface registers
     // the tool from these deps and the framing renders the rungs they gate.
     const agents = this.hostedAgentsToolDeps(turn);
+
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
@@ -854,6 +889,7 @@ export class OrchestratorAgent extends ActorAgent {
       facts: turn.actor.stores.facts,
       webSearch,
     };
+
     // THE ASSIGNED TURN'S LANE, added after the surface's own fields for the
     // same reason the cli adds it after its own (`local-session.ts`'s
     // `reportGateOpen`): `report` belongs to a turn the PARENT drove, and an
@@ -863,6 +899,7 @@ export class OrchestratorAgent extends ActorAgent {
     // cached across turns, has to re-ask per turn.
     deps.report = report;
     const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
+
     // FRAMED FROM THE SURFACE THAT WAS BUILT, not from a second idea of it: the
     // prompt's tool index and delegation rungs are rendered from these exact
     // names, and `report` among them is what makes core's `state/delegation`
@@ -927,6 +964,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
     const seams = this.explorationSeams();
+
     const swarm: AgentsSwarmDeps = {
       rt: turn.runtime,
       model: turn.model,
@@ -945,16 +983,20 @@ export class OrchestratorAgent extends ActorAgent {
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
       announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
     };
+
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
       swarm,
       budget: this.budget,
     };
+
     // THIS turn's own resolution, not a second one: the rungs narrow by the
     // role and tier the claim recorded.
     deps.profile = () => agentsProfileContext(turn.profile.profile, turn.profile.inputs);
     const team = this.hostedTeamToolDeps(turn.actor);
+
     if (team !== null) deps.team = team;
+
     return deps;
   }
 
@@ -977,9 +1019,11 @@ export class OrchestratorAgent extends ActorAgent {
   private hostedTeamToolDeps(actor: HostedActor): TeamToolDeps | null {
     const seams = this.subordinateSeams();
     const delegation = hostedDelegationBudget(seams, actor);
+
     if (delegationExhausted(delegation)) return null;
     const roster = seams.roster(actor);
     roster.ensureSchema();
+
     return createTeamToolDeps({
       delegation,
       roster,
@@ -1038,11 +1082,15 @@ export class OrchestratorAgent extends ActorAgent {
       recordReport: async (report) => { await this.headJournalRecordReport(report); },
       cacheMerge: async (rootId, result, strategy) => { await this.headJournalCacheMerge(rootId, result, strategy); },
     };
+
     const runtimeForSplit = this.getCFHeadRuntime();
+
     if (runtimeForSplit === undefined) {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
+
     const controller = new HeadController(runtimeForSplit, journal);
+
     const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parent.id,
       parentDepth: parent.depth,
@@ -1053,10 +1101,12 @@ export class OrchestratorAgent extends ActorAgent {
       mode: parent.mode,
       model: parent.model,
     };
+
     // A subtree charges the same mission its root does — otherwise a head
     // escapes its budget simply by splitting again.
     if (parent.missionLabels?.length) controllerInput.missionLabels = parent.missionLabels;
     const result: MergeResult = await controller.run(controllerInput);
+
     return {
       narrative: result.mergedNarrative,
       decisions: result.selectedDecisions,
@@ -1097,21 +1147,27 @@ export class OrchestratorAgent extends ActorAgent {
    */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+
     if (url.pathname.startsWith(`${WORKSPACE_PREVIEW_PATH}/`)) {
       const [port, handle, ...rest] = url.pathname.slice(WORKSPACE_PREVIEW_PATH.length + 1).split('/');
       const parsed = Number(port);
+
       if (!Number.isInteger(parsed) || !handle) {
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
+
       return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
     }
+
     return await super.fetch(request);
   }
 
   protected override turnWorkMode(): WorkMode {
     const requested = super.turnWorkMode();
+
     const approvedHandoff = this._activeProgrammaticUserMessage !== null
       && this.turnUserMessageEvent(this._activeProgrammaticUserMessage) === 'plan_approved';
+
     return requested === 'build'
       && !approvedHandoff
       && planReviewAwaitingDecision(this.planReviews.getActive('default'))
@@ -1126,11 +1182,15 @@ export class OrchestratorAgent extends ActorAgent {
         { log: this.eventLog, replies: this.replyChannels },
         turnId, assistantText, Date.now(),
       );
+
       if (replies.pending) {
         diagnostics.event('event.reply_pending', { turnId });
+
         return false;
       }
+
       this.eventLog.markTurnCompleted(turnId);
+
       return true;
     } catch (err) {
       diagnostics.failure('event.reply_dispatch_failed', toKinuError({
@@ -1138,6 +1198,7 @@ export class OrchestratorAgent extends ActorAgent {
         cause: err,
         otherwise: 'unavailable',
       }), { turnId });
+
       return false;
     }
   }
@@ -1153,6 +1214,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   private owedDrainReplies(): ReadonlyMap<string, string> {
     const leases = this.eventLog.openDrainLeases();
+
     return leases.length === 0
       ? new Map<string, string>()
       : answersForDrainTurns(this.boundSql, this.actorHandle(), leases);
@@ -1249,12 +1311,16 @@ export class OrchestratorAgent extends ActorAgent {
     const now = Date.now();
     let budget = HOSTED_DELEGATION_DRAIN_BUDGET;
     let truncated = false;
+
     for (const record of this.workspaceActors().list()) {
       if (record.kind !== 'subordinate') continue;
+
       if (budget <= 0) { truncated = true; break; }
+
       const reference: ActorReference = {
         actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
       };
+
       try {
         // `bindStores` and not `acquire`: the enumeration needs this child's
         // handle over the one database and nothing else — no runtime, no
@@ -1262,13 +1328,17 @@ export class OrchestratorAgent extends ActorAgent {
         // actor, so reading a child's queue is not a way around membership.
         const log = new EventLog(exec, this.actorHost().bindStores(reference).handle);
         log.unbindStale(STALE_EVENT_DELIVERY_MS, now);
+
         for (const event of log.pending({ variant: 'subordinate_task', limit: budget })) {
           if (budget <= 0) { truncated = true; break; }
+
           if (event.variant !== 'subordinate_task') continue;
+
           if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') continue;
           const turnId = `evt-${nanoid()}`;
           log.markConsumed(event.id, turnId, 0);
           budget -= 1;
+
           try {
             // The EVENT ID is the relay's dedupe key, and it is the right one:
             // it is stable across a re-delivery, so a report a recovered
@@ -1294,6 +1364,7 @@ export class OrchestratorAgent extends ActorAgent {
         }), { workspace: this.name, actor: record.name });
       }
     }
+
     return truncated;
   }
 
@@ -1335,11 +1406,14 @@ export class OrchestratorAgent extends ActorAgent {
     // then the replies; then the terminal replay, which closes the same
     // leases when it finishes a transition.
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
+
     try {
       owed = this.owedDrainReplies();
+
       const reconciledEventIds = this.eventLog.unbindStale(
         STALE_EVENT_DELIVERY_MS, Date.now(), new Set(owed.keys()),
       );
+
       if (reconciledEventIds.length > 0) {
         diagnostics.event('event.deliveries_repended', { events: reconciledEventIds.length });
         this.orch.scheduleDrain();
@@ -1351,6 +1425,7 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
     // No catch: `completeEventBatch` answers false instead of throwing (its
     // own catch covers the dispatch and the completion write), so a catch
     // here could only fire for the announce line beside it.
@@ -1358,6 +1433,7 @@ export class OrchestratorAgent extends ActorAgent {
       const closed = await this.completeEventBatch(drainTurnId, answer);
       diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
     }
+
     await super.owedDeliveryWork();
   }
 
@@ -1370,6 +1446,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._emailOutbox) {
       this._emailOutbox = new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at));
     }
+
     return this._emailOutbox;
   }
 
@@ -1384,10 +1461,12 @@ export class OrchestratorAgent extends ActorAgent {
     return {
       approvals: () => {
         const items = [...this._consents.approvals(), ...this.deferrals.approvals()];
+
         return { items, total: items.length };
       },
       extraMissingCapabilities: () => {
         const deafInbox = this.emailInbox.dropNotice(Date.now());
+
         return deafInbox ? [deafInbox] : [];
       },
     };
@@ -1413,8 +1492,10 @@ export class OrchestratorAgent extends ActorAgent {
         // Idempotent: pick the soonest of (existing alarm, new ts).
         scheduleAt: (ts: number) => this.armTimer(ts),
       };
+
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, this.actorHandle(), alarmScheduler);
     }
+
     return this._triggerRegistry;
   }
   protected get replyChannels(): ReplyChannelStore {
@@ -1429,21 +1510,25 @@ export class OrchestratorAgent extends ActorAgent {
             const parsedContent = v.safeParse(v.looseObject({ content: v.optional(JsonValueSchema) }), payload);
             const content = parsedContent.success ? parsedContent.output.content ?? payload : payload;
             const text = parsedText.success ? parsedText.output : JSON.stringify(content);
+
             const message = {
               id: nanoid(),
               role: 'assistant',
               parts: [{ type: 'text', text }],
             } as const;
+
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
               messages: [...this.messages, message],
             }));
+
             return { delivered: true };
           } catch (err) {
             return { delivered: false, detail: renderThrownChain({ cause: err }) };
           }
         },
       };
+
       // email_thread dispatcher: a drained email turn's answer goes back onto
       // the inbound mail's thread via the send_email binding. Context resolves
       // per dispatch so binding/display-name changes never go stale.
@@ -1452,6 +1537,7 @@ export class OrchestratorAgent extends ActorAgent {
         agentDisplayName: this.safeDisplayName(),
         outbox: this.emailOutbox,
       }));
+
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, this.actorHandle(), {
         ws_session: wsDispatcher,
         // peer_back: route the answer to a peer ask back over the outbox
@@ -1462,6 +1548,7 @@ export class OrchestratorAgent extends ActorAgent {
         email_thread: emailDispatcher,
       });
     }
+
     return this._replyChannels;
   }
 
@@ -1475,6 +1562,7 @@ export class OrchestratorAgent extends ActorAgent {
     try { return this.titleState().displayName || UNTITLED_WORKSPACE_NAME; }
     catch (error) {
       diagnostics.event('orchestrator.display_name_unreadable', { error: renderThrownChain({ cause: error }) });
+
       return UNTITLED_WORKSPACE_NAME;
     }
   }
@@ -1494,19 +1582,23 @@ export class OrchestratorAgent extends ActorAgent {
         selfAgentName: () => this.name,
         selfUserId: () => {
           const userId = this.getOwnerUserId();
+
           if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+
           return userId;
         },
         deliver: async (receiverAgentName, msg) => {
           const stub = this.env.OrchestratorAgent.get(
             this.env.OrchestratorAgent.idFromName(receiverAgentName),
           );
+
           return await stub.receivePeerMessage(msg);
         },
         isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
         hasGrant: async (senderAgentName, senderUserId) => {
           try {
             const { stub, caller } = await this.userHub();
+
             return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
           } catch (err) {
             diagnostics.failure('peer.grant_lookup_failed', toKinuError({
@@ -1514,6 +1606,7 @@ export class OrchestratorAgent extends ActorAgent {
               cause: err,
               otherwise: 'unavailable',
             }), { sender: senderAgentName });
+
             return false;   // default deny on lookup failure
           }
         },
@@ -1521,6 +1614,7 @@ export class OrchestratorAgent extends ActorAgent {
         onAdmitted: () => { this.orch.scheduleDrain(); },
       });
     }
+
     return this._peerHub;
   }
 
@@ -1566,15 +1660,20 @@ export class OrchestratorAgent extends ActorAgent {
    */
   protected async reconcileTimerRow(): Promise<void> {
     const next = this.nextWakeAt(Date.now());
+
     if (next === null) return;
+
     const armed = (await this.listSchedules())
       .filter((row) => row.callback === KINU_TIMER_CALLBACK)
       .map((row) => row.time);
+
     if (armed.length === 0) {
       await this.armTimer(next);
       diagnostics.event('schedule.timer_reconciled', { at: next });
+
       return;
     }
+
     // A row already DUE is a wake the platform still owes: it runs at or before
     // now, so it covers anything due now and re-arming over it would add a
     // second row on every touch. What is new is the other direction — a row
@@ -1627,6 +1726,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   private armDurableWake(): void {
     const next = this.nextWakeAt(Date.now());
+
     if (next === null) return;
     this.detachOwned(async () => {
       try {
@@ -1656,6 +1756,7 @@ export class OrchestratorAgent extends ActorAgent {
     // the wake's own capped backoff is what keeps a pass that cannot succeed
     // from becoming a one-second loop.
     let schedules = true;
+
     try {
       schedules = this.sweepUnrunnableSchedules();
     } catch (err) {
@@ -1665,6 +1766,7 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
     return branches || fibers || schedules;
   }
 
@@ -1703,6 +1805,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  mattered: the row was deleted on the activation that would have run it. */
   private sweepUnrunnableSchedules(): boolean {
     const cutoffSec = Math.floor((Date.now() - STALE_SCHEDULE_HORIZON_MS) / 1000);
+
     // The terminal retry is exempt for the same reason the Kinu timer is: it is a
     // STATE-driven wake, not a dated one. Its obligation is whatever the ledger
     // still holds, and that does not expire — deleting an overdue row left owed
@@ -1716,6 +1819,7 @@ export class OrchestratorAgent extends ActorAgent {
     // support.
     const rowidOf = (row: Record<string, SqlStorageValue>): number =>
       v.parse(v.object({ rowid: v.number() }), row).rowid;
+
     const doomed = new Set(this.ctx.storage.sql.exec(
       `SELECT rowid FROM cf_agents_schedules
         WHERE type IN ('delayed', 'scheduled') AND time <= ?
@@ -1742,8 +1846,10 @@ export class OrchestratorAgent extends ActorAgent {
       .toArray()
       .map((row) => v.parse(v.object({ callback: v.string() }), row).callback)
       .filter((callback) => !this.canDispatch(callback));
+
     if (dead.length > 0 && doomed.size < SWEEP_MAX_ROWS) {
       const placeholders = dead.map(() => '?').join(', ');
+
       for (const rowid of this.ctx.storage.sql.exec(
         `SELECT rowid FROM cf_agents_schedules
           WHERE callback IN (${placeholders})
@@ -1753,13 +1859,16 @@ export class OrchestratorAgent extends ActorAgent {
     }
 
     const rowids = [...doomed];
+
     if (rowids.length > 0) {
       this.ctx.storage.sql.exec(
         `DELETE FROM cf_agents_schedules WHERE rowid IN (${rowids.map(() => '?').join(', ')})`,
         ...rowids,
       );
     }
+
     const dropped = rowids.length;
+
     if (dropped > 0) {
       diagnostics.event('schedule.stale_rows_dropped', {
         dropped,
@@ -1769,6 +1878,7 @@ export class OrchestratorAgent extends ActorAgent {
         unrunnableCallbacks: dead.join(','),
       });
     }
+
     return dropped >= SWEEP_MAX_ROWS;
   }
 
@@ -1805,6 +1915,7 @@ export class OrchestratorAgent extends ActorAgent {
         this.emailOwnerNotification('Evolution changelog digest', event.message);
       });
     }
+
     return this._engine;
   }
 
@@ -1829,7 +1940,9 @@ export class OrchestratorAgent extends ActorAgent {
     if (this._ownerUserId !== undefined) return this._ownerUserId;
     const rows = this.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity LIMIT 1`;
     const owner = rows[0]?.owner_user_id;
+
     if (owner && owner !== '') this._ownerUserId = owner;
+
     return owner && owner !== '' ? owner : null;
   }
 
@@ -1843,6 +1956,7 @@ export class OrchestratorAgent extends ActorAgent {
       workspaceId: this.ctx.id.toString(),
       get ownerUserId() { return owner(); },
     });
+
     return this._actorDirectory;
   }
 
@@ -1854,6 +1968,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   async actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     const { actorId, workspaceId, parentActorId } = this.actorHandle();
+
     return this.runActorDirectory({ actorId, workspaceId, parentActorId }, [], operation);
   }
 
@@ -1868,21 +1983,29 @@ export class OrchestratorAgent extends ActorAgent {
   private async runActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     if (!this.getOwnerUserId()) throw new KinuError('missing', 'The workspace has no owner.');
     const parsed = v.safeParse(ChildActorOperationSchema, operation);
+
     if (!parsed.success) throw new KinuError('bad_input', 'Invalid child actor operation.');
     const input = parsed.output;
     const directory = this.workspaceActors();
     directory.validate(caller, path);
+
     if (input.action === 'release') throw new KinuError('denied', 'Only completed physical retirement can release an actor name.');
+
     if (input.action === 'cancelCreation') {
       const entry = directory.apply(caller, path, input);
+
       return this.runActorDirectory(caller, path, { action: 'retire', name: entry.name, reference: entry.reference });
     }
+
     if (input.action !== 'retire') return directory.apply(caller, path, input);
     const pending = this.actorRetirementsInFlight.get(input.reference.actorId);
+
     if (pending) {
       directory.apply(caller, path, input);
+
       return await pending;
     }
+
     const retirement = (async (): Promise<ActorDirectoryResult> => {
       const entry = directory.apply(caller, path, input);
       await this.scheduleTerminalRetry(Date.now());
@@ -1897,9 +2020,12 @@ export class OrchestratorAgent extends ActorAgent {
       await this.actorHost().retire(caller, {
         reference: input.reference, name: input.name, destroy: true,
       });
+
       return entry.state === 'deleted' ? entry : directory.apply(caller, path, { action: 'release', name: input.name, reference: input.reference });
     })();
+
     this.actorRetirementsInFlight.set(input.reference.actorId, retirement);
+
     try {
       return await retirement;
     } catch (cause) {
@@ -1912,9 +2038,11 @@ export class OrchestratorAgent extends ActorAgent {
   private bootstrapWorkspaceActor(): void {
     this.ctx.storage.transactionSync(() => {
       const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
+
       if (identity.length === 0) {
         void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
+
       this.workspaceActors().createMain({ name: this.name });
       this.actorHandle();
     });
@@ -1940,9 +2068,12 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
       const row = this.subordinateRoster.get(name);
+
       if (!row || row.status === 'dismissed' || !row.actorReference) throw new KinuError('missing', 'The actor is not available for client execution.');
       const actor = this.workspaceActors().apply(this.actorHandle(), [], { action: 'validate', name, reference: row.actorReference });
+
       if (actor.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a chat-reachable actor.');
+
       return { ok: true };
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'resolving a hosted actor chat path', cause, otherwise: 'io' }));
@@ -1955,30 +2086,39 @@ export class OrchestratorAgent extends ActorAgent {
   private getPeersToolDeps(): PeersToolDeps {
     const requireOwner = () => {
       const userId = this.getOwnerUserId();
+
       if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
+
       return userId;
     };
+
     /** Same-owner roster check so a typo'd name errors clearly instead of
      *  materializing a fresh unowned DO that rejects the message. */
     const requirePeer = async (agent: string): Promise<void> => {
       requireOwner();
+
       if (agent === this.name) throw new Error('that is this agent — pick another peer (action:"list")');
       const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
+
       if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
     };
+
     return {
       listPeers: async () => {
         requireOwner();
         const { stub, caller } = await this.userHub();
+
         return teamPeers(this.name, await stub.listActiveWorkspaces(caller));
       },
       ask: async ({ agent, topic, message, mode, signal }) => {
         await requirePeer(agent);
+
         return this.peerHub.ask({ agent, userId: requireOwner(), topic, message, mode, signal });
       },
       send: async ({ agent, topic, message, mode }) => {
         await requirePeer(agent);
+
         return this.peerHub.send({ agent, userId: requireOwner(), topic, message, mode });
       },
       reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
@@ -1987,15 +2127,18 @@ export class OrchestratorAgent extends ActorAgent {
         const { stub: userDO, caller } = await this.userHub();
         let agentName = name;
         let created = false;
+
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
           const workspaceInput = { name: agentName || undefined, purpose };
           const entry = await createCloudWorkspaceForUser(this.env, userId, userDO, caller, workspaceInput);
           agentName = entry.name;
           created = true;
         }
+
         const outcome = await this.peerHub.ask({
           agent: agentName, userId, topic: 'task', message, mode, signal,
         });
+
         return { agent: agentName, created, ...outcome };
       },
     };
@@ -2010,6 +2153,7 @@ export class OrchestratorAgent extends ActorAgent {
     const reject = async (): Promise<never> => {
       throw new Error('This agent has no owner yet, so there is no release lane to reach. Open it through the authenticated app or CLI first.');
     };
+
     return {
       board: reject, bindSource: reject, create: reject, update: reject,
       transition: reject, recordCheck: reject, requestApproval: reject, recordDeployment: reject,
@@ -2019,15 +2163,48 @@ export class OrchestratorAgent extends ActorAgent {
   private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
+
     return {
-      board: async () => { const { stub, caller } = await hub(); return stub.getReleaseBoard(caller, this.name, 20); },
-      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertReleaseSource(caller, input); },
-      create: async (input) => { const { stub, caller } = await hub(); return stub.createReleaseChange(caller, this.name, input); },
-      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
-      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, status); },
-      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
-      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestReleaseApproval(caller, changeId, approvalType); },
-      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
+      board: async () => {
+        const { stub, caller } = await hub();
+
+        return stub.getReleaseBoard(caller, this.name, 20);
+      },
+      bindSource: async (input) => {
+        const { stub, caller } = await hub();
+
+        return stub.upsertReleaseSource(caller, input);
+      },
+      create: async (input) => {
+        const { stub, caller } = await hub();
+
+        return stub.createReleaseChange(caller, this.name, input);
+      },
+      update: async (changeId, patch) => {
+        const { stub, caller } = await hub();
+
+        return stub.updateReleaseChange(caller, changeId, patch);
+      },
+      transition: async (changeId, status) => {
+        const { stub, caller } = await hub();
+
+        return stub.transitionReleaseChange(caller, changeId, status);
+      },
+      recordCheck: async (changeId, input) => {
+        const { stub, caller } = await hub();
+
+        return stub.recordReleaseCheck(caller, changeId, input);
+      },
+      requestApproval: async (changeId, approvalType) => {
+        const { stub, caller } = await hub();
+
+        return stub.requestReleaseApproval(caller, changeId, approvalType);
+      },
+      recordDeployment: async (changeId, input) => {
+        const { stub, caller } = await hub();
+
+        return stub.recordReleaseDeployment(caller, changeId, input);
+      },
       engine: this.getReleaseEngine(),
     };
   }
@@ -2047,11 +2224,31 @@ export class OrchestratorAgent extends ActorAgent {
       exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
       signal: () => this.currentTurnSignal(),
       ledger: {
-        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getReleaseDetail(caller, changeId); },
-        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
-        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, to); },
-        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
-        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
+        detail: async (changeId) => {
+          const { stub, caller } = await hub();
+
+          return stub.getReleaseDetail(caller, changeId);
+        },
+        update: async (changeId, patch) => {
+          const { stub, caller } = await hub();
+
+          return stub.updateReleaseChange(caller, changeId, patch);
+        },
+        transition: async (changeId, to) => {
+          const { stub, caller } = await hub();
+
+          return stub.transitionReleaseChange(caller, changeId, to);
+        },
+        recordCheck: async (changeId, input) => {
+          const { stub, caller } = await hub();
+
+          return stub.recordReleaseCheck(caller, changeId, input);
+        },
+        recordDeployment: async (changeId, input) => {
+          const { stub, caller } = await hub();
+
+          return stub.recordReleaseDeployment(caller, changeId, input);
+        },
       },
       // A stored `github` credential (POST /api/user/credentials/github with a
       // bearer PAT) authorizes clone/push for github source bindings; absent →
@@ -2059,9 +2256,11 @@ export class OrchestratorAgent extends ActorAgent {
       gitHubAuth: async () => {
         const { stub, caller } = await this.userHub();
         const headers = await stub.getAuthHeaders(caller, 'github');
+
         return headers?.Authorization ?? null;
       },
     });
+
     return this._releaseEngine;
   }
 
@@ -2111,6 +2310,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
     if (!userId) throw new Error('userId required');
+
     try {
       this.ensureSchema();
     } catch (err) {
@@ -2120,15 +2320,18 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
     // The HASH, not a boolean: the owner's UserDO compares it against what it
     // has registered, so any disagreement — a workspace holding nothing, or one
     // holding a token the UserDO no longer knows — is repaired rather than
     // mistaken for "already provisioned".
     const capabilityHash = await this.workspaceCapabilityHash();
     const current = this.getOwnerUserId();
+
     if (current === null) {
       // Unclaimed — first touch. Ensure identity has the owner marker.
       const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+
       if (exists.length === 0) {
         void this.sql`
           INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
@@ -2139,14 +2342,18 @@ export class OrchestratorAgent extends ActorAgent {
         this.actorHandle();
         void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
+
       this._ownerUserId = userId;
       this.invalidateModelCaches();
       await this.ensureOwnedScaffold();
+
       return { owner: userId, capabilityHash };
     }
+
     if (current !== userId) {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
+
     // No scaffold probe on this branch: it runs on EVERY authenticated
     // request, and a cold activation paid a Nimbus network round trip inside
     // it (claimOwner p90 1170ms / max 2456ms across 48h of production). The
@@ -2194,6 +2401,7 @@ export class OrchestratorAgent extends ActorAgent {
     // with every recording, and a cold replay has no active governor scope.
     const scopedTurn = projectJsonValue({ value: this.orch.scopedTurn(input.turn) });
     const mission = readMission(this.boundSql);
+
     // Sampled only for a turn the promotion gate can learn from, and keyed on the
     // turn rather than rolled — `queueTurnShadowTrial` re-reads the pending
     // version on every call, so a replay would otherwise score this turn against
@@ -2201,6 +2409,7 @@ export class OrchestratorAgent extends ActorAgent {
     const sampledVersion = completed && input.turnMode !== 'plan'
       ? shadowTrialPlan(this.scaffoldControl, messageId)
       : null;
+
     return declareTerminalRoster({
       messageId,
       status: input.status,
@@ -2259,6 +2468,7 @@ export class OrchestratorAgent extends ActorAgent {
         }),
       },
     };
+
     return parts;
   }
 
@@ -2294,6 +2504,7 @@ export class OrchestratorAgent extends ActorAgent {
               turnId: credited, sessionId: 'default', startedAt, takeIds,
             });
           }
+
           return { status: 'completed' };
         },
       }),
@@ -2305,6 +2516,7 @@ export class OrchestratorAgent extends ActorAgent {
                    VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)}, ${Date.now()})
                    ON CONFLICT(actor_id, message_id) DO UPDATE SET
                      tool_names = excluded.tool_names, created_at = excluded.created_at`;
+
           return { status: 'completed' };
         },
       }),
@@ -2321,10 +2533,13 @@ export class OrchestratorAgent extends ActorAgent {
         run: async ({ drainTurnId, answer, requestId }) => {
           this._pendingDrainReplyTurns.set(requestId, drainTurnId);
           const closed = await this.completeEventBatch(drainTurnId, answer);
+
           if (!closed) return { status: 'owed', detail: 'a reply channel is still open' };
+
           if (this._pendingDrainReplyTurns.get(requestId) === drainTurnId) {
             this._pendingDrainReplyTurns.delete(requestId);
           }
+
           return { status: 'completed' };
         },
       }),
@@ -2353,8 +2568,10 @@ export class OrchestratorAgent extends ActorAgent {
         // comparison — the exact case this effect exists for.
         run: async ({ id, task, turnId, liveText }) => {
           const live = this._pendingBranches.findIndex((entry) => entry.id === id);
+
           if (live >= 0) {
             const [entry] = this._pendingBranches.splice(live, 1);
+
             if (entry !== undefined) {
               await settlePendingBranch(
                 {
@@ -2368,19 +2585,25 @@ export class OrchestratorAgent extends ActorAgent {
                 // live write and the recovery write would be two sets.
                 id,
               );
+
               return { status: 'completed' };
             }
           }
+
           const head = this.headJournal.readHeadView(branchHeadId(id));
+
           if (head === null) {
             return { status: 'completed', detail: 'the journal holds no such branch head' };
           }
+
           const report = branchOutcomeFromJournal(head);
+
           if (report === null) {
             // Still executing, or waiting for the activation sweep to write its
             // terminal status. Owed, so the row stays and the wake comes back.
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
+
           const outcome = settleBranchIntoTakes(this.boundSql, this.actorHandle(), {
             task,
             report,
@@ -2390,12 +2613,14 @@ export class OrchestratorAgent extends ActorAgent {
             // write and the row's disposition from writing a second set.
             settlementKey: id,
           });
+
           this.broadcastBranchStatus(outcome.ok
             ? {
               type: 'branch_status', status: 'settled', branchId: id, task,
               takeSetId: outcome.set.id, turnId: turnId ?? '',
             }
             : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+
           return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
         },
       }),
@@ -2416,12 +2641,15 @@ export class OrchestratorAgent extends ActorAgent {
           // model call whose result mutates the fact store, so the answer is
           // persisted before it is applied and the tombstone records that it was.
           const factKey = keyedScope(scope);
+
           if (factKey !== undefined && effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, factKey)) {
             return { status: 'completed', detail: 'the fact update for this turn already landed' };
           }
+
           await this.runSleepTimeCompute(
             task, output, v.parse(ToolCallRecordsSchema, toolCalls), factKey,
           );
+
           return { status: 'completed' };
         },
       }),
@@ -2432,8 +2660,10 @@ export class OrchestratorAgent extends ActorAgent {
         // `name_origin`, so a replay of a titled workspace changes nothing.
         run: async ({ subject }) => {
           const unreachable = await this.titlingRefusal();
+
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
           await this.applyAutoTitle(subject);
+
           return { status: 'completed' };
         },
       }),
@@ -2447,6 +2677,7 @@ export class OrchestratorAgent extends ActorAgent {
         // and is the run that was owed — or does nothing.
         run: async (_input, scope) => {
           await this.maybeRunAutoGepa(keyedScope(scope));
+
           return { status: 'completed' };
         },
       }),
@@ -2456,17 +2687,20 @@ export class OrchestratorAgent extends ActorAgent {
 
   async onChatResponse(result: ChatResponseResult) {
     const turnMode = this.turnWorkMode();
+
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
     const {
       drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
       outputContinuation,
     } = this.settleTurnEvents(result);
+
     // The run is sealed here, and the name it was sealed with comes back rather
     // than being classified again below for the roster: one turn, one reading of
     // how it ended.
     const { overflowRecovery, end } =
       this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage, workMode: turnMode });
+
     // The identity of THIS terminal sequence comes from the shared helper, so
     // the root and its facets key one response the same way.
     //
@@ -2492,10 +2726,12 @@ export class OrchestratorAgent extends ActorAgent {
       sessionId: 'default',
       origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
     });
+
     // The same name the durable run carries — the classifier ran once, over the
     // facts the seal used (including the model's last word, which is the only
     // thing that separates a finished turn from one Think's stop condition cut).
     const status = end.reason;
+
     // Alternate Takes and steer branches were both captured mid-turn, before
     // this id existed, and both are attributed to it — one decision, made by
     // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
@@ -2503,6 +2739,7 @@ export class OrchestratorAgent extends ActorAgent {
     const credited = result.status === 'completed'
       ? creditedTurnId({ messageId: result.message.id, completed: true, workMode: turnMode })
       : null;
+
     // Core drives it from here: the in-process guard, the durable claim, the
     // roster, the run and the close are ONE state machine, and this backend
     // supplies only what it owns — the effect bodies above, and the fiber that
@@ -2542,22 +2779,27 @@ export class OrchestratorAgent extends ActorAgent {
       // each decay twice. Persisting the update first makes the replay apply the
       // SAME answer, and the tombstone below makes it apply it once.
       const stored = key === undefined ? undefined : this.recordedSleepTimeUpdate(key);
+
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
+
       const update = stored ?? await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
         task,
         output,
         toolCalls: toolCalls.map((call) => call.name),
         currentFacts,
       });
+
       // A null answer is a MALFORMED one — extraction or validation failed. A
       // model that genuinely wants no change returns empty arrays, so this is a
       // failure, and tombstoning it would report a fact update that never landed.
       if (update === null) {
         throw new KinuError('unavailable', 'the sleep-time compute returned no usable update');
       }
+
       if (key !== undefined && stored === undefined) this.persistSleepTimeUpdate(key, update);
+
       // ONE TRANSACTION over the fact writes and their tombstone. The update is
       // several upserts and several CUMULATIVE confidence decays, and none of them
       // is idempotent: an isolate termination after a prefix left the whole update
@@ -2571,12 +2813,15 @@ export class OrchestratorAgent extends ActorAgent {
       // makes this possible at all.
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
+
         if (key !== undefined) {
           recordEffectDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, key);
           void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
         }
+
         return applied;
       });
+
       diagnostics.event('memory.facts_compressed', {
         upserted: summary.upserted,
         decayed: summary.decayed,
@@ -2588,6 +2833,7 @@ export class OrchestratorAgent extends ActorAgent {
         cause: err,
         otherwise: 'unavailable',
       });
+
       diagnostics.failure('memory.fact_compression_failed', failure);
       // RETHROWN. Resolve normally and the terminal effect that drives this
       // records `completed` and is pruned even when no fact update landed, so
@@ -2603,6 +2849,7 @@ export class OrchestratorAgent extends ActorAgent {
   private recordedSleepTimeUpdate(key: string): SleepTimeUpdate | undefined {
     const row = this.sql<{ update_json: string }>`
       SELECT update_json FROM sleep_time_updates WHERE effect_key = ${key}`[0];
+
     return row === undefined
       ? undefined
       : v.parse(SleepTimeUpdateSchema, JSON.parse(row.update_json));
@@ -2643,6 +2890,7 @@ export class OrchestratorAgent extends ActorAgent {
   protected _titleHydrated = false;
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
+
     try {
       const { stub, caller } = await this.userHub();
       this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
@@ -2691,15 +2939,18 @@ export class OrchestratorAgent extends ActorAgent {
    */
   protected override async titlingRefusal(): Promise<string | null> {
     if (!this.getOwnerUserId()) return 'this workspace has no owner to hold its title';
+
     if (!this.workspaceCapabilityToken()) {
       return 'this workspace holds no capability token, so its title registry is unreachable';
     }
+
     return null;
   }
 
   /** The root decides against UserDO's naming state, not its own config. */
   protected override titleInputs() {
     const state = this.titleState();
+
     return { displayName: state.displayName === this.name ? null : state.displayName, nameOrigin: state.nameOrigin };
   }
 
@@ -2716,6 +2967,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async workspaceTitle(): Promise<string | null> {
     if (!this._titleHydrated) await this.hydrateTitle();
+
     return this.titleInputs().displayName;
   }
 
@@ -2732,14 +2984,17 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<boolean> {
     await this.hydrateTitle();
     let applied = true;
+
     if (this.getOwnerUserId()) {
       const { stub, caller } = await this.userHub();
       applied = (await stub.setWorkspaceDisplayName(caller, this.name, displayName, origin)).applied;
     }
+
     if (!applied) return false;
     this._titleCache = { displayName, nameOrigin: origin };
     this._titleHydrated = true;
     this.broadcast(JSON.stringify({ type: 'workspace_renamed', displayName }));
+
     return true;
   }
 
@@ -2777,6 +3032,7 @@ export class OrchestratorAgent extends ActorAgent {
       operation,
       outcome: outcome.ok ? 'ok' : 'refused',
     });
+
     return outcome;
   }
 
@@ -2844,8 +3100,10 @@ export class OrchestratorAgent extends ActorAgent {
           command: consent.command,
           workspaceName: consent.workspaceName ?? null,
         }));
+
         return;
       }
+
       this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
     },
   });
@@ -2909,6 +3167,7 @@ export class OrchestratorAgent extends ActorAgent {
         announce: (notice) => this.announceDeferral(notice),
       });
     }
+
     return this._deferrals;
   }
 
@@ -2924,6 +3183,7 @@ export class OrchestratorAgent extends ActorAgent {
       const [first] = notice.actions;
       this.logActivity('approval_decided', `${notice.actions.length} ${first?.status ?? 'decided'}`);
     }
+
     // The needs-you queue is polled, not pushed; one frame tells a connected
     // client to re-read it rather than duplicating the rows onto the wire.
     this.broadcast(JSON.stringify({ type: 'pending_actions_changed' }));
@@ -2948,6 +3208,7 @@ export class OrchestratorAgent extends ActorAgent {
     ids: string[], decision: DeferredApprovalAnswer,
   ): Promise<{ decided: string[] }> {
     const decided = await this.deferrals.decide(ids, decision);
+
     return { decided: decided.map((a) => a.id) };
   }
 
@@ -3095,6 +3356,7 @@ export class OrchestratorAgent extends ActorAgent {
         }), { workspace: this.name });
       }
     });
+
     // The activation CLASSIFIES and ARMS: bounded existence reads plus the
     // sweep verdicts above, one schedule row when anything is owed. Every
     // DISPATCH — owed replies, interrupted terminal transitions, fork and job
@@ -3198,7 +3460,9 @@ export class OrchestratorAgent extends ActorAgent {
     const notice: RecoveredNotice = {
       kind: signal.kind, text: signal.text,
     };
+
     if (signal.idempotencyKey !== undefined) notice.idempotencyKey = signal.idempotencyKey;
+
     if (signal.metadata !== undefined) notice.metadata = signal.metadata;
     dispatchRecoveredNotice(
       {
@@ -3220,6 +3484,7 @@ export class OrchestratorAgent extends ActorAgent {
     for (const pending of this.workspaceActors().retirements()) {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
     }
+
     // ARM 1 OF THE ACTOR SWEEP, and it runs BEFORE anything admits new work
     // for these actors. A claim admitted and never settled is the only record
     // that a hosted turn is owed, and reconciling it first is load-bearing:
@@ -3243,13 +3508,16 @@ export class OrchestratorAgent extends ActorAgent {
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
       }), { workspace: this.name });
     }
+
     // ARM 2, STRICTLY AFTER ARM 1. A claim reconciled above is an actor free to
     // take new work; drained first, this would issue a second turn for an actor
     // whose previous one still holds a claim, and the per-actor serialization
     // would refuse — honestly, but the wrong turn. Truncation is owed work, so
     // it is reported to the caller the way every other budgeted pass reports it.
     const delegationsTruncated = await this.drainAdmittedDelegations();
+
     if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();
+
     // AFTER the branch seal has drained, and the seal's own remainder is what
     // says so: a branch head still `running` from before the cutoff is a row
     // the LIMIT-256 seal has not reached, and the fork reconcile — which reads
@@ -3262,6 +3530,7 @@ export class OrchestratorAgent extends ActorAgent {
       STEER_BRANCH_RUN_ID_PREFIX, 1, this.activationStartedAt,
     ).length > 0) return true;
     this.activationRecoveryPending = false;
+
     try {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
@@ -3280,6 +3549,7 @@ export class OrchestratorAgent extends ActorAgent {
           // stacking cards.
           deliver: (signal) => {
             this.dispatchForkNotice(signal);
+
             return Promise.resolve('queued');
           },
         },
@@ -3302,6 +3572,7 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
     return delegationsTruncated || await super.maintenanceWork();
   }
   /**
@@ -3324,6 +3595,7 @@ export class OrchestratorAgent extends ActorAgent {
         readHead: (id) => this.headJournal.readHead(id),
         hasLiveExploration: () => this.hasLiveExploration(),
       });
+
       if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
     } catch (err) {
       diagnostics.failure('actor.reconciliation_failed', toKinuError({
@@ -3350,8 +3622,11 @@ export class OrchestratorAgent extends ActorAgent {
    *  same question through its own `readHead` port. */
   protected explorationFacetLedgerStatus(id: string): 'resumable' | 'terminal' | 'unknown' {
     const head = this.headJournal.readHead(id);
+
     if (!head) return 'unknown';
+
     if (headStatusUnsettled(head.status)) return 'resumable';
+
     return storedHeadReportStatus(head.status) === null ? 'unknown' : 'terminal';
   }
 
@@ -3392,6 +3667,7 @@ export class OrchestratorAgent extends ActorAgent {
           // arriving alongside the alarm coalesce into it.
           const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
           span.setAttribute('kinu.triggers_fired', fired);
+
           if (fired > 0) this.orch.scheduleDrain();
         } catch (err) {
           const failure = toKinuError({
@@ -3399,6 +3675,7 @@ export class OrchestratorAgent extends ActorAgent {
             cause: err,
             otherwise: 'io',
           });
+
           // `fail` and not a rethrow: the tick tolerates this and continues to the
           // next phase, so the span closes SUCCESSFULLY unless it says otherwise.
           span.fail(failure);
@@ -3418,6 +3695,7 @@ export class OrchestratorAgent extends ActorAgent {
             cause: err,
             otherwise: 'unavailable',
           });
+
           span.fail(failure);
           diagnostics.failure('peer.outbox_dispatch_failed', failure);
         }
@@ -3435,6 +3713,7 @@ export class OrchestratorAgent extends ActorAgent {
             cause: err,
             otherwise: 'unavailable',
           });
+
           span.fail(failure);
           diagnostics.failure('email.outbox_reconcile_failed', failure);
         }
@@ -3449,6 +3728,7 @@ export class OrchestratorAgent extends ActorAgent {
         try {
           const next = this.nextWakeAt(now);
           span.setAttribute('kinu.rearmed', next !== null);
+
           if (next !== null) await this.armTimer(next);
         } catch (err) {
           const failure = toKinuError({
@@ -3456,6 +3736,7 @@ export class OrchestratorAgent extends ActorAgent {
             cause: err,
             otherwise: 'io',
           });
+
           span.fail(failure);
           diagnostics.failure('schedule.timer_rearm_failed', failure);
           // RETHROWN, unlike the three phases above it. Their work is state
@@ -3485,17 +3766,20 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async getReleaseBoard(limit: number = 20) {
     const { stub, caller } = await this.userHub();
+
     return stub.getReleaseBoard(caller, this.name, limit);
   }
 
   @callable()
   async createReleaseChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
     const { stub, caller } = await this.userHub();
+
     return stub.createReleaseChange(caller, this.name, input);
   }
 
   async transitionReleaseChange(changeId: string, status: ReleaseStatus) {
     const { stub, caller } = await this.userHub();
+
     return stub.transitionReleaseChange(caller, changeId, status);
   }
 
@@ -3503,12 +3787,14 @@ export class OrchestratorAgent extends ActorAgent {
   async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
     const { stub, caller } = await this.userHub();
     const decided = await stub.decideReleaseApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+
     // Refusing a ROLLBACK leaves the deployed change deployed, which is also
     // why `deployed -> rejected` is not a legal transition. Every other
     // approval is the gate on shipping the change, so refusing it rejects it.
     if (decision === 'rejected' && decided.approvalType !== 'rollback') {
       await stub.transitionReleaseChange(caller, decided.changeId, 'rejected');
     }
+
     return decided;
   }
 
@@ -3521,7 +3807,9 @@ export class OrchestratorAgent extends ActorAgent {
       name: this.name,
       displayName: await this.workspaceTitle() ?? '',
     });
+
     const profile = this.resolvedTurnProfile();
+
     return {
       ...status,
       roleId: profile?.role.id ?? this.activeRoleLabel(),
@@ -3641,6 +3929,7 @@ export class OrchestratorAgent extends ActorAgent {
     // count, the newest entry's time, and how many of those entries actually
     // offer keep/revert rather than being measurements to read.
     const unseen = getUnseenChangelog(this.boundSql, this.rt.actor);
+
     return buildPendingActions({
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
@@ -3694,6 +3983,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
     const result = await revertChangelogEntryById({ rt: this.rt, facts: this.facts }, id);
+
     if (result.ok) {
       // Crafted-tool retirement must drop the cached tool surface, exactly
       // like the consolidation path.
@@ -3703,6 +3993,7 @@ export class OrchestratorAgent extends ActorAgent {
         VALUES (${this.actorHandle().actorId}, 'reflection',
                 ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
     }
+
     return result;
   }
 
@@ -3713,10 +4004,12 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async listAlternateTakes(): Promise<Record<string, AlternateTakeSet>> {
     const byTurn: Record<string, AlternateTakeSet> = {};
+
     // Newest-first listing: keep the first (latest) set seen per turn.
     for (const set of listAlternateTakeSets(this.boundSql, this.actorHandle(), { limit: 100 })) {
       if (set.turnId && !byTurn[set.turnId]) byTurn[set.turnId] = set;
     }
+
     return byTurn;
   }
 
@@ -3736,17 +4029,23 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
     const task = text.trim();
+
     if (!task) throw new Error('branchTurn requires the redirect text');
+
     if (!this._inFlight) {
       return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
     }
+
     if (this.turnWorkMode() === 'plan') {
       return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
     }
+
     const runtime = this.getCFHeadRuntime();
+
     if (!runtime) {
       return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
     }
+
     const id = newBranchId();
     this._pendingBranches.push({
       id, task,
@@ -3756,11 +4055,13 @@ export class OrchestratorAgent extends ActorAgent {
     });
     this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
     this.logActivity('branch_start', task.slice(0, 120));
+
     return { accepted: true, branchId: id };
   }
 
   private broadcastBranchStatus(event: BranchStatusEvent): void {
     this.broadcast(JSON.stringify(event));
+
     if (event.status !== 'running') {
       this.logActivity('branch_settle', event.status === 'settled'
         ? `takes ${event.takeSetId}`
@@ -3779,7 +4080,9 @@ export class OrchestratorAgent extends ActorAgent {
     const outcome = await pickAlternateTake(
       { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, signals: this.orch.signals },
       takeId, nodeId);
+
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
+
     return outcome;
   }
 
@@ -3852,7 +4155,9 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     const result = await applyScaffoldDecision(this.scaffoldControl, mode);
+
     if (!result.ok) return result;
+
     // Emit the decision into the durable event log so SSE subscribers + MCP
     // `list_run_events` see it in-band. Uses the action ACTUALLY applied — the
     // misevolution recheck can convert a requested promote into a rollback
@@ -3871,6 +4176,7 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { action: result.action });
     }
+
     return result;
   }
 
@@ -3883,6 +4189,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async getShadowVerdict(version?: number): Promise<ShadowVerdict> {
     const pendingVersion = version ?? getPendingScaffold(this.boundSql, this.rt.actor)?.version ?? null;
+
     return readShadowVerdict(this.boundSql, this.rt.actor, pendingVersion);
   }
 
@@ -3899,13 +4206,16 @@ export class OrchestratorAgent extends ActorAgent {
     added: number; removed: number; lines: DiffLine[];
   }> {
     const after = (await readScaffoldVersion(this.rt, version)) ?? "";
+
     const prevRow = this.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${this.rt.actor.actorId} AND version < ${version}
       ORDER BY version DESC LIMIT 1`;
+
     const previousVersion = prevRow[0]?.version ?? null;
     const before = previousVersion != null ? (await readScaffoldVersion(this.rt, previousVersion)) ?? "" : "";
     const d = diffLines(before, after);
+
     return { version, previousVersion, added: d.added, removed: d.removed, lines: d.lines };
   }
 
@@ -3988,9 +4298,11 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async checkpointStatus(): Promise<CheckpointAvailability> {
     if (!this.getOwnerUserDO()) return { available: false, reason: 'agent has no owner user yet' };
+
     try {
       const { stub, caller } = await this.userHub();
       const result = await stub.deviceRpc(caller, 'checkpointStatus', []);
+
       return v.parse(CheckpointAvailabilitySchema, result === undefined ? undefined : JSON.parse(result));
     } catch (err) {
       // The unattached case FIRST, because its remedy is not the owner's: a
@@ -4000,15 +4312,18 @@ export class OrchestratorAgent extends ActorAgent {
       if (isWorkspaceUnattachedError(err)) {
         return { available: false, reason: WORKSPACE_HAS_NO_OWNER };
       }
+
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `kinu connect`' };
       }
+
       // Several machines are live and the checkpoint plane does not yet name
       // one: an availability answer, in the hub's own words (it names the
       // machines), never a silent pick of whichever came first.
       if (isDeviceAmbiguityError(err)) {
         return { available: false, reason: renderThrownChain({ cause: err }) };
       }
+
       throw err;
     }
   }
@@ -4028,8 +4343,10 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async listFileCheckpoints(limit = 50, turnId?: string): Promise<FileCheckpointListing> {
     const availability = await this.checkpointStatus();
+
     if (!availability.available) return { availability, entries: [] };
     const { stub, caller } = await this.userHub();
+
     // `turnId` reaches the DEVICE, so the store filters before it truncates. A
     // caller that filtered a window here instead would lose any turn buried
     // under `limit` other directories' checkpoints — retention is per directory,
@@ -4037,6 +4354,7 @@ export class OrchestratorAgent extends ActorAgent {
     const result = await stub.deviceRpc(
       caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit)), turnId ?? null],
     );
+
     return {
       availability,
       entries: v.parse(
@@ -4050,6 +4368,7 @@ export class OrchestratorAgent extends ActorAgent {
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
     const { stub, caller } = await this.userHub();
     const result = await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]);
+
     return v.parse(FileRestorePlanSchema, result === undefined ? undefined : JSON.parse(result));
   }
 
@@ -4057,6 +4376,7 @@ export class OrchestratorAgent extends ActorAgent {
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
     const { stub, caller } = await this.userHub();
     const result = await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]);
+
     return v.parse(FileRestoreResultSchema, result === undefined ? undefined : JSON.parse(result));
   }
 
@@ -4079,14 +4399,18 @@ export class OrchestratorAgent extends ActorAgent {
     if (messageId.length === 0) {
       throw new Error('messageId must be a non-empty string');
     }
+
     if (feedback === null) {
       void this.sql`DELETE FROM turn_feedback
         WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId}`;
+
       return { ok: true, messageId, feedback: null, rescored: 0 };
     }
+
     if (feedback !== 'positive' && feedback !== 'negative') {
       throw new Error(`feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
+
     void this.sql`INSERT INTO turn_feedback (actor_id, message_id, feedback, created_at)
              VALUES (${this.actorHandle().actorId}, ${messageId}, ${feedback}, ${Date.now()})
              ON CONFLICT(actor_id, message_id) DO UPDATE SET
@@ -4096,12 +4420,15 @@ export class OrchestratorAgent extends ActorAgent {
     // Re-score the crafted tools this turn used with the feedback-derived
     // quality. No-op when the turn used no crafted tools.
     let rescored = 0;
+
     const usageRows = this.sql<{ tool_names: string }>`
       SELECT tool_names FROM turn_craft_usage
       WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
+
     if (usageRows[0]?.tool_names) {
       const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
       const names = parsedNames.success ? parsedNames.output : [];
+
       if (names.length > 0) {
         updateCraftScores(this.boundSql, names, feedbackToQuality(feedback));
         rescored = names.length;
@@ -4110,6 +4437,7 @@ export class OrchestratorAgent extends ActorAgent {
         this._cachedToolsKey = '';
       }
     }
+
     // One outcome ledger: the explicit verdict overrides any classifier row
     // for this turn and, when negative, corroborates provisional lessons.
     try {
@@ -4121,6 +4449,7 @@ export class OrchestratorAgent extends ActorAgent {
         otherwise: 'io',
       }), { messageId });
     }
+
     return { ok: true, messageId, feedback, rescored };
   }
 
@@ -4135,6 +4464,7 @@ export class OrchestratorAgent extends ActorAgent {
     const rows = this.sql<{ message_id: string; feedback: 'positive' | 'negative' }>`
       SELECT message_id, feedback FROM turn_feedback
       WHERE actor_id = ${this.actorHandle().actorId}`;
+
     return Object.fromEntries(rows.map((r) => [r.message_id, r.feedback]));
   }
 
@@ -4252,6 +4582,7 @@ export class OrchestratorAgent extends ActorAgent {
   async runOutcomeEnsemble(specs?: string[]): Promise<EnsembleRunResult> {
     const registry = this.providerRegistry();
     const turnRoute = resolveModelRoute('agent', await this.routingProfile());
+
     return runEnsemble(this.boundSql, this.actorHandle(), {
       specs: async () => (await resolveEnsembleJudgeSelection({
         registry,
@@ -4290,17 +4621,21 @@ export class OrchestratorAgent extends ActorAgent {
   }> {
     try {
       const run = listGepaRuns(this.boundSql, this.actorHandle(), 200).find((r) => r.runId === runId) ?? null;
+
       const candidates = loadGepaCandidates(this.boundSql, this.actorHandle(), runId).map((c) => ({
         id: c.id, parentId: c.parentId, source: c.source,
         scores: Object.fromEntries(c.scores), feedback: Object.fromEntries(c.feedback),
         aggregateScore: c.aggregateScore, createdAt: c.createdAt,
       }));
+
       // The membership table is core's; its loader derives the front from the
       // rows that persist. No raw SELECT across the package boundary.
       const pareto = loadGepaParetoFront(this.boundSql, this.actorHandle(), runId);
+
       return { run, candidates, pareto };
     } catch (error) {
       if (classify({ cause: error }) !== 'sqlite-missing-table') throw error;
+
       return { run: null, candidates: [], pareto: [] };
     }
   }
@@ -4392,6 +4727,7 @@ export class OrchestratorAgent extends ActorAgent {
       // it happens once whether a step arrives through this RPC from a hosted
       // facet or straight from an in-isolate node that has no facet at all.
       this.headJournal.appendStep(headId, seq, step);
+
       return { ok: true };
     });
   }
@@ -4445,8 +4781,10 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
     const ownerUserId = this.getOwnerUserId();
+
     if (!ownerUserId) throw new Error('Cannot export an unclaimed workspace.');
     const workspace = this.hostedWorkspace().bundle;
+
     return readWorkspaceArchivePage(this.ctx.storage.sql, {
       workspace: this.name,
       source: 'cloud',
@@ -4472,7 +4810,9 @@ export class OrchestratorAgent extends ActorAgent {
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
+
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
+
     // FIRST, and before the container object's own token store is deleted with
     // it: every preview URL this workspace published stops resolving at the
     // edge. Without this, a URL somebody still holds — chat history, a
@@ -4485,6 +4825,7 @@ export class OrchestratorAgent extends ActorAgent {
         this.env.AUTH_KV, sandboxIdForWorkspace(this.name),
       ).revokeAll();
     }
+
     if (this.env.Sandbox) {
       // {@link SANDBOX_TRANSPORT} — the SDK drops in-flight requests if the
       // transport changes between calls on one sandbox, so the constant is the
@@ -4492,14 +4833,17 @@ export class OrchestratorAgent extends ActorAgent {
       const sb = getSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), {
         normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
+
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.
       await sb.discardState();
       await sb.destroy();
     }
+
     // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the
     // isolate. `deleteAll` is what takes the workspace filesystem with it.
     await this.destroy();
+
     return { ok: true };
   }
 
@@ -4556,7 +4900,9 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const owner = this.getOwnerUserId();
+
     if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
+
     return this.inspectSubordinateStorage(request, { owner, workspace: this.name });
   }
 
@@ -4593,10 +4939,13 @@ export class OrchestratorAgent extends ActorAgent {
   async getActorSnapshot(name: string) {
     if (!this.getOwnerUserId()) throw new KinuError('denied', 'The workspace has no owner.');
     const entry = this.subordinateRoster.requireExisting(name);
+
     const reference = this.actorDirectoryStore().apply(
       actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
     ).reference;
+
     const child = this.actorHost().bindStores(reference);
+
     return {
       name: entry.name,
       displayName: child.stores.config.getDisplayName() ?? entry.name,
@@ -4645,9 +4994,11 @@ export class OrchestratorAgent extends ActorAgent {
   async announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
     const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
     const name = parsed.path[0];
+
     if (!name || !this.subordinateRoster.get(name)) {
       throw new KinuError('denied', 'This workspace has no such plan actor.');
     }
+
     this.broadcast(JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
   }
 
@@ -4686,6 +5037,7 @@ export class OrchestratorAgent extends ActorAgent {
     // something" is `usageReported` — never a presence check on the field.
     const measured = steps.filter((e) => usageReported(e.usage ?? {}));
     const newest = measured[measured.length - 1];
+
     return {
       latest: newest === undefined
         ? null
@@ -4721,6 +5073,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  appendMemoryNote primitive as workspace.saveNote + the `memory` builtin. */
   async saveNoteFromMcp(content: string): Promise<{ ok: true }> {
     await appendMemoryNote(this.rt.memory, content);
+
     return { ok: true };
   }
 
@@ -4731,11 +5084,14 @@ export class OrchestratorAgent extends ActorAgent {
    *  harness — so the signal names its author and the chat keeps its bubble. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = text.trim();
+
     if (!trimmed) throw new Error('run_task requires non-empty text');
+
     const outcome = await this.orch.signals.deliver({
       kind: 'mcp', text: trimmed,
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
+
     return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
 
@@ -4744,6 +5100,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  gate enforced inside getPeersToolDeps). */
   async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
     if (!input?.agent || !input?.message) throw new Error('send_peer requires agent and message');
+
     return this.getPeersToolDeps().send({
       agent: input.agent,
       topic: (input.topic ?? '').trim() || 'message',
@@ -4770,6 +5127,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async searchMemoryHybrid(query: string, limit: number = 10): Promise<HybridHit[]> {
     const lexicalSearchFn = async (q: string, k: number) => {
       const results = await this.rt.memory.search(q, k);
+
       return results.map((r) => ({
         // Canonical chunk id (`path:start-end`) — matches the id the vector
         // store returns, so RRF fuses the lexical and semantic hits.
@@ -4781,6 +5139,7 @@ export class OrchestratorAgent extends ActorAgent {
         snippet: r.snippet,
       }));
     };
+
     return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, {
       finalK: limit, rehydrate: memorySnippetRehydrator(this.rt.memory),
     });
@@ -4808,6 +5167,7 @@ export class OrchestratorAgent extends ActorAgent {
       listBackgroundJobs: () => this.listBackgroundJobs(),
       listTriggers: () => this.listTriggers(),
     };
+
     return v.parse(JsonValueSchema, await reads[source]());
   }
 
@@ -4832,10 +5192,13 @@ export class OrchestratorAgent extends ActorAgent {
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       expose: async (port) => {
         const ports = this.hostedWorkspace().box('agent:main').ports;
+
         if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');
+
         return ports.expose(port);
       },
     });
+
     return this._slates;
   }
 
@@ -4863,6 +5226,7 @@ export class OrchestratorAgent extends ActorAgent {
     // are two facts: what the capability IS (declared) and what this actor
     // WIRES (observed from the ToolSet the turn actually built).
     const wiredNames = new Set(Object.keys(this.getRawTools()));
+
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
       // Both registers, from the one spec: the headline a list row shows and
@@ -4876,12 +5240,15 @@ export class OrchestratorAgent extends ActorAgent {
       exposure: TOOL_REACH[name].codemode ? 'both' as const : 'native' as const,
       wired: wiredNames.has(name),
     }));
+
     const craftedRaw = this.rt.craftStore.list();
+
     const crafted = craftedRaw.map(t => {
       // Quality lives on the crafted_tools row, keyed by name alone: the table
       // is workspace-wide and carries no actor_id (`agent-utils/stores/craft.ts`).
       const scoreRow = this.sql<{ score: number; uses: number }>`
         SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
+
       return {
         name: t.name,
         description: t.description || "Crafted tool",
@@ -4895,7 +5262,9 @@ export class OrchestratorAgent extends ActorAgent {
         usageCount: scoreRow[0]?.uses ?? 0,
       };
     });
+
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
+
     return { builtIn, crafted, executors };
   }
 
@@ -4903,11 +5272,13 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async setDisplayName(displayName: string) {
     await this.propagateDisplayName(displayName, 'user');
+
     return { displayName };
   }
 
   async setAutoDisplayName(displayName: string) {
     const applied = await this.propagateDisplayName(displayName, 'auto');
+
     return { displayName: applied ? displayName : this.getDisplayName(), applied };
   }
 
@@ -4917,6 +5288,7 @@ export class OrchestratorAgent extends ActorAgent {
     // written; the root remains the authority.
     this._titleCache = { displayName, nameOrigin };
     this._titleHydrated = true;
+
     return { displayName, nameOrigin };
   }
 
@@ -4935,6 +5307,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async beginGenesisTurn(): Promise<{ started: boolean }> {
     const signal = workspaceGenesisSignal(readMission(this.boundSql));
+
     if (!signal) return { started: false };
     this.detachOwned(async () => {
       try {
@@ -4945,6 +5318,7 @@ export class OrchestratorAgent extends ActorAgent {
         }), { workspace: this.name });
       }
     });
+
     return { started: true };
   }
 
@@ -4981,6 +5355,7 @@ export class OrchestratorAgent extends ActorAgent {
     subordinate: SubordinateRosterEntry;
   }> {
     const result = await this.getTeamToolDeps().create({});
+
     return {
       ...result,
       subordinate: await this.subordinateView(result.subordinate.name),
@@ -4997,6 +5372,7 @@ export class OrchestratorAgent extends ActorAgent {
     subordinate: SubordinateRosterEntry;
   }> {
     const result = await this.getTeamToolDeps().rename({ name, displayName });
+
     return {
       ...result,
       subordinate: await this.subordinateView(result.subordinate.name),
@@ -5068,6 +5444,7 @@ export class OrchestratorAgent extends ActorAgent {
     const heads = this.headJournal.listRunningBranchHeads(
       STEER_BRANCH_RUN_ID_PREFIX, ORPHAN_SEAL_MAX_ROWS, this.activationStartedAt,
     );
+
     for (const head of heads) {
       this.headJournal.recordReport({
         id: head.id, status: 'errored',
@@ -5079,6 +5456,7 @@ export class OrchestratorAgent extends ActorAgent {
       this.broadcastBranchStatus({ type: 'branch_status', status: 'error', branchId: head.rootId, task: head.task,
         message: 'workspace restarted before the branch settled' });
     }
+
     return heads.length >= ORPHAN_SEAL_MAX_ROWS;
   }
 
@@ -5100,6 +5478,7 @@ export class OrchestratorAgent extends ActorAgent {
     // Same owner guard `listPendingActions` uses for the same cross-DO board
     // read: without an owner there is no release lane to have content in.
     const board = this.getOwnerUserId() ? await this.getReleaseBoard(1) : null;
+
     return {
       releases: (board?.changes.length ?? 0) > 0,
       explorations: listForkRuns(this.boundSql, this.actorHandle(), null, 1).items.length > 0,
@@ -5117,18 +5496,22 @@ export class OrchestratorAgent extends ActorAgent {
       this.getWorkspaceTabPresence(),
       this.listSlates(),
     ]);
+
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
         outputs: await this.getExecutorOutput(e.name, 50),
       })),
     );
+
     const lastActiveExecutor = this.config.getLastActiveExecutor();
+
     // Durable journal, never `_pendingBranches`: RAM is empty after reset while
     // the journal is the branch lifecycle authority.
     const branchRuns = this.headJournal.listRunningRuns()
       .filter((run) => run.rootId.startsWith('branch-') && run.status === 'running')
       .map((run) => ({ type: 'branch_status' as const, status: 'running' as const, branchId: run.rootId, task: run.task }));
+
     return {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
       tabPresence, slates, pendingSteers: this.pendingSteerRuns(), branchRuns,
@@ -5137,14 +5520,18 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {
     const provider = this.rt.executionRouter?.getProvider(executorId);
+
     if (!provider) return { error: `Executor "${executorId}" not found`,
       refusal: refusalOf(new KinuError('missing', `Executor "${executorId}" not found`)) };
+
     if (!provider.isAvailable()) return { error: `Executor "${executorId}" is not available`,
       refusal: refusalOf(new KinuError('unavailable', `Executor "${executorId}" is not available`)) };
 
     const execTool = provider.tools.exec;
+
     if (!execTool) return { error: `Executor "${executorId}" has no exec tool`,
       refusal: refusalOf(new KinuError('unsupported', `Executor "${executorId}" has no exec tool`)) };
+
     // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
     // "The user's account is a fleet"): device rides as the tool context
     // the laptop executor reads (readDeviceSelection), and a call that
@@ -5152,6 +5539,7 @@ export class OrchestratorAgent extends ActorAgent {
     // never see one.
     try {
       const result = v.parse(CommandResultSchema, device === undefined ? await execTool.execute(command) : await execTool.execute(command, { device }));
+
       const output = v.is(v.string(), result)
         ? { stdout: result, stderr: '', exitCode: 0 }
         : { stdout: result.error, stderr: result.error, exitCode: 1, refusal: result };
@@ -5176,6 +5564,7 @@ export class OrchestratorAgent extends ActorAgent {
         type: 'executor-output', executor: executorId, command, stdout: '',
         stderr: errMsg, exitCode: 1, refusal, timestamp: Date.now(),
       }));
+
       return { error: errMsg, exitCode: 1, refusal };
     }
   }
@@ -5184,12 +5573,14 @@ export class OrchestratorAgent extends ActorAgent {
    *  own raw handle, in that environment's own paths. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
+
     return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }
 
   /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
+
     return readExecutorFile(this.rt.executionRouter, executorId, path);
   }
 
@@ -5199,6 +5590,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  directory that only bytes could carry. Never overwrites. */
   @callable() async renameExecutorFile(executorId: string, from: string, to: string): Promise<ExecutorWriteResult> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
+
     return renameExecutorPathOp(this.rt.executionRouter, executorId, from, to);
   }
 
@@ -5206,6 +5598,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  native tree removal where one exists and goes entry by entry elsewhere. */
   @callable() async deleteExecutorFile(executorId: string, path: string): Promise<ExecutorWriteResult> {
     if (!this.rt.executionRouter) return { error: 'no execution router' };
+
     return deleteExecutorPathOp(this.rt.executionRouter, executorId, path);
   }
 
@@ -5234,12 +5627,16 @@ export class OrchestratorAgent extends ActorAgent {
     | { error: string; reason: 'too_large' | 'unavailable' }
   > {
     const router = this.rt.executionRouter;
+
     if (!router) return { error: 'no execution router', reason: 'unavailable' };
+
     if (!transferId) return { error: 'download transfer id required', reason: 'unavailable' };
     const download = new ExecutorFileDownload(router, executorId, path);
     this.executorFileDownloads.set(transferId, download);
     const opened = await download.open();
+
     if ('error' in opened) this.executorFileDownloads.delete(transferId);
+
     return opened;
   }
 
@@ -5254,16 +5651,22 @@ export class OrchestratorAgent extends ActorAgent {
     length: number,
   ): Promise<{ bytes: Uint8Array } | { error: string }> {
     const router = this.rt.executionRouter;
+
     if (!router) return { error: 'no execution router' };
+
     if (!transferId) return { error: 'download transfer id required' };
     const download = this.executorFileDownloads.get(transferId);
+
     if (!download || !download.serves(executorId, path)) {
       return { error: 'file transfer out of sync: no matching open download' };
     }
+
     const result = await download.range(offset, length);
+
     if ('error' in result || download.completeAfter(offset + result.bytes.byteLength)) {
       this.executorFileDownloads.delete(transferId);
     }
+
     return result;
   }
 
@@ -5285,10 +5688,14 @@ export class OrchestratorAgent extends ActorAgent {
     expectedRevision?: number,
   ): Promise<ExecutorWriteResult> {
     const router = this.rt.executionRouter;
+
     if (!router) return { error: 'no execution router' };
+
     if (!path) return { error: 'file path required' };
+
     if (!transferId) return { error: 'upload transfer id required' };
     let row = this.executorFileUploads.get(transferId);
+
     if (offset === 0) {
       row = {
         executorId,
@@ -5302,8 +5709,11 @@ export class OrchestratorAgent extends ActorAgent {
     } else if (row.expectedRevision !== expectedRevision) {
       return { error: 'file transfer out of sync: expected revision does not match the first chunk' };
     }
+
     const result = await row.upload.chunk(offset, chunk, final);
+
     if (row.upload.done) this.executorFileUploads.delete(transferId);
+
     return result;
   }
 
@@ -5327,15 +5737,22 @@ export class OrchestratorAgent extends ActorAgent {
     // one. "laptop has no terminal" was true until its agent grew one.
     if (executorId === 'laptop') {
       const device = this.rt.deviceTransport.status();
+
       if (device.connected) return { ok: true };
+
       if (device.registered) return { error: 'That machine is offline. Run `kinu connect` on it.' };
+
       return { error: 'No machine is linked to this account yet. Run `kinu connect` on the one you want.' };
     }
+
     if (executorId !== 'sandbox') return { error: `${executorId} has no terminal` };
     const handle = this.rt.sandboxHandle;
+
     if (!handle) return { error: 'the sandbox container is not configured for this workspace' };
+
     try {
       await handle.ensureReady();
+
       return { ok: true };
     } catch (cause) {
       // The chain, so the pane can show WHY: an attach that overran its budget
@@ -5371,11 +5788,14 @@ export class OrchestratorAgent extends ActorAgent {
     window: { cols: number; rows: number },
   ): Promise<{ session: string; user: string } | { error: string }> {
     const user = this.getOwnerUserId();
+
     if (!user) return { error: 'this workspace has no owner yet' };
+
     try {
       const opened = await this.requireOwnerUserDO().openDeviceTerminal(
         await this.userCaller(), this.workspaceName(), window,
       );
+
       return { session: opened.session, user };
     } catch (cause) {
       // The chain, so the pane can show WHY. A declined grant, a machine that
@@ -5399,20 +5819,26 @@ export class OrchestratorAgent extends ActorAgent {
     error?: string;
   }> {
     const provider = this.rt.executionRouter?.getProvider(executorId);
+
     if (!provider) {
       return executorId === 'sandbox'
         ? { ports: [] }
         : { ports: [], error: `${executorId} preview provider is unavailable` };
     }
+
     const status = provider.getStatus?.();
+
     if (status && !status.active && provider.kind !== 'workspace') {
       return { ports: [] };
     }
+
     if (!provider.listExposedPorts) {
       return { ports: [], error: `${executorId} cannot list exposed ports` };
     }
+
     try {
       const ports = await provider.listExposedPorts();
+
       return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
     } catch (error) {
       return {
@@ -5446,13 +5872,16 @@ export class OrchestratorAgent extends ActorAgent {
     id: string, status: 'pending' | 'accepted' | 'rejected' | 'completed',
   ) {
     updateProposedTaskStatus(this.rt, id, status);
+
     return { ok: true };
   }
 
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
+
     if (!text) throw new Error('SOUL.md cannot be empty.');
     const ownerUserId = this.getOwnerUserId();
+
     if (!ownerUserId) throw new Error('SOUL.md is unavailable until the workspace owner claim completes.');
     await writeSoul(
       this.rt.storage.vfs,
@@ -5462,6 +5891,7 @@ export class OrchestratorAgent extends ActorAgent {
     );
     // The next turn re-reads the soul from the workspace filesystem.
     this._cachedSoulText = null;
+
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
@@ -5505,6 +5935,7 @@ export class OrchestratorAgent extends ActorAgent {
     // own the copy, and the transport's own reservation would refuse it later
     // with a message about a name.
     this.requireOwnerForFork();
+
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
@@ -5516,6 +5947,7 @@ export class OrchestratorAgent extends ActorAgent {
       busy: () => this._inFlight,
       transport: this.forkTransport,
     }, untilMessageId, opts);
+
     return {
       id: fork.workspaceId,
       name: fork.name,
@@ -5530,7 +5962,9 @@ export class OrchestratorAgent extends ActorAgent {
    *  name is reserved. */
   private requireOwnerForFork(): string {
     const ownerUserId = this.getOwnerUserId();
+
     if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
+
     return ownerUserId;
   }
 
@@ -5539,15 +5973,19 @@ export class OrchestratorAgent extends ActorAgent {
   private get forkTransport(): ForkTransport {
     const ns = this.env.OrchestratorAgent;
     const stubFor = (name: string) => ns.get(ns.idFromName(name));
+
     return {
       occupied: async (name) => {
         const { stub, caller } = await this.userHub();
+
         return stub.hasWorkspace(caller, name);
       },
       deliver: async (name, snapshot) => {
         const ownerUserId = this.getOwnerUserId();
+
         if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
         const { stub, caller } = await this.userHub();
+
         return deliverCloudFork({
           registry: stub,
           caller,
@@ -5591,17 +6029,21 @@ export class OrchestratorAgent extends ActorAgent {
    * activation's receiver was keyed to a predecessor's transfer. */
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
+
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       targetAuthority: 'pane',
       writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
+
     const receiver = new ForkTransferReceiver(
       writer,
       createWorkspaceForkSink(this.hostedWorkspace().bundle, transferId),
     );
+
     this.forkReceiver = { transferId, receiver };
+
     return receiver;
   }
 
@@ -5619,24 +6061,29 @@ export class OrchestratorAgent extends ActorAgent {
     if (!ownerUserId) throw new Error('fork owner is required');
     this.ensureSchema();
     const currentOwner = this.getOwnerUserId();
+
     if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
 
     // The owner is the Nimbus file-plane precondition. It is intentionally the
     // only identity datum before commit; lineage, name, mission, marker and
     // display name publish together in the writer transaction.
     const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+
     if (identity.length === 0) {
       void this.sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
         VALUES (${this.ctx.id.toString()}, ${forkName}, ${ownerUserId}, ${Date.now()})`;
     } else {
       void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
     }
+
     this._ownerUserId = ownerUserId;
     this.invalidateModelCaches();
 
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
     const outcome = await receiver.accept(frame);
+
     if (outcome.status === 'staged') return { ok: true, status: 'staged' };
+
     // Copied approval rows key the source scope, so the target's copied
     // instruction files start unverified with no marker to write.
     if (outcome.status === 'settled') {
@@ -5645,8 +6092,10 @@ export class OrchestratorAgent extends ActorAgent {
         capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
       };
     }
+
     await this.ensureOwnedScaffold();
     await resetWorkspaceBaseline(this.rt);
+
     return {
       ok: true, status: 'published', agentId: this.ctx.id.toString(),
       capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
@@ -5668,7 +6117,9 @@ export class OrchestratorAgent extends ActorAgent {
   async listTriggers(): Promise<{ triggers: (TriggerView & { url?: string })[] }> {
     const listed = listTriggers(this.triggerRegistry);
     const secret = webhookRouteSecret(this.env);
+
     if (secret === null) return listed;
+
     return {
       triggers: await Promise.all(listed.triggers.map(async (trigger) => (
         trigger.kind === 'webhook_durable' || trigger.kind === 'webhook_ephemeral'
@@ -5705,6 +6156,7 @@ export class OrchestratorAgent extends ActorAgent {
     // Read before the row is written: a trigger whose delivery URL cannot be
     // signed is a row no delivery could ever reach.
     const routeSecret = webhookRouteSecret(this.env);
+
     if (routeSecret === null) throw new Error(WEBHOOK_ROUTE_UNAVAILABLE);
     const now = Date.now();
     // The secret is core's to decide and to store: an hmac/bearer trigger
@@ -5712,6 +6164,7 @@ export class OrchestratorAgent extends ActorAgent {
     // this route hands core the secret store rather than minting a row without
     // one when the caller sends none.
     const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
+
     return {
       trigger_id: webhook.trigger_id,
       url: await webhookRoutePath(routeSecret, {
@@ -5762,7 +6215,9 @@ export class OrchestratorAgent extends ActorAgent {
     tick?: string,
   ): Promise<void> {
     const everyN = this.config.getAutoGepaEveryNTurns();
+
     if (everyN <= 0) return;
+
     // One-time honesty note: before autonomy defaults flipped ON, a disable
     // DELETED this key — an absent row is indistinguishable from
     // never-configured, so the autonomous default supersedes both. Pin the
@@ -5777,6 +6232,7 @@ export class OrchestratorAgent extends ActorAgent {
           `superseded by this default — run setAutoGepa(0) to disable again.`
         }, ${Date.now()})`;
     }
+
     // ONE cadence pass at a time in this activation. A `running` row means either
     // an interrupted activation (owed, and this tick owes it) or THIS activation's
     // previous turn still inside its detached pass — and the per-tick tombstones
@@ -5785,14 +6241,17 @@ export class OrchestratorAgent extends ActorAgent {
     // concurrently and race each other's proposals.
     if (this._gepaTickRunning) return;
     const recent = listGepaRuns(this.boundSql, this.actorHandle(), 1)[0];
+
     // A run left `running` is an INTERRUPTED pass, not a completed one. Taking it
     // as the cadence watermark counted its own turns against the next interval
     // and abandoned it until a whole cadence had accrued again — so it is owed
     // and this tick is the one that owes it.
     if (recent?.status !== 'running') {
       const sinceTs = recent ? new Date(recent.startedAt).toISOString() : null;
+
       if (this.eventRecorder.completedWorkTurns(sinceTs) < everyN) return;
     }
+
     // The prompt-section lane is the ONE automatic lane. A scaffold GEPA pass
     // sharing this tick would optimise `scaffold/agent.js`, which the chat turn
     // does not run: the turn is Think's loop over `getSystemPrompt` / `getTools`
@@ -5804,6 +6263,7 @@ export class OrchestratorAgent extends ActorAgent {
     // one.
     const lane = tick === undefined ? undefined : `${this.name}:${tick}`;
     this._gepaTickRunning = true;
+
     try {
       await this.oncePerTick(PROMPT_SECTION_LANE, lane, () => this.advancePromptSections());
     } finally {
@@ -5846,16 +6306,21 @@ export class OrchestratorAgent extends ActorAgent {
     // with nothing to replay it. It runs, and it keys nothing.
     if (tick === undefined) {
       await pass();
+
       return;
     }
+
     if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`)) return;
+
     if (effectAlreadyDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`)) {
       diagnostics.event('evolution.interrupted_pass_abandoned', {
         workspace: this.name, lane: scope, tick,
       });
       recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`);
+
       return;
     }
+
     const running = pass();
     recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`);
     await running;
@@ -5919,6 +6384,7 @@ export class OrchestratorAgent extends ActorAgent {
       trigger: 'explicit',
       scope: opts?.scope ?? 'workspace',
     };
+
     if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
     const view = await requestRefinement(this.refinementDeps, request);
     void this.runRefinementLane()
@@ -5927,6 +6393,7 @@ export class OrchestratorAgent extends ActorAgent {
         cause: rejection[0],
         otherwise: 'unavailable',
       }), { workspace: this.name }));
+
     return view;
   }
 
@@ -5942,6 +6409,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
     const result = await decideRefinementRoute(this.refinementDeps, input);
+
     // An approval puts a new trusted skill in the next prompt and its
     // `allowed_tools` in the next tool surface, so the cached surface is dropped
     // exactly as a craft retirement drops it.
@@ -5949,6 +6417,7 @@ export class OrchestratorAgent extends ActorAgent {
       this._cachedTools = null;
       this._cachedToolsKey = '';
     }
+
     return result;
   }
 
@@ -6052,6 +6521,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
     this.ensureSchema();
+
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
       signals: this.orch.signals,
@@ -6068,6 +6538,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  secret material must never be readable over the browser websocket. */
   private get webhookSecrets(): WebhookSecretStore {
     this._webhookSecrets ??= createWebhookSecretStore(this.ctx.storage.sql);
+
     return this._webhookSecrets;
   }
 
@@ -6078,6 +6549,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  the agent through the standard drain → programmatic turn path. */
   async receivePeerMessage(msg: PeerMessage): Promise<ReceiveResult> {
     this.ensureSchema();
+
     return this.peerHub.receive(msg);
   }
 
@@ -6090,6 +6562,7 @@ export class OrchestratorAgent extends ActorAgent {
   private async getOwnerEmail(): Promise<string | null> {
     if (!this.getOwnerUserId()) return null;
     const { stub, caller } = await this.userHub();
+
     return (await stub.getProfile(caller))?.email ?? null;
   }
 
@@ -6107,6 +6580,7 @@ export class OrchestratorAgent extends ActorAgent {
       ownerEmail: () => this.getOwnerEmail(),
       onAdmitted: () => { this.orch.scheduleDrain(); },
     });
+
     return this._emailInbox;
   }
 
@@ -6134,6 +6608,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  durably, so an eviction between the two never sends twice. */
   async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
     const admission = await this.emailInbox.accept(opts);
+
     if (admission.admitted && !admission.duplicate && admission.thread && admission.event_id) {
       await sendInboundEmailReceipt({
         email: this.env.EMAIL,
@@ -6141,12 +6616,14 @@ export class OrchestratorAgent extends ActorAgent {
         outbox: this.emailOutbox,
       }, admission.thread, admission.event_id);
     }
+
     return admission;
   }
 
   /** The agent's email surface for the operator UI / routes. */
   async getEmailIngress(): Promise<{ address: string | null; allowlist: string[]; notifications: boolean }> {
     const domain = this.env.EMAIL_DOMAIN;
+
     return {
       address: domain ? agentEmailAddress(this.name, domain) : null,
       allowlist: readEmailAllowlist(this.triggerRegistry),
@@ -6166,6 +6643,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** Toggle owner-email notifications (changelog digests, job completions). */
   async setEmailNotifications(enabled: boolean): Promise<{ notifications: boolean }> {
     this.config.setEmailNotificationsEnabled(enabled);
+
     return { notifications: this.config.getEmailNotificationsEnabled() };
   }
 
@@ -6180,6 +6658,7 @@ export class OrchestratorAgent extends ActorAgent {
       subject,
       text,
     });
+
     if (!notification) return;
     void (async () => {
       await sendOwnerEmail({
@@ -6217,11 +6696,13 @@ export class OrchestratorAgent extends ActorAgent {
     limit?: number;
   }): Promise<RecentEventRow[]> {
     const parsedVariant = v.safeParse(EventVariantSchema, opts?.variant);
+
     const events = this.eventLog.query(boundEventQuery({
       variant: parsedVariant.success ? parsedVariant.output : undefined,
       since: opts?.since,
       limit: opts?.limit,
     }));
+
     return events.map((e) => ({
       id: e.id,
       trace_id: e.trace_id,
@@ -6258,5 +6739,6 @@ export class OrchestratorAgent extends ActorAgent {
  *  archive rather than binding junk into the row query. */
 function parseArchiveCursor<Value>(value: Value): ArchiveCursor | null {
   const parsed = v.safeParse(ArchiveCursorSchema, value);
+
   return parsed.success ? parsed.output : null;
 }

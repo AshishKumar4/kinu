@@ -23,6 +23,7 @@ export async function vfsAddressingHint(
 	subject: string,
 ): Promise<string> {
 	let roots = "";
+
 	try {
 		roots = (await vfs.readdir("/")).join(", ");
 	} catch (error) {
@@ -32,6 +33,7 @@ export async function vfsAddressingHint(
 		// listed is itself part of the diagnosis, so it is stated, not omitted.
 		roots = `unlistable (${error instanceof Error ? error.message : String(error)})`;
 	}
+
 	return (
 		`${subject} is the agent's own virtual filesystem, NOT the machine or container this agent `
 		+ "runs on: a path here is not the machine path of the same name"

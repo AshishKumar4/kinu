@@ -13,6 +13,7 @@ import { KinuError } from '../obs/error';
 
 function requireCapability<Capability>(capability: Capability | undefined, name: string): Capability {
   if (capability === undefined) throw new KinuError('unsupported', 'Slate ' + name + ' capability is not configured');
+
   return capability;
 }
 
@@ -36,9 +37,11 @@ class WorkspaceSlateMutation extends SlateMutationSeam {
   mutate<Result>(request: SlateMutationRequest, mutation: () => Result): Promise<Result> {
     return this.authority.mutate(request, () => {
       const result = mutation();
+
       if (request.operation === 'fork' || this.restoring && request.operation === 'update') {
         this.files.restore(request.slateId, request.source);
       }
+
       return result;
     });
   }
@@ -78,14 +81,19 @@ export class WorkspaceSlates {
   async synchronize(id: SlateId): Promise<Slate> {
     const source = this.deps.store.transaction(() => this.deps.files.capture(id));
     const current = this.deps.store.getSlate(id);
+
     if (current === undefined) return this.runtime(id).create(this.deps.workspaceId, source);
+
     if (!current.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('denied', 'Slate belongs to another workspace');
+
     if (current.source.equals(source)) return current;
+
     return this.runtime().update(id, source, current.revision);
   }
 
   async commit(id: SlateId) {
     const slate = await this.synchronize(id);
+
     return this.runtime().commit(id, slate.revision);
   }
 
@@ -95,17 +103,23 @@ export class WorkspaceSlates {
 
   async restore(id: SlateId, versionId: SlateVersionId): Promise<Slate> {
     const version = this.deps.store.getVersion(versionId);
+
     if (version === undefined || !version.slateId.equals(id) || !version.workspaceId.equals(this.deps.workspaceId)) {
       throw new KinuError('missing', 'Source restoration requires a version of this Slate');
     }
+
     const current = await this.synchronize(id);
+
     if (current.source.equals(version.source)) return current;
+
     return this.runtime(undefined, true).update(id, version.source, current.revision);
   }
 
   publish(versionId: SlateVersionId, bindings: readonly BindingRequirement[]) {
     const version = this.deps.store.getVersion(versionId);
+
     if (version === undefined || !version.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate version not found');
+
     return this.runtime().publish(versionId, version.source, bindings);
   }
 
@@ -123,7 +137,9 @@ export class WorkspaceSlates {
 
   source(versionId: SlateVersionId): ContentRef {
     const version = this.deps.store.getVersion(versionId);
+
     if (version === undefined || !version.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate version not found');
+
     return version.source;
   }
 

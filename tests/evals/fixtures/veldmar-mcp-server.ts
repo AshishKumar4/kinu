@@ -59,14 +59,19 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
  *  term is refused by name rather than answered with everything. */
 function search(query: string): string {
   const terms = query.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+
   if (terms.length === 0) {
     return `no usable search term in ${JSON.stringify(query)} — terms under three characters are ignored`;
   }
+
   const hits = ENTRIES.filter((entry) => {
     const haystack = `${entry.title}\n${entry.body}`.toLowerCase();
+
     return terms.some((term) => haystack.includes(term));
   });
+
   if (hits.length === 0) return `no entry matches ${JSON.stringify(query)}`;
+
   return hits
     .map((hit) => `${hit.id} — ${hit.title}\n  ${hit.body.slice(0, 120).replace(/\n/g, ' ')}…`)
     .join('\n');
@@ -74,32 +79,39 @@ function search(query: string): string {
 
 function read(id: string): string {
   const entry = ENTRIES.find((candidate) => candidate.id === id);
+
   if (!entry) {
     return `no entry ${JSON.stringify(id)} — the archive holds: ${ENTRIES.map((e) => e.id).join(', ')}`;
   }
+
   return `# ${entry.title}\n\n${entry.body}`;
 }
 
 const SearchArgsSchema = v.object({ query: v.string() });
+
 const ReadArgsSchema = v.object({ id: v.string() });
 
 server.setRequestHandler(CallToolRequestSchema, (request) => {
   const args: unknown = request.params.arguments ?? {};
   let text: string;
+
   switch (request.params.name) {
     case 'archive_search': {
       const parsed = v.safeParse(SearchArgsSchema, args);
       text = parsed.success ? search(parsed.output.query) : 'archive_search: `query` must be a string';
       break;
     }
+
     case 'archive_read': {
       const parsed = v.safeParse(ReadArgsSchema, args);
       text = parsed.success ? read(parsed.output.id) : 'archive_read: `id` must be a string';
       break;
     }
+
     default:
       text = `unknown tool ${JSON.stringify(request.params.name)}`;
   }
+
   return { content: [{ type: 'text', text }] };
 });
 

@@ -44,6 +44,7 @@ describe('CLI mission workspace names', () => {
 
   test('creates an unnamed cloud workspace with the generated name and display name', async () => {
     let createdInput: CreateCloudAgentInput | undefined;
+
     const created = await createCloudAgentFromMission(
       {
         purpose: 'Build a benchmark for Rust web frameworks',
@@ -55,6 +56,7 @@ describe('CLI mission workspace names', () => {
         generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
         create: async (input) => {
           createdInput = input;
+
           return {
             name: input.name ?? 'missing-name',
             displayName: input.displayName ?? 'missing-display-name',
@@ -92,6 +94,7 @@ describe('CLI mission workspace names', () => {
         generate: async () => { throw new Error('explicit names must not be regenerated'); },
         create: async (input) => {
           createdInput = input;
+
           return {
             name: input.name ?? 'missing-name',
             displayName: input.displayName ?? 'missing-display-name',
@@ -120,8 +123,10 @@ describe('a cloud workspace name the hub refuses', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input, init) => {
       seen.push(String(input) + ' ' + String(init?.method));
+
       return Response.json({ error: refusal }, { status: 400 });
     });
+
     try {
       const { createCloudAgent } = await import('../src/cloud-api');
       await expect(createCloudAgent('https://kinu.test', 'ptc_token', { name: 'slate-acceptance-20260907-8898094b', purpose: 'x' }))
@@ -129,6 +134,7 @@ describe('a cloud workspace name the hub refuses', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+
     expect(seen).toEqual(['https://kinu.test/api/cli/workspaces POST']);
   });
 });
@@ -169,6 +175,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     return {
       exitCode: result.exitCode ?? -1,
       stdout: result.stdout.toString(),
@@ -199,6 +206,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
    *  each scenario emits its own first line then the state line. */
   function reported<First>(stdout: string, first: v.GenericSchema<First>) {
     const [head, tail] = stdout.trim().split('\n');
+
     return {
       first: v.parse(first, JSON.parse(head ?? '')),
       state: v.parse(CreateStateSchema, JSON.parse(tail ?? '')),
@@ -222,6 +230,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       console.log(JSON.stringify({ failure }));
       report('refused-role');
     `);
+
     expect(result.exitCode, result.stderr).toBe(0);
     const { first: attempt, state } = reported(result.stdout, v.object({ failure: v.string() }));
     expect(attempt.failure).toContain('no-such-role-in-any-catalog');
@@ -246,6 +255,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
       console.log(JSON.stringify({ name: created.name }));
       report('killed-create');
     `);
+
     expect(result.exitCode, result.stderr).toBe(0);
     const { first: created, state } = reported(result.stdout, v.object({ name: v.string() }));
     expect(created).toEqual({ name: 'killed-create' });
@@ -267,10 +277,13 @@ describe('local workspace creation publishes or leaves nothing', () => {
       console.log(JSON.stringify({ identity: identity?.name, model: Boolean(model?.value) }));
       report('published-ws');
     `);
+
     expect(result.exitCode, result.stderr).toBe(0);
+
     const { first: contents, state } = reported(
       result.stdout, v.object({ identity: v.string(), model: v.boolean() }),
     );
+
     // `workspace_identity.name` is the ADDRESS, so it is the slug and not the
     // title beside it. Take whichever of the two is non-empty and `agentName()`
     // answers with a title on every named workspace.

@@ -36,6 +36,7 @@ describe('the work journal', () => {
       [task('t-mid', 300)],
       [entry('c-newest', 700), entry('c-oldest', 50)],
     );
+
     expect(rows.map((r) => r.key)).toEqual([
       'self:c-newest', 'job:j-new', 'task:t-mid', 'job:j-old', 'self:c-oldest',
     ]);
@@ -44,6 +45,7 @@ describe('the work journal', () => {
   test('every row carries the chip that filters it, so the chips are views over one list', () => {
     const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [entry('c', 2)]);
     expect(new Set(rows.map((r) => r.filter))).toEqual(new Set(['jobs', 'plan', 'self']));
+
     // …and each chip selects exactly its own rows out of that one list.
     for (const chip of ['jobs', 'plan', 'self'] as const) {
       expect(rows.filter((r) => r.filter === chip)).toHaveLength(1);

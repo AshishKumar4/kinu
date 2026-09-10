@@ -43,7 +43,9 @@ const MAX_CYCLE_LENGTH = 4;
  */
 function fingerprint(call: ToolCallRecord): string | null {
   const keys = Object.keys(call.args);
+
   if (keys.length === 0) return null;
+
   return `${call.name}:${stableStringify(decodeJsonValue({ value: call.args }))}`;
 }
 
@@ -62,14 +64,19 @@ function countRedundant(prints: ReadonlyArray<string>): number {
 function countLooped(prints: ReadonlyArray<string>): number {
   let looped = 0;
   let i = 0;
+
   while (i < prints.length) {
     const cycle = shortestCycleAt(prints, i);
+
     if (!cycle) { i += 1; continue; }
+
     let repeats = 1;
+
     while (blockEquals(prints, i, i + repeats * cycle, cycle)) repeats += 1;
     looped += (repeats - 1) * cycle;
     i += repeats * cycle;
   }
+
   return looped;
 }
 
@@ -77,14 +84,17 @@ function shortestCycleAt(prints: ReadonlyArray<string>, start: number): number |
   for (let k = 1; k <= MAX_CYCLE_LENGTH; k += 1) {
     if (blockEquals(prints, start, start + k, k)) return k;
   }
+
   return null;
 }
 
 function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length: number): boolean {
   if (b + length > prints.length) return false;
+
   for (let offset = 0; offset < length; offset += 1) {
     if (prints[a + offset] !== prints[b + offset]) return false;
   }
+
   return true;
 }
 
@@ -116,11 +126,13 @@ const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
 /** Every string leaf of an arguments object — the only place a path can hide. */
 function stringLeaves(value: JsonValue, into: string[] = []): string[] {
   const text = v.safeParse(v.string(), value);
+
   if (text.success) into.push(text.output);
   else if (Array.isArray(value)) for (const item of value) stringLeaves(item, into);
   else if (isJsonObject(value)) {
     for (const item of Object.values(value)) stringLeaves(item, into);
   }
+
   return into;
 }
 
@@ -130,19 +142,23 @@ function stringLeaves(value: JsonValue, into: string[] = []): string[] {
  *  comparison — out of the path sets. */
 function normalizePath(raw: string): string | null {
   const path = raw.replace(/^['"`]+/, '').replace(/['"`;,)]+$/, '');
+
   return /[/.]/.test(path) ? path : null;
 }
 
 function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegExp>): Set<string> {
   const found = new Set<string>();
+
   for (const chunk of text) {
     for (const pattern of patterns) {
       for (const match of chunk.matchAll(pattern)) {
         const path = match[1] === undefined ? null : normalizePath(match[1]);
+
         if (path) found.add(path);
       }
     }
   }
+
   return found;
 }
 
@@ -153,9 +169,13 @@ function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | '
   if (call.name !== 'file') return null;
   const action = call.args.action;
   const path = call.args.path;
+
   if (!v.is(v.string(), path)) return null;
+
   if (action === 'write' || action === 'edit') return { path, effect: 'write' };
+
   if (action === 'read') return { path, effect: 'revisit' };
+
   return null;
 }
 
@@ -163,21 +183,28 @@ function fileToolPath(call: ToolCallRecord): { path: string; effect: 'write' | '
 function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   const written = new Set<string>();
   let backtracks = 0;
+
   for (const call of calls) {
     const text = stringLeaves(decodeJsonValue({ value: call.args }));
     const revisited = pathsMatching(text, REVISIT_PATTERNS);
     const touched = fileToolPath(call);
+
     if (touched?.effect === 'revisit') revisited.add(touched.path);
+
     if ([...revisited].some((path) => written.has(path))) backtracks += 1;
+
     for (const path of pathsMatching(text, WRITE_PATTERNS)) written.add(path);
+
     if (touched?.effect === 'write') written.add(touched.path);
   }
+
   return backtracks;
 }
 
 /** Deterministic execution-path validity for one turn's tool calls. */
 export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): ExecutionPathSignals {
   const prints = calls.map(fingerprint).filter((print): print is string => print !== null);
+
   return {
     loopedCalls: countLooped(prints),
     redundantCalls: countRedundant(prints),
@@ -190,14 +217,17 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
 function agentsAction(call: ToolCallRecord): string | null {
   if (call.name !== 'agents') return null;
   const input = v.safeParse(v.object({ action: v.optional(v.string()) }), call.args);
+
   return input.success ? input.output.action ?? null : null;
 }
 
 /** The persistent rung's actions. */
 const STAFFING_ACTIONS = { hire: true, list: true, dismiss: true } satisfies Record<string, true>;
+
 /** The addressing action, plus the three verbs it replaced: these tables read
  *  STORED rows, so a turn recorded before the collapse still classifies. */
 const MESSAGING_ACTIONS = { msg: true, ask: true, send: true, reply: true } satisfies Record<string, true>;
+
 /** The ephemeral-search rung's action. */
 const EXPLORATION_ACTIONS = { swarm: true } satisfies Record<string, true>;
 
@@ -212,6 +242,7 @@ function hasKey<Table extends object>(table: Table, action: string | null): bool
 export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures {
   const count = (predicate: (call: ToolCallRecord) => boolean): number =>
     turn.toolCalls.filter(predicate).length;
+
   return {
     stepCount: turn.steps,
     teamCalls: count((call) => hasKey(STAFFING_ACTIONS, agentsAction(call))),
@@ -236,6 +267,7 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
     features.redundantCalls > 0 ? `${features.redundantCalls} redundant` : null,
     features.backtrackCalls > 0 ? `${features.backtrackCalls} backtracking` : null,
   ].filter((part): part is string => part !== null);
+
   return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} hiring, ` +
     `${features.thinkCalls} exploration, ${features.peerCalls} messaging, ` +
     `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +

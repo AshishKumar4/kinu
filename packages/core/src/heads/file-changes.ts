@@ -72,11 +72,14 @@ export class HeadFileChanges implements WriteObserver {
   record(event: WriteEvent): void {
     const existing = this.touched.get(event.path);
     const after = asText(event.after);
+
     if (existing) {
       existing.current = after.text;
       existing.binary ||= after.binary;
+
       return;
     }
+
     const before = asText(event.before ?? null);
     this.touched.set(event.path, {
       baseline: before.text,
@@ -89,17 +92,21 @@ export class HeadFileChanges implements WriteObserver {
    *  started are omitted — nothing changed there. */
   snapshot(): HeadFileChange[] {
     const out: HeadFileChange[] = [];
+
     for (const [path, t] of this.touched) {
       if (t.baseline === null && t.current === null) continue;
       const status: FileStatus = t.baseline === null ? 'added' : t.current === null ? 'removed' : 'changed';
+
       if (t.binary) {
         out.push({ path, status, added: 0, removed: 0, binary: true });
         continue;
       }
+
       if (t.baseline === t.current) continue;
       const d = diffLines(withoutFinalNewline(t.baseline), withoutFinalNewline(t.current));
       out.push({ path, status, added: d.added, removed: d.removed });
     }
+
     return out.sort((a, b) => a.path.localeCompare(b.path));
   }
 }
@@ -109,6 +116,7 @@ export class HeadFileChanges implements WriteObserver {
  *  makes a new 3-line file read as +3 instead of +4. */
 function withoutFinalNewline(content: string | null): string {
   if (content === null) return '';
+
   return content.endsWith('\n') ? content.slice(0, -1) : content;
 }
 
@@ -118,7 +126,10 @@ function withoutFinalNewline(content: string | null): string {
  *  makes the counts zero; `textPayload` owns the parse and this owns that mapping. */
 function asText(value: string | Uint8Array | null) {
   const payload = textPayload(value);
+
   if (payload.kind === 'absent') return { text: null, binary: false };
+
   if (payload.kind === 'text') return { text: payload.text, binary: false };
+
   return { text: '', binary: true };
 }

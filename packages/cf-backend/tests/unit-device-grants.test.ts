@@ -293,6 +293,7 @@ describe('durable device request ownership', () => {
     const harness = await deviceHarness();
     const detaching = nextDeviceRequestId();
     const sibling = nextDeviceRequestId();
+
     for (const requestId of [detaching, sibling]) {
       harness.db.prepare(
         `INSERT INTO device_inflight_requests
@@ -333,15 +334,18 @@ describe('durable device request ownership', () => {
    */
   test('the ownership seam a background-job consumer needs is reachable and native', async () => {
     const harness = await deviceHarness();
+
     const seam = {
       transferDeviceRequestToBackgroundJob: harness.userDO.transferDeviceRequestToBackgroundJob,
       cancelDeviceRequestsForBackgroundJob: harness.userDO.cancelDeviceRequestsForBackgroundJob,
       acknowledgeDeviceRequest: harness.userDO.acknowledgeDeviceRequest,
     };
+
     for (const [name, member] of Object.entries(seam)) {
       expect(member).toBeFunction();
       expect(USER_DO_RPC_SURFACE).toContain(name);
     }
+
     // A per-request transfer takes exactly one request identity plus one job
     // identity — no turn argument exists to widen it back to the whole turn.
     expect(seam.transferDeviceRequestToBackgroundJob).toHaveLength(3);
@@ -429,12 +433,15 @@ describe('durable device request ownership', () => {
 
   test('a killed request whose acknowledgement fails is untransferable and cleaned up in the same activation', async () => {
     let ackWorks = false;
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
         throw new Error('acknowledgement channel down');
       }
+
       return daemon(frame);
     });
+
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
@@ -465,8 +472,10 @@ describe('durable device request ownership', () => {
   test('a request killed before a restart is still untransferable and cleaned up after it', async () => {
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_EXEC_ACK_METHOD) throw new Error('acknowledgement channel down');
+
       return daemon(frame);
     });
+
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
@@ -494,15 +503,19 @@ describe('durable device request ownership', () => {
 
   test('an unknown cancellation whose acknowledgement fails is untransferable and keeps its answer', async () => {
     let ackWorks = false;
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) {
         return { requestId: String(frame.params[0]), cancelled: 'unknown' };
       }
+
       if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {
         throw new Error('acknowledgement channel down');
       }
+
       return daemon(frame);
     });
+
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
@@ -551,13 +564,16 @@ describe('durable device request ownership', () => {
 
   test('a sweep that loses its row while the kill fails reports nothing for it', async () => {
     let dropRow: (() => void) | null = null;
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) {
         dropRow?.();
         throw new Error('tunnel closed under the kill');
       }
+
       return daemon(frame);
     });
+
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
@@ -703,10 +719,13 @@ describe('durable device request ownership', () => {
 
   test('an exec is refused when revocation lands inside its acknowledgement probe', async () => {
     let revokeNow: (() => void) | null = null;
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_EXEC_ACK_METHOD) revokeNow?.();
+
       return daemon(frame);
     });
+
     harness.consentDecision = 'always';
     // The probe is the one await between admission and the durable row, so this
     // is where a revocation sweep can slip past an earlier check.
@@ -714,6 +733,7 @@ describe('durable device request ownership', () => {
       harness.db.prepare(`UPDATE user_devices SET revoked_at = ? WHERE id = ?`)
         .run(Date.now(), harness.deviceId);
     };
+
     const requestId = nextDeviceRequestId();
 
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['sleep 30'], {
@@ -750,17 +770,22 @@ describe('durable device request ownership', () => {
 
   test('a sweep whose claim is taken mid-flight sends no further frame for that row', async () => {
     let stealClaim: (() => void) | null = null;
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) stealClaim?.();
+
       return daemon(frame);
     });
+
     const [first, second] = [nextDeviceRequestId(), nextDeviceRequestId()];
+
     for (const requestId of [first, second]) {
       harness.db.prepare(
         `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
          VALUES (?, ?, ?, ?)`,
       ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
     }
+
     // Both rows are claimed by the sweep, then the terminal authority takes the
     // second row's claim while the first row's frame is in flight.
     stealClaim = () => {
@@ -780,14 +805,17 @@ describe('durable device request ownership', () => {
 
   test('revocation records its incident before the first kill and clears it only when all are confirmed', async () => {
     const seenAtFrame: Array<number | null> = [];
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) {
         seenAtFrame.push(harness.db.prepare(
           `SELECT unstopped_at FROM user_devices WHERE id = ?`,
         ).all(harness.deviceId).map((row) => v.parse(UnstoppedRowSchema, row).unstopped_at)[0]);
       }
+
       return daemon(frame);
     });
+
     const requestId = nextDeviceRequestId();
     harness.db.prepare(
       `INSERT INTO device_inflight_requests (request_id, device_id, workspace, turn_id)
@@ -820,6 +848,7 @@ describe('device revocation admission', () => {
     const cancellationSent = Promise.withResolvers<{ id: string; method: string; params: JsonValue[] }>();
     let attachment: JsonValue = null;
     let hub: DeviceSocketHub | null = null;
+
     const socket = {
       readyState: 1,
       close: () => {},
@@ -827,7 +856,9 @@ describe('device revocation admission', () => {
       deserializeAttachment: () => attachment,
       send: (raw: string) => {
         const frame = v.parse(DeviceRpcFrameSchema, JSON.parse(raw));
+
         if (frame.method === DEVICE_CANCEL_METHOD) cancellationSent.resolve(frame);
+
         if (frame.method === DEVICE_EXEC_ACK_METHOD && hub) {
           hub.handleMessage(harness.deviceId, JSON.stringify({
             id: frame.id, result: { requestId, acknowledged: true },
@@ -835,7 +866,9 @@ describe('device revocation admission', () => {
         }
       },
     };
+
     const hubCandidate = Object.getOwnPropertyDescriptor(harness.userDO, '_devices')?.value;
+
     if (!(hubCandidate instanceof DeviceSocketHub)) throw new Error('UserDO device hub is unavailable.');
     hub = hubCandidate;
     harness.attachDevice(null);
@@ -941,10 +974,13 @@ describe('asking for a machine when there is none', () => {
     const first = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
+
     const retry = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
+
     const settled = Promise.allSettled([first, retry]);
+
     // Await the CONDITION, never a duration: yield to the scheduler until the
     // card is actually up. Both calls are already in flight, so the second
     // reaches the registry during the same yielding and meets the first's card.
@@ -971,9 +1007,11 @@ describe('asking for a machine when there is none', () => {
     harness.answerConsent('once');
     const outcomes = await settled;
     expect(outcomes.map((o) => o.status)).toEqual(['rejected', 'rejected']);
+
     for (const outcome of outcomes) {
       expect(String(outcome.status === 'rejected' ? outcome.reason : '')).toContain(NO_DEVICE_CONNECTED);
     }
+
     // And answering did not raise a second card on the way out.
     expect(harness.raisedConsentIds).toEqual(['cons-1']);
     await harness.joinFibers();
@@ -1151,17 +1189,22 @@ describe('a copied device.json goes stale', () => {
   async function connectDaemon(harness: TestUserDO, token: string): Promise<string | null> {
     harness.acceptedSockets.at(-1)?.drop();
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
+
     if (!issued.ok || !issued.ticket) return null;
+
     const response = await harness.userDO.fetch(new Request(
       `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
       { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '203.0.113.7', 'user-agent': 'kinu-daemon/1' } },
     ));
+
     expect(response.status).toBe(101);
     // The rotation frame rides the socket the hub just accepted.
     const socket = harness.acceptedSockets.at(-1);
+
     const rotation = (socket?.sent ?? [])
       .map((raw) => v.safeParse(v.object({ type: v.string(), token: v.string() }), JSON.parse(raw)))
       .find((parsed) => parsed.success && parsed.output.type === DEVICE_TOKEN_ROTATION);
+
     return rotation?.success ? rotation.output.token : null;
   }
 
@@ -1170,11 +1213,14 @@ describe('a copied device.json goes stale', () => {
    *  returns the upgrade status. */
   async function claimAgainstLiveSocket(harness: TestUserDO, token: string): Promise<number> {
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
+
     if (!issued.ok || !issued.ticket) return 0;
+
     const response = await harness.userDO.fetch(new Request(
       `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
       { headers: { Upgrade: 'websocket', 'cf-connecting-ip': '198.51.100.9', 'user-agent': 'thief/1' } },
     ));
+
     return response.status;
   }
 
@@ -1182,6 +1228,7 @@ describe('a copied device.json goes stale', () => {
    *  and says so, which is what ends the grace on the superseded one. */
   async function acknowledgeRotation(harness: TestUserDO): Promise<void> {
     const socket = harness.acceptedSockets.at(-1);
+
     if (!socket) throw new Error('no accepted device socket to acknowledge on');
     await harness.userDO.webSocketMessage(socket.ws, JSON.stringify({ type: DEVICE_TOKEN_ROTATION_ACK }));
   }
@@ -1282,10 +1329,12 @@ describe('a copied device.json goes stale', () => {
   test('the window is absolute from the last rotation, not slid by use', async () => {
     const harness = createTestUserDO({ deviceResponder: daemon });
     const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
     const expiry = () => v.parse(
       v.array(v.object({ expires_at: v.number() })),
       harness.sql.exec(`SELECT expires_at FROM user_devices WHERE id = ?`, deviceId).toArray(),
     )[0].expires_at;
+
     // A window far enough out to be unmistakable: an idle-sliding
     // implementation rewrites it to ~now+TTL, which is a different number, while
     // an absolute one leaves it exactly where the last rotation put it. Reading

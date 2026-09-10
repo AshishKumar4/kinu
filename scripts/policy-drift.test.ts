@@ -104,6 +104,7 @@ describe('policy drift — the calibration true negative', () => {
 const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;
 export const a = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
 `;
+
   const LOCAL = 'const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;\nexport const b = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;\n';
 
   test('the real pair is silent', () => {

@@ -143,6 +143,7 @@ const FALLBACK_NOUNS = [
 /** Deterministic provisional display title: first non-empty line, collapsed. */
 export function deriveWorkspaceTitle(text: string): string {
   const firstLine = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? '';
+
   return firstLine.replace(/\s+/g, ' ').slice(0, 60);
 }
 
@@ -181,6 +182,7 @@ const WORKSPACE_ADDRESS = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
  */
 export function workspaceAddressRefusal(name: string): string | null {
   if (WORKSPACE_ADDRESS.test(name)) return null;
+
   return `the workspace name "${name}" cannot be a preview hostname label`
     + ` (a label holds lowercase letters, digits and hyphens, at most ${WORKSPACE_ADDRESS_MAX} characters, and carries no case)`;
 }
@@ -198,6 +200,7 @@ export function workspaceAddressRefusal(name: string): string | null {
 export function workspaceSlug(id: string): string {
   const hex = id.replace(/-/g, '').toLowerCase();
   const { adjective, noun } = memorableWords(hex);
+
   return `${adjective}-${noun}-${hex.slice(4, 12)}`;
 }
 
@@ -205,6 +208,7 @@ export function workspaceSlug(id: string): string {
  *  mission's own opening line. Empty when the mission yields neither. */
 export function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
+
   return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
 }
 
@@ -212,6 +216,7 @@ export function workspaceTitleFromMission(mission: string): string {
  *  the best title the mission yields. */
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
   const { adjective, noun } = memorableWords(id.replace(/-/g, '').toLowerCase());
+
   return {
     name: workspaceSlug(id),
     displayName: workspaceTitleFromMission(mission) || `${capitalize(adjective)} ${capitalize(noun)}`,
@@ -240,6 +245,7 @@ export interface WorkspaceTitlePlan {
  *  created with no purpose shows until its first message titles it. */
 function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
+
   return shown.length === 0 || shown === slug.trim();
 }
 
@@ -251,10 +257,13 @@ function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slu
  *  generated (`nameOrigin: null`) or is still showing its raw slug. */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (state.nameOrigin === 'user') return null;
+
   if (isPlaceholderMission(state.mission)) return null;
   const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
+
   if (!placeholder && state.nameOrigin !== null) return null;
   const mission = state.mission.trim();
+
   return { provisional: (placeholder && workspaceTitleFromMission(mission)) || null, mission };
 }
 
@@ -276,19 +285,26 @@ export async function applyWorkspaceTitle(
   },
 ): Promise<string | null> {
   const plan = planWorkspaceTitle(state);
+
   if (!plan) return null;
   let title: string | null = null;
+
   if (plan.provisional) {
     const persisted = await effects.persist(plan.provisional);
+
     if (persisted === false) return null;
     title = plan.provisional;
   }
+
   const suggested = (await effects.suggest?.(plan.mission))?.trim();
+
   if (suggested && suggested !== title) {
     const persisted = await effects.persist(suggested);
+
     if (persisted === false) return null;
     title = suggested;
   }
+
   return title;
 }
 
@@ -317,9 +333,12 @@ export function workspaceTitlePrompt(mission: string): string {
 export function parseWorkspaceTitle(raw: string): string | null {
   // The one failure a title parse tolerates: the model did not return JSON.
   const parsed = tolerate(() => extractJsonObject(raw), 'malformed-input');
+
   if (parsed === undefined) return null;
   const title = v.safeParse(WorkspaceTitleSchema, parsed);
+
   if (!title.success) return null;
+
   return cleanTitle(title.output.title) || null;
 }
 
@@ -350,6 +369,7 @@ export async function suggestWorkspaceTitle(
 
 function extractPersonaName(mission: string): string | null {
   const match = mission.match(/\b(?:you are|call you|named)\s+([A-Za-z][A-Za-z0-9_-]{1,30})\b/i);
+
   return match?.[1] ?? null;
 }
 

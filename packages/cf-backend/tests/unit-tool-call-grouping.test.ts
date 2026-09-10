@@ -21,12 +21,15 @@ function tool(
   input: JsonValue = {},
 ): ToolUIPart {
   const type: `tool-${string}` = `tool-${name}`;
+
   if (state === 'output-available') {
     return { type, toolCallId: id, state, input, output: null };
   }
+
   if (state === 'output-error') {
     return { type, toolCallId: id, state, input, errorText: 'test failure' };
   }
+
   return { type, toolCallId: id, state, input };
 }
 

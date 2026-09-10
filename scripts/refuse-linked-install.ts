@@ -10,19 +10,26 @@ import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from '
 import { join, resolve } from 'node:path';
 
 const here = realpathSync(process.cwd());
+
 const modules = join(here, 'node_modules');
+
 if (!existsSync(modules)) process.exit(0); // nothing linked yet: a real install is what is wanted
+
 const leaked = readdirSync(modules)
   .filter((name) => !name.startsWith('.') && !name.startsWith('@'))
   .filter((name) => lstatSync(join(modules, name)).isSymbolicLink())
   .map((name) => ({ name, target: resolve(modules, readlinkSync(join(modules, name))) }))
   .filter(({ target }) => !realpathSync(target).startsWith(`${here}/`));
+
 if (leaked.length === 0) process.exit(0);
+
 const [first] = leaked;
+
 console.error(
   `refuse-linked-install: ${String(leaked.length)} node_modules entr${leaked.length === 1 ? 'y' : 'ies'} link outside this checkout `
   + `(${first?.name ?? ''} -> ${first?.target ?? ''}), so an install here would rewrite another tree.\n`
   + `  fix: rm -rf node_modules && bun install   (a real install for this worktree)\n`
   + `  or:  leave node_modules alone; the links already resolve to the primary's pinned set`,
 );
+
 process.exit(1);

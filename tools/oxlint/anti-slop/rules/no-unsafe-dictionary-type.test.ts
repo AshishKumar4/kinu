@@ -1,3 +1,5 @@
+// KINU-LOCAL delta on upstream's suite: the type-parameter-constraint cases upstream lists as
+// valid are invalid here. See tools/oxlint/anti-slop/upstream.json.
 import { RuleTester } from "oxlint/plugins-dev";
 
 import { noUnsafeDictionaryTypeRule } from "./no-unsafe-dictionary-type.ts";
@@ -99,5 +101,17 @@ tester.run("anti-slop/no-unsafe-dictionary-type", noUnsafeDictionaryTypeRule, {
 			code: "type Marker<T> = { readonly __brand?: never }; type Index<T, U = Marker<T>> = Record<string, U>; type A = Index<Item>;",
 			errors: 1,
 		},
+		{
+			code: "function outer() { type Identity<T> = T; type A = Record<string, Identity<unknown>>; }",
+			errors: 1,
+		},
+		{
+			code: "function local() { type Record<K, V> = { key: K; value: V }; type A = Record<string, unknown>; } function global() { type A = Record<string, unknown>; }",
+			errors: 1,
+		},
+		{ code: "type WithSchema<T extends Record<string, unknown>> = (schema: T) => void;", errors: 1 },
+		{ code: "function run<T extends Record<string, unknown>>(input: T): T { return input; }", errors: 1 },
+		{ code: "declare class Store<T extends Record<string, unknown>> { read(): T }", errors: 1 },
+		{ code: "type Deep<T extends Readonly<Record<string, unknown>>> = T;", errors: 1 },
 	],
 });

@@ -13,6 +13,7 @@
 import type { streamText } from 'ai';
 
 export const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 /** Provider-namespaced request options, as the AI SDK declares them. Named here
@@ -52,6 +53,7 @@ export function workersAIEffortOption(
   effort?: ReasoningEffort | undefined,
 ) {
   if (!effort) return {};
+
   return { providerOptions: { 'workers-ai': { reasoningEffort: effort } } };
 }
 
@@ -68,6 +70,7 @@ export function reasoningEffortOptions(
 ): ProviderOptions | undefined {
   if (!effort) return undefined;
   const family = providerFamily.split(':', 1)[0];
+
   switch (family) {
     case 'workers-ai':
       return workersAIEffortOption(effort).providerOptions;
@@ -96,11 +99,14 @@ export function mergeProviderOptions(
   override: ProviderOptions | undefined,
 ): ProviderOptions | undefined {
   if (!base) return override;
+
   if (!override) return base;
   const merged: ProviderOptions = { ...base };
+
   for (const [provider, options] of Object.entries(override)) {
     merged[provider] = { ...base[provider], ...options };
   }
+
   return merged;
 }
 

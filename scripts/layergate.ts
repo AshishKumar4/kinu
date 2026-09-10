@@ -29,11 +29,13 @@ import {
 import { createTestRuntime } from '../packages/core/tests/helpers';
 
 const CORE_BASELINE_FILE = join(import.meta.dir, '../packages/core/src/layergate/baseline.ts');
+
 const COMPACTION_BASELINE_FILE = join(import.meta.dir, '../packages/compaction/src/layergate-baseline.ts');
 
 // The gate reads no storage — every prompt probe passes soulOverride — so any
 // runtime handle satisfies the one production signature that requires one.
 const subjects = createPipelineSubjects(createTestRuntime().rt);
+
 const ladderSubjects = createCompactionLadderSubjects();
 
 // The merged view: every measured probe of both slices, one namespace. Core
@@ -41,12 +43,16 @@ const ladderSubjects = createCompactionLadderSubjects();
 // the spread cannot cross-wire them — but the merged fault matrix CAN prove
 // a ladder fault moves no core layer (and vice versa).
 type MergedSubjects = PipelineSubjects & CompactionLadderSubjects;
+
 const mergedSubjects: MergedSubjects = { ...subjects, ...ladderSubjects };
+
 const mergedLayers: readonly Layer<MergedSubjects>[] = [
   ...LAYERS.filter((layer) => !(layer.id === 'compaction-ladder' && layer.probes.length === 0)),
   ...COMPACTION_LAYERS,
 ];
+
 const mergedFaults: readonly Fault<MergedSubjects>[] = [...FAULTS, ...COMPACTION_FAULTS];
+
 const mergedBaseline: Baseline = { ...LOCKED_BASELINE, ...COMPACTION_LOCKED_BASELINE };
 
 function writeBaseline(file: string, header: string[], name: string, baseline: Baseline): void {
@@ -82,6 +88,7 @@ if (process.argv.includes('--lock')) {
   const report: LayerGateReport = await runLayerGate({
     subjects: mergedSubjects, baseline: mergedBaseline, layers: mergedLayers,
   });
+
   console.log(renderLayerGateReport(report));
   process.exitCode = report.layers.every((s) => s.drifted.length === 0 && s.unlocked.length === 0) ? 0 : 1;
 }

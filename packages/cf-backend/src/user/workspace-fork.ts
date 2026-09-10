@@ -66,6 +66,7 @@ export async function deliverCloudFork(input: {
   ownerUserId: string;
 }): Promise<{ workspaceId: string; forkPointMs: number }> {
   const registration = await input.registry.reserveWorkspace(input.caller, input.name, input.name);
+
   if (!registration.reserved) throw new Error(`agent name already exists: "${input.name}"`);
 
   const destroy = async <Cause>(cause: Cause): Promise<never> => {
@@ -73,10 +74,12 @@ export async function deliverCloudFork(input: {
     catch (rollback) {
       throw new AggregateError([cause, rollback], `fork creation failed and cleanup also failed for "${input.name}"`, { cause: rollback });
     }
+
     throw cause;
   };
 
   let landed: Extract<ForkFrameAck, { status: 'published' }> | null = null;
+
   try {
     for await (const frame of forkTransferFrames({
       ...input.source,
@@ -85,29 +88,36 @@ export async function deliverCloudFork(input: {
       frameBytes: FORK_FRAME_BYTES,
     })) {
       const ack = await input.target.rawCopyFromFork(input.name, frame, input.ownerUserId);
+
       if (!ack.ok) {
         const released = await input.registry.releaseWorkspaceReservation(
           input.caller, input.name, registration.entry.createdAt,
         );
+
         if (!released) throw new Error(`fork target is owned by another user and reservation cleanup failed for "${input.name}"`);
         throw new Error(`agent name already exists: "${input.name}"`);
       }
+
       if (ack.status === 'published') { landed = ack; break; }
+
       // Still going: hold the name for another lease. A registry that answers
       // false has already given the name to someone else — carrying on would
       // stream into a target this transfer no longer owns.
       const held = await input.registry.renewWorkspaceReservation(
         input.caller, input.name, registration.entry.createdAt,
       );
+
       if (!held) throw new Error(`the reservation for "${input.name}" is no longer held by this transfer`);
     }
   } catch (cause) { return destroy(cause); }
+
   if (!landed) return destroy(new Error(`fork transfer to "${input.name}" ended before the target published it`));
 
   try {
     await input.registry.publishWorkspaceReservation(
       input.caller, input.name, registration.entry.createdAt, landed.capabilityHash,
     );
+
     return { workspaceId: landed.agentId, forkPointMs: landed.forkPointMs };
   } catch (cause) { return destroy(cause); }
 }

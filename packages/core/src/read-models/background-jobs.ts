@@ -68,6 +68,7 @@ export async function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId
 export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
   try {
     jobs.dismiss(jobId);
+
     return { ok: true };
   } catch (error) {
     return { ok: false, error: renderThrownChain({ cause: error }) };
@@ -78,6 +79,7 @@ export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
 export function clearBackgroundJobs(jobs: BackgroundJobStore) {
   try {
     jobs.clearSettled();
+
     return { ok: true };
   } catch (error) {
     return { ok: false, error: renderThrownChain({ cause: error }) };
@@ -102,29 +104,43 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {
   const job = deps.jobs.get(jobId);
+
   if (!job) return { ok: false, error: 'job not found' };
+
   if (job.status === 'running') return { ok: false, error: 'job still running' };
+
   if (job.retriedBy) return { ok: false, error: `job already retried as ${job.retriedBy}` };
   const inputJson = deps.jobs.getInput(jobId);
+
   if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
   const tool = deps.rawTools(job.workMode)[job.kind];
+
   if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
   let input: JsonValue;
+
   try { input = parseJsonValue(inputJson); }
   catch (error) { return { ok: false, error: `stored input is unreadable: ${renderThrownChain({ cause: error })}` }; }
+
   const translated = resumableAgentsInput(job.kind, input);
+
   if (translated) input = decodeJsonValue({ value: translated });
   const controller = new AbortController();
   const newId = deps.jobRunner.createRetry(jobId, job.kind, input, job.workMode, controller);
+
   if (newId === null) {
     const replacement = deps.jobs.get(jobId)?.retriedBy;
+
     return { ok: false, error: replacement ? `job already retried as ${replacement}` : 'job retry could not be reserved' };
   }
+
   deps.logActivity('bg_job_retry', `${jobId} → ${newId}`);
+
   const promise = Promise.resolve(tool.execute(input, {
       abortSignal: controller.signal, toolCallId: newId, messages: [],
     })).then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
+
   deps.jobRunner.detach(newId, job.kind, promise);
+
   return { ok: true, jobId: newId };
 }
 
@@ -165,6 +181,7 @@ export interface CancelWorkDeps {
    *  broadcast so a client that reacts to it reads settled state. */
   readonly onCancelled?: (outcome: Omit<CancelWorkOutcome, 'ok'>) => void;
 }
+
 /**
  * Stop the DISPLAYED turn: abort the in-flight LLM request, then the foreground
  * tool calls it is holding. Queued steers stay queued — the turn settle path
@@ -185,13 +202,16 @@ export interface CancelWorkDeps {
 export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWorkOutcome> {
   await deps.cancelChats?.();
   let abortedTools = 0;
+
   for (const controller of deps.activeToolControllers) {
     if (!controller.signal.aborted) {
       controller.abort(new Error('cancelled by operator'));
       abortedTools++;
     }
+
     deps.activeToolControllers.delete(controller);
   }
+
   // ONE awaited sweep before ONE frame. A foreground Stop that said "done"
   // while its turn-owned laptop commands were still running was a split-brain
   // result; device unavailability is an honest empty/failed outcome, never a
@@ -204,5 +224,6 @@ export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWor
     deviceCommands,
     timestamp: Date.now(),
   }));
+
   return { ok: true, abortedTools, deviceCommands };
 }

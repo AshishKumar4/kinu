@@ -26,6 +26,7 @@ const LLM: LLMProviderConfig = {
 
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-exec-runtime-'));
+
   return { dir, dbPath: join(dir, 'agent.db') };
 }
 
@@ -33,6 +34,7 @@ describe('assertExecutableRuntime', () => {
   test('REFUSES the birth runtime — the one two full eval runs were taken on', async () => {
     const { dir, dbPath } = scratch();
     const db = new Database(dbPath);
+
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
@@ -49,6 +51,7 @@ describe('assertExecutableRuntime', () => {
   test('ACCEPTS the runtime every running surface actually opens', async () => {
     const { dir, dbPath } = scratch();
     const birth = new Database(dbPath);
+
     try {
       birth.exec('PRAGMA journal_mode = WAL');
       await createWorkspace(birth, { name: 'open', purpose: 'open', llm: LLM });
@@ -56,7 +59,9 @@ describe('assertExecutableRuntime', () => {
     } finally {
       birth.close();
     }
+
     const db = new Database(dbPath);
+
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM });
@@ -89,6 +94,7 @@ describe('the birth runtime refuses to fabricate an exploration result', () => {
   test('spawnBranch THROWS and names the runtime that implements it', async () => {
     const { dir, dbPath } = scratch();
     const db = new Database(dbPath);
+
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });

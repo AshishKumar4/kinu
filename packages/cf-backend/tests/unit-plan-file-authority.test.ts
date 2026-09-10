@@ -17,6 +17,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
     tools: planTools, model: 'harness-model', continuation: false, body: {},
   });
   const planFile = planTools.file;
+
   if (planFile === undefined) throw new Error('Plan has no file inspection tool');
   const plan = toolExecute<JsonValue, JsonValue>(planFile);
   expect(await plan({ action: 'read', path })).toEqual(expect.stringContaining('original'));
@@ -30,6 +31,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   agent.harnessDrivingUserMessage('Now implement.', { kinuMode: 'build' });
   const buildTools = agent.observeRawTools();
   const buildFile = buildTools.file;
+
   if (buildFile === undefined) throw new Error('Build has no file tool');
   const build = toolExecute<JsonValue, JsonValue>(buildFile);
   await build({ action: 'read', path });
@@ -47,6 +49,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   await files.writeFile('/home/user/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));
   await files.writeFile(path, 'first');
   const committed = await agent.slate({ op: 'commit', id: 'app' });
+
   if (!committed.ok) throw new Error(committed.error);
   const version = v.parse(v.object({ id: v.string() }), committed.value);
   await files.writeFile(path, 'second');
@@ -55,6 +58,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   await agent.beforeTurn({ system: 'base', messages: [{ role: 'user', content: 'Plan only.' }], tools: native, model: 'harness-model', continuation: false, body: {} });
   const providers = providersInWorkMode('plan', agent.observeRuntime().executionRouter?.getProviders() ?? []);
   const workspace = providers.find((provider) => provider.name === 'workspace');
+
   if (workspace === undefined) throw new Error('No workspace provider');
   expect(await workspace.tools.readFile.execute(path)).toBe('second');
   expect(await workspace.tools.writeFile.execute(path, 'forbidden')).toMatchObject({ reason: 'denied' });
@@ -83,12 +87,14 @@ test('a planner role records Plan authority for deferred work even when the mess
   const requested = agent.observeRawTools();
   const configured = await agent.beforeTurn({ system: 'base', messages: [{ role: 'user', content: 'Inspect the project.' }], tools: requested, model: 'harness-model', continuation: false, body: {} });
   const submitted = configured?.tools?.submit_plan;
+
   if (submitted === undefined) throw new Error('Role-imposed Plan has no plan submission operation');
   expect(await toolExecute(submitted)({ edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] })).toMatchObject({ ok: true, status: 'pending' });
   expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
   await agent.onChatResponse({ message: { id: 'role-plan-answer', role: 'assistant', parts: [{ type: 'text', text: 'Plan ready.' }] }, requestId: 'role-plan-answer', continuation: false, status: 'completed' });
   const runs = await agent.listRuns();
   const run = runs.items[0];
+
   if (run === undefined) throw new Error('The real turn produced no run record');
   const events = await agent.getRunEvents(run.runId);
   expect(events.find((event) => event.type === 'turn_end')).toMatchObject({ workMode: 'plan' });

@@ -24,6 +24,7 @@ export type SlateCallResult =
   | ({ readonly ok: false } & Refusal);
 
 const VersionId = v.pipe(v.string(), v.minLength(1));
+
 export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('list') }),
   v.strictObject({ op: v.literal('preview'), id: SlateDirectoryName }),
@@ -33,6 +34,7 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('fork'), version: VersionId }),
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
 ]);
+
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
 /** The parsed operation contract: listing/history inspect; every other operation can change resources or run authored code. */

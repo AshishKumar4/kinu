@@ -24,6 +24,7 @@ interface AuthStoreTestBindings<Stub> {
 function testEnv<Stub>(bindings: AuthStoreTestBindings<Stub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: createSession and verifySession read exactly the constructed KV
   // namespace, UserDO namespace, and credential key; every reachable binding is present.
   return env as Env;
@@ -35,9 +36,11 @@ function setupEnv() {
   // The authority behind a cookie, at the RPC seam. The real table is
   // exercised against the real UserDO in unit-auth-session-revocation.
   const rows = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
+
   const userDO = {
     async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
+
       return { email, displayName: displayName ?? null, createdAt: 1, lastSeenAt: 1 };
     },
     async registerBrowserSession(
@@ -48,6 +51,7 @@ function setupEnv() {
     async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
       for (const [hash, row] of rows) if (row.expiresAt <= Date.now()) rows.delete(hash);
       const row = rows.get(tokenHash);
+
       return row ? { identity: row.identity } : null;
     },
     async revokeBrowserSession(_caller: UserCaller, tokenHash: string) {
@@ -279,6 +283,7 @@ describe('the synthetic development identity', () => {
     const held = await resolve('https://staging.kinu.run/api/user/workspaces', {
       'x-kinu-dev-identity': 'staging-shared-secret',
     });
+
     if (!held.granted) throw new Error(`the secret was refused with ${String(held.status)}`);
     expect(held.identity.email).toBe('eval-service@kinu.run');
     expect(held.identity.provider).toBe('dev');
@@ -297,12 +302,14 @@ describe('the synthetic development identity', () => {
     const request = new Request('https://staging.kinu.run/api/user/workspaces', {
       headers: { 'x-kinu-dev-identity': 'staging-shared-secret' },
     });
+
     expect(authenticateRequest(request, { AUTH_KV: makeKv(), DEV_USER_EMAIL: 'eval-service@kinu.run' }))
       .rejects.toThrow(/No Kinu session/);
   });
 
   test('a developer\'s own machine is already the trust boundary, so localhost needs no secret', async () => {
     const local = await resolve('http://localhost:8787/api/user/workspaces');
+
     if (!local.granted) throw new Error(`localhost was refused with ${String(local.status)}`);
     expect(local.identity.email).toBe('eval-service@kinu.run');
   });

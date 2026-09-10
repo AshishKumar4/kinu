@@ -48,22 +48,28 @@ interface SidebarRow {
 async function readSidebar(page: Page): Promise<SidebarRow[]> {
   return page.evaluate(() => {
     const rows: SidebarRow[] = [];
+
     for (const item of document.querySelectorAll('aside li')) {
       const link = item.querySelector('a[href^="/workspace/"]');
+
       if (!link) continue;
       const labels: string[] = [];
+
       for (const node of [item, ...item.querySelectorAll('*')]) {
         for (const attribute of ['title', 'aria-label']) {
           const value = node.getAttribute(attribute);
+
           if (value) labels.push(value);
         }
       }
+
       rows.push({
         href: link.getAttribute('href') ?? '',
         text: (item.textContent ?? '').replace(/\s+/g, ' ').trim(),
         labels,
       });
     }
+
     return rows;
   });
 }
@@ -78,6 +84,7 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('aside a[href^="/workspace/"]');
+
       return readSidebar(page);
     });
     untitled = rows.find((row) => row.href === `/workspace/${SLUG}`);

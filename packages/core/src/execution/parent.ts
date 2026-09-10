@@ -91,6 +91,7 @@ export interface ParentWorkspaceHandle {
  */
 function detail(error: ParentRpcError): string {
   const prefix = `${error.code}:`;
+
   return error.message.startsWith(prefix) ? error.message.slice(prefix.length).trimStart() : error.message;
 }
 
@@ -98,6 +99,7 @@ function value<T>(result: ParentRpcResult<T>): T {
   if (result.ok) return result.value;
   throw makeVfsError(result.error.code, detail(result.error), result.error.path);
 }
+
 const StringSchema = v.string();
 
 function parseInput<TSchema extends v.GenericSchema>(
@@ -105,6 +107,7 @@ function parseInput<TSchema extends v.GenericSchema>(
   input: { value: unknown },
 ): v.InferOutput<TSchema> | undefined {
   const result = v.safeParse(schema, input.value);
+
   return result.success ? result.output : undefined;
 }
 
@@ -120,6 +123,7 @@ export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
   return {
     async readFile(path, opts) {
       const content = value(await handle.read(path));
+
       return opts?.encoding === 'utf8' ? new TextDecoder().decode(content) : content;
     },
     async writeFile(path, data) { value(await handle.write({ kind: 'file', path, data })); },
@@ -162,6 +166,7 @@ export function createParentExecutor(deps: {
   workspaceName?: string;
 }): ExecutorProvider {
   const vfs = deps.vfs ?? createParentWorkspaceVfs(deps.handle);
+
   const status: ExecutorStatus = {
     configured: true,
     available: true,
@@ -189,10 +194,13 @@ export function createParentExecutor(deps: {
         description: "Read a file from the parent workspace you were forked from, in the parent's own paths.",
         execute: async (...args: unknown[]) => {
           const path = parseInput(StringSchema, { value: args[0] });
+
           if (path === undefined) {
             return refusalText(new KinuError('bad_input', 'parent readFile: path must be a string'));
           }
+
           const content = await vfs.readFile(path, { encoding: 'utf8' });
+
           return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
         },
       },
@@ -200,11 +208,14 @@ export function createParentExecutor(deps: {
         description: 'Write a file in the parent workspace. Your changes are attributed to you in the merge.',
         execute: async (...args: unknown[]) => {
           const path = parseInput(StringSchema, { value: args[0] });
+
           if (path === undefined) {
             return refusalText(new KinuError('bad_input', 'parent writeFile: path must be a string'));
           }
+
           const text = String(args[1]);
           await vfs.writeFile(path, text);
+
           return `Written ${text.length} bytes to ${path}`;
         },
       },
@@ -213,9 +224,11 @@ export function createParentExecutor(deps: {
         description: 'List a directory of the parent workspace.',
         execute: async (...args: unknown[]) => {
           const path = args[0] === undefined ? '.' : parseInput(StringSchema, { value: args[0] });
+
           if (path === undefined) {
             return refusalText(new KinuError('bad_input', 'parent readdir: path must be a string'));
           }
+
           return vfs.readdir(path);
         },
       },
@@ -224,9 +237,11 @@ export function createParentExecutor(deps: {
         description: 'Check whether a path exists in the parent workspace.',
         execute: async (...args: unknown[]) => {
           const path = parseInput(StringSchema, { value: args[0] });
+
           if (path === undefined) {
             return refusalText(new KinuError('bad_input', 'parent exists: path must be a string'));
           }
+
           return vfs.exists(path);
         },
       },
@@ -247,10 +262,13 @@ export function createParentExecutor(deps: {
           // the seam that catches them, and re-wrapping either here would blur the
           // code it arrived with.
           const command = parseInput(StringSchema, { value: args[0] });
+
           if (command === undefined) {
             return refusalOf(new KinuError('bad_input', 'parent exec: command must be a string'));
           }
+
           const signal = readExecSignal({ context: args[1] });
+
           return commandResult(value(await raceAbort(
             () => deps.handle.exec(command),
             signal,

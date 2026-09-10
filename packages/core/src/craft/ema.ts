@@ -41,6 +41,7 @@ export function effectiveScore(
 ): number {
   if (lastUsedAtMs <= 0) return score;
   const daysSince = (now - lastUsedAtMs) / MS_PER_DAY;
+
   return score * Math.pow(0.5, daysSince / halfLifeDays);
 }
 
@@ -61,9 +62,12 @@ export function filterByEffectiveScore<T extends { name: string }>(
 ): T[] {
   const rows = sql<{ name: string; score: number; last_used_at: number }>`
     SELECT name, score, last_used_at FROM crafted_tools`;
+
   const scores = new Map(rows.map((r) => [r.name, r]));
+
   return tools.filter((t) => {
     const s = scores.get(t.name);
+
     return !s || effectiveScore(s.score, s.last_used_at, now) >= minScore;
   });
 }
@@ -78,10 +82,12 @@ export function updateCraftScores(
   alpha = DEFAULT_CONFIG.craftStore.emaAlpha,
 ): void {
   const now = nowMs();
+
   for (const name of usedToolNames) {
     const existing = sql<{ score: number }>`
       SELECT score FROM crafted_tools WHERE name = ${name}
     `[0];
+
     if (!existing) continue;
     const newScore = emaUpdate(existing.score, outcome, alpha);
     void sql`UPDATE crafted_tools

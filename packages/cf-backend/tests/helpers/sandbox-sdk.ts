@@ -27,12 +27,14 @@ export interface SandboxSdkOverride<GetSandboxAnswer, ProxyAnswer> {
 }
 
 let current: SandboxSdkOverride<unknown, unknown> | null = null;
+
 let installed = false;
 
 // The real members the routers fall back to, captured by value before the mock
 // exists. After installation every read of the module namespace answers with
 // the mock, so the routers must never reach the real SDK through it.
 const realGetSandbox = realSandboxSdk.getSandbox;
+
 const realProxyToSandbox = realSandboxSdk.proxyToSandbox;
 
 function factory() {
@@ -44,12 +46,16 @@ function factory() {
       options?: SandboxOptions,
     ) => {
       const override = current?.getSandbox;
+
       if (override) return override(ns, id, options);
+
       return realGetSandbox(ns, id, options);
     },
     proxyToSandbox: (request: Request, env: Env) => {
       const override = current?.proxyToSandbox;
+
       if (override) return override(request, env);
+
       return realProxyToSandbox(request, env);
     },
   };
@@ -74,6 +80,7 @@ export function setSandboxSdk<GetSandboxAnswer, ProxyAnswer>(
 ): void {
   current = override;
   const completion = mock.module('@cloudflare/sandbox', factory);
+
   if (completion !== undefined) {
     throw new Error('mock.module(@cloudflare/sandbox) must register synchronously');
   }

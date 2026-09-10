@@ -39,6 +39,7 @@ interface GlobScan {
 /** `@source "<glob>";` — Tailwind v4's scan directive. */
 function sourceGlobs(cssPath: string): string[] {
   const text = readFileSync(cssPath, 'utf8');
+
   return [...text.matchAll(/@source\s+"([^"]+)"/g)].map((m) => m[1]!);
 }
 
@@ -47,7 +48,9 @@ function sourceGlobs(cssPath: string): string[] {
 function splitGlob(pattern: string): GlobParts {
   const parts = pattern.split('/');
   const firstMagic = parts.findIndex((p) => /[*?[{]/.test(p));
+
   if (firstMagic === -1) return { root: dirname(pattern), rest: basename(pattern) };
+
   return { root: parts.slice(0, firstMagic).join('/') || '.', rest: parts.slice(firstMagic).join('/') };
 }
 
@@ -57,7 +60,9 @@ function splitGlob(pattern: string): GlobParts {
 function scan(cssPath: string, pattern: string): GlobScan {
   const { root, rest } = splitGlob(pattern);
   const scanRoot = resolve(dirname(cssPath), root);
+
   if (!existsSync(scanRoot)) return { scanRoot, files: [] };
+
   return { scanRoot, files: [...new Glob(rest).scanSync({ cwd: scanRoot, onlyFiles: true })] };
 }
 
@@ -91,6 +96,7 @@ describe('Tailwind @source globs', () => {
     // reference, which is what has to reach the stylesheet.
     const cssPath = resolve(import.meta.dir, '../src/index.css');
     const kumo = sourceGlobs(cssPath).find((g) => g.includes('kumo'));
+
     if (!kumo) throw new Error('index.css must declare a Kumo @source');
 
     const { scanRoot, files } = scan(cssPath, kumo);

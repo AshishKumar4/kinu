@@ -137,6 +137,7 @@ describe('rendering', () => {
         }],
       },
     ] satisfies ModelMessage[];
+
     const page = await read(messages)({ offset: 0 });
     expect(page.entries[0]!.text).toBe('find it');
     expect(page.entries[1]!.text).toBe('[tool-call run {"cmd":"ls"}]');
@@ -148,6 +149,7 @@ describe('rendering', () => {
       role: 'user',
       content: [{ type: 'file', data: 'data:text/plain;base64,eA==', mediaType: 'text/plain' }],
     }] satisfies ModelMessage[];
+
     const page = await read(messages)({ offset: 0 });
     expect(page.entries[0]!.text).toBe('[file]');
   });
@@ -178,24 +180,30 @@ describe('the sandbox bridge', () => {
   ): Promise<JsonValue | undefined> {
     const { rt } = createTestRuntime();
     let returned: JsonValue | undefined;
+
     const executor: Executor = {
       languages: ['javascript'],
       execute: async (_code, providers) => {
         if (!Array.isArray(providers)) throw new Error('expected resolved scaffold providers');
         const host = providers.find((provider) => provider.name === 'host');
+
         if (!host) throw new Error('expected host provider');
         const history = host.fns.history;
+
         if (!history) throw new Error('expected host.history provider function');
         returned = await history(query);
+
         return { result: undefined };
       },
     };
+
     rt.executor = executor;
     await runScaffold({
       rt, task: 'anything', emit: () => undefined, llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       scaffoldCodeOverride: 'async function run() {}',
       ...opts,
     });
+
     return returned;
   }
 
@@ -208,6 +216,7 @@ describe('the sandbox bridge', () => {
     const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
       { history: createScaffoldHistory(() => conversation(4)) }, { offset: 0 },
     ));
+
     expect(page.total).toBe(4);
     expect(page.entries.map((e) => e.text)).toEqual([
       'message 0 body', 'message 1 body', 'message 2 body', 'message 3 body',
@@ -218,6 +227,7 @@ describe('the sandbox bridge', () => {
     const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
       { history: createScaffoldHistory(() => conversation(4)) }, 'not-an-object',
     ));
+
     expect(page.entries).toHaveLength(4);
   });
 

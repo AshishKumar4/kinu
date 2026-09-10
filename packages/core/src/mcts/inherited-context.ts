@@ -49,9 +49,11 @@ export function formatInheritedContext(
 ): string {
   if (history.length === 0) return '';
   const n = Math.max(1, lastN);
+
   const block = history
     .slice(-n)
     .map((m) => `${m.role}: ${m.content}`)
     .join('\n');
+
   return evidenceWindow(block, maxChars);
 }

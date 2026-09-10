@@ -39,6 +39,7 @@ import { isParseable, isRunnableSuite, isTestFile, trackedFiles } from './source
 /* ── The seam ──────────────────────────────────────────────────────────── */
 
 const PROBE = 'packages/probe/tests/unit-probe.test.ts';
+
 const MODULE = 'packages/probe/src/budget.ts';
 
 /** The module under test, as text. Its private members and its named constants
@@ -58,6 +59,7 @@ export class Orchestrator {
  *  measured against a module a reader can hold in their head. */
 function probeInputs(): CensusInputs {
   const sources = new Map([[MODULE, MODULE_TEXT]]);
+
   return {
     sources,
     nonPublic: nonPublicMembers(sources),
@@ -250,6 +252,7 @@ describe('internal_mock versus external_seam_mock', () => {
       await mock.module('../src/budget', () => ({ clampToBudget: (t: string) => t }));
       test('clamped', () => { expect(1).toBe(1); });
     `, inputs);
+
     expect(measured.findings.internal_mock.map((f) => f.detail))
       .toEqual(["module('../src/budget')"]);
     expect(measured.externalSeam).toEqual([]);
@@ -262,6 +265,7 @@ describe('internal_mock versus external_seam_mock', () => {
       await mock.module('cloudflare:workers', () => ({ RpcTarget: class {} }));
       test('clamped', () => { expect(1).toBe(1); });
     `, inputs);
+
     expect(measured.findings.internal_mock).toEqual([]);
     expect(measured.externalSeam.map((f) => f.what))
       .toEqual(['external seam mock', 'external seam mock']);
@@ -280,6 +284,7 @@ describe('internal_mock versus external_seam_mock', () => {
         expect(rename).toBeDefined();
       });
     `, inputs);
+
     expect(measured.findings.internal_mock).toEqual([]);
     expect(measured.externalSeam).toHaveLength(2);
   });
@@ -341,6 +346,7 @@ describe('assertion_free and silent_skip', () => {
         await page.waitForFunction(() => document.title === 'Renamed', { timeout: 10_000 });
       });
     `, inputs).findings.assertion_free;
+
     expect(rows.map((f) => f.what)).toEqual(['asserts only by waiting']);
   });
 
@@ -423,6 +429,7 @@ describe('public_surface_entry', () => {
         expect(child.exitCode).toBe(0);
       });
     `, inputs);
+
     expect(measured.publicSurface.map((f) => f.what).sort())
       .toEqual(['CLI spawn entry', 'HTTP entry', 'package API entry']);
   });
@@ -437,6 +444,7 @@ describe('kind and test counting', () => {
         expect(map(name)).toBe(value);
       });
     `, inputs);
+
     expect(measured.row.tests).toBe(1);
     expect(measured.findings.assertion_free).toEqual([]);
   });
@@ -445,6 +453,7 @@ describe('kind and test counting', () => {
     const measured = measureFile('packages/probe/tests/helpers/harness.ts', `
       export function harness(): number { return 1; }
     `, inputs);
+
     expect(measured.row.kind).toBe('support');
     expect(measured.row.runner).toBe('imported only');
   });
@@ -459,6 +468,7 @@ describe('the ratchet', () => {
       expect(clampToBudget('x'.repeat(9000)).length).toBeLessThan(9000);
     });
   `, inputs).findings;
+
   const lock = lockText(clean, 'probe: 1 file, 1 test');
 
   test('a clean tree against its own lock is silent', () => {
@@ -477,6 +487,7 @@ describe('the ratchet', () => {
         expect(PROMPT_BUDGET).toBe(4096);
       });
     `, inputs).findings;
+
     const verdict = checkRatchet(injected, lock);
     expect(verdict.added).toHaveLength(1);
     expect(verdict.added[0]).toContain('mirror ::');
@@ -495,6 +506,7 @@ describe('the ratchet', () => {
         expect(response.status).toBe(200);
       });
     `, inputs).findings;
+
     const verdict = checkRatchet(added, lock);
     expect(verdict.added).toEqual([]);
     expect(verdict.grown).toEqual([]);
@@ -509,6 +521,7 @@ describe('the ratchet', () => {
         expect(1).toBe(1);
       });
     `, inputs).findings;
+
     const twice = measureFile(PROBE, `
       import { Orchestrator } from '../src/budget';
       test('settles', () => {
@@ -517,6 +530,7 @@ describe('the ratchet', () => {
         expect(1).toBe(1);
       });
     `, inputs).findings;
+
     const verdict = checkRatchet(twice, lockText(once, 'probe'));
     expect(verdict.added).toEqual([]);
     expect(verdict.grown).toHaveLength(1);
@@ -531,12 +545,14 @@ describe('the ratchet', () => {
         expect(1).toBe(1);
       });
     `, inputs).findings;
+
     const after = measureFile(PROBE, `
       import { Orchestrator } from '../src/budget';
       test('settles', () => {
         expect(new Orchestrator().publicRead()).toBe(1_800_000);
       });
     `, inputs).findings;
+
     const verdict = checkRatchet(after, lockText(before, 'probe'));
     expect(verdict.stale).toHaveLength(1);
     expect(verdict.stale[0]).toContain('private_reach ::');
@@ -551,6 +567,7 @@ describe('the ratchet', () => {
         expect(1).toBe(1);
       });
     `;
+
     const top = measureFile(PROBE, body(''), inputs).findings;
     const moved = measureFile(PROBE, body('\n\n\n// twenty lines lower\n\n\n'), inputs).findings;
     expect(checkRatchet(moved, lockText(top, 'probe')))
@@ -568,6 +585,7 @@ describe('this repository', () => {
   test('the corpus is the whole test corpus minus the vendored plugin', () => {
     const expected = tracked.filter(isCensusFile);
     expect(census.files.map((row) => row.file).sort()).toEqual([...expected].sort());
+
     // A tracked test path outside the census is either vendored or UNPARSEABLE —
     // a `tests/` directory here also holds Python, JSON fixtures and a C probe,
     // and handing one of those to the parser is a crash rather than a finding.
@@ -576,6 +594,7 @@ describe('this repository', () => {
       .filter((file) => isTestFile(file) && !isCensusFile(file))
       .filter((file) => !file.startsWith('tools/oxlint/anti-slop/'))
       .filter((file) => isParseable(file));
+
     expect(outside).toEqual([]);
   });
 
@@ -606,6 +625,7 @@ describe('this repository', () => {
     const unclaimed = census.files
       .filter((row) => row.kind !== 'support' && row.runners.length === 0)
       .map((row) => row.file);
+
     expect(unclaimed).toEqual([...census.neverRun]);
     expect(census.neverRun).toEqual([...NEVER_RUN_TODAY]);
   });
@@ -631,6 +651,7 @@ describe('this repository', () => {
   test('the anti-slop rule suites are claimed by the aggregator and nothing else', () => {
     const aggregator = census.runnerClaims
       .find((claim) => claim.name.includes('rules.test.ts'));
+
     expect(aggregator?.files.length).toBeGreaterThan(20);
     expect(aggregator?.files.every((file) => file.startsWith('tools/oxlint/anti-slop/rules/')))
       .toBe(true);
@@ -639,6 +660,7 @@ describe('this repository', () => {
   test('every finding names a file in the corpus and a test or file scope', () => {
     const corpus = new Set(census.files.map((row) => row.file));
     const orphans: string[] = [];
+
     for (const category of CATEGORIES) {
       for (const finding of census.findings[category]) {
         if (!corpus.has(finding.file) || finding.test.length === 0) {
@@ -646,14 +668,17 @@ describe('this repository', () => {
         }
       }
     }
+
     expect(orphans).toEqual([]);
   });
 
   test('the per-package counts sum to the per-file rows', () => {
     for (const category of CATEGORIES) {
       const fromRows = census.files.reduce((sum, row) => sum + row[category], 0);
+
       const fromPackages = Object.values(census.perPackage)
         .reduce((sum, bucket) => sum + (bucket[category] ?? 0), 0);
+
       expect(fromPackages).toBe(fromRows);
     }
   });
@@ -689,14 +714,18 @@ describe('the runner table is resolved, never listed', () => {
     // compaction, pc-agent, devbox and the scripts gates. Each must be claimed
     // somewhere, or it is never run — which is the whole point of the table.
     const claims = runnerClaims(tracked);
+
     const omitted = ['packages/agent-utils/', 'packages/compaction/', 'packages/pc-agent/',
       'packages/devbox/', 'packages/test-utils/', 'scripts/', 'tests/'];
+
     const unclaimed: string[] = [];
+
     for (const prefix of omitted) {
       for (const file of tracked.filter((f) => f.startsWith(prefix) && isRunnableSuite(f))) {
         if (!claims.some((claim) => claim.files.includes(file))) unclaimed.push(file);
       }
     }
+
     // NONE, since the ladder declared this census's own suite. This read
     // `['scripts/test-census.test.ts']` for the same reason `NEVER_RUN_TODAY`
     // above did, and it is empty for the same reason: the wiring landed.
@@ -710,6 +739,7 @@ describe('the ratchet key', () => {
       file: PROBE, line: 12, test: 'the budget is 4096',
       what: 'mirrored constant', detail: 'PROMPT_BUDGET = 4096 duplicates PROMPT_BUDGET',
     };
+
     expect(ratchetKey('mirror', finding))
       .toBe(`mirror :: ${PROBE} :: the budget is 4096 :: mirrored constant`);
   });

@@ -24,7 +24,9 @@ export type AsyncResource<T> =
  *  revalidates, so a background refresh never blanks a working view. */
 export function beginLoad<T>(previous: AsyncResource<T>): AsyncResource<T> {
   if (previous.status === "ready") return previous;
+
   if (previous.status === "error" && previous.last !== null) return previous;
+
   return { status: "loading" };
 }
 
@@ -39,13 +41,17 @@ export function loadFailed<T, ErrorValue>(previous: AsyncResource<T>, error: Err
 /** The most recent successfully-loaded value, carried across a failure. */
 export function lastValue<T>(resource: AsyncResource<T>): T | null {
   if (resource.status === "ready") return resource.value;
+
   if (resource.status === "error") return resource.last;
+
   return null;
 }
 
 export function describeError<ErrorValue>(error: ErrorValue): string {
   if (error instanceof Error && error.message) return error.message;
+
   if (v.is(v.string(), error) && error.trim()) return error;
+
   return "request failed";
 }
 
@@ -76,9 +82,11 @@ export function useAsyncResource<T>(
     identity: string | undefined;
     resource: AsyncResource<T>;
   }>({ identity, resource: { status: "loading" } });
+
   const resource: AsyncResource<T> = state.identity === identity
     ? state.resource
     : { status: "loading" };
+
   // Only the newest run may write: a slow failing load must not overwrite the
   // result of the retry that superseded it.
   const runId = useRef(0);
@@ -103,14 +111,17 @@ export function useAsyncResource<T>(
       // the newest is decided below, so a slow load that a retry superseded
       // publishes nothing into the resource that replaced it.
       let thrown: { cause: unknown } | null = null;
+
       try {
         const value = await load();
+
         if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
       } catch (error) {
         thrown = { cause: error };
       } finally {
         activeRuns.current.delete(id);
       }
+
       if (thrown === null || id !== runId.current) return;
       const { cause } = thrown;
       setState((previous) => ({
@@ -129,8 +140,10 @@ export function useAsyncResource<T>(
   useEffect(() => {
     if (!revalidate || resource.status === "loading") return;
     const delay = revalidate(lastValue(resource));
+
     if (delay === null) return;
     const timer = setTimeout(run, delay);
+
     return () => clearTimeout(timer);
   }, [resource, revalidate, run]);
 

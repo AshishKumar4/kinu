@@ -41,6 +41,7 @@ import { join, resolve } from 'node:path';
 import { isTextSource, isVendoredSource, readMatching } from './sources';
 
 const repoRoot = new URL('..', import.meta.url).pathname;
+
 const leanRoot = join(repoRoot, 'lean');
 
 /** A cited path, in the three spellings the tree uses. `Foo` here is a placeholder
@@ -219,7 +220,9 @@ const DOCUMENTING_PROSE =
  *  is spelled, and skipping it would leave a real citation unchecked. */
 function expandBraces(path: string): string[] {
   const match = path.match(/\{([A-Za-z0-9_,]+)\}/);
+
   if (match === null) return [path];
+
   return match[1].split(',').flatMap((alt) => expandBraces(path.replace(match[0], alt)));
 }
 
@@ -247,26 +250,34 @@ function readDeclarations(): Map<string, string> {
   const listed = spawnSync('node', [join(leanRoot, 'check-traceability.mjs'), '--list-declarations'], {
     cwd: leanRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
   });
+
   if (listed.error !== undefined) {
     throw new Error(`lean-citations: could not run the declaration scanner: ${listed.error.message}`);
   }
+
   if (listed.status !== 0) {
     throw new Error(
       `lean-citations: the declaration scanner failed (exit ${String(listed.status)}): ${listed.stderr}`,
     );
   }
+
   const declarations = new Map<string, string>();
+
   for (const line of listed.stdout.split('\n')) {
     if (line.length === 0) continue;
     const [name, module] = line.split('\t');
+
     if (name === undefined || module === undefined) {
       throw new Error(`lean-citations: unreadable declaration line: ${line}`);
     }
+
     declarations.set(name, module);
   }
+
   // An empty corpus reports a clean tree, which is the one failure a gate must not
   // have — the same reason `sources.ts` throws on an empty enumeration.
   if (declarations.size === 0) throw new Error('lean-citations: the scanner listed no theorem');
+
   return declarations;
 }
 
@@ -277,10 +288,12 @@ export function citations(): Citations {
   // modules of one name make every bare citation of it unresolvable in principle, and
   // picking the first is how a check starts governing a set it did not measure.
   const byBasename = new Map<string, string[]>();
+
   for (const module of new Set(declarations.values())) {
     const base = module.slice(module.lastIndexOf('/') + 1);
     byBasename.set(base, [...(byBasename.get(base) ?? []), module]);
   }
+
   return {
     declarations, byBasename, illustrative: new Map(),
     modules: 0, names: 0, lines: 0, illustrativeSites: 0,
@@ -291,16 +304,22 @@ export function citations(): Citations {
 function resolveCitation(path: string, seen: Citations, findings: string[]): string | null {
   for (const prefix of ['', 'lean/', 'lean/Kinu/']) {
     const candidate = `${prefix}${path}`;
+
     if (candidate.startsWith('lean/')
       && resolve(repoRoot, candidate).startsWith(`${leanRoot}/`)
       && existsSync(join(repoRoot, candidate))) return candidate;
   }
+
   const base = seen.byBasename.get(path.slice(path.lastIndexOf('/') + 1));
+
   if (base === undefined) return null;
+
   if (base.length > 1) {
     findings.push(`ambiguous Lean module basename cited as ${path}: ${base.join(', ')}`);
+
     return null;
   }
+
   return base[0];
 }
 
@@ -315,6 +334,7 @@ function resolveCitation(path: string, seen: Citations, findings: string[]): str
  */
 export function auditRegister(seen: Citations): string[] {
   const findings: string[] = [];
+
   for (const name of seen.declarations.keys()) {
     if (!name.includes('_') && !Object.hasOwn(CITATION_OPAQUE, name)) {
       findings.push(
@@ -324,6 +344,7 @@ export function auditRegister(seen: Citations): string[] {
       );
     }
   }
+
   for (const name of Object.keys(CITATION_OPAQUE)) {
     if (!seen.declarations.has(name)) {
       findings.push(`CITATION_OPAQUE names a theorem that no longer exists: ${name}`);
@@ -331,8 +352,10 @@ export function auditRegister(seen: Citations): string[] {
   }
 
   const corpus = readMatching(isTextSource);
+
   for (const entry of CITATION_ILLUSTRATIVE) {
     const module = resolveCitation(entry.cites.replace(/:.*$/, ''), seen, findings);
+
     if (module !== null) {
       findings.push(
         `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` (${entry.file}) an illustration,`
@@ -342,15 +365,19 @@ export function auditRegister(seen: Citations): string[] {
       );
       continue;
     }
+
     if (entry.reason.length === 0) {
       findings.push(`CITATION_ILLUSTRATIVE entry for \`${entry.cites}\` states no reason`);
       continue;
     }
+
     const host = corpus.get(entry.file);
+
     if (host === undefined) {
       findings.push(`CITATION_ILLUSTRATIVE names a file outside the corpus: ${entry.file}`);
       continue;
     }
+
     if (!host.includes(entry.cites)) {
       findings.push(
         `CITATION_ILLUSTRATIVE declares \`${entry.cites}\` in ${entry.file}, which no longer`
@@ -359,8 +386,10 @@ export function auditRegister(seen: Citations): string[] {
       );
       continue;
     }
+
     seen.illustrative.set(entry.file, [...(seen.illustrative.get(entry.file) ?? []), entry]);
   }
+
   return findings;
 }
 
@@ -375,6 +404,7 @@ function citedToken(text: string, match: RegExpExecArray | RegExpMatchArray): st
   const start = match.index ?? 0;
   const rest = text.slice(start + match[0].length);
   const suffix = rest.match(/^:[^\s`,)\]'"]+/);
+
   return `${match[0]}${suffix === null ? '' : suffix[0]}`;
 }
 
@@ -382,6 +412,7 @@ function citedToken(text: string, match: RegExpExecArray | RegExpMatchArray): st
 function paragraphAround(text: string, index: number): string {
   const before = text.lastIndexOf('\n\n', index);
   const after = text.indexOf('\n\n', index);
+
   return text.slice(before === -1 ? 0 : before, after === -1 ? text.length : after);
 }
 
@@ -392,7 +423,9 @@ function isIllustrative(
   file: string, cites: string, text: string, index: number, seen: Citations,
 ): boolean {
   const declared = seen.illustrative.get(file)?.some((entry) => entry.cites === cites);
+
   if (declared !== true) return false;
+
   return DOCUMENTING_PROSE.test(paragraphAround(text, index));
 }
 
@@ -412,8 +445,10 @@ export function auditCitations(file: string, text: string, seen: Citations): str
       seen.illustrativeSites += 1;
       continue;
     }
+
     for (const path of expandBraces(match[0])) {
       seen.modules += 1;
+
       if (resolveCitation(path, seen, findings) === null) {
         findings.push(`${file}: cites a Lean module that does not exist: ${path}`);
       }
@@ -429,13 +464,16 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   for (const match of flat.matchAll(CITED_LINE)) {
     if (isIllustrative(file, citedToken(flat, match), flat, match.index, seen)) continue;
     const module = resolveCitation(match[1], seen, findings);
+
     if (module === null) continue;   // already reported by the module scan above
     seen.lines += 1;
     const lineCount = readFileSync(join(repoRoot, module), 'utf8').split('\n').length;
+
     // BOTH endpoints, and one finding per citation rather than one per endpoint: a
     // range is a single claim, so a reader fixing it wants the whole claim named.
     const gone = [match[2], match[3]]
       .filter((endpoint) => endpoint !== undefined && Number(endpoint) > lineCount);
+
     if (gone.length > 0) {
       const cited = `${match[1]}:${match[2]}${match[3] === undefined ? '' : `-${match[3]}`}`;
       findings.push(
@@ -449,9 +487,11 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   // the name-first spelling is its documentation habit, and governing only the first
   // meant a rename of a theorem the docs name passed clean.
   const cited: { readonly path: string; readonly names: readonly string[] }[] = [];
+
   for (const match of flat.matchAll(CITED_NAMES_TRAILING)) {
     cited.push({ path: match[1], names: (match[2] ?? match[3] ?? '').split(',') });
   }
+
   for (const match of flat.matchAll(CITED_NAMES_LEADING)) {
     cited.push({ path: match[2], names: [match[1]] });
   }
@@ -459,10 +499,13 @@ export function auditCitations(file: string, text: string, seen: Citations): str
   for (const { path, names } of cited) {
     const modules = expandBraces(path)
       .map((one) => resolveCitation(one, seen, findings)).filter((m) => m !== null);
+
     for (const name of names.map((one) => one.trim()).filter((one) => one.includes('_'))) {
       seen.names += 1;
+
       const declaring = [...seen.declarations]
         .filter(([qualified]) => qualified.endsWith(`.${name}`));
+
       if (declaring.length === 0) {
         findings.push(
           `${file}: cites Lean theorem \`${name}\` (${path}), which no Lean source declares`
@@ -470,6 +513,7 @@ export function auditCitations(file: string, text: string, seen: Citations): str
         );
         continue;
       }
+
       if (modules.length > 0 && !declaring.some(([, module]) => modules.includes(module))) {
         findings.push(
           `${file}: cites \`${path} — ${name}\`, but ${name} is declared in`
@@ -479,12 +523,14 @@ export function auditCitations(file: string, text: string, seen: Citations): str
       }
     }
   }
+
   return findings;
 }
 
 /** The corpus-wide check: a scan that found nothing certifies nothing. */
 export function auditCoverage(seen: Citations): string[] {
   if (seen.modules > 0 && seen.names > 0) return [];
+
   return [
     `citation scan found ${String(seen.modules)} module and ${String(seen.names)} theorem`
     + ' references, so it cannot fail — a gate with an empty corpus certifies nothing',
@@ -516,10 +562,12 @@ if (import.meta.main) {
   const findings = auditRegister(seen);
   const corpus = readMatching(isTextSource);
   const vendored = [...corpus.keys()].filter(isVendoredSource).length;
+
   for (const [file, text] of corpus) {
     if (!isGovernedCitationFile(file)) continue;
     findings.push(...auditCitations(file, text, seen));
   }
+
   findings.push(...auditCoverage(seen));
 
   if (findings.length > 0) {
@@ -527,6 +575,7 @@ if (import.meta.main) {
     console.error(`lean-citations: ${String(findings.length)} finding(s)`);
     process.exit(1);
   }
+
   console.log(
     `lean-citations: OK — ${String(seen.declarations.size)} theorems, ${String(seen.modules)} module,`
     + ` ${String(seen.names)} theorem and ${String(seen.lines)} line citations across`

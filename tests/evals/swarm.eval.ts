@@ -110,6 +110,7 @@ const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
  * honoured: an arm chosen by two knobs is an arm that can be half-changed.
  */
 const PLAN = resolveEvalTarget(SUITE, EVAL_MODELS[TIER]);
+
 const LLM_CONFIG: LLMProviderConfig = PLAN?.llm ?? UNCONFIGURED_LLM;
 
 /**
@@ -127,8 +128,11 @@ const LLM_CONFIG: LLMProviderConfig = PLAN?.llm ?? UNCONFIGURED_LLM;
  * arm runs on either.
  */
 const IN_PROCESS = PLAN === null || PLAN.backend === 'local';
+
 const liveTest = test.skipIf(PLAN === null);
+
 const inProcessTest = test.skipIf(!IN_PROCESS);
+
 const liveInProcessTest = test.skipIf(PLAN === null || !IN_PROCESS);
 
 const TEST_DIR = join(tmpdir(), 'kinu-eval-swarm-' + String(Date.now()));
@@ -162,10 +166,12 @@ const TASK_ID = 'hard-majority-vote';
 
 function corpusTask(id: string): HardTask {
   const found = HARD_TASKS.find((task) => task.id === id);
+
   if (!found) {
     throw new Error(`the hard-task corpus has no "${id}", so this eval has no instrument: `
       + `it holds ${HARD_TASKS.map((task) => task.id).join(', ')}`);
   }
+
   return found;
 }
 
@@ -183,6 +189,7 @@ const TASK = corpusTask(TASK_ID);
  */
 function problemSpec(): JsonValue {
   const { params, reference, body, targetOps, lowerBoundOps } = TASK.problem;
+
   return { params: { ...params }, reference, body, targetOps, lowerBoundOps };
 }
 
@@ -229,9 +236,13 @@ const FLOOR: Floor = {
  * symptom.
  */
 const METRIC = 'oracle_calls';
+
 const UNIT = 'oracle calls';
+
 const DIRECTION = 'minimise';
+
 const SCALE = 'log';
+
 const TARGET_OPS = TASK.problem.targetOps;
 
 /**
@@ -301,7 +312,9 @@ const IDENTITY: ObjectiveIdentity = {
  * (`swarm-budget.ts`), which is what this arm is billed for.
  */
 const DEPTH = 2;
+
 const BRANCHES = 3;
+
 const LABEL = 'live-swarm-eval-verifier-fanin';
 
 /**
@@ -452,6 +465,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
 
   beforeAll(async () => {
     console.warn(`[swarm] ${PLAN?.describe ?? 'no live target — credential-free arms only'}`);
+
     if (!IN_PROCESS) {
       // NOT provisioned, and that is deliberate rather than an omission. The arms
       // below this block drive the INNER API, so on the cloud plan they cannot
@@ -462,6 +476,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         + 'tools.agents.execute and read the settled result over a CLIRuntime, which a '
         + 'deployed workspace does not hand out. Run them with KINU_EVAL_BACKEND unset. '
         + 'The cross-target arm below runs here and is what reaches @cloudflare/think.');
+
       return;
     }
 
@@ -489,6 +504,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // arrival. An existence check passes throughout that; this one refuses on the
     // instrument's own verdict, which is the fact this eval's ground truth depends on.
     const probe = await target.probe();
+
     if (probe.verifier.kind !== 'runs') {
       throw new Error(`swarm-eval cannot measure anything on this target: ${probe.verifier.reason}`);
     }
@@ -513,6 +529,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     });
     const entry = tools.agents;
+
     if (!entry) throw new Error('the agents tool was not built, so there is no swarm rung to drive');
     const execute = toolExecute<SwarmCall, JsonValue>(entry);
     // Native execution rejects typed failures; successful reports are parsed here.
@@ -526,6 +543,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         const raw = await execute(args, {
           toolCallId: 'swarm-eval', messages: [], abortSignal: signal,
         });
+
         return { kind: 'ran', result: v.parse(SwarmResultSchema, raw) };
       } catch (cause) {
         if (cause instanceof KinuError) return { kind: 'refused', refusal: refusalOf(cause) };
@@ -570,10 +588,12 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       // Never aborts: this call is refused by the parse before any field is read, so
       // there is nothing to bound and a timer here would outlive the test.
     }, new AbortController().signal);
+
     if (outcome.kind !== 'refused') {
       throw new Error('the tool ACCEPTED a field its input does not declare, so a camelCase cap '
         + 'reaches the dispatcher and is read by nothing at all');
     }
+
     expect(outcome.refusal.reason).toBe('bad_input');
     expect(outcome.refusal.error).toContain('budget_usd');
   });
@@ -599,6 +619,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
 
   liveInProcessTest('MEASURED: a live swarm crowns a winner that beats its own measured baseline', async () => {
     const startedAt = Date.now();
+
     const outcome = await callSwarm({
       action: 'swarm',
       // A COMPOSITION, not a bare preset, and the label is what records it as one.
@@ -616,6 +637,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       depth: DEPTH,
       branches: BRANCHES,
     }, AbortSignal.timeout(ENVELOPE_MS));
+
     const wallSeconds = (Date.now() - startedAt) / 1000;
 
     // SPEND FIRST, BEFORE ANY PATH THAT CAN THROW. Below the refusal check and
@@ -651,6 +673,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       throw new Error(`the swarm refused instead of running (${outcome.refusal.reason}): `
         + outcome.refusal.error);
     }
+
     const { result } = outcome;
     const { report, config, caps, best, candidates } = result;
 
@@ -665,6 +688,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
       + `stop=${report.stop}`);
     console.log(`    baseline ${String(report.baseline ?? 'none')} ${UNIT}, `
       + `winner ${String(best?.measured?.value ?? 'none')} (score ${String(best?.score ?? 'none')})`);
+
     for (const candidate of candidates) {
       // THREE OUTCOMES, not two. A candidate with no measurement is either a node that
       // never finished or an answer the instrument declined; printing both as
@@ -675,8 +699,10 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         : candidate.measured === null
           ? `unmeasurable — ${String(candidate.unmeasurable)}`
           : `${String(candidate.measured.value)} calls, score ${String(candidate.score)}`;
+
       console.log(`      ${candidate.id}: ${outcome}`);
     }
+
     console.log(`    fanIn ${JSON.stringify(report.fanIn)}`);
     console.log(`    records ${JSON.stringify(report.records)}`);
 
@@ -706,14 +732,19 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // given: a `depth` that produces no second level is an axis in the docstring and
     // a no-op in the engine.
     if (!best) throw new Error('no winner was crowned, so there is nothing to trace to a tree');
+
     const rootRows = rt.storage.sql<{ root_id: string }>`
       SELECT root_id FROM search_nodes WHERE id = ${best.id}`;
+
     const rootId = rootRows[0]?.root_id;
+
     if (rootId === undefined) {
       throw new Error(`the winner ${best.id} has no row in search_nodes, so the run left no tree`);
     }
+
     const depthRows = rt.storage.sql<{ deepest: number | null }>`
       SELECT MAX(depth) AS deepest FROM search_nodes WHERE root_id = ${rootId}`;
+
     expect(depthRows[0]?.deepest ?? 0).toBeGreaterThanOrEqual(2);
 
     // ── The winner beats the measured baseline ─────────────────────────────────
@@ -773,6 +804,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
 
     // ── The fan-in happened, and its account is self-consistent ────────────────
     const fanIn = report.fanIn;
+
     if (!fanIn) throw new Error('expand:"aggregate" reported no fan-in, so the DAG did not run');
     const candidateIds = new Set(candidates.map((candidate) => candidate.id));
     // A LEVEL WAS REALLY CONSUMED. The engine refuses to count a fan-in over fewer
@@ -803,6 +835,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // this objective, so the honest carry-in is zero — reported rather than absent,
     // which is what makes a later run's non-zero mean something.
     const records = report.records;
+
     if (!records) throw new Error('a measured run reported no records report, so it had no identity');
     expect(records.carriedIn).toBe(0);
     expect(records.carriedInBest).toBeNull();
@@ -820,6 +853,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     expect(rows[0]?.value).toBe(winner);
     expect(bestInCell(rt.storage.sql, rt.actor, { identity: IDENTITY, floor: FLOOR, descriptor: null })?.value)
       .toBe(winner);
+
     // Every row belongs to THIS run's tree, and carries the provenance a leaderboard
     // reader needs without resolving a digest.
     for (const row of rows) {
@@ -906,18 +940,22 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     // a throw rather than an early return so a gating mistake is a red and not a
     // pass over nothing.
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
+
     const arm = await PLAN.provision({
       subject: 'reaches-search',
       purpose: 'An optimisation engineer who beats a measured baseline and proves it by running it.',
       evolution: false,
     });
+
     console.warn(`[swarm/${arm.backend}] cross-target arm on ${arm.describe}`);
+
     try {
       // The reference the agent is asked about, written through the target's own
       // file plane — the same seed the in-process arm gets, on the cloud arm over
       // the deployment's executor. Sequential: two writes to one plane are not
       // independent.
       const files = arm.workspaceFiles();
+
       for (const file of TASK.seed) await files.vfs.writeFile(file.path, file.content);
 
       await arm.sendTurn(

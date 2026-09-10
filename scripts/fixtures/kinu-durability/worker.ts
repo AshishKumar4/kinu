@@ -23,6 +23,7 @@ import { DEFAULT_DEVBOX_STRATEGY } from "@kinu.run/devbox";
 import type { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
 
 export { KinuSandbox } from "../../../packages/cf-backend/src/kinu-sandbox";
+
 export { ContainerProxy };
 
 interface ProbeEnv {
@@ -51,6 +52,7 @@ const CommandSchema = v.object({
   name: v.optional(v.string()),
   keepAlive: v.optional(v.boolean()),
 });
+
 type ProbeCommand = v.InferOutput<typeof CommandSchema>;
 
 /** One probe reply: the sandbox method's own result, serialized verbatim. */
@@ -61,13 +63,16 @@ function json<T>(data: T, status = 200): Response {
 export default {
   async fetch(request: Request, env: ProbeEnv): Promise<Response> {
     const url = new URL(request.url);
+
     if (env.PROBE_TOKEN === undefined || request.headers.get("x-probe-token") !== env.PROBE_TOKEN) {
       return json({ error: "unauthorized" }, 401);
     }
+
     void url;
 
     const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" });
     let command: ProbeCommand;
+
     try {
       command = v.parse(CommandSchema, await request.json());
     } catch (error) {
@@ -87,15 +92,20 @@ export default {
             ownerUserId: "",
             bindings: [],
           });
+
           return json({ ok: true });
         }
+
         case "/writeFile": {
           await sandbox.writeFile(command.path ?? "", command.content ?? "", { encoding: "base64" });
+
           return json({ ok: true });
         }
+
         case "/exec": {
           const started = Date.now();
           const timeoutMs = command.timeoutMs ?? 30_000;
+
           // Supervised processes own their process id, not the exec session.
           // The SDK runs this health command independently, so there is no
           // session-routing control to expose in the probe protocol.
@@ -103,12 +113,15 @@ export default {
             command.command ?? "",
             command.cwd === undefined ? { timeout: timeoutMs } : { timeout: timeoutMs, cwd: command.cwd },
           );
+
           return json({ ...res, wallMs: Date.now() - started });
         }
+
         case "/tick": {
           // One periodic checkpoint tick, driven synchronously by the driver.
           return json(await sandbox.checkpointNow("tick"));
         }
+
         case "/finalCheckpoint":
           return json(await sandbox.checkpointNow("quiesce"));
         case "/startProcess": {
@@ -116,8 +129,10 @@ export default {
             command.command ?? "",
             command.cwd,
           );
+
           return json(started);
         }
+
         case "/listProcesses":
           return json(await sandbox.listSupervised());
         case "/notePortExposed": {
@@ -127,8 +142,10 @@ export default {
           const { urlToken } = await sandbox.portToken(
             command.port ?? 0, command.name,
           );
+
           return json({ ok: true, urlToken });
         }
+
         case "/heartbeatSchedules":
           return json(await sandbox.listSchedules("devboxHeartbeat"));
         case "/state":
@@ -140,16 +157,22 @@ export default {
           return json({ decided: DEFAULT_DEVBOX_STRATEGY });
         case "/setKeepAlive": {
           await sandbox.setKeepAlive(command.keepAlive ?? false);
+
           return json({ ok: true });
         }
+
         case "/stop": {
           await sandbox.stop("SIGTERM");
+
           return json({ ok: true });
         }
+
         case "/discard": {
           await sandbox.discardState();
+
           return json({ ok: true });
         }
+
         default:
           return json({ error: `unknown op ${url.pathname}` }, 404);
       }

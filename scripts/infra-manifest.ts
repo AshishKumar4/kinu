@@ -47,7 +47,9 @@ import { parseJsonc } from './jsonc';
 const REPO = new URL('..', import.meta.url).pathname;
 
 export const WRANGLER_CONFIG = 'packages/cf-backend/wrangler.jsonc';
+
 export const ENV_TYPES = 'packages/cf-backend/env.d.ts';
+
 /** Where the Vectorize index's geometry actually lives — see `vectorizeGeometry`. */
 export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
 
@@ -219,6 +221,7 @@ export interface ClaimedHosts {
  */
 export function claimedHosts(environment: InfraEnvironment): ClaimedHosts {
   const hosts = environment.routes.map((pattern) => pattern.replace(/\/.*$/u, ''));
+
   return {
     app: hosts.find((host) => !host.startsWith('*.')),
     wildcards: hosts.filter((host) => host.startsWith('*.')).map((host) => host.slice(2)),
@@ -251,39 +254,50 @@ export interface EnvField {
  */
 export function envFields(source = readFileSync(join(REPO, ENV_TYPES), 'utf8')): readonly EnvField[] {
   const start = source.indexOf('interface Env {');
+
   if (start === -1) throw new Error(`${ENV_TYPES}: no \`interface Env {\` — the Env census has no denominator`);
   let depth = 0;
   let end = start;
+
   for (let i = source.indexOf('{', start); i < source.length; i += 1) {
     const char = source[i];
+
     if (char === '{') depth += 1;
     else if (char === '}') {
       depth -= 1;
+
       if (depth === 0) { end = i; break; }
     }
   }
+
   const body = source.slice(source.indexOf('{', start) + 1, end);
   const fields: EnvField[] = [];
   let inComment = false;
+
   for (const raw of body.split('\n')) {
     const line = raw.trim();
+
     if (inComment) {
       if (line.includes('*/')) inComment = false;
       continue;
     }
+
     if (line.startsWith('/*')) {
       if (!line.includes('*/')) inComment = true;
       continue;
     }
+
     if (line.length === 0 || line.startsWith('//') || line.startsWith('*')) continue;
     // `readonly` is legal on an interface member and says nothing about whether
     // the deployment may omit the binding — which is the only thing this reader
     // is after. Accepted rather than rejected, because a parser that refuses
     // valid TypeScript turns a correct declaration into a gate failure.
     const member = /^(?:readonly\s+)?(\w+)(\??):\s*(.+);$/u.exec(line);
+
     if (member === null) throw new Error(`${ENV_TYPES}: cannot read Env member \`${line}\``);
     fields.push({ name: member[1] ?? '', optional: member[2] === '?', type: member[3] ?? '' });
   }
+
   return fields;
 }
 
@@ -737,15 +751,18 @@ export function vectorizeGeometry(
   source = readFileSync(join(REPO, EMBEDDER_SOURCE), 'utf8'),
 ): VectorGeometry {
   const widths = new Set<string>();
+
   for (const [, width] of source.matchAll(/createWorkersAIEmbedder\([^)]*dimensions:\s*(\d+)/gu)) {
     widths.add(width ?? '');
   }
+
   if (widths.size !== 1) {
     throw new Error(
       `${EMBEDDER_SOURCE}: expected exactly one embedder width, found [${[...widths].join(', ')}]`
       + ' — the Vectorize index cannot be created at two dimensions',
     );
   }
+
   // `cosine` is not stated in code anywhere: bge vectors are unit-normalised, so
   // cosine and dot rank identically and the wrangler.jsonc comment settled on
   // cosine. Recorded in UNCAPTURED as a value the manifest does not carry.
@@ -786,6 +803,7 @@ function environmentRow(key: string, topName: string, config: WranglerEnvironmen
     ...(config.assets === undefined ? [] : [config.assets.binding]),
     ...singleBinding(config.version_metadata),
   ];
+
   return {
     key,
     workerName: config.name ?? topName,
@@ -906,6 +924,7 @@ function draftsFor(
       });
       continue;
     }
+
     const host = route.pattern.replace(/^\*\./u, '').replace(/\/.*$/u, '');
     const wildcard = route.pattern.startsWith('*.');
     drafts.push({
@@ -918,6 +937,7 @@ function draftsFor(
         : `the ${host} origin, taken as a route rather than a custom domain so that an exact `
           + 'hostname outranks the wildcard route covering it',
     });
+
     // The route matches; it does not resolve. The record it needs is the single
     // most invisible prerequisite production has.
     if (wildcard) {
@@ -932,6 +952,7 @@ function draftsFor(
       });
       continue;
     }
+
     drafts.push({
       kind: 'dns-record',
       name: host,
@@ -975,6 +996,7 @@ function draftsFor(
   // that can catch it, and it is declared for EVERY environment including the one
   // with no operators.
   const claimed = claimedHosts(environment);
+
   if (claimed.app !== undefined) {
     const host = claimed.app;
     drafts.push({
@@ -1041,6 +1063,7 @@ function draftsFor(
   }
 
   const emailDomain = environment.vars.get('EMAIL_DOMAIN');
+
   if ((config.send_email ?? []).length > 0 && emailDomain !== undefined && emailDomain.length > 0) {
     // Email Routing is a ZONE feature and EMAIL_DOMAIN is a subdomain of one, so
     // the resource is keyed on the zone wrangler actually addresses. Taken from
@@ -1049,6 +1072,7 @@ function draftsFor(
     // last two labels, which is a guess and is labelled as one.
     const declaredZone = (config.routes ?? []).map((route) => route.zone_name)
       .find((zone): zone is string => zone !== undefined);
+
     const zone = declaredZone ?? emailDomain.split('.').slice(-2).join('.');
     drafts.push({
       kind: 'email-routing',
@@ -1065,6 +1089,7 @@ function draftsFor(
   }
 
   const gateway = /\/v1\/[^/]+\/([^/]+)\//u.exec(environment.vars.get('AI_GATEWAY_URL') ?? '');
+
   if (gateway !== null) {
     drafts.push({
       kind: 'ai-gateway',
@@ -1087,6 +1112,7 @@ function draftsFor(
     ...singleBinding(config.version_metadata).map((binding) =>
       [binding, 'the deployed Worker version — the installed-build identity a durable turn claim records'] as const),
   ];
+
   for (const [binding, purpose] of inert) {
     drafts.push({
       kind: 'binding',
@@ -1118,11 +1144,14 @@ export function deriveInfrastructure(
     WranglerConfigSchema,
     configPath,
   );
+
   const topName = config.name ?? 'worker';
+
   const environments = [
     environmentRow('production', topName, config),
     ...Object.entries(config.env ?? {}).map(([key, section]) => environmentRow(key, `${topName}-${key}`, section)),
   ];
+
   // Raw env blocks are right for bindings and vars, which wrangler does NOT
   // inherit into named environments — but `triggers` IS inheritable
   // (developers.cloudflare.com/workers/wrangler/configuration, checked
@@ -1140,13 +1169,16 @@ export function deriveInfrastructure(
 
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
   const merged = new Map<string, Resource>();
+
   for (const [environment, section] of sections) {
     for (const draft of draftsFor(environment, section, geometry)) {
       const id = `${draft.kind}.${draft.name}`;
       const previous = merged.get(id);
+
       const bindingRefs = draft.binding === undefined
         ? []
         : [{ environment: environment.key, binding: draft.binding }];
+
       merged.set(id, {
         id,
         kind: draft.kind,
@@ -1205,7 +1237,9 @@ export function exclusiveTo(
  */
 export function requiredIn(name: string, environment: InfraEnvironment): boolean {
   const supply = SUPPLY.get(name);
+
   if (supply === undefined) return false;
+
   return supply.pairedWith === undefined
     ? supply.required
     : (environment.vars.get(supply.pairedWith) ?? '').trim().length > 0;
@@ -1226,6 +1260,7 @@ export function supplyCensus(
   fields = envFields(),
 ): readonly EnvField[] {
   const supplied = new Set([...environment.bindings, ...environment.vars.keys()]);
+
   return fields.filter((field) => !supplied.has(field.name));
 }
 

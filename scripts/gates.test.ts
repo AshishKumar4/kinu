@@ -56,6 +56,7 @@ describe('ast duplication gate', () => {
       ['packages/core/src/a.ts', ORIGINAL],
       ['packages/core/src/b.ts', RENAMED],
     ]), 25);
+
     expect(groups).toHaveLength(1);
     expect(groups[0].members.map((m) => `${m.file}#${m.name}`)).toEqual([
       'packages/core/src/a.ts#summarise',
@@ -68,6 +69,7 @@ describe('ast duplication gate', () => {
       ['packages/core/src/a.ts', ORIGINAL],
       ['packages/core/src/b.ts', RELITERALLED],
     ]), 25);
+
     expect(groups).toEqual([]);
   });
 
@@ -78,10 +80,12 @@ describe('ast duplication gate', () => {
           row.a, row.b, row.c, row.a, row.b, row.c, row.a, row.b);
       }
     `;
+
     const groups = findDuplicateGroups(new Map([
       ['packages/core/src/a.ts', insert('')],
       ['packages/core/src/b.ts', insert(' ON CONFLICT(a) DO UPDATE SET b = excluded.b')],
     ]), 20);
+
     expect(groups).toEqual([]);
   });
 
@@ -90,6 +94,7 @@ describe('ast duplication gate', () => {
       ['packages/core/src/a.ts', ORIGINAL],
       ['packages/core/src/b.ts', RENAMED],
     ]), 500);
+
     expect(groups).toEqual([]);
   });
 
@@ -99,6 +104,7 @@ describe('ast duplication gate', () => {
       ['packages/cf-backend/src/b.ts', RENAMED],
       ['packages/cli/src/c.ts', ORIGINAL],
     ]), 25);
+
     expect(groups).toHaveLength(1);
     expect(groups[0].kind).toBe('cross-package');
     expect(groups[0].members).toHaveLength(3);
@@ -109,6 +115,7 @@ describe('ast duplication gate', () => {
       ['packages/core/src/a.ts', ORIGINAL],
       ['packages/core/src/b.ts', RENAMED],
     ]), 5);
+
     expect(groups).toHaveLength(1);
     expect(groups[0].members.map((m) => m.name)).toEqual(['summarise', 'condense']);
   });
@@ -127,10 +134,12 @@ describe('ast duplication gate', () => {
         return grow;
       }
     `;
+
     const groups = findDuplicateGroups(new Map([
       ['packages/cf-backend/src/a.tsx', component('log("a");')],
       ['packages/cf-backend/src/b.tsx', component('warn("b", 2);')],
     ]), 20);
+
     expect(groups).toHaveLength(1);
     expect(groups[0].members.map((m) => m.name)).toEqual([
       'grow > useCallback',
@@ -149,6 +158,7 @@ describe('dead code gate', () => {
       export interface Shape { a: string }
       const unexported = 3;
     `);
+
     expect([...names].sort()).toEqual(['Shape', 'inline', 'later', 'one', 'two']);
   });
 
@@ -160,6 +170,7 @@ describe('dead code gate', () => {
       export * from './engine';
       export { local };
     `);
+
     expect([...names]).toEqual([]);
   });
 
@@ -170,13 +181,16 @@ describe('dead code gate', () => {
         { name: 'orphan', line: 20 },
       ]],
     ]);
+
     const everywhere = new Map([
       ['packages/cf-backend/src/user/capability.ts', [{ name: 'orphan', line: 20 }]],
     ]);
+
     const source = `
       export function setTier(): void {}
       export function orphan(): void {}
     `;
+
     expect(classify(productionOnly, everywhere, () => source).map(keyOf)).toEqual([
       'packages/cf-backend/src/user/capability.ts#orphan (unreferenced)',
       'packages/cf-backend/src/user/capability.ts#setTier (test-only)',
@@ -186,6 +200,7 @@ describe('dead code gate', () => {
   test('test scaffolding and script entry points are out of scope', () => {
     const finding = [{ name: 'makeSqlExec', line: 1 }];
     const source = 'export function makeSqlExec(): void {}';
+
     const dead = classify(
       new Map([
         ['packages/core/tests/helpers.ts', finding],
@@ -196,6 +211,7 @@ describe('dead code gate', () => {
       new Map(),
       () => source,
     );
+
     expect(dead).toEqual([]);
   });
 
@@ -217,6 +233,7 @@ describe('capability parity gate', () => {
   const shared = new Map([
     ['packages/core/src/index.ts', "import * as v from 'valibot';\nexport const x = v.string();\n"],
   ]);
+
   const withShared = (files: Record<string, string>): Map<string, string> =>
     new Map([...shared, ...Object.entries(files)]);
 
@@ -225,6 +242,7 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/components/summary.ts':
         "import * as v from 'valibot';\nexport const s = v.string();\n",
     }));
+
     expect(movable.map((m) => m.file)).toEqual(['packages/cf-backend/src/components/summary.ts']);
     expect(movable[0].closure).toBe('cf');
   });
@@ -233,6 +251,7 @@ describe('capability parity gate', () => {
     const { movable } = findMovable(withShared({
       'packages/core/src/summary.ts': "import * as v from 'valibot';\nexport const s = v.string();\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -240,6 +259,7 @@ describe('capability parity gate', () => {
     const { movable } = findMovable(withShared({
       'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -248,6 +268,7 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
       'packages/cf-backend/src/pure.ts': "import { a } from './do.ts';\nexport const b = a;\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -255,6 +276,7 @@ describe('capability parity gate', () => {
     const files = {
       'packages/cf-backend/src/pure.ts': "import { z } from 'zod';\nexport const s = z.string();\n",
     };
+
     expect(findMovable(withShared(files)).movable).toEqual([]);
     // core takes the same dependency, and the same file becomes movable — with
     // nothing about the gate edited.
@@ -267,6 +289,7 @@ describe('capability parity gate', () => {
     const { movable } = findMovable(withShared({
       'packages/cf-backend/src/styled.ts': "import './theme.css';\nexport const s = 1;\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -280,6 +303,7 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/reach.ts':
         "export { deep } from '../../../node_modules/@x/y/dist/inner.js';\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -296,6 +320,7 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/do.ts': "import { Agent } from 'agents';\nexport const a = Agent;\n",
       'packages/cf-backend/src/uses.ts': "import { a } from '@/do';\nexport const b = a;\n",
     }));
+
     expect(movable).toEqual([]);
   });
 
@@ -304,6 +329,7 @@ describe('capability parity gate', () => {
       'packages/cf-backend/src/a.ts': "export const a = 1;\n",
       'packages/cf-backend/src/b.ts': "import { a } from './a.ts';\nexport const b = a;\n",
     }));
+
     // Exactly the one import edge above: zero means the count is not wired up,
     // and more than one means an edge is counted twice.
     expect(edges).toBe(1);
@@ -324,6 +350,7 @@ describe('gate ratchet', () => {
   const lockPath = (keys: readonly string[]): string => {
     const path = join(scratchDir('gates-ratchet'), 'lock.json');
     writeFileSync(path, `${JSON.stringify(keys, null, 2)}\n`);
+
     return path;
   };
 
@@ -373,6 +400,7 @@ describe('dependency advisory gate', () => {
     range: '<=1.4.1',
     ...over,
   });
+
   const reviewed = {
     valibot: { reason: 'flatten() is called nowhere in tracked source', ids: [1124298] },
   } satisfies Record<string, ReviewedPackage>;
@@ -387,6 +415,7 @@ describe('dependency advisory gate', () => {
       [exposure(), exposure({ pkg: 'left-pad' })],
       reviewed,
     );
+
     expect(accepted).toBe(1);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.at).toBe('left-pad@1.4.1 — advisory 1124298');
@@ -400,6 +429,7 @@ describe('dependency advisory gate', () => {
       [exposure(), exposure({ id: 9999999 })],
       reviewed,
     );
+
     expect(accepted).toBe(1);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.rendered).toContain('gained a new one');
@@ -435,6 +465,7 @@ describe('dependency advisory gate', () => {
   test('a feed that does not answer is unreachable, never a clean scan', async () => {
     const scan = await queryAdvisories(onePackage, 'http://127.0.0.1:1/bulk');
     expect(scan.status).toBe('unreachable');
+
     if (scan.status !== 'unreachable') throw new Error('unreachable expected');
     expect(scan.reason).toBe('io');
     expect(scan.error.length).toBeGreaterThan(0);
@@ -445,6 +476,7 @@ describe('dependency advisory gate', () => {
     const advisories = advisoriesFor({
       status: 'unreachable', scanned: 1288, reason: 'io', error: 'ConnectionRefused',
     });
+
     expect(advisories).toHaveLength(1);
     expect(advisories[0]?.level).toBe('warn');
     expect(advisories[0]?.description).toContain('were NOT checked');
@@ -452,9 +484,11 @@ describe('dependency advisory gate', () => {
 
   test('a feed answering an unreadable shape is unreachable, not empty', async () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ valibot: 'nope' }) });
+
     try {
       const scan = await queryAdvisories(onePackage, server.url.href);
       expect(scan.status).toBe('unreachable');
+
       if (scan.status !== 'unreachable') throw new Error('unreachable expected');
       expect(scan.reason).toBe('unreadable');
     } finally {
@@ -464,9 +498,11 @@ describe('dependency advisory gate', () => {
 
   test('a feed answering HTTP 500 is unreachable, not empty', async () => {
     const server = Bun.serve({ port: 0, fetch: () => new Response('nope', { status: 500 }) });
+
     try {
       const scan = await queryAdvisories(onePackage, server.url.href);
       expect(scan.status).toBe('unreachable');
+
       if (scan.status !== 'unreachable') throw new Error('unreachable expected');
       expect(scan.error).toContain('500');
     } finally {
@@ -490,12 +526,15 @@ describe('dependency advisory gate', () => {
         }],
       }),
     });
+
     try {
       const scan = await queryAdvisories([
         { name: 'hono', version: '4.12.23', requestedRange: '^4.11.4', tarball: 'a' },
         { name: 'hono', version: '4.13.2', requestedRange: '^4.13.0', tarball: 'b' },
       ], server.url.href);
+
       expect(scan.status).toBe('reported');
+
       if (scan.status !== 'reported') throw new Error('reported expected');
       expect(scan.exposures.map((each) => each.version)).toEqual(['4.12.23']);
     } finally {
@@ -505,6 +544,7 @@ describe('dependency advisory gate', () => {
 
   test('a feed that matches nothing is a clean scan, distinguishable from an outage', async () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({}) });
+
     try {
       const scan = await queryAdvisories(onePackage, server.url.href);
       expect(scan).toEqual({ status: 'reported', scanned: 1, exposures: [] });
@@ -553,11 +593,13 @@ describe('agents action/field gate', () => {
       '}',
       extra,
     ].join('\n');
+
     const parsed = parseAgentsSources(new Map([
       [REGISTRY, `export const AGENTS_TOOL_ACTIONS = [${quoted(miniature.actions)}] as const;`],
       [TOOL, tool],
       [LIMITS, 'export function readLimits(input: { cap?: number }): number { return input.cap ?? 0; }'],
     ]));
+
     return auditAgentsFields(readAgentsDeclarations(parsed), readAgentsHandler(parsed)).map((f) => f.kind);
   }
 
@@ -613,6 +655,7 @@ describe('agents action/field gate', () => {
       ...consistent,
       arms: { ...consistent.arms, list: '      return { ...input };' },
     });
+
     expect(opaque).toContain('opaque');
   });
 
@@ -637,6 +680,7 @@ describe('agents action/field gate', () => {
       ].join('\n')],
       [LIMITS, 'export function readLimits(input: { cap?: number }): number { return input.cap ?? 0; }'],
     ]));
+
     const reads = readAgentsHandler(parsed);
     expect([...reads.byAction.get('fork') ?? []]).toEqual(['cap']);
     expect(reads.hops).toContain('readLimits(…)');

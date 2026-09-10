@@ -124,8 +124,10 @@ export function connectedDevices(fleet: DeviceFleet | undefined): DeviceFleetEnt
  */
 export function deviceFleetAsk(fleet: DeviceFleet | undefined): string {
   const live = connectedDevices(fleet);
+
   if (live.length === 0) return NO_DEVICE_CONNECTED;
   const names = live.map((device) => `${device.name}${device.os ? ` (${device.os})` : ''}`).join(', ');
+
   return `name the machine this command runs on — connected: ${names}. Pass it as device: "<name>".`;
 }
 
@@ -135,6 +137,7 @@ export function deviceFleetAsk(fleet: DeviceFleet | undefined): string {
 export function deviceByName(fleet: DeviceFleet | undefined, name: string): DeviceFleetEntry | null {
   const live = connectedDevices(fleet);
   const matches = live.filter((device) => device.name === name);
+
   return matches.length === 1 ? matches[0]! : null;
 }
 
@@ -144,6 +147,7 @@ export function deviceByName(fleet: DeviceFleet | undefined, name: string): Devi
  * agent can change one.
  */
 export const DEVICE_TIERS = ['sandboxed', 'raw'] as const;
+
 export type DeviceTier = (typeof DEVICE_TIERS)[number];
 
 /**
@@ -159,6 +163,7 @@ export type DeviceTier = (typeof DEVICE_TIERS)[number];
  * The owner turns the sandbox off, or the machine runs no commands.
  */
 export const DEVICE_SANDBOX_CAPABILITIES = ['sandboxed', 'files_only', 'raw_only'] as const;
+
 export type DeviceSandboxCapability = (typeof DEVICE_SANDBOX_CAPABILITIES)[number];
 
 /** Why a machine cannot sandbox. A closed vocabulary, because each value has
@@ -181,6 +186,7 @@ export const DEVICE_SANDBOX_REASONS = [
   'no_bwrap', 'no_userns', 'wsl1', 'no_sandbox_exec', 'unsupported_platform', 'probe_failed',
   'daemon_outdated',
 ] as const;
+
 export type DeviceSandboxReason = (typeof DEVICE_SANDBOX_REASONS)[number];
 
 /** How a device runs a command right now: the tier the owner set, narrowed by
@@ -217,13 +223,16 @@ export interface DeviceSandboxStatus {
 }
 
 const DeviceTierSchema = v.picklist(DEVICE_TIERS);
+
 const DeviceSandboxCapabilitySchema = v.picklist(DEVICE_SANDBOX_CAPABILITIES);
+
 const DeviceSandboxReasonSchema = v.picklist(DEVICE_SANDBOX_REASONS);
 
 /** Narrow a stored tier. Anything unrecognised is the sandboxed tier: the
  *  switch is on by default, and a damaged row must not read as "off". */
 export function parseDeviceTier(raw: string | null | undefined): DeviceTier {
   const parsed = v.safeParse(DeviceTierSchema, raw);
+
   return parsed.success ? parsed.output : 'sandboxed';
 }
 
@@ -232,6 +241,7 @@ export function parseDeviceTier(raw: string | null | undefined): DeviceTier {
  *  proved it can sandbox has not proved it can sandbox. */
 export function parseSandboxCapability(raw: string | null | undefined): DeviceSandboxCapability {
   const parsed = v.safeParse(DeviceSandboxCapabilitySchema, raw);
+
   return parsed.success ? parsed.output : 'files_only';
 }
 
@@ -239,6 +249,7 @@ export function parseSandboxCapability(raw: string | null | undefined): DeviceSa
  *  the surfaces render as exactly that rather than inventing a cause. */
 export function parseSandboxReason(raw: string | null | undefined): DeviceSandboxReason | null {
   const parsed = v.safeParse(DeviceSandboxReasonSchema, raw);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -251,6 +262,7 @@ export function effectiveDeviceMode(
   sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability'>,
 ): DeviceMode {
   if (sandbox.tier === 'raw') return 'raw';
+
   return sandbox.capability === 'sandboxed' ? 'sandboxed' : 'files_only';
 }
 
@@ -291,6 +303,7 @@ export function sandboxReasonFix(reason: DeviceSandboxReason | null): string {
  *  stand in for a cause the row holds. */
 export function sandboxCause(sandbox: Pick<DeviceSandboxStatus, 'reason' | 'detail'>): string {
   if (sandbox.reason !== null && sandbox.detail !== null) return `${sandbox.reason}: ${sandbox.detail}`;
+
   return sandbox.reason ?? sandbox.detail ?? 'the daemon reported no reason';
 }
 
@@ -298,6 +311,7 @@ export function sandboxCause(sandbox: Pick<DeviceSandboxStatus, 'reason' | 'deta
  *  absent, never unknown — the daemon enumerates /dev on every exec. */
 export function describeGpuNodes(nodes: readonly string[]): string {
   const names = nodes.map((node) => node.replace(/^\/dev\//, '')).filter((name) => name.length > 0);
+
   return names.length > 0 ? names.join(', ') : 'none';
 }
 
@@ -345,6 +359,7 @@ export const DEVICE_PRESENCE_CONFIG_KEY = 'device_last_presence';
 
 export function devicePresence(status: DeviceStatus): DevicePresence {
   if (status.connected) return 'connected';
+
   return status.registered ? 'offline' : 'none';
 }
 
@@ -359,6 +374,7 @@ export function freshDeviceToolchain(
   now: number,
 ): DeviceToolchain | null {
   if (!toolchain) return null;
+
   return now - toolchain.probedAt < DEVICE_TOOLCHAIN_TTL_MS ? toolchain : null;
 }
 
@@ -387,7 +403,9 @@ export function observeDevicePresence(
 ) {
   const presence = devicePresence(status);
   const lastSeen = parseDevicePresence(store.get(DEVICE_PRESENCE_CONFIG_KEY));
+
   if (lastSeen !== presence) store.set(DEVICE_PRESENCE_CONFIG_KEY, presence);
+
   return { presence, notice: deviceChangeNotice(lastSeen, presence) };
 }
 
@@ -399,11 +417,13 @@ export function observeDevicePresence(
  */
 export function deviceChangeNotice(prev: DevicePresence | null, current: DevicePresence): string | null {
   if (prev === null || prev === current) return null;
+
   if (current === 'connected') {
     return '## Context update\n' +
       "Your user's PC just connected — the `laptop` runtime is now available. " +
       'Consent will be requested on its first use; that prompt is expected, not an error.';
   }
+
   if (prev === 'connected') {
     return '## Context update\n' +
       "Your user's PC just disconnected — the `laptop` runtime is offline" +
@@ -411,5 +431,6 @@ export function deviceChangeNotice(prev: DevicePresence | null, current: DeviceP
         ? '. The user can reconnect it by running `kinu connect` on their machine.'
         : ' and the device is no longer registered.');
   }
+
   return null;
 }

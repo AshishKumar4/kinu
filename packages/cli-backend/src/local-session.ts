@@ -253,6 +253,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     pricing: () => input.session().modelPricing(),
     onExhausted: ({ error: _error, ...refusal }) => { input.session().reportBudgetRefusal(refusal); },
   });
+
   const engine = new EvolutionEngine(input.runtime, {
     enabled: input.autoEvolve,
     // The turn review's own model calls debit the mission the reviewed turn
@@ -271,7 +272,9 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     // and the decision is surfaced like any other self-change.
     shadowTrialRunner: () => input.session().runShadowTrials(),
   });
+
   engine.onEvent((event) => { input.session().reportEvolutionEvent(event); });
+
   return {
     engine,
     budget,
@@ -327,6 +330,7 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
 type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
+
 type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
 
 type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -612,6 +616,7 @@ const TurnTierMetadataSchema = v.object({
 function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {
   if (metadata === undefined) return undefined;
   const parsed = v.safeParse(TurnTierMetadataSchema, metadata);
+
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
@@ -773,6 +778,7 @@ export class LocalAgentSession implements BackendHost {
       effectiveSpec: this.effectiveModelSpec(),
       pricing: this.modelCatalog.pricing(),
     });
+
     // Half of these producers fire BETWEEN runs — an evolution pass on a fiber,
     // a workspace title before the first turn exists — and the log is keyed by
     // run, so those calls are filed under the reserved workspace run rather than
@@ -907,6 +913,7 @@ export class LocalAgentSession implements BackendHost {
     // any store is built rather than trusting an earlier caller.
     const hubSql = makeSqlExec(opts.db);
     initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+
     // THE ORCHESTRATION THIS ACTOR'S LOOP RUNS UNDER — hosted or not, built by
     // one factory. Hosted, the root's `ActorHost` already built it (it needed
     // it to construct the `ActorSession` below) and hands the three objects
@@ -920,7 +927,9 @@ export class LocalAgentSession implements BackendHost {
       oneShot: this.oneShot,
       autoEvolve: this.autoEvolve,
     });
+
     const orchestration = opts.hosted ?? own;
+
     if (!orchestration) throw new KinuError('missing', 'This session has no orchestration to run its loop under.');
     this.budget = orchestration.budget;
     this.engine = orchestration.engine;
@@ -968,6 +977,7 @@ export class LocalAgentSession implements BackendHost {
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
     this.sessionId = canonicalConversationId(this.config);
+
     // The runtime already resolves profiles — that is what makes a session-less
     // workspace routable. What a session adds is a RICHER set of inputs to the
     // same authority: a provider registry that can list an account, the caller's
@@ -980,6 +990,7 @@ export class LocalAgentSession implements BackendHost {
         : staticModelPlane(),
       record: (event) => { this.recordRunEvent(event); },
     };
+
     if (opts.profileAuthority) refinement.envelope = opts.profileAuthority;
     // Not optional-chained: a runtime with no authority cannot resolve a model
     // for anything, and saying so here costs one line where saying it at the
@@ -1002,6 +1013,7 @@ export class LocalAgentSession implements BackendHost {
       },
     });
     this.actorHost = opts.hosted?.host ?? this.buildOwnActorHost(hubSql);
+
     const alarmScheduler: AlarmScheduler = {
       // Synchronous here: the local host's wake-up is a process timer, not a
       // storage write, so there is nothing to await. The seam returns a promise
@@ -1009,6 +1021,7 @@ export class LocalAgentSession implements BackendHost {
       // inside its invocation (`do.wait_until.no_op`).
       scheduleAt: async (ts) => { this.scheduleLocalAlarm(ts); },
     };
+
     this.triggerRegistry = new TriggerRegistry(hubSql, this.rt.actor, alarmScheduler);
 
     // The durable per-run event log (run_events) — the same recorder, table and
@@ -1108,12 +1121,14 @@ export class LocalAgentSession implements BackendHost {
   /** Tool names for the banner (built-ins + connected MCP). */
   toolNames(): string[] {
     this.ensureModelState();
+
     return [...Object.keys(this.tools), ...Object.keys(this.extraTools)];
   }
 
   /** Built-in + MCP tools with descriptions for the /tools view. */
   describeTools(): Array<{ name: string; description: string }> {
     this.ensureModelState();
+
     return Object.entries({ ...this.tools, ...this.extraTools }).map(([name, t]) => ({
       name, description: t.description ?? '',
     }));
@@ -1143,6 +1158,7 @@ export class LocalAgentSession implements BackendHost {
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
     };
+
     return listInstructionApprovals({
       ...request,
       sources: await gatherApprovableInstructions({
@@ -1157,11 +1173,14 @@ export class LocalAgentSession implements BackendHost {
   /** One row, opened: the bytes of THAT file and nothing else. */
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
     const clean = path.trim();
+
     if (clean === '') return null;
+
     const limits = {
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
     };
+
     return openInstructionSource({
       path: clean,
       agentsMd: discoverAgentsMd(this.cwd, limits, this.instructionTrust),
@@ -1175,20 +1194,26 @@ export class LocalAgentSession implements BackendHost {
    *  as the cloud transport, because it is core's rule, not either side's. */
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
     const admitted = admitInstructionDecision(path, reviewedDigest);
+
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
+
     if (!current || current.digest !== admitted.digest) {
       return { ok: false, error: 'the file changed or could not be read after review; read it again before approving' };
     }
+
     this.instructionApprovals.approve(admitted.path, admitted.digest);
+
     return admitted;
   }
 
   /** Stop following a path, and keep the refusal so nothing re-grants it. */
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
     const admitted = admitInstructionDecision(path);
+
     if (!admitted.ok) return admitted;
     this.instructionApprovals.revoke(admitted.path);
+
     return admitted;
   }
 
@@ -1204,7 +1229,9 @@ export class LocalAgentSession implements BackendHost {
    */
   async listFileCheckpoints(limit?: number, turnId?: string): Promise<FileCheckpointListing> {
     const availability = await this.checkpointStatus();
+
     if (!availability.available || !this.rt.checkpoints) return { availability, entries: [] };
+
     return { availability, entries: await this.rt.checkpoints.list({ limit, turnId }) };
   }
 
@@ -1223,6 +1250,7 @@ export class LocalAgentSession implements BackendHost {
 
   private requireCheckpoints(): FileCheckpoints {
     if (!this.rt.checkpoints) throw new Error('checkpoints are not configured for this session');
+
     return this.rt.checkpoints;
   }
 
@@ -1256,6 +1284,7 @@ export class LocalAgentSession implements BackendHost {
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
     this.shellApprovalHandler = handler;
     this.rt.setShellApprovalChannel?.(handler ? this.wrapShellApprovalHandler(handler) : null);
+
     return () => {
       if (this.shellApprovalHandler === handler) {
         this.shellApprovalHandler = null;
@@ -1282,12 +1311,16 @@ export class LocalAgentSession implements BackendHost {
         kind: 'shell approval',
         detail: `${req.executor}: ${req.command}`,
       };
+
       this.pendingShellApproval = pending;
+
       try {
         const outcome = await handler(req) ?? null;
+
         if (outcome === 'allow_always') {
           this.config.grantShellApproval(gatedGrants(req.review, req.executor));
         }
+
         return outcome;
       } finally {
         if (this.pendingShellApproval === pending) this.pendingShellApproval = null;
@@ -1308,12 +1341,14 @@ export class LocalAgentSession implements BackendHost {
   /** The catalog role id this agent resolves under. */
   getActiveRoleId(): string {
     if (this.actorSession.profile) return this.actorSession.profile.role.id;
+
     return this.config.getRoleSelection();
   }
 
   getEffectiveTierId(): string {
     if (this.actorSession.profile) return this.actorSession.profile.tier.id;
     const roleId = this.getActiveRoleId();
+
     return effectiveRoleCatalog(BUILTIN_PROFILE_CATALOG)[roleId]?.tier ?? 'default';
   }
 
@@ -1328,15 +1363,18 @@ export class LocalAgentSession implements BackendHost {
    */
   async setRole(roleId: string): Promise<{ role: string }> {
     const envelope = await this.profiles().envelope();
+
     const changed = changeActiveRole({
       config: this.config,
       envelope,
       to: roleId,
       actor: 'user',
     });
+
     if (changed.kind !== 'applied') {
       throw new Error(roleChangeOutcomeText(roleId, changed, this.getActiveRoleId()));
     }
+
     return { role: changed.to };
   }
 
@@ -1382,6 +1420,7 @@ export class LocalAgentSession implements BackendHost {
   cancelTrigger(trigger_id: string, caller: TrustLevel): CancelTriggerResult {
     const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller);
     this.rearmLocalAlarm();
+
     return result;
   }
 
@@ -1393,10 +1432,13 @@ export class LocalAgentSession implements BackendHost {
    *  the process timer that will call this again. */
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
     if (this.ended) return { fired: 0, nextAlarmAt: null };
+
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
     const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+
     if (fired > 0) this.actorSession.orchestrator.scheduleDrain();
     this.rearmLocalAlarm();
+
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
   }
 
@@ -1434,7 +1476,9 @@ export class LocalAgentSession implements BackendHost {
    *  state so a retired crafted tool disappears from the next turn. */
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
     const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore }, id);
+
     if (result.ok) this.invalidateModelState();
+
     return result;
   }
 
@@ -1464,6 +1508,7 @@ export class LocalAgentSession implements BackendHost {
 
   async setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<{ ok: true }> {
     updateProposedTaskStatus(this.rt, id, status);
+
     return { ok: true };
   }
 
@@ -1475,6 +1520,7 @@ export class LocalAgentSession implements BackendHost {
 
   get headRuntime(): HeadRuntime {
     this.ensureModelState();
+
     return this._headRuntime;
   }
 
@@ -1487,6 +1533,7 @@ export class LocalAgentSession implements BackendHost {
       explorer: this.rt.llm,
       judge: this.rt.judgeModel,
     };
+
     return { executor: this.rt.executor, explorer: this.rt.llm };
   }
 
@@ -1503,6 +1550,7 @@ export class LocalAgentSession implements BackendHost {
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(async () => {
       if (this.ended) return;
+
       try {
         await fn();
       } catch (cause) {
@@ -1554,14 +1602,18 @@ export class LocalAgentSession implements BackendHost {
         'Plan review is available in the hosted workspace UI; this local session has no review surface.',
       ));
     }
+
     // A job settling during shutdown must not start a turn the ending session
     // will never drain: 'skipped' sends the caller down its durable-breadcrumb
     // path instead, and the next run drains it from the event log.
     if (this.ended) return Promise.resolve({ status: 'skipped' });
+
     if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
       return Promise.resolve({ status: 'queued' });
     }
+
     const { promise, resolve } = Promise.withResolvers<EnqueueTurnResult>();
+
     const item: QueueItem = {
       text: input.text,
       metadata: input.metadata,
@@ -1571,16 +1623,21 @@ export class LocalAgentSession implements BackendHost {
       // drain gets its rows back when another process holds the driver lease.
       settle: (refusal) => resolve({ status: refusal ? 'skipped' : 'queued' }),
     };
+
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
     this.queue.push(item);
+
     if (this.settlingDepth > 0) {
       // Accepted, not started. `item.settle` still runs when the pump reaches
       // it; resolving twice is harmless, and the caller gets an answer it can
       // act on instead of a promise only it could complete.
       void this.pump();
+
       return Promise.resolve({ status: 'queued' });
     }
+
     void this.pump();
+
     return promise;
   }
 
@@ -1603,6 +1660,7 @@ export class LocalAgentSession implements BackendHost {
   /** Recorded in the durable transcript — the half a later process can read. */
   private announcementOnDisk(identity: string): boolean {
     const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
+
     return this.rt.storage.sql<{ id: string }>`
       SELECT id FROM messages
       WHERE actor_id = ${this.rt.actor.actorId} AND id = ${id} AND session_id = ${this.sessionId}
@@ -1646,7 +1704,12 @@ export class LocalAgentSession implements BackendHost {
     this.queue.push({
       text, files, metadata, kind: 'user',
       settle: (refusal) => {
-        if (!refusal) { resolve(); return; }
+        if (!refusal) {
+          resolve();
+
+          return;
+        }
+
         reject(new KinuError(
           refusal.reason,
           `${refusal.error}. Close that session, or send this from it.`,
@@ -1654,6 +1717,7 @@ export class LocalAgentSession implements BackendHost {
       },
     });
     this.pump();
+
     return promise;
   }
 
@@ -1670,6 +1734,7 @@ export class LocalAgentSession implements BackendHost {
     // landed one and the durable row are all the same steer to a surface —
     // which is what stops one steer being rendered twice under two names.
     const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
+
     return this.actorSession.steer({ ...parts, id });
   }
 
@@ -1684,14 +1749,18 @@ export class LocalAgentSession implements BackendHost {
   branch(text: string): boolean {
     if (!this.pumping) return false;
     const task = text.trim();
+
     if (!task) return false;
     this.ensureModelState();
     const id = newBranchId();
+
     const handle = startBranchHead(this._headRuntime, this.headJournal, {
       id, task, inheritedContext: this.readInheritedContext(),
     });
+
     this.pendingBranches.push({ id, task, handle });
     this.broadcast({ type: 'branch_status', status: 'running', branchId: id, task } satisfies BranchStatusEvent);
+
     return true;
   }
 
@@ -1725,10 +1794,13 @@ export class LocalAgentSession implements BackendHost {
    *  Call once at startup (no-op for empty config). Idempotent-safe to skip. */
   async connectMcp(servers: Record<string, McpServerConfig>): Promise<void> {
     if (!servers || Object.keys(servers).length === 0) return;
+
     const log = (message: string): void => {
       this.emit({ type: 'background', event: 'mcp', message });
     };
+
     const conn = await connectMcpServers(servers, log, this.lifetime.signal);
+
     // ONE admission, through the same policy the cloud backend's turn applies:
     // the session's resolved figures, less the native surface this session
     // already carries. The install is session-scoped — merged once, ridden by
@@ -1740,15 +1812,19 @@ export class LocalAgentSession implements BackendHost {
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
       nativeToolTokens: toolSurfaceTokens(this.tools),
     });
+
     const tools: ToolSet = {};
+
     for (const d of admission.admitted) {
       const entry = tool({
         description: d.description ?? `${d.serverName}/${d.name}`,
         inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
         execute: async (args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
       });
+
       tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
     }
+
     // MCP servers are bulk producers like any other tool — same clamp, same
     // spill path, same turn budget as the builtins.
     this.extraTools = withClampedToolResults(tools, {
@@ -1773,6 +1849,7 @@ export class LocalAgentSession implements BackendHost {
         reason: d.reason,
       })),
     ];
+
     for (const d of admission.deferred) {
       log(`mcp: ${d.server} deferred: ${d.reason}`);
     }
@@ -1800,10 +1877,13 @@ export class LocalAgentSession implements BackendHost {
     // is the outcome to prefer when the answer is already knowable. The gate is
     // the same object either way, and re-asking it costs one row read.
     const refusal = this.driverGate?.();
+
     if (refusal) {
       diagnostics.event('driver.drain_deferred', { reason: refusal.reason });
+
       return;
     }
+
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
@@ -1829,6 +1909,7 @@ export class LocalAgentSession implements BackendHost {
    */
   reclaimStrandedEventDeliveries(): void {
     const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
+
     if (reclaimed.length === 0) return;
     diagnostics.event('event.deliveries_reclaimed', { count: reclaimed.length });
     this.emit({
@@ -1872,6 +1953,7 @@ export class LocalAgentSession implements BackendHost {
     const t2 = Date.now();
     await this.mcpClose?.();
     const t3 = Date.now();
+
     // The exit tail, attributed — see evolution.settled for WHAT the first
     // phase waited on. Quiet under 1s: a fast exit stays silent (the --json
     // contract promises an empty stderr), a slow tail still names itself.
@@ -1910,6 +1992,7 @@ export class LocalAgentSession implements BackendHost {
   private tracked(settle: () => Promise<void>): void {
     const { promise, resolve } = Promise.withResolvers<void>();
     this.backgroundFibers.add(promise);
+
     // BOTH outcomes prune, and the entry resolves only after it is gone — which
     // is what lets `joinBackgroundFibers` re-read the size and terminate. A
     // settlement observer that rejected would otherwise leave a set entry
@@ -1918,6 +2001,7 @@ export class LocalAgentSession implements BackendHost {
       this.backgroundFibers.delete(promise);
       resolve();
     };
+
     settle().then(prune, prune);
   }
 
@@ -1947,6 +2031,7 @@ export class LocalAgentSession implements BackendHost {
         );
       }
     });
+
     return running;
   }
 
@@ -1972,14 +2057,19 @@ export class LocalAgentSession implements BackendHost {
       type: 'background', event: 'bg_jobs_settling',
       message: `${this.backgroundFibers.size} background job(s) still running — waiting for their results`,
     });
+
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - Date.now();
+
       if (remaining <= 0) {
         this.announceAbandonedJobs();
+
         return false;
       }
+
       await raceDeadline(Promise.allSettled(this.backgroundFibers), remaining);
     }
+
     return true;
   }
 
@@ -1998,15 +2088,18 @@ export class LocalAgentSession implements BackendHost {
    */
   private announceAbandonedJobs(): void {
     const interrupted = this.jobs.listRunning().items;
+
     const roster = interrupted
       .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
       .join(', ');
+
     const message =
       `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
       'exit. They are checkpointed, so this workspace resumes them the next time it starts — including ' +
       'unattended, under the local scheduler daemon — and a resumed job runs commands and writes files on ' +
       `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
       (roster ? ` Interrupted: ${roster}.` : '');
+
     this.emit({ type: 'background', event: 'bg_jobs_abandoned', message });
     diagnostics.failure('jobs.abandoned_at_exit', new KinuError('timeout', message), {
       jobs: interrupted.length,
@@ -2063,15 +2156,18 @@ export class LocalAgentSession implements BackendHost {
    */
   async recoverBackgroundJobs(): Promise<void> {
     const advisorOrphans: OrphanedFiber[] = [];
+
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
       if (orphan.name === ADVISOR_LANE_FIBER) {
         advisorOrphans.push(orphan);
         continue;
       }
+
       if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
+
     await reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.actorSession.orchestrator.signals,
@@ -2087,6 +2183,7 @@ export class LocalAgentSession implements BackendHost {
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
+
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
       // Each reason states a different fate for the row, so they are counted
       // apart: an unreadable row is gone, a budget-refused one is still owed.
@@ -2099,6 +2196,7 @@ export class LocalAgentSession implements BackendHost {
           + (overBudget > 0 ? `, ${overBudget} left queued: the mission is over its budget` : ''),
       });
     }
+
     await this.recoverActorClaims();
     await this.recoverTerminalTransitions(advisorOrphans);
   }
@@ -2129,12 +2227,14 @@ export class LocalAgentSession implements BackendHost {
         sha256Hex,
         () => this.stores.claims.consumedContext(claim.turnId),
       );
+
       const note = recovery.kind === 'source_changed'
         ? `the source of program v${claim.program.version} no longer digests to what this turn was admitted on`
         + ` (claimed ${claim.program.digest ?? 'nothing'}, found ${recovery.found ?? 'no source'})`
         : recovery.kind === 'build_unknown'
           ? 'this turn ran the builtin loop under a build identity the host never published'
           : `program v${claim.program.version} still retains the source this turn was admitted on`;
+
       this.recordRunEvent({
         type: 'error',
         message: `recovered an unsettled turn claim (epoch ${claim.epoch}): ${note}`,
@@ -2177,15 +2277,19 @@ export class LocalAgentSession implements BackendHost {
     advisorOrphans: readonly OrphanedFiber[] = [],
   ): Promise<void> {
     const refusal = this.driverGate?.();
+
     if (refusal) {
       diagnostics.event('driver.terminal_recovery_deferred', { reason: refusal.reason });
+
       return;
     }
+
     for (const orphan of advisorOrphans) {
       await this.recoverAdvisorLane(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
+
     await this.settleRecordedIntents();
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn (the completion gate does), and on
@@ -2214,12 +2318,15 @@ export class LocalAgentSession implements BackendHost {
   private async settleRecordedIntents(): Promise<void> {
     const rows = this.rt.storage.sql<{ message_id: string; turn_id: string; roster_json: string }>`
       SELECT message_id, turn_id, roster_json FROM terminal_intents ORDER BY recorded_at, message_id`;
+
     for (const row of rows) {
       const transition: TerminalTransition = { turnId: row.turn_id, messageId: row.message_id };
+
       const parsed = v.safeParse(
         RecordedRosterSchema,
         tolerate(() => parseJsonValue(row.roster_json), 'malformed-input'),
       );
+
       if (!parsed.success) {
         // A roster this build cannot read is not a roster it may guess at, and
         // keeping the row would re-offer the same unreadable bytes on every
@@ -2232,9 +2339,12 @@ export class LocalAgentSession implements BackendHost {
         this.clearTerminalIntent(row.message_id);
         continue;
       }
+
       const owed = parsed.output;
+
       try {
         this.settlingDepth += 1;
+
         try {
           await this.terminal.settle({
             transition,
@@ -2251,6 +2361,7 @@ export class LocalAgentSession implements BackendHost {
         }), { turnId: row.turn_id, messageId: row.message_id });
         continue;
       }
+
       this.clearTerminalIntent(row.message_id);
     }
   }
@@ -2271,15 +2382,19 @@ export class LocalAgentSession implements BackendHost {
    */
   private async recoverAdvisorLane(snapshot: JsonValue | null): Promise<void> {
     const parsed = v.safeParse(RecordedAdvisorSchema, snapshot);
+
     if (!parsed.success) {
       diagnostics.failure('advisor.snapshot_unreadable', toKinuError({
         doing: 'reading the turn an interrupted advisor review was about',
         cause: new Error(parsed.issues.map((issue) => issue.message).join('; ')),
         otherwise: 'unsupported',
       }));
+
       return;
     }
+
     const turnId = parsed.output.turn.turnId;
+
     if (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId)) return;
     // The gate verdict comes off the CHECKPOINT. Its armed state is RAM this
     // process does not have, and re-deriving it as closed said a note the turn
@@ -2301,7 +2416,9 @@ export class LocalAgentSession implements BackendHost {
     return resumeBackgroundJob((resumeMode) => {
       this.ensureModelState();
       const surface = this.toolSets[resumeMode];
+
       if (!surface) throw new Error(`tool surface for ${resumeMode} mode is unavailable`);
+
       return surface.raw;
     }, kind, decodeJsonValue({ value: input.value }), mode, signal).then((value) =>
       value === undefined ? undefined : decodeJsonValue({ value }));
@@ -2326,6 +2443,7 @@ export class LocalAgentSession implements BackendHost {
 
   private scheduleLocalAlarm(ts: number): void {
     if (this.ended) return;
+
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= ts) return;
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
@@ -2333,6 +2451,7 @@ export class LocalAgentSession implements BackendHost {
     this.alarmTimer = setTimeout(async () => {
       this.alarmTimer = null;
       this.scheduledAlarmAt = null;
+
       try {
         await this.fireDueTriggers();
       } catch (cause) {
@@ -2341,6 +2460,7 @@ export class LocalAgentSession implements BackendHost {
           cause,
           otherwise: 'io',
         });
+
         diagnostics.failure('schedule.due_triggers_failed', failure);
       }
     }, Math.min(delay, 2_147_483_647));
@@ -2355,10 +2475,13 @@ export class LocalAgentSession implements BackendHost {
   private rearmLocalAlarm(): void {
     if (this.ended) return;
     const next = this.nextScheduledTriggerAt();
+
     if (next === null) {
       if (this.scheduledAlarmAt !== null) this.clearLocalAlarm();
+
       return;
     }
+
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt !== next) this.clearLocalAlarm();
     this.scheduleLocalAlarm(next);
   }
@@ -2368,9 +2491,11 @@ export class LocalAgentSession implements BackendHost {
       .map((t) => t.next_fire_at)
       .flatMap((value) => {
         const parsed = v.safeParse(v.number(), value);
+
         return parsed.success ? [parsed.output] : [];
       })
       .sort((a, b) => a - b)[0];
+
     return upcoming ?? null;
   }
 
@@ -2397,6 +2522,7 @@ export class LocalAgentSession implements BackendHost {
     if (this.pumping) return;
     this.pumping = true;
     const running = this.runPump();
+
     // Assigned only if the pump is STILL running. `runPump` on an empty queue
     // reaches no await, so it runs to completion inside this call and clears both
     // fields on its way out — an unconditional assignment would reinstate a
@@ -2409,6 +2535,7 @@ export class LocalAgentSession implements BackendHost {
   private async runPump(): Promise<void> {
     try {
       let item: QueueItem | undefined;
+
       while ((item = this.queue.shift())) {
         // Checked per ITEM, immediately before the turn runs. A turn is the
         // longest thing this process does and it writes the conversation, so
@@ -2423,14 +2550,17 @@ export class LocalAgentSession implements BackendHost {
         // hears so — an event drain compensates its rows back to pending, a
         // person's send fails loudly. The producer owns what to say about it.
         const refusal = this.driverGate?.();
+
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
           item.settle(refusal);
           continue;
         }
+
         // The key of the turn about to run, so a producer asking whether this
         // fact is already being said gets a truthful answer while it is.
         this.runningAnnouncement = item.idempotencyKey ?? null;
+
         try {
           await this.processTurn(item);
         } catch (err) {
@@ -2472,11 +2602,14 @@ export class LocalAgentSession implements BackendHost {
    */
   async settleBackgroundWork(): Promise<void> {
     const deadline = this.drainDeadline();
+
     for (;;) {
       // A queued turn always has a live pump (enqueueTurn kicks it), so awaiting
       // the pump drains the queue too.
       if (this.pumpPromise) { await this.pumpPromise; continue; }
+
       if (this.backgroundFibers.size === 0) return;
+
       if (!await this.joinBackgroundFibers(deadline)) return;
     }
   }
@@ -2487,7 +2620,9 @@ export class LocalAgentSession implements BackendHost {
    *  on. Never throws: losing a history row must not fail a turn. */
   private recordRunEvent(input: RunEventInput, runId?: string | null): void {
     const id = runId !== undefined ? runId : this.currentRunId;
+
     if (!id) return;
+
     try { this.eventRecorder.emit(id, input); }
     catch (err) {
       diagnostics.failure(
@@ -2510,12 +2645,15 @@ export class LocalAgentSession implements BackendHost {
    */
   private closeRun(facts: RunEndFacts, lease: ActorTurnLease): RunEndReason {
     const end = classifyRunEnd(facts);
+
     // The durable claim closes under the SAME name the run does. It is settled
     // before the early return below, because a second `closeRun` for one run is
     // a no-op on the run row and must not leave the claim open either — and the
     // claim's own settle is idempotent per turn.
     if (this.actorSession.turnClaim !== null) this.actorSession.settleTurnClaim(lease, end.reason);
+
     if (!this.currentRunId) return end.reason;
+
     const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
       usage: this.actorSession.orchestrator.acc.reportedUsage(),
@@ -2528,9 +2666,11 @@ export class LocalAgentSession implements BackendHost {
       recoveries: this.actorSession.orchestrator.recoverySnapshot(),
       reason: end.reason,
     };
+
     if (end.error) outcome.error = end.error;
     closeTurnRun(this.eventRecorder, this.currentRunId, { ...outcome, workMode: this.actorSession.workMode });
     this.currentRunId = null;
+
     return end.reason;
   }
 
@@ -2575,20 +2715,24 @@ export class LocalAgentSession implements BackendHost {
     this.currentTurnId = item.kind === 'programmatic'
       ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
       : crypto.randomUUID();
+
     const lease = this.actorSession.beginTurn(
       { runId: this.currentRunId, turnId: this.currentTurnId }, mode, startedAt, item.metadata,
     );
+
     openTurnRun(this.eventRecorder, this.currentRunId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
       userMessage: item.text,
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
     });
+
     try {
       await runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease));
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
+
       if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
       this.closeRun({ completed: false, interrupted, errorText: message.slice(0, 500) }, lease);
       this.emit({ type: 'error', message });
@@ -2619,10 +2763,13 @@ export class LocalAgentSession implements BackendHost {
   private closeEventDeliveryLeases(item: QueueItem, absorbed: SettledSignals['absorbed']): void {
     const drainTurns = new Set<string>();
     const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);
+
     if (queued.success) drainTurns.add(queued.output);
+
     for (const signal of absorbed) {
       if (signal.replyTurnId) drainTurns.add(signal.replyTurnId);
     }
+
     for (const turnId of drainTurns) this.eventLog.markTurnCompleted(turnId);
   }
 
@@ -2635,7 +2782,9 @@ export class LocalAgentSession implements BackendHost {
       sessionId: this.sessionId,
       origin: item.kind,
     };
+
     if (turnId) completedTurn.turnId = turnId;
+
     return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
   }
 
@@ -2651,23 +2800,30 @@ export class LocalAgentSession implements BackendHost {
     const profileInputs = await this.profiles().inputs();
     const activeRoleId = this.getActiveRoleId();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
+
     // A real user message grades the previous turn — dispatch the detached
     // outcome review (same core pipeline as the DO's beforeTurn hook). In a
     // one-shot process the previous turn belongs to an already-exited
     // invocation, so this prompt is a fresh task, not a verdict on it.
     if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(item.text, this.turnContinuity);
+
     if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
+
     const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(
       item.text,
       roleSkills,
     );
+
     const candidateBuiltins = this.filterToolsBySkills(activeSkills);
+
     const candidateBuiltinNames = Object.keys(candidateBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
     );
+
     const candidateExternalNames = Object.keys(this.extraTools);
     const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(this.actorSession.workMode));
+
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
       activeRoleId: this.getActiveRoleId(),
@@ -2698,6 +2854,7 @@ export class LocalAgentSession implements BackendHost {
       // for.
       explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
     });
+
     this.actorSession.bindProfile(lease, profile, profileInputs);
     this.rt.setTurnProfile?.(profile);
     this.invalidateModelState();
@@ -2705,22 +2862,29 @@ export class LocalAgentSession implements BackendHost {
     this.activateToolMode(this.actorSession.workMode);
     const allowedTools = new Set(profile.allowedTools);
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
+
     const filteredBuiltins = Object.fromEntries(
       Object.entries(this.filterToolsBySkills(activeSkills)).filter(([name]) => toolAllowed(name)),
     );
+
     const filteredExternal = Object.fromEntries(
       Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)),
     );
+
     const turnTools = toolsInWorkMode(this.actorSession.workMode, { ...filteredBuiltins, ...filteredExternal });
+
     const availableBuiltins = Object.keys(filteredBuiltins).filter(
       (name): name is BuiltinToolName => BUILTIN_TOOL_NAMES.has(name),
     );
+
     const externalTools = Object.keys(filteredExternal).map((name) => ({
       name,
       source: isMcpToolKey(name) ? 'mcp' as const : 'external' as const,
     }));
+
     const resolvedAgentActions = toolAllowed('agents') ? candidateAgentActions : [];
     const memoryTail = await readMemoryTail(this.rt.memory);
+
     // Nearest-file-wins AGENTS.md chain, re-statted each turn so edits land
     // immediately (a handful of stat calls — negligible next to the LLM call).
     // Only the files that fit this model's window are read, and each one is
@@ -2730,10 +2894,12 @@ export class LocalAgentSession implements BackendHost {
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
     }, this.instructionTrust);
+
     // The agent's SOUL.md, re-read each turn for the same reason as AGENTS.md.
     // agentStateVfs is the identity tree when it differs from the working VFS;
     // absent override renders the default soul, never an empty one.
     const soul = await readSoul(this.rt.agentStateVfs ?? this.rt.storage.vfs);
+
     // The byte-stable cache prefix — system state (facts, executor status)
     // rides the dynamic ledger and activation reasons ride the turn-local
     const systemPromptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
@@ -2757,9 +2923,13 @@ export class LocalAgentSession implements BackendHost {
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.rt.actor),
       identity: this.promptIdentity(),
     };
+
     systemPromptOptions.agentsMd = agentsMd;
+
     if (availableSkills.lines.length > 0) systemPromptOptions.availableSkills = availableSkills;
+
     if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+
     if (soul) systemPromptOptions.soulOverride = soul;
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
@@ -2770,6 +2940,7 @@ export class LocalAgentSession implements BackendHost {
     const fileParts = (item.files ?? []).map((f) => ({
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
+
     this.actorSession.appendInput(lease, fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
@@ -2785,6 +2956,7 @@ export class LocalAgentSession implements BackendHost {
       ledger: this.actorSession.dynamic,
       snapshot: () => this.dynamicContextSnapshot(memoryTail),
     };
+
     // Provenance rides here, not in the system prompt: it flips whenever a
     // background job lands mid-session, and at system placement that flip
     // rewrote the whole cacheable prefix twice — once into the wake and once
@@ -2792,8 +2964,10 @@ export class LocalAgentSession implements BackendHost {
     const turnLocal: Parameters<typeof turnLocalContextMessage>[0] = {
       provenance: turnProvenanceForMetadata(item.metadata),
     };
+
     if (activeSkills) turnLocal.activeSkills = activeSkills;
     const turnLocalMsg = turnLocalContextMessage(turnLocal);
+
     // Instruction bytes no owner approved ride that same turn-local tail rather
     // than the system prompt: sealed, labelled reference material the model may
     // read but cannot be commanded by. Placed BEFORE the turn-local message so
@@ -2802,14 +2976,17 @@ export class LocalAgentSession implements BackendHost {
     const unverifiedMsg = unverifiedInstructionsMessage(
       activeSkills ? { agentsMd, activeSkills } : { agentsMd },
     );
+
     const turnLocalMsgs = [unverifiedMsg, turnLocalMsg]
       .filter((msg): msg is ModelMessage => msg !== null);
 
     const cache = this.cacheIdentity();
+
     const providerOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
       parseModelSpec(profile.tier.model).provider,
     );
+
     // The measured compaction trigger, read from the durable state by core in
     // the one correct order (orchestrator/turn-context.ts). `historyLength` is
     // the durable length the measurement is bound to, so it is also what
@@ -2855,9 +3032,11 @@ export class LocalAgentSession implements BackendHost {
       cache,
       budget: this.budget,
     };
+
     if (measured.providerReportedTokens !== undefined) {
       liveTurnOpts.providerReportedTokens = measured.providerReportedTokens;
     }
+
     if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
     // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
     // replay re-runs those opts off the priced path, and its composition would
@@ -2870,10 +3049,12 @@ export class LocalAgentSession implements BackendHost {
     // registry to ask, and is assembled ungated exactly as before.
     const resolver = this.modelResolver;
     const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts };
+
     if (resolver) {
       liveTurn.countInputTokens = (request: CountableRequest) =>
         resolver.countInputTokens(this.effectiveModelSpec(), request);
     }
+
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       loopVersion: await this.rt.identity.scaffold.version(),
@@ -2884,10 +3065,12 @@ export class LocalAgentSession implements BackendHost {
     }, (event) => {
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
     });
+
     const fullText = execution.text;
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
+
     if (execution.failure !== null) {
       const message = renderThrownChain({ cause: execution.failure });
       runError = message.slice(0, 500);
@@ -2926,6 +3109,7 @@ export class LocalAgentSession implements BackendHost {
     // answered leaves those rows bound forever to a turn nothing can read back.
     const durable = runError === null && 'committed' in commit;
     const settled = this.actorSession.orchestrator.signals.settle({ completed: durable });
+
     if (durable) this.closeEventDeliveryLeases(item, settled.absorbed);
 
     if (!('committed' in commit)) {
@@ -2943,8 +3127,10 @@ export class LocalAgentSession implements BackendHost {
       // this turn back as a turn that produced nothing.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+
       return;
     }
+
     const { messageId, facts, turn, owed, transition } = commit.committed;
 
     try {
@@ -2954,6 +3140,7 @@ export class LocalAgentSession implements BackendHost {
       // Steers that never saw a step boundary (the model was already finishing)
       // run as the IMMEDIATE next turn — ahead of any programmatic injects.
       const leftover = this.actorSession.takeLeftoverSteers();
+
       if (leftover.length > 0) {
         this.queue.unshift({
           text: leftover.map((steer) => steer.text).join('\n\n'),
@@ -2980,6 +3167,7 @@ export class LocalAgentSession implements BackendHost {
       // claims are the rows a recovery would have replayed — a second
       // declaration would read live state that has moved on.
       this.settlingDepth += 1;
+
       try {
         await this.terminal.settle({
           transition,
@@ -2988,6 +3176,7 @@ export class LocalAgentSession implements BackendHost {
         });
       }
       finally { this.settlingDepth -= 1; }
+
       // The claim is behind the roster now, so the intent has nothing left to
       // carry: from here the ledger's own rows are what a recovery reads.
       this.clearTerminalIntent(messageId);
@@ -3051,6 +3240,7 @@ export class LocalAgentSession implements BackendHost {
     readonly overflowRetry: boolean;
   }): TurnCommit {
     const { item, runError } = input;
+
     try {
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
@@ -3062,12 +3252,14 @@ export class LocalAgentSession implements BackendHost {
       // Minted HERE rather than inside `persist`, because the roster keys on it
       // and the roster is frozen before the write.
       const messageId = crypto.randomUUID();
+
       // The confirming turn is over: what the agent did with its free re-look
       // IS the gate's conversion number, and the run row carries it. Before the
       // roster, so the turn that ANSWERED a gate cannot be gated again.
       if (input.event === COMPLETION_GATE_EVENT) {
         this.completionGate.settle({ toolCalls: this.actorSession.orchestrator.acc.toolCalls.length });
       }
+
       const facts: RunEndFacts = {
         completed: runError === null,
         interrupted: input.interrupted,
@@ -3078,8 +3270,10 @@ export class LocalAgentSession implements BackendHost {
         // 'truncated' seal the cloud loop gets, from the same classifier.
         lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
       };
+
       const status = classifyRunEnd(facts).reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
+
       const owed = this.owedTerminalEffects({
         turn,
         status,
@@ -3100,6 +3294,7 @@ export class LocalAgentSession implements BackendHost {
         reachableTools: input.reachableTools,
         overflowRetry: input.overflowRetry,
       });
+
       // A response whose turn has no durable identity has nothing to claim
       // against, so it also has nothing to record an intent under: it runs
       // unledgered, and an intent keyed on an id no claim can use would be a
@@ -3107,6 +3302,7 @@ export class LocalAgentSession implements BackendHost {
       const transition: TerminalTransition | null = this.currentTurnId === null
         ? null
         : { turnId, messageId };
+
       this.db.transaction(() => {
         this.persist(
           turnId,
@@ -3120,8 +3316,10 @@ export class LocalAgentSession implements BackendHost {
           input.assistantText,
           item.kind === 'programmatic' ? item.metadata : undefined,
         );
+
         if (transition !== null) this.recordTerminalIntent(transition, owed);
       })();
+
       return { committed: { messageId, facts, turn, owed, transition } };
     } catch (cause) {
       // Classified AT the boundary that caught it rather than stored raw and
@@ -3206,6 +3404,7 @@ export class LocalAgentSession implements BackendHost {
     // not have is an absent part, not a claimed row that completes on the
     // engine's refusal a moment later.
     const sampled = this.autoEvolve ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
+
     // The gate's decision belongs to the LIVE turn: `shouldGate` reads RAM the
     // gate keeps (armed, already fired) that a restart does not have, so the
     // answer travels as the row's existence rather than being asked again on
@@ -3215,7 +3414,9 @@ export class LocalAgentSession implements BackendHost {
       && this.completionGate.shouldGate({
         completed: input.completed, toolCalls: this.actorSession.orchestrator.acc.toolCalls.length,
       });
+
     const scoped = this.actorSession.orchestrator.scopedTurn(input.turn);
+
     // Every input the review's verdict reads, taken while the turn is still in
     // memory. Recorded rather than re-read on replay: the tool surface is
     // rebuilt per turn, the dedupe window moves with every later note, and the
@@ -3231,6 +3432,7 @@ export class LocalAgentSession implements BackendHost {
       minSeverity: this.config.getAdvisorMinSeverity(),
       recent: [...this.engine.recentAdvisorNotes()],
     };
+
     // WHICH report this ending owes the parent, decided once, here. A task
     // child's terminal answer and a durable child's progress note are different
     // reports for different reasons, and both are the host's decision because
@@ -3238,8 +3440,10 @@ export class LocalAgentSession implements BackendHost {
     const ending: TaskTurnEnding = input.completed
       ? 'answered'
       : input.interrupted ? 'interrupted' : 'errored';
+
     const relay = this.parentRelay;
     const parentReport = relay?.owed(ending, input.assistantText) ?? null;
+
     const facts: Parameters<typeof declareTerminalRoster>[0] = {
       messageId: input.messageId,
       status: input.status,
@@ -3260,6 +3464,7 @@ export class LocalAgentSession implements BackendHost {
       // recovering one happens to be started with.
       evolutionEnabled: this.autoEvolve,
     };
+
     const parts: Writable<TerminalTurnParts> = {};
     parts.takes = {
       credited: input.credited,
@@ -3270,7 +3475,9 @@ export class LocalAgentSession implements BackendHost {
       takeIds: unclaimedAlternateTakeIds(this.rt.storage.sql, this.rt.actor),
     };
     parts.branches = this.pendingBranches.map(({ id, task }) => ({ id, task }));
+
     if (input.overflowRetry) parts.overflowRetry = true;
+
     if (gated) parts.completionGate = { text: this.completionGate.task };
     // EVERY input the review's verdict reads, recorded — not just the tool
     // surface. The severity floor, the dedupe window and the completion gate
@@ -3289,6 +3496,7 @@ export class LocalAgentSession implements BackendHost {
         gateOpen: gated || this.completionGate.open,
       },
     });
+
     if (sampled !== null) {
       parts.shadowTrial = {
         pendingVersion: sampled,
@@ -3299,7 +3507,9 @@ export class LocalAgentSession implements BackendHost {
         trialContext: projectJsonValue({ value: trimTrialContext([...input.trialContext]) }),
       };
     }
+
     parts.autoTitle = { subject: isPlaceholderMission(mission) ? input.userText : mission ?? '' };
+
     // The answer this child owes its parent — ONE claimed effect, covering a
     // task child's errored and interrupted endings too. An untracked
     // fire-and-forget promise started off the `turn-end` event instead leaves a
@@ -3313,6 +3523,7 @@ export class LocalAgentSession implements BackendHost {
         sequenceId: relay.sequenceId(input.messageId),
       };
     }
+
     // NO `turnEndExtensions`. This backend's `runChat` fires the extension
     // turn-end inside the turn stream, including for a cut turn, and its
     // ExtensionHost is built per turn and dies with it — so there is nothing
@@ -3342,6 +3553,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private terminalEffectTable(): TerminalEffectTable {
     const relay = this.parentRelay;
+
     const base = {
       takes: terminalEffect({
         input: v.object({
@@ -3358,6 +3570,7 @@ export class LocalAgentSession implements BackendHost {
               turnId: credited, sessionId: this.sessionId, startedAt, takeIds,
             });
           }
+
           return { status: 'completed' };
         },
       }),
@@ -3380,8 +3593,10 @@ export class LocalAgentSession implements BackendHost {
         // restart between the report and the settle dropped the comparison.
         run: async ({ id, task, turnId, liveText }) => {
           const live = this.pendingBranches.findIndex((entry) => entry.id === id);
+
           if (live >= 0) {
             const [entry] = this.pendingBranches.splice(live, 1);
+
             if (entry !== undefined) {
               await settlePendingBranch(
                 {
@@ -3393,29 +3608,37 @@ export class LocalAgentSession implements BackendHost {
                 // live write and the recovery write would be two take sets.
                 entry, turnId, liveText, id,
               );
+
               return { status: 'completed' };
             }
           }
+
           const head = this.headJournal.readHeadView(branchHeadId(id));
+
           if (head === null) {
             return { status: 'completed', detail: 'the journal holds no such branch head' };
           }
+
           const report = branchOutcomeFromJournal(head);
+
           if (report === null) {
             return { status: 'owed', detail: `branch head is ${head.status}` };
           }
+
           const outcome = settleBranchIntoTakes(this.rt.storage.sql, this.rt.actor, {
             task,
             report,
             turnId, sessionId: this.sessionId, liveText,
             settlementKey: id,
           });
+
           this.broadcast(outcome.ok
             ? {
               type: 'branch_status', status: 'settled', branchId: id, task,
               takeSetId: outcome.set.id, turnId: turnId ?? '',
             }
             : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+
           return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
         },
       }),
@@ -3441,12 +3664,14 @@ export class LocalAgentSession implements BackendHost {
         // that stops a replay queueing a second confirmation.
         run: async ({ text }, scope) => {
           const identity = `${COMPLETION_GATE_EVENT}:${scope}`;
+
           // The confirming turn's OWN durable row, whose id `processTurn` derives
           // from the key this effect queues it under. Its presence is the
           // admission this row waits for.
           if (this.announcementOnDisk(identity)) {
             return { status: 'completed', detail: 'the confirming turn is on disk' };
           }
+
           // QUEUED OR RUNNING is not "not queued yet". A retry falling due while
           // the first confirming turn is still in the model finds no message row
           // and its queue item is already shifted out, so an unchecked enqueue
@@ -3455,20 +3680,25 @@ export class LocalAgentSession implements BackendHost {
           if (this.announcementInFlight(identity)) {
             return { status: 'owed', detail: 'the confirming turn is queued and not yet on disk' };
           }
+
           const shell = this.rt.shell;
+
           if (shell === undefined) {
             return { status: 'completed', detail: 'this session has no shell to observe with' };
           }
+
           const observed = await observeCompletionState({
             exec: (command) => shell.exec(command),
             vfs: this.rt.storage.vfs,
           });
+
           // Nothing observable means no evidence to show, and a gate with no
           // evidence is just "are you sure?" — the doctrine-shaped ask this
           // replaces.
           if (observed === null) {
             return { status: 'completed', detail: 'the working directory showed nothing to check' };
           }
+
           this.completionGate.fire();
           this.queue.push({
             text: completionGateText({ task: text, observed }),
@@ -3492,6 +3722,7 @@ export class LocalAgentSession implements BackendHost {
           // change the advisor's verdict — the gate state the review is
           // judged against is recorded on the improvement-lanes row.
           this.pump();
+
           return {
             status: 'owed',
             detail: 'the confirming turn is queued and not yet on disk',
@@ -3502,12 +3733,15 @@ export class LocalAgentSession implements BackendHost {
         input: v.object({}),
         run: (_input, scope) => {
           const effectScope = keyedScope(scope);
+
           const identity = effectScope === undefined
             ? `overflow-retry:${crypto.randomUUID()}`
             : `overflow-retry:${effectScope}`;
+
           if (this.announcementOnDisk(identity)) {
             return { status: 'completed', detail: 'the retry turn is on disk' };
           }
+
           if (!this.announcementInFlight(identity)) {
             this.queue.push({
               text: OVERFLOW_RETRY_TEXT,
@@ -3518,6 +3752,7 @@ export class LocalAgentSession implements BackendHost {
             });
             this.pump();
           }
+
           return { status: 'owed', detail: 'the retry turn is queued and not yet on disk' };
         },
       }),
@@ -3544,15 +3779,19 @@ export class LocalAgentSession implements BackendHost {
           if (workMode === 'plan') {
             return { status: 'completed', detail: 'a plan turn records no evolution state' };
           }
+
           const recordedId = keyedScope(messageId);
+
           const recordOptions = recordedId === undefined
             ? { recordedAt, enabled: autoEvolve }
             : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` };
+
           this.actorSession.orchestrator.recordTurn(
             this.actorSession.orchestrator.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
             continuity,
             recordOptions,
           );
+
           return autoEvolve
             ? { status: 'completed' }
             : { status: 'completed', detail: 'the turn was produced with auto-evolution off' };
@@ -3570,6 +3809,7 @@ export class LocalAgentSession implements BackendHost {
           // row does, and reporting `completed` over a half-bound batch strands
           // the assignment behind it.
           await this.actorSession.orchestrator.drainPendingEvents({ rethrow: true });
+
           return { status: 'completed' };
         },
       }),
@@ -3595,7 +3835,9 @@ export class LocalAgentSession implements BackendHost {
           if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
+
           await this.reviewTurnInBackground(advisor);
+
           return { status: 'completed' };
         },
       }),
@@ -3609,13 +3851,16 @@ export class LocalAgentSession implements BackendHost {
         // clears, so the trial stays owed while nothing else waits on it.
         run: ({ turn, trialContext, pendingVersion }, scope) => {
           const trialScope = keyedScope(scope);
+
           const trialOptions = trialScope === undefined
             ? { pendingVersion }
             : { pendingVersion, id: `trial-${trialScope}` };
+
           const queued = this.engine.queueShadowTrial(
             v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
             trialOptions,
           );
+
           // A REFUSAL is not a deferral. `not_sampled` means there is nothing
           // to queue and never will be for this turn, so the obligation is
           // discharged; only a full queue or a failed insert is worth coming
@@ -3624,6 +3869,7 @@ export class LocalAgentSession implements BackendHost {
           if (queued === 'queue_full' || queued === 'failed') {
             return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
           }
+
           return queued === 'queued'
             ? { status: 'completed' }
             : { status: 'completed', detail: `no trial to queue: ${queued}` };
@@ -3639,6 +3885,7 @@ export class LocalAgentSession implements BackendHost {
         // one-shot process from exiting through the model call.
         run: async ({ subject }) => {
           await this.applyAutoTitle(subject);
+
           return { status: 'completed' };
         },
       }),
@@ -3654,6 +3901,7 @@ export class LocalAgentSession implements BackendHost {
     // comes off the row for the same reason it does on the cloud facet — a
     // cold replay must not turn a Plan report into a Build one.
     if (relay === null) return base;
+
     return {
       ...base,
       parent_report: terminalEffect({
@@ -3696,6 +3944,7 @@ export class LocalAgentSession implements BackendHost {
         scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
       });
     }
+
     return this.terminalTransitions;
   }
 
@@ -3723,8 +3972,10 @@ export class LocalAgentSession implements BackendHost {
     if (this.ended || this.terminalRetryAt <= atMs) return;
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
+
     const timer = setTimeout(async () => {
       this.clearTerminalRetry();
+
       // The job sweep FIRST, and in its own try: this timer is also the wake a
       // deferred background job arms, and `recoverTerminalTransitions` does not
       // reach `recoverOrphans` — the only path that does is
@@ -3739,15 +3990,18 @@ export class LocalAgentSession implements BackendHost {
           doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
         }));
       }
+
       try {
         await this.recoverTerminalTransitions();
       } catch (cause) {
         const failure = toKinuError({
           doing: 'retrying the effects a settled turn still owed', cause, otherwise: 'unavailable',
         });
+
         diagnostics.failure('turn.terminal_retry_failed', failure);
       }
     }, Math.max(0, atMs - Date.now()));
+
     // UNREF'D: an owed row must not hold a finished process open. The next start
     // is the durable carrier; this timer only shortens the wait for a process
     // that happens to still be here.
@@ -3807,6 +4061,7 @@ export class LocalAgentSession implements BackendHost {
           cause,
           otherwise: 'io',
         });
+
         // RELEASED. A sequence this process still holds is one every later
         // sweep skips, which is the one way this design wedges. The rows stay
         // owed either way, and the next start is what comes back for them.
@@ -3814,6 +4069,7 @@ export class LocalAgentSession implements BackendHost {
         diagnostics.failure('turn.terminal_transition_close_failed', failure, {
           turnId: transition.turnId, messageId: transition.messageId,
         });
+
         // RE-ARMED, exactly as the Durable Object's close does. The close
         // carries the ledger's own final wake, so this rejection can BE that
         // wake failing — and the fiber is about to delete itself. Without this
@@ -3850,6 +4106,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private promptIdentity(): PromptIdentity {
     const own = this.config.getDisplayName();
+
     return this.workspaceTitleSource
       ? { agent: own, workspace: this.workspaceTitleSource() }
       : { workspace: own };
@@ -3876,6 +4133,7 @@ export class LocalAgentSession implements BackendHost {
       nameOrigin: this.config.getNameOrigin(),
       mission,
     };
+
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
       persist: (name) => {
@@ -3884,6 +4142,7 @@ export class LocalAgentSession implements BackendHost {
         if (this.config.getNameOrigin() === 'user') return false;
         this.config.setDisplayNameOrigin(name, 'auto');
         this.broadcast({ type: 'workspace_renamed', displayName: name });
+
         return true;
       },
       // Only the suggestion is absorbed. The model SDK reports a failed call as
@@ -3897,6 +4156,7 @@ export class LocalAgentSession implements BackendHost {
           diagnostics.failure('agent.auto_title_suggestion_failed', toKinuError({
             doing: 'deriving a title from the mission', cause, otherwise: 'unavailable',
           }));
+
           return null;
         }
       },
@@ -3915,7 +4175,9 @@ export class LocalAgentSession implements BackendHost {
   private async suggestTitle(mission: string): Promise<string | null> {
     const profile = await this.routingProfile();
     const resolution = resolveModelRoute('fast', profile);
+
     if (!resolution) return null;
+
     // The prompt pair and parse are core's; only the model is local. This does
     // not catch: `applyAutoTitle` names and records the one best-effort Error
     // class after the deterministic title has landed.
@@ -3945,11 +4207,14 @@ export class LocalAgentSession implements BackendHost {
    */
   private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
+
     const laneKey = recorded.turn.turnId === undefined || recorded.turn.turnId === ''
       ? null
       : recorded.turn.turnId;
+
     if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey)) return;
     const checkpointed = Promise.withResolvers<void>();
+
     const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
       // The checkpoint IS what the caller owes, so a lane that cannot write one
       // is a review no interruption can resume and the failure travels to the
@@ -3962,16 +4227,19 @@ export class LocalAgentSession implements BackendHost {
           cause,
           otherwise: 'io',
         });
+
         diagnostics.failure('advisor.snapshot_failed', failure, {
           turnId: recorded.turn.turnId ?? '(none)',
         });
         checkpointed.reject(failure);
         throw failure;
       }
+
       if (laneKey !== null) recordEffectDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
     });
+
     let observed: Promise<void> | null = null;
     observed = (async () => {
       try {
@@ -3983,6 +4251,7 @@ export class LocalAgentSession implements BackendHost {
         const failure = toKinuError({
           doing: 'tracking the advisor review lane', cause, otherwise: 'unavailable',
         });
+
         diagnostics.failure('advisor.lane_failed', failure);
         checkpointed.reject(failure);
       } finally {
@@ -4010,8 +4279,10 @@ export class LocalAgentSession implements BackendHost {
    */
   private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
     const llm = this.rt.advisorLlm;
+
     if (llm === undefined) return;
     const labels = recorded.turn.missionLabels ?? [];
+
     try {
       await runAdvisorLane({
         turn: recorded.turn,
@@ -4034,6 +4305,7 @@ export class LocalAgentSession implements BackendHost {
   /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
   private getSkillsVfs(): SkillsVfs {
     if (!this.skillsVfs) this.skillsVfs = skillsVfsOver(this.rt.storage.vfs);
+
     return this.skillsVfs;
   }
 
@@ -4042,6 +4314,7 @@ export class LocalAgentSession implements BackendHost {
       return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
     } catch (error) {
       diagnostics.event('local_session.agent_name_unreadable', { error: renderThrownChain({ cause: error }) });
+
       return 'local';
     }
   }
@@ -4063,11 +4336,14 @@ export class LocalAgentSession implements BackendHost {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
     const retention = this.config.getCacheRetention();
     const spec = this.effectiveModelSpec();
+
     try {
       const { provider, modelId } = parseModelSpec(spec);
+
       return { providerId: provider, modelId, sessionKey, retention };
     } catch (error) {
       diagnostics.event('local_session.model_spec_unparseable', { error: renderThrownChain({ cause: error }) });
+
       return { sessionKey, retention };
     }
   }
@@ -4091,11 +4367,14 @@ export class LocalAgentSession implements BackendHost {
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
+
     const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
       fetch: globalThis.fetch,
     };
+
     if (getAuth) options.getAuth = getAuth;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
+
     return this._webSearchProvider;
   }
 
@@ -4135,6 +4414,7 @@ export class LocalAgentSession implements BackendHost {
       config: this.config,
       surface: (task, context, callScope) => {
         const model = this.ensureModelState();
+
         return {
           llmStream: this.makeScaffoldLLMStream(model, this.tools),
           callTool: this.makeScaffoldCallTool(this.tools, callScope),
@@ -4165,12 +4445,15 @@ export class LocalAgentSession implements BackendHost {
    */
   private get refinementDeps(): RefinementDeps {
     const temporary = this.teamDeps?.temporary;
+
     let deps: RefinementDeps = {
       control: this.scaffoldControl,
       facts: this.factsStore,
       approvals: this.instructionApprovals,
     };
+
     if (temporary !== undefined) deps = { ...deps, refiner: temporary };
+
     return deps;
   }
 
@@ -4180,6 +4463,7 @@ export class LocalAgentSession implements BackendHost {
     const deps = this.refinementDeps;
     await refinementDebtRequest(deps);
     const step = await advanceRefinementLane(deps);
+
     if (step.step === 'idle') return;
     // A refinement can move the live prompt (through the section lane it feeds)
     // and the facts block, so the session's model-bound state is dropped and the
@@ -4201,12 +4485,14 @@ export class LocalAgentSession implements BackendHost {
       trigger: 'explicit',
       scope: opts?.scope ?? 'workspace',
     };
+
     if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
     const view = await requestRefinement(this.refinementDeps, request);
     // Awaited, unlike the cloud nudge: a local `/refine` is a foreground
     // command at a terminal, and printing "queued" while the answer is one
     // await away would be worse than the wait.
     await this.runRefinementLane();
+
     return this.listRefinements(1).requests[0] ?? view;
   }
 
@@ -4217,9 +4503,11 @@ export class LocalAgentSession implements BackendHost {
    */
   async decideRefinement(input: RefinementDecisionInput): Promise<RefinementDecisionResult> {
     const result = await decideRefinementRoute(this.refinementDeps, input);
+
     // A promoted skill enters the next prompt and its allowed_tools bound the
     // next turn's surface, so the model-bound state is dropped.
     if (result.ok) this.invalidateModelState();
+
     return result;
   }
 
@@ -4261,6 +4549,7 @@ export class LocalAgentSession implements BackendHost {
       history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
     });
+
     for await (const event of stream) yield { event };
   }
 
@@ -4274,7 +4563,9 @@ export class LocalAgentSession implements BackendHost {
    *  promotion gate; 'promote'/'rollback' force the corresponding action. */
   async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
     const result = await applyScaffoldDecision(this.scaffoldControl, mode);
+
     if (result.ok) this.invalidateModelState();
+
     return result;
   }
 
@@ -4334,6 +4625,7 @@ export class LocalAgentSession implements BackendHost {
   ): NonNullable<ScaffoldRunOptions['callTool']> {
     if (callScope === undefined) return createScaffoldCallTool(() => turnTools, undefined, signal);
     const scoped = this.rolloutTools(callScope);
+
     return createScaffoldCallTool(() => scoped, callScope, signal);
   }
 
@@ -4351,12 +4643,15 @@ export class LocalAgentSession implements BackendHost {
   async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
     const memoryTail = await readMemoryTail(this.rt.memory);
+
     const systemPrompt = buildSystemPromptSync(this.rt, {
       backend: 'cli-local',
       model: { id: this.effectiveModelSpec() },
       currentDate: currentDateForPrompt(),
     });
+
     let text = '';
+
     for await (const ev of runChat({
       model,
       modelContext: {
@@ -4378,6 +4673,7 @@ export class LocalAgentSession implements BackendHost {
       if (ev.type === 'text-delta') text += ev.delta;
       else if (ev.type === 'done' && !text.trim()) text = ev.text;
     }
+
     return text;
   }
 
@@ -4399,6 +4695,7 @@ export class LocalAgentSession implements BackendHost {
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
         const items = this.pendingShellApproval === null ? [] : [this.pendingShellApproval];
+
         return { items, total: items.length };
       },
     });
@@ -4453,6 +4750,7 @@ export class LocalAgentSession implements BackendHost {
    */
   async runShadowTrials(): Promise<ShadowTrialDrain> {
     const drain = await runQueuedShadowTrials(this.scaffoldControl);
+
     if (drain.applied) {
       this.emit({
         type: 'evolution',
@@ -4461,6 +4759,7 @@ export class LocalAgentSession implements BackendHost {
       });
       this.invalidateModelState();
     }
+
     return drain;
   }
 
@@ -4476,6 +4775,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private buildOwnActorHost(hubSql: SqlExec): ActorHost {
     const { directory } = localActorDirectory(this.rt.actor);
+
     return createActorHost({
       storage: {
         sql: this.rt.storage.sql,
@@ -4525,11 +4825,13 @@ export class LocalAgentSession implements BackendHost {
   private lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
     const { hash, status } = observeSystemPromptHash(this.lastSystemPromptHash, system);
+
     // Only the change is worth a line on an interactive stream — a per-turn
     // "still stable" is the noise the telemetry exists to make visible against.
     if (status === 'changed') {
       this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
     }
+
     this.lastSystemPromptHash = hash;
   }
 
@@ -4539,6 +4841,7 @@ export class LocalAgentSession implements BackendHost {
   private buildAgentsSwarmDeps(): AgentsSwarmDeps {
     const nodeHome = this.rt.nodeHome;
     const nodeRuntime = this.rt.nodeRuntime;
+
     return {
       rt: this.rt,
       // ONE SEAT PER NODE. A wave's deps are built once and shallow-copied per
@@ -4575,6 +4878,7 @@ export class LocalAgentSession implements BackendHost {
         ? undefined
         : () => async (node) => {
           const actor = registerLocalNode(this.rt.actor, node);
+
           return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(headAgentName(actor.storageKey));
         },
       // The home is only real through a runtime that USES the credential: the
@@ -4645,8 +4949,11 @@ export class LocalAgentSession implements BackendHost {
     const swarm = this.buildAgentsSwarmDeps();
     const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
     base.profile = () => agentsProfileContext(this.actorSession.profile, this.actorSession.profileInputs);
+
     if (this.teamDeps) base.team = this.teamDeps;
+
     if (this.peersDeps) base.peers = this.peersDeps;
+
     return base;
   }
 
@@ -4702,15 +5009,18 @@ export class LocalAgentSession implements BackendHost {
     void this.rt.storage.sql`INSERT OR IGNORE INTO messages (actor_id, id, session_id, role, content, metadata)
       VALUES (${actorId}, ${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
+
     for (const steer of steers) {
       const steerStamp = JSON.stringify({
         [STEER_METADATA_KEY]: true,
         [STEER_STEP_METADATA_KEY]: steer.atStep,
       });
+
       void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, metadata)
         VALUES (${actorId}, ${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
       parentId = steer.id;
     }
+
     void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${actorId}, ${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
   }
@@ -4723,22 +5033,28 @@ export class LocalAgentSession implements BackendHost {
    *  user half and hoping the model reads it the same way. */
   private localRouteLlm(resolution: ModelRouteResolution, system?: string): LLM {
     const { model, providerOptions } = this.bindRouteModel(resolution);
+
     return {
       async *stream() { yield ""; },
       complete: async (prompt: string): Promise<string> => {
         const request: Parameters<typeof generateText>[0] = { model, prompt };
+
         if (system !== undefined) request.system = system;
+
         if (providerOptions) request.providerOptions = providerOptions;
         const result = await generateText(request);
+
         const report = {
           source: resolution.source,
           spec: resolution.model,
           usage: normalizeUsage(result.usage),
         };
+
         const modelId = result.response?.modelId;
         this.modelCallSink(modelId
           ? { ...report, modelId }
           : report);
+
         return result.text.trim();
       },
     };
@@ -4762,10 +5078,12 @@ export class LocalAgentSession implements BackendHost {
     const model = this.modelResolver
       ? this.modelResolver.resolveModel(resolution.model)
       : this.defaultModel(`${resolution.source} model lane`);
+
     const providerOptions = reasoningEffortOptions(
       resolution.reasoningEffort,
       parseModelSpec(resolution.model).provider,
     );
+
     return providerOptions ? { model, providerOptions } : { model };
   }
 
@@ -4806,20 +5124,27 @@ export class LocalAgentSession implements BackendHost {
       WHERE actor_id = ${this.rt.actor.actorId}
         AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, rowid DESC`;
+
     const budget = stepContextLimit({
       contextWindow: this.sessionContextWindow(),
       modelOutputLimit: this.modelCatalog.modelOutputLimit(),
     });
+
     const restored: ModelMessage[] = [];
     let tokens = 0;
     let omitted = 0;
+
     for (const row of rows) {
       if (row.role !== 'user' && row.role !== 'assistant') continue;
+
       if (omitted > 0) { omitted++; continue; }
+
       const cost = estimateTokens(row.content.length);
+
       // The newest message is always restored. A single over-window message
       // belongs to the compaction ladder, not an empty-history fallback.
       if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
+
       tokens += cost;
       restored.push({ role: row.role, content: row.content });
     }
@@ -4838,12 +5163,14 @@ export class LocalAgentSession implements BackendHost {
    */
   private profiles(): LocalProfileAuthority {
     const profiles = this.rt.profiles;
+
     if (!profiles) {
       throw new Error(
         'this runtime carries no profile authority: build it with createCLIRuntime '
         + '(openWorkspaceCLI) so its model lanes can route',
       );
     }
+
     return profiles;
   }
 
@@ -4864,9 +5191,11 @@ export class LocalAgentSession implements BackendHost {
    */
   private resolveModelForSpec(spec: string): LanguageModel {
     if (this.modelResolver) return this.modelResolver.resolveModel(spec);
+
     if (this.profiles().normalizeSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
     }
+
     throw new Error(
       `this session cannot resolve ${spec}: it was built with a single static model `
       + `(${STATIC_MODEL_SPEC}) and has no provider registry.`,
@@ -4885,6 +5214,7 @@ export class LocalAgentSession implements BackendHost {
         `No default model to run ${what}: set one with /model or kinu model.`
       );
     }
+
     return this.fallbackModel;
   }
 
@@ -4907,6 +5237,7 @@ export class LocalAgentSession implements BackendHost {
 
   private ensureModelState(): LanguageModel {
     const spec = this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
+
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
     const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel("this static-model session");
     this.cachedModel = model;
@@ -4918,6 +5249,7 @@ export class LocalAgentSession implements BackendHost {
     // whatever has not landed falls back exactly as before.
     this.modelCatalog.info();
     this.rebuildModelBoundState(model);
+
     return model;
   }
 
@@ -4939,6 +5271,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private codemodeProviders(mode: WorkMode): CodemodeProvider[] {
     const report = this.reportGateOpen() ? this.reportDeps : null;
+
     return [
       createAgentSelfProvider(this),
       // `agents.*` — the delegation tool projected into the sandbox, over
@@ -5023,12 +5356,14 @@ export class LocalAgentSession implements BackendHost {
       journal: () => this.headJournal,
       hostHead: (input, writes) => this.hostHead(input, writes),
     };
+
     // Per-fork models only mean something where a resolver exists; a static
     // model session has one model and every search inherits it.
     if (this.modelResolver) {
       const modelResolver = this.modelResolver;
       options.resolveModel = (spec) => modelResolver.resolveModel(spec);
     }
+
     return options;
   }
 
@@ -5051,6 +5386,7 @@ export class LocalAgentSession implements BackendHost {
     const binding = registerLocalActor(this.rt.actor, {
       name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
     });
+
     const agentName = headAgentName(binding.storageKey);
     // BOTH NAMED BEFORE ACQUIRE, because the host seeds the loop pointer and
     // builds the runtime while it builds the actor — a fork that named a
@@ -5060,6 +5396,7 @@ export class LocalAgentSession implements BackendHost {
     this.loopOrigins.set(binding.reference.actorId, input.loop);
     this.actorWrites.set(binding.reference.actorId, writes);
     const actor = await this.actorHost.acquire(binding.reference);
+
     return {
       actor,
       runId: this.currentRunId ?? WORKSPACE_RUN_ID,
@@ -5116,11 +5453,13 @@ export class LocalAgentSession implements BackendHost {
     const binding = registerLocalActor(this.rt.actor, {
       name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task',
     });
+
     // The mode this seat runs in, declared before the host builds it: the row
     // is a head row, and only this slot tells `runtimeFor` it seats a swarm
     // node rather than a branching head.
     this.nodeSeats.add(binding.reference.actorId);
     const actor = await this.actorHost.acquire(binding.reference);
+
     return {
       actor,
       runId: this.currentRunId ?? WORKSPACE_RUN_ID,
@@ -5143,6 +5482,7 @@ export class LocalAgentSession implements BackendHost {
     input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode },
   ): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profiles().inputs();
+
     const profile = resolveAgentTurnProfile({
       ...inputs,
       activeRoleId: actor.handle.config.getRoleSelection() ?? this.getActiveRoleId(),
@@ -5152,6 +5492,7 @@ export class LocalAgentSession implements BackendHost {
       // program its parent promoted, and the skills that program names.
       activeSkills: [],
     });
+
     return { profile, inputs };
   }
 
@@ -5172,6 +5513,7 @@ export class LocalAgentSession implements BackendHost {
     // Branching heads — in-process runtime over an isolated ephemeral store.
     // The agent's VFS backs the shared findings scratch sibling heads write to.
     this._headRuntime = createCLIHeadRuntime(this.headRuntimeOptions(() => model));
+
     for (const mode of ['build', 'plan'] as const) {
       const raw = buildActorTools(this.actorToolsetDeps(
         mode,
@@ -5179,8 +5521,10 @@ export class LocalAgentSession implements BackendHost {
         // the turn changes every turn.
         () => this.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
+
       this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
     }
+
     this.activateToolMode(this.actorSession.workMode);
   }
 
@@ -5220,9 +5564,11 @@ export class LocalAgentSession implements BackendHost {
         // declares no tool list.
         const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
         const native: ToolSet = {};
+
         for (const [name, entry] of Object.entries(surface.native)) {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
+
         return createNodeExecuteToolFactory({
           extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
         })({ ...surface, native });
@@ -5232,10 +5578,12 @@ export class LocalAgentSession implements BackendHost {
       facts: this.factsStore,
       webSearch: this.getWebSearchProvider(),
     };
+
     // Structural absence is the gate, and the toolset is rebuilt per turn, so a
     // subordinate carries `report` on the turns its parent drove and on no
     // others.
     if (this.reportGateOpen() && this.reportDeps) deps.report = this.reportDeps;
+
     return deps;
   }
 
@@ -5259,6 +5607,7 @@ export class LocalAgentSession implements BackendHost {
 
   private activateToolMode(mode: WorkMode): void {
     const surface = this.toolSets[mode];
+
     if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
     this.tools = surface.wrapped;
   }
@@ -5275,7 +5624,9 @@ function normalizePromptInput(
   input: string | { text: string; files: ReadonlyArray<PromptFile> },
 ): PromptInputParts {
   const text = v.safeParse(v.string(), input);
+
   if (text.success) return { text: text.output };
+
   return v.parse(v.object({
     text: v.string(),
     files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
@@ -5288,6 +5639,7 @@ function normalizePromptInput(
 async function raceDeadline(work: Promise<unknown>, ms: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+
   try { await Promise.race([work, expiry]); }
   finally { if (timer) clearTimeout(timer); }
 }

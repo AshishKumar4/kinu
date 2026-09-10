@@ -9,24 +9,29 @@ export const PublicationCutSchema = v.strictObject({
   key: v.nullable(v.string()),
   work: PublishWorkSchema,
 });
+
 export type PublicationCut = v.InferOutput<typeof PublicationCutSchema>;
 
 export function armPublicationCut(token: string, prefix: string): PublicationCut {
   if (token.length === 0 || prefix.length === 0 || !prefix.endsWith('/')) {
     throw new Error('a publication cut needs a token and a complete store prefix');
   }
+
   return { token, prefix, state: 'armed', key: null, work: { objectsPut: 0, bytesPut: 0, casAttempts: 0 } };
 }
 
 /** Called after the store commits the object, before its caller receives the acknowledgement. */
 export function reachPublicationCut(row: PublicationCut, key: string, bytes: number): PublicationCut {
   if (row.state !== 'armed' || !key.startsWith(row.prefix) || bytes <= 0) return row;
+
   return { ...row, state: 'held', key, work: { objectsPut: 1, bytesPut: bytes, casAttempts: 0 } };
 }
 
 export function finishPublicationCut(row: PublicationCut, token: string, stopped: boolean): PublicationCut {
   if (row.token !== token) throw new Error('the publication cut token changed');
+
   if (row.state === 'CUT' || row.state === 'NOT-CUT') return row;
+
   return { ...row, state: row.state === 'held' && stopped ? 'CUT' : 'NOT-CUT' };
 }
 
@@ -42,8 +47,11 @@ export interface PublicationCutPorts {
 export async function rendezvousPublicationCut(ports: PublicationCutPorts): Promise<PublicationCut> {
   for (;;) {
     const receipt = await ports.read();
+
     if (receipt.state === 'CUT' || receipt.state === 'NOT-CUT') return receipt;
+
     if (!(await ports.pending())) return await ports.cancel();
+
     if (receipt.state === 'held') return await ports.kill();
     await ports.wait();
   }
@@ -73,9 +81,11 @@ export async function holdPublicationAcknowledgement(
   ports: PublicationAckPorts, key: string, bytes: number,
 ): Promise<void> {
   let receipt = await ports.reach(key, bytes);
+
   while (receipt?.state === 'held') {
     await ports.wait();
     receipt = await ports.read(receipt.token);
   }
+
   if (receipt?.state === 'CUT') throw new PublicationAckLost(receipt.token);
 }

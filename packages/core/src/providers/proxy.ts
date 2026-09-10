@@ -35,8 +35,10 @@ import { copyHeaders } from './util';
  *  "this one is proxied"; absent means the caller resolved real auth and the
  *  request goes out directly. Never carries secret material. */
 export const PROXY_CRED_HEADER = 'x-kinu-proxy-cred';
+
 /** The upstream URL the proxied request was built for. */
 export const PROXY_TARGET_HEADER = 'x-kinu-proxy-target';
+
 /** The route both sides agree on. Owned here so the client that builds the
  *  URL and the server that mounts it cannot drift. */
 export const PROVIDER_PROXY_PATH = '/api/user/ai/proxy';
@@ -73,6 +75,7 @@ export function cloudProxyBaseURL(origin: string): string {
  *  credential, which is what the CLI's endpoint/credential seam and the server's
  *  registry must agree on. */
 export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
+
 export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
 /**
@@ -124,10 +127,13 @@ export async function providerProxyBaseURL(
 ): Promise<string | null> {
   if (PROXY_DENIED_CRED_KEYS.includes(credKey)) return null;
   const staticBase = STATIC_PROVIDER_BASE_URLS[credKey];
+
   if (staticBase) return staticBase;
   const catalogId = CATALOG_CRED_KEY_PATTERN.exec(credKey)?.[1];
+
   if (!catalogId) return null;
   const info = await getModelsDevProvider(catalogId, deps);
+
   return info ? modelsDevCompatBaseURL(info) : null;
 }
 
@@ -174,16 +180,22 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
   // refusal here is always a refusal this predicate decided.
   const targetURL = URL.parse(target);
   const baseURL = URL.parse(base);
+
   if (!targetURL || !baseURL) return false;
+
   if (targetURL.protocol !== 'https:' || baseURL.protocol !== 'https:') return false;
+
   // A URL carrying credentials cannot be handed to fetch, and its authority is
   // exactly the shape used to make a target look like somewhere it is not.
   if (targetURL.username || targetURL.password) return false;
+
   if (targetURL.origin !== baseURL.origin) return false;
   const basePath = baseURL.pathname.replace(/\/+$/, '');
+
   if (targetURL.pathname !== basePath && !targetURL.pathname.startsWith(`${basePath}/`)) return false;
   const endpoint = targetURL.pathname.slice(basePath.length) || '/';
   const verb = method.toUpperCase();
+
   return PROXY_ALLOWED_ENDPOINTS.some((allowed) => allowed.method === verb && allowed.path.test(endpoint));
 }
 
@@ -197,7 +209,9 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
  *  marker would be a wire feature nothing could ever set. */
 export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
   const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
+
   if (baseURL) resolution.baseURL = baseURL;
+
   return resolution;
 }
 
@@ -221,14 +235,17 @@ export interface ProviderProxyFetchOptions {
  */
 export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeof globalThis.fetch {
   const baseFetch = opts.fetch ?? fetch;
+
   return asFetchFunction(async (input, init) => {
     const request = describeRequest(input, init);
     const credKey = request.headers.get(PROXY_CRED_HEADER);
+
     if (!credKey) return baseFetch(input, init);
 
     const headers = copyHeaders(request.headers);
     headers.set('authorization', opts.authorization);
     headers.set(PROXY_TARGET_HEADER, request.url);
+
     for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
 
     return baseFetch(opts.forwardURL, { ...init, method: request.method, headers });
@@ -241,6 +258,7 @@ export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeo
  *  `createAuthedFetch`), so spreading `init` forwards the body untouched. */
 function describeRequest(input: RequestInfo | URL, init?: RequestInit) {
   const fromRequest = input instanceof Request ? input : null;
+
   return {
     url: fromRequest ? fromRequest.url : String(input),
     method: init?.method ?? fromRequest?.method ?? 'GET',

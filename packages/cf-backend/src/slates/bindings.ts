@@ -53,6 +53,7 @@ interface SlateBindingEnv {
 export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBindingProps> {
   call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
+
     return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation });
   }
 }

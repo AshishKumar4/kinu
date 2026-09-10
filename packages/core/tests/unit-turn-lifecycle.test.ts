@@ -21,6 +21,7 @@ function recorder(): RunEventRecorder {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
+
   return new RunEventRecorder(sql, testActorHandle(sql));
 }
 
@@ -30,6 +31,7 @@ function recordingState(): CompactionTriggerState & {
 } {
   const saved: Array<[key: string, tokens: number, length: number]> = [];
   const armed: string[] = [];
+
   return {
     saved, armed,
     savePromptTokens: (key, tokens, len) => { saved.push([key, tokens, len]); },
@@ -50,14 +52,17 @@ describe('openTurnRun / closeTurnRun', () => {
     const events = rec.read('run-1');
     expect(events.map((e) => e.type)).toEqual(['run_start', 'turn_start', 'turn_end', 'run_end']);
     const start = events[0];
+
     if (start?.type !== 'run_start') throw new Error('Expected run_start as the first event');
     expect(start.agentId).toBe('ws');
     expect(start.caused_by).toBe('chat');
     expect(start.userMessage?.length).toBe(500); // bounded at the spine, not per backend
     const turnEnd = events[2];
+
     if (turnEnd?.type !== 'turn_end') throw new Error('Expected turn_end as the third event');
     expect(turnEnd.usage).toEqual({ input: 10, output: 5, cacheRead: 2 });
     const runEnd = events[3];
+
     if (runEnd?.type !== 'run_end') throw new Error('Expected run_end as the fourth event');
     expect(runEnd.reason).toBe('error');
     expect(runEnd.error).toBe('boom');
@@ -84,6 +89,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const events = rec.read('run-2');
     expect(events.map((e) => e.type)).toEqual(['run_start', 'turn_start', 'context_budget', 'turn_end', 'run_end']);
     const row = events[2];
+
     if (row?.type !== 'context_budget') throw new Error('Expected context_budget before turn_end');
     expect(row.admittedChars).toBe(41_000);
     expect(row.omittedChars).toBe(160_000);
@@ -105,11 +111,13 @@ describe('openTurnRun / closeTurnRun', () => {
   test('a steered turn writes its turn_steering row; an unsteered one writes none', () => {
     const rec = recorder();
     const steering = new TurnSteering();
+
     // Three DIFFERENT failures of one tool — the failure streak, not a repeat.
     for (const boom of ['boom a', 'boom b', 'boom c']) {
       steering.onToolResult({ toolName: 'run', args: { command: boom }, result: 'Error (exit 2): ' + boom,
         success: false, reason: 'io', execution: { exitCode: 2 } });
     }
+
     steering.steerFor({ stepNumber: 4, messages: [] });
     steering.onToolCall({ toolName: 'run', args: { command: 'cat config.log' } });
 
@@ -120,6 +128,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const events = rec.read('run-n');
     expect(events.map((e) => e.type)).toEqual(['turn_steering', 'turn_end', 'run_end']);
     const row = events[0];
+
     if (row?.type !== 'turn_steering') throw new Error('Expected turn_steering before turn_end');
     expect(row.trigger).toBe('repeated_failure');
     expect(row.tool).toBe('run');
@@ -139,10 +148,16 @@ describe('openTurnRun / closeTurnRun', () => {
     const observed: string[][] = [];
     const crafted: string[] = [];
     const acc = new TurnAccumulator();
+
     const cycle = new CraftCycle({
       names: () => crafted,
-      observe: (names) => { observed.push([...names]); return []; },
+      observe: (names) => {
+        observed.push([...names]);
+
+        return [];
+      },
     }, acc);
+
     cycle.reset(true);
 
     // The episode: craft in one call, reach for it in the next.
@@ -163,6 +178,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const events = rec.read('run-c');
     expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
     const row = events[0];
+
     if (row?.type !== 'craft_cycle') throw new Error('Expected craft_cycle before turn_end');
     expect(row.crafted).toEqual(['sum']);
     expect(row.reused).toEqual(['sum']);
@@ -185,6 +201,7 @@ describe('openTurnRun / closeTurnRun', () => {
   test('a recorder failure never throws into the turn', () => {
     const logger = createRecordingLogger();
     const restore = setDiagnosticsSink(logger);
+
     try {
       const broken: TurnRunRecorder = { emit: () => { throw new Error('db locked'); } };
       expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
@@ -192,6 +209,7 @@ describe('openTurnRun / closeTurnRun', () => {
     } finally {
       restore();
     }
+
     // The failure reaches diagnostics: a lost history row stays visible.
     expect(logger.emitted.map((line) => line.event)).toEqual(['turn.start_events_failed', 'turn.end_events_failed']);
   });
@@ -225,9 +243,11 @@ describe('snapshotCompletedTurn', () => {
     acc.reset(Date.now() - 1_000);
     acc.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
     acc.recordStep({});
+
     const turn = snapshotCompletedTurn(acc, {
       userMessage: 'do it', assistantResponse: 'done', turnId: 't1', sessionId: 'default', origin: 'user',
     });
+
     expect(turn.toolCalls.length).toBe(1);
     expect(turn.steps).toBe(1);
     expect(turn.hadError).toBe(false);
@@ -241,9 +261,11 @@ describe('snapshotCompletedTurn', () => {
     acc.reset(Date.now());
     acc.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'exit 1' });
     acc.recordStep({ usage: { input: 7, output: 3 } });
+
     const turn = snapshotCompletedTurn(acc, {
       userMessage: 'u', assistantResponse: 'a', sessionId: 's', origin: 'programmatic',
     });
+
     expect(turn.hadError).toBe(true);
     expect(turn.origin).toBe('programmatic');
     expect(turn.usage).toEqual({ input: 7, output: 3 });
@@ -270,11 +292,13 @@ describe('persistMeasuredPromptTokens', () => {
 describe('applyOverflowRecovery', () => {
   test('a context overflow arms force-compaction and declares exactly one retry', () => {
     const state = recordingState();
+
     const decision = applyOverflowRecovery({
       error: 'prompt is too long: 210000 tokens > 200000 maximum',
       lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
       state, sessionKey: 'k',
     });
+
     expect(decision.forceCompaction).toBe(true);
     expect(decision.enqueueRetry).toBe(true);
     expect(state.armed).toEqual(['k']);
@@ -282,16 +306,20 @@ describe('applyOverflowRecovery', () => {
 
   test('a failed retry never declares another; unrelated failures never arm', () => {
     const state = recordingState();
+
     const retryFailure = applyOverflowRecovery({
       error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
       turnWasOverflowRetry: true, state, sessionKey: 'k',
     });
+
     expect(retryFailure.forceCompaction).toBe(true);
     expect(retryFailure.enqueueRetry).toBe(false);
+
     const rateLimit = applyOverflowRecovery({
       error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
       turnWasOverflowRetry: false, state, sessionKey: 'k',
     });
+
     expect(rateLimit.forceCompaction).toBe(false);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
   });
@@ -311,12 +339,14 @@ test('an earned overflow retry is recorded as one inline terminal effect', () =>
     recordedAt: 1,
     evolutionEnabled: false,
   };
+
   const owed = declareTerminalRoster(facts, { overflowRetry: true });
   expect(owed.filter((effect) => effect.name === 'overflow_retry')).toEqual([
     { name: 'overflow_retry', scope: 'answer-1', lane: 'inline', input: {} },
   ]);
   expect(declareTerminalRoster(facts).some((effect) => effect.name === 'overflow_retry')).toBe(false);
 });
+
 // The credit decision — which id the work captured INSIDE a turn is attributed
 // to. Both backends attribute two capture kinds (alternate takes, steer
 // branches) to the same answer, so this is the cross-backend contract for both.
@@ -385,9 +415,11 @@ describe('the escalation row', () => {
   test('a repeated decision is counted, not listed again', () => {
     // Thirty commands in one container is one decision thirty times over.
     const escalations = new TurnEscalationLedger();
+
     for (let i = 0; i < 30; i += 1) {
       escalations.observe({ runtime: 'sandbox', reason: 'inbound port', outcome: 'ok' });
     }
+
     expect(escalations.snapshot().escalations).toEqual([
       { runtime: 'sandbox', reason: 'inbound port', outcome: 'ok', count: 30 },
     ]);

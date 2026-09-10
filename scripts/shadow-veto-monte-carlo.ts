@@ -62,10 +62,12 @@ import {
 // ── Reproducible RNG (mulberry32) ──────────────────────────────────
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -90,6 +92,7 @@ function callVerdict(u: number, world: JudgeWorld, pendingFirst: boolean): Verdi
   if (u < world.tieRate) return 'tie';
   const shifted = world.winRate + (pendingFirst ? world.bias : -world.bias);
   const pPending = Math.min(1, Math.max(0, shifted));
+
   return u < world.tieRate + (1 - world.tieRate) * pPending ? 'pending' : 'current';
 }
 
@@ -101,11 +104,13 @@ function sampleTrial(protocol: Protocol, world: JudgeWorld, rng: () => number): 
     // The pending is always second, and always labelled PENDING.
     return callVerdict(rng(), world, false);
   }
+
   const pendingFirst = rng() < 0.5;
   const u1 = rng();
   const u2 = rng() < world.agreement ? u1 : rng();
   const first = callVerdict(u1, world, pendingFirst);
   const second = callVerdict(u2, world, !pendingFirst);
+
   return first === second && first !== 'tie' ? first : 'tie';
 }
 
@@ -124,19 +129,25 @@ function simulateOnce(
   rng: () => number,
 ): Outcome {
   let pendingWins = 0, currentWins = 0, ties = 0;
+
   for (let t = 1; t <= HORIZON; t++) {
     const verdict = sampleTrial(protocol, world, rng);
+
     if (verdict === 'pending') pendingWins++;
     else if (verdict === 'current') currentWins++;
     else ties++;
+
     const pending: PendingScaffold = {
       version: 1, writtenAt: 0, rationale: '',
       trialsSoFar: pendingWins + currentWins + ties,
       pendingWins, currentWins, ties,
     };
+
     const { decision } = decidePromotion(pending, config);
+
     if (decision !== 'continue') return decision;
   }
+
   return 'unresolved';
 }
 
@@ -151,12 +162,15 @@ function rollout(
 ): Rates {
   const rng = mulberry32(seed);
   let promote = 0, rollback = 0, unresolved = 0;
+
   for (let i = 0; i < sims; i++) {
     const outcome = simulateOnce(protocol, world, config, rng);
+
     if (outcome === 'promote') promote++;
     else if (outcome === 'rollback') rollback++;
     else unresolved++;
   }
+
   return { promote: promote / sims, rollback: rollback / sims, unresolved: unresolved / sims };
 }
 
@@ -165,46 +179,62 @@ function rollout(
 function trialStats(protocol: Protocol, world: JudgeWorld, sims: number, seed: number) {
   const rng = mulberry32(seed);
   let pending = 0, current = 0, ties = 0;
+
   for (let i = 0; i < sims; i++) {
     const v = sampleTrial(protocol, world, rng);
+
     if (v === 'pending') pending++;
     else if (v === 'current') current++;
     else ties++;
   }
+
   const decisive = pending + current;
+
   return { tieRate: ties / sims, winRate: decisive === 0 ? 0.5 : pending / decisive };
 }
 
 // ── Sweep parameters ───────────────────────────────────────────────
 const WIN_RATES = [0.55, 0.6, 0.7, 0.8];
+
 const TIE_RATES = [0.3, 0.5, 0.7];
+
 const MAX_REGRESSIONS = [0, 1, 2];
+
 const MIN_DECISIVE = [3, 5];
+
 const SIMS = 200_000;
+
 const BASE_SEED = 0x5eed;
 
 /** Headline operating point: 10pp of directional bias (the low end of the
  *  10-25pp the self-preference / position-bias literature reports) and a judge
  *  that is content-consistent half the time. */
 const HEADLINE_BIAS = 0.10;
+
 const HEADLINE_AGREEMENT = 0.5;
 
 const pct = (x: number) => (x * 100).toFixed(1).padStart(5);
+
 let seed = BASE_SEED;
 
 const world = (winRate: number, tieRate: number, bias: number, agreement: number): JudgeWorld =>
   ({ winRate, tieRate, bias, agreement });
 
 console.log(`Shadow-veto Monte Carlo — ${SIMS.toLocaleString()} sims/cell`);
+
 console.log(`Fixed: minTrials=${DEFAULT_SHADOW_CONFIG.minTrials} maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials} ` +
   `promote≥${DEFAULT_SHADOW_CONFIG.promoteThreshold} rollback≤${DEFAULT_SHADOW_CONFIG.rollbackThreshold} ` +
   `horizon=${HORIZON}`);
+
 console.log(`Judge world: bias=${HEADLINE_BIAS} agreement=${HEADLINE_AGREEMENT}\n`);
 
 // ── 1. What each protocol does to the trial distribution ───────────
 console.log('1. INDUCED TRIAL DISTRIBUTION (per-call win/tie → recorded trial win/tie)');
+
 console.log('win%  tie%  │ single: tie%  win%  │ doubleWin: tie%  win%');
+
 console.log('─'.repeat(66));
+
 for (const winRate of WIN_RATES) {
   for (const tieRate of TIE_RATES) {
     const w = world(winRate, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
@@ -234,21 +264,25 @@ interface Agg {
 
 function sweep(protocol: Protocol, bias: number, agreement: number, maxTrials = 12): Agg[] {
   const aggs: Agg[] = [];
+
   for (const maxRegressions of MAX_REGRESSIONS) {
     for (const minDecisiveTrials of MIN_DECISIVE) {
       const config: ShadowConfig = { ...DEFAULT_SHADOW_CONFIG, maxRegressions, minDecisiveTrials, maxTrials };
       const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
       let worstUnresolved = 0;
+
       for (const winRate of WIN_RATES) {
         for (const tieRate of TIE_RATES) {
           const good = rollout(protocol, world(winRate, tieRate, bias, agreement), config, SIMS, seed++);
           const bad = rollout(protocol, world(1 - winRate, tieRate, bias, agreement), config, SIMS, seed++);
           better.push(good.promote);
           worseAll.push(bad.promote);
+
           if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
           worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
         }
       }
+
       aggs.push({
         protocol, maxRegressions, minDecisiveTrials,
         meanBetter: better.reduce((s, x) => s + x, 0) / better.length,
@@ -258,6 +292,7 @@ function sweep(protocol: Protocol, bias: number, agreement: number, maxTrials = 
       });
     }
   }
+
   return aggs;
 }
 
@@ -265,6 +300,7 @@ function report(label: string, aggs: Agg[]): Agg | undefined {
   console.log(`\n2. CONFIG AGGREGATES — ${label}`);
   console.log('maxReg  minDec  mean P(better)  worst P(worse) ALL  worst P(worse≤0.3,tie≤0.5)  worst unresolved');
   console.log('─'.repeat(100));
+
   for (const a of aggs) {
     console.log(
       `${String(a.maxRegressions).padStart(4)}  ${String(a.minDecisiveTrials).padStart(6)}  ` +
@@ -272,6 +308,7 @@ function report(label: string, aggs: Agg[]): Agg | undefined {
       `                      ${pct(a.worstUnresolved)}%`,
     );
   }
+
   const strict = aggs.filter(a => a.worstWorseAll < 0.05);
   console.log(`Strict frontier (<5% vs ALL worse worlds): ${strict.length === 0
     ? 'EMPTY — unattainable at this trial budget (see the bars above)'
@@ -279,6 +316,7 @@ function report(label: string, aggs: Agg[]): Agg | undefined {
   const feasible = [...aggs].filter(a => a.worstWorseClear < 0.05).sort((a, b) => b.meanBetter - a.meanBetter);
   const best = feasible[0];
   console.log('OPERATIONAL FRONTIER (<5% vs clearly-worse at tie≤0.5, max true-promotion):');
+
   if (best) {
     console.log(`  maxRegressions=${best.maxRegressions}, minDecisiveTrials=${best.minDecisiveTrials}  ` +
       `mean P(better)=${pct(best.meanBetter)}%  worst P(clearly-worse)=${pct(best.worstWorseClear)}%  ` +
@@ -286,6 +324,7 @@ function report(label: string, aggs: Agg[]): Agg | undefined {
   } else {
     console.log('  none met the bar — tighten thresholds.');
   }
+
   return best;
 }
 
@@ -293,17 +332,23 @@ function report(label: string, aggs: Agg[]): Agg | undefined {
 // so the constants in DEFAULT_SHADOW_CONFIG stay reproducible from this file.
 const sweep0Best = report('single call, bias=0, maxTrials=12 (the original calibration)',
   sweep('single', 0, HEADLINE_AGREEMENT));
+
 const singleBest = report(`single call, bias=${HEADLINE_BIAS}, maxTrials=12 (what production actually ran)`,
   sweep('single', HEADLINE_BIAS, HEADLINE_AGREEMENT));
+
 const doubleBest = report(`order-swapped double-win, bias=${HEADLINE_BIAS}, maxTrials=12 (old budget)`,
   sweep('doubleWin', HEADLINE_BIAS, HEADLINE_AGREEMENT));
 
 // ── 3. Sensitivity of the SHIPPING config to bias and judge consistency ──
 console.log('\n3. SHIPPING CONFIG SENSITIVITY ' +
   `(maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials})`);
+
 console.log('Flagship world: true win-rate 0.70 / per-call tie-rate 0.50, and its 0.30 mirror.');
+
 console.log('bias  agree │ single: P(better) P(worse) │ doubleWin: P(better) P(worse) unresolved');
+
 console.log('─'.repeat(88));
+
 for (const bias of [0, 0.05, 0.10, 0.15, 0.25]) {
   for (const agreement of [1.0, 0.5, 0.0]) {
     const good = (p: Protocol) => rollout(p, world(0.7, 0.5, bias, agreement), DEFAULT_SHADOW_CONFIG, SIMS, seed++);
@@ -326,12 +371,16 @@ for (const bias of [0, 0.05, 0.10, 0.15, 0.25]) {
 // majority and does NOT consult minDecisiveTrials). So sweep the budget.
 console.log('\n4. TRIAL-BUDGET RESCALING under the double-win protocol ' +
   `(maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials})`);
+
 console.log('maxTrials  mean P(better)  worst P(worse) ALL  worst P(worse≤0.3,tie≤0.5)  worst unresolved');
+
 console.log('─'.repeat(94));
+
 for (const maxTrials of [12, 16, 20, 24, 30, 40]) {
   const config: ShadowConfig = { ...DEFAULT_SHADOW_CONFIG, maxTrials };
   const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
   let worstUnresolved = 0;
+
   for (const winRate of WIN_RATES) {
     for (const tieRate of TIE_RATES) {
       const w = (x: number) => world(x, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
@@ -339,10 +388,12 @@ for (const maxTrials of [12, 16, 20, 24, 30, 40]) {
       const bad = rollout('doubleWin', w(1 - winRate), config, SIMS, seed++);
       better.push(good.promote);
       worseAll.push(bad.promote);
+
       if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
       worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
     }
   }
+
   console.log(
     `${String(maxTrials).padStart(7)}    ${pct(better.reduce((s, x) => s + x, 0) / better.length)}%` +
     `         ${pct(Math.max(...worseAll))}%              ${pct(Math.max(...worseClear))}%` +
@@ -357,14 +408,19 @@ const rescaledBest = report(
 );
 
 console.log('\nSUMMARY');
+
 console.log(`  original calibration  (single call, bias=0,   maxTrials=12): frontier ` +
   `(${sweep0Best?.maxRegressions},${sweep0Best?.minDecisiveTrials})`);
+
 console.log(`  what production ran   (single call, bias=${HEADLINE_BIAS}, maxTrials=12): frontier ` +
   `(${singleBest?.maxRegressions},${singleBest?.minDecisiveTrials})`);
+
 console.log(`  double-win, old budget (maxTrials=12):                      frontier ` +
   `(${doubleBest?.maxRegressions},${doubleBest?.minDecisiveTrials})  ← breaks the 5% bar at (1,5)`);
+
 console.log(`  double-win, rescaled   (maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials}):                      frontier ` +
   `(${rescaledBest?.maxRegressions},${rescaledBest?.minDecisiveTrials})`);
+
 console.log(`  shipping DEFAULT_SHADOW_CONFIG: maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, ` +
   `minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials}, maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials}`);
 
@@ -387,13 +443,18 @@ const PROMOTE_BANDS: ReadonlyArray<readonly [number, number]> =
 console.log('\n6. PROMOTE/ROLLBACK BAND at the shipping operating point ' +
   `(doubleWin, bias=${HEADLINE_BIAS}, maxRegressions=${DEFAULT_SHADOW_CONFIG.maxRegressions}, ` +
   `minDecisiveTrials=${DEFAULT_SHADOW_CONFIG.minDecisiveTrials}, maxTrials=${DEFAULT_SHADOW_CONFIG.maxTrials})`);
+
 console.log('promote≥ rollback≤  mean P(better)  worst P(worse) ALL  worst P(worse≤0.3,tie≤0.5)  worst unresolved');
+
 console.log('─'.repeat(104));
+
 const bandRows: Array<{ promote: number; rollback: number; meanBetter: number; worstClear: number; worstAll: number }> = [];
+
 for (const [promoteThreshold, rollbackThreshold] of PROMOTE_BANDS) {
   const config: ShadowConfig = { ...DEFAULT_SHADOW_CONFIG, promoteThreshold, rollbackThreshold };
   const better: number[] = [], worseAll: number[] = [], worseClear: number[] = [];
   let worstUnresolved = 0;
+
   for (const winRate of WIN_RATES) {
     for (const tieRate of TIE_RATES) {
       const w = (x: number) => world(x, tieRate, HEADLINE_BIAS, HEADLINE_AGREEMENT);
@@ -401,15 +462,18 @@ for (const [promoteThreshold, rollbackThreshold] of PROMOTE_BANDS) {
       const bad = rollout('doubleWin', w(1 - winRate), config, SIMS, seed++);
       better.push(good.promote);
       worseAll.push(bad.promote);
+
       if (winRate >= 0.7 && tieRate <= 0.5) worseClear.push(bad.promote);
       worstUnresolved = Math.max(worstUnresolved, good.unresolved, bad.unresolved);
     }
   }
+
   const row = {
     promote: promoteThreshold, rollback: rollbackThreshold,
     meanBetter: better.reduce((s, x) => s + x, 0) / better.length,
     worstClear: Math.max(...worseClear), worstAll: Math.max(...worseAll),
   };
+
   bandRows.push(row);
   console.log(
     `${promoteThreshold.toFixed(2).padStart(7)} ${rollbackThreshold.toFixed(2).padStart(9)}   ` +
@@ -417,11 +481,15 @@ for (const [promoteThreshold, rollbackThreshold] of PROMOTE_BANDS) {
     `                      ${pct(worstUnresolved)}%`,
   );
 }
+
 const bandBest = [...bandRows].filter(r => r.worstClear < 0.05).sort((a, b) => b.meanBetter - a.meanBetter)[0];
+
 console.log('OPERATIONAL FRONTIER over the band (<5% vs clearly-worse at tie≤0.5, max true-promotion):');
+
 console.log(bandBest
   ? `  promote≥${bandBest.promote.toFixed(2)}, rollback≤${bandBest.rollback.toFixed(2)}  ` +
     `mean P(better)=${pct(bandBest.meanBetter)}%  worst P(clearly-worse)=${pct(bandBest.worstClear)}%`
   : '  none met the bar over the swept bands');
+
 console.log(`  shipping band: promote≥${DEFAULT_SHADOW_CONFIG.promoteThreshold}, ` +
   `rollback≤${DEFAULT_SHADOW_CONFIG.rollbackThreshold}`);

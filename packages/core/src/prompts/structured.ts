@@ -45,23 +45,28 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
   const inner = fenced?.[1] ?? '';
   const src = inner.includes(open) ? inner : text;
   const start = src.indexOf(open);
+
   if (start === -1) throw new SyntaxError(`no JSON ${open === '{' ? 'object' : 'array'} in model output`);
 
   let depth = 0;
   let inString = false;
   let escaped = false;
+
   for (let i = start; i < src.length; i++) {
     const ch = src[i];
+
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === '\\') escaped = true;
       else if (ch === '"') inString = false;
       continue;
     }
+
     if (ch === '"') inString = true;
     else if (ch === open) depth++;
     else if (ch === close && --depth === 0) return src.slice(start, i + 1);
   }
+
   throw new SyntaxError(`unterminated JSON ${open === '{' ? 'object' : 'array'} in model output`);
 }
 
@@ -97,6 +102,7 @@ export async function generateJson<TOutput>(opts: {
   // grading it was in the middle of.
   const operation = beginModelOperation(spend, 'generate_json');
   let result;
+
   try {
     result = await generateText({
       model: opts.model,
@@ -107,6 +113,7 @@ export async function generateJson<TOutput>(opts: {
     operation.failed({ cause: err });
     throw err;
   }
+
   // Before the extract-and-validate, and outside it: the call COMPLETED and was
   // billed whether or not its output turns out to be JSON this schema accepts,
   // and every caller handles that throw by falling back to something cheaper —
@@ -117,5 +124,6 @@ export async function generateJson<TOutput>(opts: {
   const modelId = result.response.modelId;
   operation.completed({ usage, modelId });
   spend?.report({ source: spend.source, usage, modelId });
+
   return v.parse(opts.schema, extractJsonObject(result.text));
 }

@@ -80,15 +80,20 @@ export interface TurnFailureSignals {
 /** Classify a failed turn's provider error text. */
 export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
   if (CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error))) return 'context_length';
+
   if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) {
     const { lastPromptTokens, contextWindow } = signals;
+
     const oversized =
       lastPromptTokens !== undefined && lastPromptTokens > 0 &&
       contextWindow !== undefined && contextWindow > 0 &&
       lastPromptTokens > contextWindow * 0.5;
+
     return oversized ? 'context_length' : 'rate_limit';
   }
+
   if (AUTH_PATTERNS.some((re) => re.test(error))) return 'auth';
+
   return 'transient';
 }
 
@@ -114,6 +119,8 @@ export interface OverflowRecoveryDecision {
 export function planOverflowRecovery(input: OverflowRecoveryInput): OverflowRecoveryDecision {
   if (!input.error) return { failureClass: null, forceCompaction: false, enqueueRetry: false };
   const failureClass = classifyTurnFailure(input.error, input);
+
   if (failureClass !== 'context_length') return { failureClass, forceCompaction: false, enqueueRetry: false };
+
   return { failureClass, forceCompaction: true, enqueueRetry: !input.turnWasOverflowRetry };
 }

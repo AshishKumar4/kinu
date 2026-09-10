@@ -41,6 +41,7 @@ import type { InstructionPlacement } from '../prompting/agents-md';
  *  settled per body against a digest, which the index has not read. */
 export function skillIndexLine(skill: SkillHeader): string {
   const origin = skill.source === 'builtin' ? '' : ' (workspace file)';
+
   return `- **${skill.name}**${origin} — ${skill.description}`;
 }
 
@@ -99,11 +100,14 @@ export function renderActiveSkillsSection(
   placement: InstructionPlacement,
 ): string {
   const system = placement === 'system';
+
   const tier = activeSet.active.filter((skill) =>
     system ? skill.trust !== 'unverified' : skill.trust === 'unverified');
+
   if (tier.length === 0) return '';
 
   const reasonByName = new Map<string, ActivationReason>();
+
   for (const r of activeSet.reasons) reasonByName.set(r.name, r.reason);
 
   // RENDER order is name order, not activation order: the same active set must
@@ -116,6 +120,7 @@ export function renderActiveSkillsSection(
     .sort((a, b) => compareSkillNames(a.name, b.name))
     .map((skill) => {
       const header = `### ${skill.name} (${describeReason(reasonByName.get(skill.name))})`;
+
       return skill.body === null
         ? `${header}\n\n(${deferredBodyNote(skill)})`
         : `${header}\n\n${skill.body.trimEnd()}`;
@@ -134,6 +139,7 @@ export function renderActiveSkillsSection(
   }
 
   const restriction = unionAllowedTools(tier);
+
   const restrictionLine = restriction.length === 0
     ? 'These skills do not restrict your tool surface.'
     : `Your tool surface for this turn is restricted to: ${restriction.join(', ')}`;
@@ -160,6 +166,7 @@ export function trustedActiveSkills(activeSet: ActiveSkillSet): ActiveSkill[] {
  *  point at, so it says that instead of naming a file that isn't there. */
 function deferredBodyNote(skill: ActiveSkill): string {
   const cost = `${skillBodyChars(skill.bodyRef)} chars`;
+
   return skill.bodyRef.kind === 'file'
     ? `body not admitted by this turn's skills allocation (${cost}) — `
       + `read it with workspace.readFile("${skill.bodyRef.path}")`
@@ -171,14 +178,17 @@ function deferredBodyNote(skill: ActiveSkill): string {
  *  Used both in the prompt header and as the input to runtime tool gating. */
 export function unionAllowedTools(skills: ReadonlyArray<SkillHeader>): string[] {
   const set = new Set<string>();
+
   for (const s of skills) {
     for (const t of s.allowed_tools) set.add(t);
   }
+
   return Array.from(set).sort();
 }
 
 function describeReason(r?: ActivationReason): string {
   if (!r) return 'active';
+
   switch (r.kind) {
     case 'explicit':      return `explicit /${r.matched_token}`;
     case 'keyword':       return `keyword "${r.matched_keyword}"`;
@@ -193,9 +203,11 @@ export function toolAllowedBySkills(
   allowedUnion: ReadonlyArray<string>,
 ): boolean {
   if (allowedUnion.length === 0) return true;
+
   for (const pattern of allowedUnion) {
     if (matchesToolPattern(toolName, pattern)) return true;
   }
+
   return false;
 }
 
@@ -205,12 +217,17 @@ export function toolAllowedBySkills(
 function matchesToolPattern(toolName: string, pattern: string): boolean {
   if (pattern === toolName) return true;
   const paren = pattern.indexOf('(');
+
   if (paren > 0 && toolName === pattern.slice(0, paren)) return true;
+
   if (pattern.endsWith('.*')) {
     const prefix = pattern.slice(0, -1); // keep the trailing dot
+
     return toolName.startsWith(prefix);
   }
+
   // Allow a bare namespace `workspace` to match `workspace.*` too.
   if (!pattern.includes('.') && toolName.startsWith(pattern + '.')) return true;
+
   return false;
 }

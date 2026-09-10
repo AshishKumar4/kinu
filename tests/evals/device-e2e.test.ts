@@ -46,6 +46,7 @@ import {
  *  borrowing the real name would put a skip line for a suite this file does not
  *  run into every credential-free tier's log. */
 const PROBE_SUITE = 'Device Gate Probe';
+
 const STAGING = 'https://staging.kinu.run';
 
 /** A resolution with no plan, as the arm sees one. The remedy text is the
@@ -56,10 +57,12 @@ describe('the device arm runs on the cloud backend and nowhere else', () => {
   test('the default and the local backend both refuse, naming the invocation', () => {
     for (const env of [{}, { KINU_EVAL_BACKEND: 'local' }]) {
       const resolution = resolvePublicSessionPlan(PROBE_SUITE, '@cf/model', env);
+
       if (resolution.kind !== 'unavailable') {
         throw new Error('a non-cloud backend resolved a plan, so this arm could try to link a '
           + 'machine to a deployment that is not there');
       }
+
       expect(resolution.remedy).toContain('KINU_EVAL_BACKEND');
       expect(resolution.remedy).toContain('evals:cloud');
     }
@@ -103,6 +106,7 @@ describe('the device arm runs on the cloud backend and nowhere else', () => {
         open: () => { throw new Error('the gate never opens a session'); },
       },
     });
+
     expect(gate.kind).toBe('run');
   });
 });
@@ -137,10 +141,12 @@ describe('the daemon is installed under a throwaway home, never the developer\'s
 describe('teardown undoes everything, in order, even after a failure', () => {
   test('a failing step does not strand the ones after it', async () => {
     const ran: string[] = [];
+
     const step = (what: string, fail = false): TeardownStep => ({
       what,
       run: () => {
         ran.push(what);
+
         if (fail) throw new Error(`${what} answered 500`);
       },
     });
@@ -203,6 +209,7 @@ describe('a failed route says something a reader can act on', () => {
     const page = '<!DOCTYPE html>\n<html>\n<head>\n'
       + '<title>Worker threw exception | staging.kinu.run | Cloudflare</title>\n'
       + '</head><body>error code: 1101</body></html>';
+
     const summary = summarizeRouteBody(page);
     expect(summary).toContain('Worker threw exception | staging.kinu.run | Cloudflare');
     expect(summary).toContain('wrangler tail');
@@ -221,12 +228,14 @@ describe('a partial walk reports every step it declared', () => {
       { what: 'devices-route', reached: true, detail: 'GET /api/cli/devices → 200' },
       { what: 'connect', reached: false, detail: 'connectDevice → timeout' },
     ];
+
     const complete = completeSubgoals(observed);
 
     // The denominator is the declared list, so a run that stopped at step two
     // cannot read as a two-step success.
     expect(complete.map((subgoal) => subgoal.what)).toEqual([...DEVICE_STEPS]);
     expect(complete.filter((subgoal) => subgoal.reached)).toHaveLength(1);
+
     for (const subgoal of complete.slice(2)) {
       expect(subgoal.detail).toBe('not reached — connect failed first');
     }
@@ -236,6 +245,7 @@ describe('a partial walk reports every step it declared', () => {
     const observed: DeviceSubgoal[] = DEVICE_STEPS.map((what) => ({
       what, reached: true, detail: 'ok',
     }));
+
     expect(completeSubgoals(observed)).toEqual(observed);
   });
 });
@@ -277,6 +287,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
     drive: (account: DeviceAccount, seen: Recorded[]) => Promise<void>,
   ): Promise<Recorded[]> {
     const seen: Recorded[] = [];
+
     const server = Bun.serve({
       port: 0,
       fetch: async (request) => {
@@ -287,9 +298,11 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
           identity: request.headers.get('x-kinu-dev-identity'),
           body: await request.text(),
         });
+
         return answer(request);
       },
     });
+
     try {
       await drive({
         origin: `http://127.0.0.1:${String(server.port)}`,
@@ -299,6 +312,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
     } finally {
       await server.stop(true);
     }
+
     return seen;
   }
 
@@ -311,6 +325,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
         expect(listing.rows).toEqual([DEVICE_ROW]);
       },
     );
+
     expect(seen).toHaveLength(1);
     expect(seen[0]?.method).toBe('GET');
     expect(seen[0]?.path).toBe('/api/cli/devices');
@@ -350,17 +365,21 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
       Response.json({ result: [{ consentId: 'consent-1' }] }),
       Response.json({ result: { ok: true } }),
     ];
+
     let served = 0;
+
     const seen = await withServer(
       () => scripted[served++] ?? new Response('the flow asked for a fourth call', { status: 500 }),
       (account) => grantDeviceConsent(account, 'dev-abc123', 'eval-device-ws'),
     );
+
     expect(seen).toHaveLength(3);
     expect(seen.map((entry) => entry.body ?? '')).toEqual([
       expect.stringContaining('executeInExecutor'),
       expect.stringContaining('listPendingConsents'),
       expect.stringContaining('resolveDeviceConsent'),
     ]);
+
     // Every call is the workspace's own plane under its bearer, and the deleted
     // account route must not come back — a request to it would be the regression.
     for (const entry of seen) {
@@ -369,6 +388,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
       expect(entry.authorization).not.toBeNull();
       expect(entry.path.endsWith('/consent')).toBe(false);
     }
+
     // Only `always` is remembered, so only `always` grants the machine.
     expect(seen[2]?.body ?? '').toContain('"always"');
   });
@@ -390,6 +410,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
         expect((await revokeDeviceOverUserRoute(account, 'dev-abc123')).status).toBe(200);
       },
     );
+
     expect(seen[0]?.method).toBe('DELETE');
     expect(seen[0]?.path).toBe('/api/user/devices/dev-abc123');
     expect(seen[0]?.identity).toBe('probe-identity');

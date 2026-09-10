@@ -103,6 +103,7 @@ type NativeEnterSpan = typeof tracing.enterSpan;
  */
 function nativeEnterSpan(): NativeEnterSpan | null {
   const entry: NativeEnterSpan | undefined = tracing.enterSpan;
+
   return entry instanceof Function ? entry.bind(tracing) : null;
 }
 
@@ -111,6 +112,7 @@ export function createWorkersTracer(): Tracer {
     span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T {
       // CAPABILITY, CHECKED BEFORE IT IS SPENT, and asked exactly once.
       const enter = nativeEnterSpan();
+
       if (enter === null) {
         // EXACTLY ONCE, and the value untouched — sync result, promise, thenable
         // or throw, all by identity. There is no try/catch and no wrapper here on
@@ -118,6 +120,7 @@ export function createWorkersTracer(): Tracer {
         // because that is what it is.
         return fn(UNTRACED_SPAN);
       }
+
       // And no attempt is made to recover from a CALLABLE `enterSpan` that
       // throws. The callback may already have run and may already have had
       // effects, so a retry there would be the instrument duplicating the work
@@ -126,6 +129,7 @@ export function createWorkersTracer(): Tracer {
         native.setAttribute(SPAN_ATTR_ISOLATE_GEN, attributes.isolateGen);
         native.setAttribute(SPAN_ATTR_SELF_PATH, attributes.selfPath);
         const failed = (): void => { native.setAttribute(SPAN_ATTR_ERROR, true); };
+
         const span: ScopedSpan = {
           get isTraced(): boolean {
             return native.isTraced;
@@ -135,8 +139,10 @@ export function createWorkersTracer(): Tracer {
           },
           fail: failed,
         };
+
         try {
           const result = fn(span);
+
           if (!(result instanceof Promise)) return result;
           // The marker is attached for its SIDE EFFECT and `result` is returned
           // untouched. Three things fall out of that, all of them wanted:
@@ -157,6 +163,7 @@ export function createWorkersTracer(): Tracer {
           // SUCCESSFULLY, or the instrument produces an unhandled rejection of its
           // own on every traced failure.
           void result.then(undefined, failed);
+
           return result;
         } catch (error) {
           failed();

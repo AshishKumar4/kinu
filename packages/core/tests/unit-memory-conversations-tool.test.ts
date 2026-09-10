@@ -16,13 +16,16 @@ function setup() {
   const tools = buildBuiltinTools({ rt });
   const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;
+
   const insert = (conversationId: string, role: string, content: string): string => {
     const id = `m-${++row}`;
     void testSql.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
                 VALUES (${rt.actor.actorId}, ${id}, ${conversationId}, ${role}, ${content},
                         ${1_000_000 + row * 1000})`;
+
     return id;
   };
+
   return { memoryExec, insert };
 }
 
@@ -35,6 +38,7 @@ describe('memory tool — conversations action', () => {
       snippet: v.string(),
     })),
   });
+
   const ScrollResultSchema = v.object({
     mode: v.string(),
     messages: v.array(v.object({
@@ -42,6 +46,7 @@ describe('memory tool — conversations action', () => {
       anchor: v.optional(v.literal(true)),
     })),
   });
+
   const BrowseResultSchema = v.object({
     mode: v.string(),
     conversations: v.array(v.object({ conversationId: v.string(), preview: v.string() })),
@@ -51,10 +56,12 @@ describe('memory tool — conversations action', () => {
     const { memoryExec, insert } = setup();
     const id = insert('proj', 'assistant', 'we shipped the cloudflare tunnel fix yesterday');
     insert('proj', 'user', 'unrelated chatter');
+
     const res = v.parse(
       SearchResultSchema,
       await memoryExec({ action: 'conversations', query: 'cloudflare tunnel' }),
     );
+
     expect(res.mode).toBe('search');
     expect(res.hits.length).toBe(1);
     expect(res.hits[0]!.messageId).toBe(id);
@@ -66,10 +73,12 @@ describe('memory tool — conversations action', () => {
     insert('proj', 'user', 'before');
     const anchor = insert('proj', 'assistant', 'anchor message');
     insert('proj', 'user', 'after');
+
     const res = v.parse(
       ScrollResultSchema,
       await memoryExec({ action: 'conversations', around_message_id: anchor, window: 1 }),
     );
+
     expect(res.mode).toBe('scroll');
     expect(res.messages.map((m) => m.content)).toEqual(['before', 'anchor message', 'after']);
     expect(res.messages[1]!.anchor).toBe(true);

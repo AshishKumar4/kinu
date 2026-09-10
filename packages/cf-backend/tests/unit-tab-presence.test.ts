@@ -21,13 +21,16 @@ import {
 } from '../src/components/surfaces/presence';
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
+
 const oneTree = (): ReadonlyMap<string, ForkNode> => new Map([
   ['n000', {
     id: 'n000', parentId: null, depth: 0, value: null, visits: null,
     status: 'open', action: '', children: [],
   }],
 ]);
+
 const FRESH: TabPresence = { releases: false, explorations: false };
+
 const FULL: TabPresence = { releases: true, explorations: true };
 
 const SILENT_RPC: Rpc = () => Promise.withResolvers<never>().promise;
@@ -68,9 +71,11 @@ describe('the gated tabs appear only with content', () => {
 
   test('every ungated surface stays visible on a fresh workspace', () => {
     const html = renderStrip(FRESH);
+
     for (const surface of ['Work', 'Files', 'Agent', 'Environment']) {
       expect(html).toContain(`aria-label="${surface}"`);
     }
+
     expect(html).not.toContain('aria-label="Releases"');
     expect(html).not.toContain('aria-label="Exploration"');
   });

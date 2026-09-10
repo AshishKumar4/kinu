@@ -62,6 +62,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
     const nimbus = createNimbusExecutor({
       box: handleWith(async () => runningStart({ ports: [{ port: 3000, pid: 3000002 }] })),
     });
+
     const out = String(await nimbus.tools.startProcess!.execute("node server.js"));
     expect(out).toContain("listening on port 3000");
     expect(out).toContain("exposePort");
@@ -75,6 +76,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
         pid: 7,
       })),
     });
+
     const out = String(await nimbus.tools.startProcess!.execute("echo hi"));
     expect(out).toContain("already exited (exit 0)");
     expect(out).toContain("nimbus.logs(7)");
@@ -110,6 +112,7 @@ describe("nimbus capabilities — declared exactly when they run", () => {
       box: handleWith(async () => runningStart()),
       runtimeCatalog: true,
     });
+
     expect(nimbus.capabilities.has("python")).toBe(true);
     expect(nimbus.capabilities.has("native_binary")).toBe(true);
   });

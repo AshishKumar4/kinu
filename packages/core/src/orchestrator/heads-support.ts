@@ -33,13 +33,16 @@ export function narrowInheritedRole(role: string): SerializedMessage['role'] {
  *  spawned heads never inherit megabytes of base64. */
 export function serializeContentForHeads(content: ModelMessage['content']): string {
   const text = v.safeParse(v.string(), content);
+
   if (text.success) return text.output;
+
   if (Array.isArray(content)) {
     return JSON.stringify(content.map((part) =>
       part.type === 'file'
         ? { type: 'file', mediaType: part.mediaType, filename: part.filename }
         : part));
   }
+
   return JSON.stringify(content);
 }
 
@@ -72,6 +75,7 @@ export function inheritedContextFromHistory(
     content: evidenceWindow(serializeContentForHeads(m.content), EVIDENCE_BUDGETS.inheritedMessage),
     createdAt: i,
   }));
+
   return [...inheritedContextOmissionNote(history.length, kept.length), ...kept];
 }
 
@@ -79,6 +83,7 @@ export function inheritedContextFromHistory(
  *  to tell its view is a window, or it treats the window as the whole story. */
 export function inheritedContextOmissionNote(total: number, kept: number): SerializedMessage[] {
   if (total <= kept) return [];
+
   return [{
     id: 'ctx-omitted',
     role: 'system',

@@ -65,6 +65,7 @@ const DONE = 'epoch 40/40 done\n';
 function fakeContainer(): FakeContainer {
   const calls: ExecCall[] = [];
   const exit = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+
   return {
     calls,
     finish: () => exit.resolve({ stdout: DONE, exitCode: 0 }),
@@ -72,6 +73,7 @@ function fakeContainer(): FakeContainer {
       exec: async (command, opts) => {
         if (opts === undefined) calls.push({ command });
         else calls.push({ command, opts });
+
         if (opts?.timeout === undefined) return exit.promise;
         throw new Error(`Command timeout after ${opts.timeout}ms`);
       },
@@ -119,8 +121,11 @@ function wrapRun(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRu
     { run: runToolOverSandbox(provider) },
     { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
   );
+
   const entry = wrapped.run;
+
   if (!entry) throw new Error('Expected the run tool to survive wrapping');
+
   return toolExecute<RunInput, object | string>(entry);
 }
 
@@ -149,11 +154,16 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     const container = fakeContainer();
     const provider = createSandboxExecutor(container.handle);
     const detached: Array<Promise<unknown>> = [];
+
     // A zero window makes the race deterministic: the command has not finished,
     // so the threshold is the only branch that can win. No guessed sleep.
     const runner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 },
-      (_kind, promise) => { detached.push(promise); return { detached: true, jobId: 'job-1' }; },
+      (_kind, promise) => {
+        detached.push(promise);
+
+        return { detached: true, jobId: 'job-1' };
+      },
     );
 
     const out = await wrapRun(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
@@ -177,9 +187,14 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     const container = fakeContainer();
     const provider = createSandboxExecutor(container.handle);
     let crossed = 0;
+
     const runner = fakeJobRunner(
       BACKGROUND_POLICY['one-shot'],
-      () => { crossed++; return { detached: true, jobId: 'job-2' }; },
+      () => {
+        crossed++;
+
+        return { detached: true, jobId: 'job-2' };
+      },
     );
 
     container.finish();
@@ -225,18 +240,27 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     const store = new BackgroundJobStore(makeSql(db), actor);
 
     const bodies: Array<Promise<unknown>> = [];
+
     const fiber: Schedule['fiber'] = async (_name, fn) => {
       const body = fn({ stash: () => {}, snapshot: null });
       bodies.push(body);
+
       return body;
     };
+
     const enqueued: ProgrammaticTurn[] = [];
+
     const host: BackendHost = {
       broadcast: () => {},
-      enqueueTurn: async (turn) => { enqueued.push(turn); return { status: 'queued' }; },
+      enqueueTurn: async (turn) => {
+        enqueued.push(turn);
+
+        return { status: 'queued' };
+      },
       turnInFlight: () => false,
       setTimer: () => {},
     };
+
     const runner = new BackgroundJobRunner({
       store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql, actor),
       scheduleDrain: () => {}, logActivity: () => {},
@@ -247,12 +271,16 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
 
     const container = fakeContainer();
     const provider = createSandboxExecutor(container.handle);
+
     const wrapped = wrapToolsForBackground(
       { run: runToolOverSandbox(provider) },
       { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
     );
+
     const entry = wrapped.run;
+
     if (!entry) throw new Error('Expected the run tool to survive wrapping');
+
     const out = await toolExecute<RunInput, object | string>(entry)({
       command: TRAINING, runtime: 'sandbox',
     });

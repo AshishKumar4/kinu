@@ -15,6 +15,7 @@ export interface ScriptedLLM extends LLM {
 export function createScriptedLLM(responses: string[]): ScriptedLLM {
   let i = 0;
   const prompts: string[] = [];
+
   return {
     prompts,
     get callCount() { return i; },
@@ -27,11 +28,13 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
     async complete(prompt: string): Promise<string> {
       prompts.push(prompt);
       const out = responses[i++];
+
       if (out === undefined) {
         throw new Error(
           `ScriptedLLM out of responses (called ${i} times, only ${responses.length} scripted).`,
         );
       }
+
       return out;
     },
   };
@@ -51,6 +54,7 @@ export function createEchoLLM(): LLM {
 export function createJSONLLM(payload: JsonValue): LLM {
   const stringPayload = v.safeParse(v.string(), payload);
   const json = stringPayload.success ? stringPayload.output : JSON.stringify(payload);
+
   return {
     async *stream() { yield json; },
     async complete() { return json; },
@@ -79,9 +83,11 @@ export function toolExecute<Args, Result>(
   entry: ExecutableTool<Args, Result>,
 ): (args: Args, options?: ToolExecutionOptions) => Promise<Result> {
   const execute = entry.execute;
+
   if (!execute) {
     throw new Error('toolExecute: the tool has no execute (was it built with a different name?)');
   }
+
   return async (args, options = DEFAULT_TOOL_OPTIONS) => {
     return await execute(args, options);
   };

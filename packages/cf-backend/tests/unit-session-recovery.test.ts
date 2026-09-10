@@ -11,6 +11,7 @@ function timeoutError(method = "getWorkspaceSnapshot", ms = 30_000): Error {
 
 /** Spacing fixtures the tests own, so nothing here copies the product defaults. */
 const BASE_INTERVAL_MS = 1_000;
+
 const CAP_INTERVAL_MS = 4_000;
 
 type RpcFailureInput = Error | string | undefined;
@@ -36,6 +37,7 @@ function harness(options: {
   let clockMs = 1_000_000;
   let redialCount = 0;
   let refetchCount = 0;
+
   const recovery = createSessionRecovery(
     { refetch: () => { refetchCount += 1; }, forceRedial: () => { redialCount += 1; } },
     {
@@ -45,6 +47,7 @@ function harness(options: {
       maxRedialIntervalMs: options.maxRedialIntervalMs,
     },
   );
+
   return {
     redials: () => redialCount,
     refetches: () => refetchCount,
@@ -90,10 +93,12 @@ describe("the corpse detector", () => {
 
   test("a success between timeouts restores trust — sporadic slow calls never redial", () => {
     const h = harness();
+
     for (let round = 0; round < 4; round += 1) {
       h.failTimeout();
       h.succeed();
     }
+
     expect(h.redials()).toBe(0);
   });
 
@@ -109,6 +114,7 @@ describe("the corpse detector", () => {
 
   test("timeouts on a socket that admits it is closed do not feed the detector", () => {
     const h = harness();
+
     for (let i = 0; i < 6; i += 1) h.failTimeout(false);
     expect(h.redials()).toBe(0);
   });
@@ -130,6 +136,7 @@ describe("redial spacing", () => {
     // First condemnation.
     h.failTimeout(); h.failTimeout(); h.failTimeout();
     expect(h.redials()).toBe(1);
+
     // Immediately after: nine more timeouts inside the minimum spacing → no second dial yet.
     for (let i = 0; i < 9; i += 1) h.failTimeout();
     expect(h.redials()).toBe(1);
@@ -196,11 +203,13 @@ const realFetch = globalThis.fetch;
 function installFetchStub(answer: () => Promise<Response>): void {
   const stub: typeof fetch = () => answer();
   stub.preconnect = () => {};
+
   globalThis.fetch = stub;
 }
 
 async function withHealthEndpoint(body: string, status: number, run: () => Promise<void>): Promise<void> {
   installFetchStub(() => Promise.resolve(new Response(body, { status })));
+
   try {
     await run();
   } finally {

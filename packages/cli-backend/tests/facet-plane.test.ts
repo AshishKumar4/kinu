@@ -17,6 +17,7 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
   const dbPath = join(state, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
+
   return { rt: createCLIRuntime(db, { dbPath, llm: null, hostRoot: null, cwd, agentName: 'parent' }), db, dbPath };
 }
 
@@ -29,11 +30,13 @@ async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): 
   const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
   const facet = subordinateAgentName(binding.storageKey);
   const child = createCLIRuntime(root.db, { dbPath: root.dbPath, llm: null, hostRoot: null, cwd: parent.cwd, facet, actorBinding: binding });
+
   return shareLocalWorkspacePlane(child, parent, facet);
 }
 
 async function exec(rt: CLIRuntime, command: string) {
   if (!rt.shell) throw new Error('The runtime has no shell.');
+
   return rt.shell.exec(command);
 }
 

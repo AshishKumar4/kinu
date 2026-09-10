@@ -21,6 +21,7 @@ describe("sortDirEntries", () => {
       { name: "a.txt", type: "file" },
       { name: "alpha", type: "dir" },
     ]);
+
     expect(out.map((e) => e.name)).toEqual(["alpha", "beta", "a.txt", "z.txt"]);
   });
 });
@@ -30,10 +31,13 @@ describe("writeExecutorFileOp", () => {
    *  optionally throwing, like an environment that went offline. */
   function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
     const written = new Map<string, Uint8Array | string>();
+
     const files: VFS = {
       readFile: async (path) => {
         const data = written.get(path);
+
         if (data === undefined) throw new Error(`ENOENT: ${path}`);
+
         return data;
       },
       writeFile: async (path: string, data: Uint8Array | string) => {
@@ -43,15 +47,19 @@ describe("writeExecutorFileOp", () => {
       readdir: async () => [],
       stat: async (path) => {
         const data = written.get(path);
+
         if (data === undefined) return null;
         const size = data instanceof Uint8Array ? data.length : new TextEncoder().encode(data).length;
+
         return { size, mtimeMs: 0, isDir: false };
       },
       unlink: async (path) => { written.delete(path); },
       mkdir: async () => undefined,
       exists: async (path) => written.has(path),
     };
+
     const deps = { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
+
     return { deps, written };
   }
 
@@ -83,6 +91,7 @@ describe("writeExecutorFileOp", () => {
       throwOn: /^\/workspace\//,
       error: "the sandbox container is not running",
     });
+
     const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", new TextEncoder().encode("y"));
     expect(result).toMatchObject({ error: expect.stringContaining("not running") });
   });
@@ -91,6 +100,7 @@ describe("writeExecutorFileOp", () => {
     const result = await writeExecutorFileOp(
       { getProvider: () => undefined }, "ghost", "/a", new TextEncoder().encode("x"),
     );
+
     expect(result).toEqual({ error: 'Executor "ghost" has no file plane' });
   });
 
@@ -113,6 +123,7 @@ describe("writeExecutorFileOp", () => {
     const big = new Uint8Array(3 * 1024 * 1024);
     expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", big)).toEqual({ ok: true });
     const stored = written.get("/uploads/big.bin");
+
     if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
     expect(stored.length).toBe(big.length);
   });
@@ -125,30 +136,38 @@ describe("writeExecutorFileOp", () => {
 function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlinkFails?: RegExp } = {}) {
   const files = new Map<string, string | Uint8Array>(Object.entries(seed));
   const dirs = new Set<string>();
+
   for (const path of files.keys()) {
     for (let at = path.indexOf("/", 1); at !== -1; at = path.indexOf("/", at + 1)) {
       dirs.add(path.slice(0, at));
     }
   }
+
   const renames: Array<[string, string]> = [];
   const removed: string[] = [];
+
   const vfs: VFS = {
     readFile: async (path) => {
       const data = files.get(path);
+
       if (data === undefined) throw new Error(`ENOENT: ${path}`);
+
       return data;
     },
     writeFile: async (path, data) => { files.set(path, data); },
     readdir: async (path) => {
       const names = new Set<string>();
       const prefix = path === "/" ? "/" : `${path}/`;
+
       for (const key of [...files.keys(), ...dirs]) {
         if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
       }
+
       return [...names];
     },
     stat: async (path) => {
       if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 1_724_500_000_000, isDir: false };
+
       return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
     },
     unlink: async (path) => {
@@ -158,6 +177,7 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
     mkdir: async (path) => { dirs.add(path); },
     exists: async (path) => files.has(path) || dirs.has(path),
   };
+
   const native = opts.native
     ? {
       rename: async (oldPath: string, newPath: string) => {
@@ -168,7 +188,9 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
       removeRecursive: async (path: string) => { removed.push(path); dirs.delete(path); },
     }
     : {};
+
   const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/user" }) };
+
   return { deps, files, dirs, renames, removed };
 }
 
@@ -241,6 +263,7 @@ describe("deleteExecutorPathOp", () => {
       "/home/user/build/out.js": "x",
       "/home/user/build/deep/two.js": "y",
     });
+
     const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
     expect(out).toEqual({ ok: true });
     expect(files.size).toBe(0);
@@ -260,6 +283,7 @@ describe("readExecutorFileBytes", () => {
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
     await writeExecutorFileOp(deps, "workspace", "/home/user/blob.bin", bytes);
     const out = await readExecutorFileBytes(deps, "workspace", "/home/user/blob.bin");
+
     if ("error" in out) throw new Error(out.error);
     expect([...out.bytes]).toEqual([...bytes]);
   });
@@ -267,6 +291,7 @@ describe("readExecutorFileBytes", () => {
   test("a string-answering plane still yields bytes", async () => {
     const { deps } = makeTree({ "/home/user/notes.md": "text" });
     const out = await readExecutorFileBytes(deps, "workspace", "/home/user/notes.md");
+
     if ("error" in out) throw new Error(out.error);
     expect(new TextDecoder().decode(out.bytes)).toBe("text");
   });
@@ -317,28 +342,35 @@ describe("a bare mount point lands inside consent", () => {
   function treeVfs(seed: Record<string, string>): VFS {
     const files = new Map(Object.entries(seed));
     const dirs = new Set<string>();
+
     for (const path of files.keys()) {
       for (let at = path.indexOf("/", 1); at !== -1; at = path.indexOf("/", at + 1)) {
         dirs.add(path.slice(0, at));
       }
     }
+
     return {
       readFile: async (path) => {
         const data = files.get(path);
+
         if (data === undefined) throw new Error(`ENOENT: ${path}`);
+
         return data;
       },
       writeFile: async (path, data) => { files.set(path, String(data)); },
       readdir: async (path) => {
         const names = new Set<string>();
         const prefix = path === "/" ? "/" : `${path}/`;
+
         for (const key of [...files.keys(), ...dirs]) {
           if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
         }
+
         return [...names];
       },
       stat: async (path) => {
         if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 0, isDir: false };
+
         return dirs.has(path) || path === "/" ? { size: 0, mtimeMs: 0, isDir: true } : null;
       },
       unlink: async (path) => { files.delete(path); },
@@ -358,32 +390,50 @@ describe("a bare mount point lands inside consent", () => {
         + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
       );
     };
+
     return {
       ...device,
-      readdir: async (path) => { refuse(path, "list"); return device.readdir(path); },
-      stat: async (path) => { refuse(path, "stat"); return device.stat(path); },
-      readFile: async (path) => { refuse(path, "open"); return device.readFile(path); },
+      readdir: async (path) => {
+        refuse(path, "list");
+
+        return device.readdir(path);
+      },
+      stat: async (path) => {
+        refuse(path, "stat");
+
+        return device.stat(path);
+      },
+      readFile: async (path) => {
+        refuse(path, "open");
+
+        return device.readFile(path);
+      },
     };
   }
 
   function router(opts: { deviceHome?: string | null; consented?: string } = {}) {
     const root = opts.consented ?? CONSENTED;
     const under = (name: string) => root === "/" ? `/${name}` : `${root}/${name}`;
+
     const device = guarded(treeVfs({
       [under("report.txt")]: "Q3",
       [under("src/app.ts")]: "x",
       "/etc/shadow": "secret",
     }), root);
+
     const workspace = withMountTable(treeVfs({ "/home/user/notes.md": "hi" }), [
       { name: "pc", files: () => device, absentReason: () => "no device connected" },
     ]);
+
     const home = opts.deviceHome === undefined ? root : opts.deviceHome;
+
     return {
       getProvider: (name: string) => name === "laptop"
         ? {
           files: device,
           homeDir: async () => {
             if (home === null) throw new Error("device went away mid-question");
+
             return home;
           },
         }
@@ -429,10 +479,12 @@ describe("a bare mount point lands inside consent", () => {
     // test would stay green over a `MOUNT_EXECUTORS` lookup that stopped
     // matching, measuring its own fixture.
     const events: string[] = [];
+
     const restore = setDiagnosticsSink({
       event: (name) => { events.push(name); },
       failure: (name) => { events.push(name); },
     });
+
     try {
       const out = await getExecutorFiles(router({ deviceHome: null }), "workspace", "/pc");
       expect(out.error).toContain("outside the consented device directory");
@@ -448,10 +500,12 @@ describe("a bare mount point lands inside consent", () => {
     // diagnostic must be absent, or its presence in the test above would prove
     // nothing about which path ran.
     const events: string[] = [];
+
     const restore = setDiagnosticsSink({
       event: (name) => { events.push(name); },
       failure: (name) => { events.push(name); },
     });
+
     try {
       const out = await getExecutorFiles(router(), "workspace", "/pc");
       expect(out.path).toBe("/pc/home/kinu");
@@ -548,8 +602,10 @@ describe("putFileBytes", () => {
     // literal lacks, and the shim attaches the no-op the SDK never calls.
     globalThis.fetch = asFetchFunction((url, init) => {
       calls.push({ url: String(url), init });
+
       return Promise.resolve(reply);
     });
+
     return calls;
   }
 
@@ -660,10 +716,12 @@ function makeCountingPlane(
   path: string, bytes: Uint8Array, opts: { ranged?: boolean; statSize?: number; unstatable?: boolean } = {},
 ) {
   const asked: Array<{ op: "readFile" | "readRange"; length?: number }> = [];
+
   const base: VFS = {
     readFile: async (target) => {
       if (target !== path) throw new Error(`ENOENT: ${target}`);
       asked.push({ op: "readFile" });
+
       return bytes;
     },
     writeFile: async () => undefined,
@@ -675,16 +733,19 @@ function makeCountingPlane(
     mkdir: async () => undefined,
     exists: async (target) => target === path,
   };
+
   const files = opts.ranged
     ? {
       ...base,
       readRange: async (target: string, offset: number, length: number) => {
         if (target !== path) throw new Error(`ENOENT: ${target}`);
         asked.push({ op: "readRange", length });
+
         return bytes.subarray(offset, offset + length);
       },
     }
     : base;
+
   return { deps: { getProvider: () => ({ files, homeDir: async () => "/home/user" }) }, asked };
 }
 
@@ -795,6 +856,7 @@ describe("getExecutorFiles isolates one child's failure", () => {
    *  the plane may not describe. */
   function makePoisonedDir(poisoned: string, code = "ENOENT") {
     const names = ["alpha", "beta.txt", poisoned];
+
     const files: VFS = {
       readFile: async () => "",
       writeFile: async () => undefined,
@@ -803,14 +865,18 @@ describe("getExecutorFiles isolates one child's failure", () => {
         if (path === `/home/user/${poisoned}`) {
           throw Object.assign(new Error(`${code}: the plane said so`), { code });
         }
+
         if (path === "/home/user/alpha") return { size: 0, mtimeMs: 0, isDir: true };
+
         if (path === "/home/user") return { size: 0, mtimeMs: 0, isDir: true };
+
         return { size: 7, mtimeMs: 42, isDir: false };
       },
       unlink: async () => undefined,
       mkdir: async () => undefined,
       exists: async () => true,
     };
+
     return { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
   }
 
@@ -843,21 +909,32 @@ describe("getExecutorFiles isolates one child's failure", () => {
     let listings = 0;
     let stats = 0;
     const entries = ["a.txt", "b.txt", "c.txt", "d"];
+
     const files: VFS & { readdirStats(path: string): Promise<Array<{ name: string; stat: { size: number; mtimeMs: number; isDir: boolean } | null }>> } = {
       readFile: async () => "",
       writeFile: async () => undefined,
-      readdir: async () => { listings += 1; return entries; },
+      readdir: async () => {
+        listings += 1;
+
+        return entries;
+      },
       readdirStats: async () => {
         listings += 1;
+
         return entries.map((name) => ({
           name, stat: { size: name === "d" ? 0 : 3, mtimeMs: 0, isDir: name === "d" },
         }));
       },
-      stat: async () => { stats += 1; return { size: 0, mtimeMs: 0, isDir: true }; },
+      stat: async () => {
+        stats += 1;
+
+        return { size: 0, mtimeMs: 0, isDir: true };
+      },
       unlink: async () => undefined,
       mkdir: async () => undefined,
       exists: async () => true,
     };
+
     const deps = { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
     const out = await getExecutorFiles(deps, "workspace", "/home/user");
     expect(out.entries?.map((e) => e.name).sort()).toEqual(["a.txt", "b.txt", "c.txt", "d"]);
@@ -882,6 +959,7 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
       ["/home/user/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(dirEntry("src", 1)) }],
       ["/home/user/src/deep", { entries: [], revision: entryRevision(dirEntry("deep", 5)) }],
     ]);
+
     // The shell wrote into src, so its mtime moved.
     const next = nextTreeCache(before, "/home/user", [dirEntry("src", 2)]);
     expect(next.has("/home/user/src")).toBe(false);
@@ -892,10 +970,12 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
     // Without this the invalidation would be indistinguishable from clearing
     // the cache on every listing, which is not a cache.
     const src = dirEntry("src", 1);
+
     const before = new Map([
       ["/home/user", { entries: [src], revision: "" }],
       ["/home/user/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(src) }],
     ]);
+
     const next = nextTreeCache(before, "/home/user", [src]);
     expect(next.get("/home/user/src")?.entries).toEqual([dirEntry("deep", 5)]);
   });
@@ -905,6 +985,7 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
       ["/home/user", { entries: [dirEntry("old", 1)], revision: "" }],
       ["/home/user/old", { entries: [], revision: entryRevision(dirEntry("old", 1)) }],
     ]);
+
     const next = nextTreeCache(before, "/home/user", [dirEntry("new", 1)]);
     expect(next.has("/home/user/old")).toBe(false);
   });
@@ -913,6 +994,7 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
     const before = new Map([
       ["/other", { entries: [dirEntry("keep", 1)], revision: "" }],
     ]);
+
     const next = nextTreeCache(before, "/home/user", []);
     expect(next.get("/other")?.entries).toEqual([dirEntry("keep", 1)]);
   });

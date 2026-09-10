@@ -107,6 +107,7 @@ export async function requestRefinement(
   const actor = deps.control.rt.actor;
   const store = createRefinementStore(sql, actor);
   const turnIds = input.turnIds ?? evolutionDebt(sql, actor).turnIds;
+
   // The ledger reads newest-first; a trajectory is read forwards. Keep the
   // caller's order and let the ledger only decide which of those turns is
   // actually graded, so the stored trajectory is the one the brief renders and
@@ -116,6 +117,7 @@ export async function requestRefinement(
       .map((row) => row.turnId)
       .filter((id): id is string => id !== null),
   );
+
   const reviewed = turnIds.filter((id) => graded.has(id));
 
   let requestInput: Parameters<typeof store.open>[0] = {
@@ -123,24 +125,32 @@ export async function requestRefinement(
     scope: input.scope,
     turnIds: reviewed,
   };
+
   if (input.sessionId !== undefined) {
     requestInput = { ...requestInput, sessionId: input.sessionId };
   }
+
   if (input.debtKey !== undefined) {
     requestInput = { ...requestInput, debtKey: input.debtKey };
   }
+
   const { request } = store.open(requestInput);
+
   const refuse = (detail: string): RefinementRequestView => {
     store.advance(request.id, 'requested', 'refused', { detail });
+
     return refinementRequestView(store.get(request.id) ?? request);
   };
+
   if (input.scope === 'account') return refuse(ACCOUNT_SCOPE_REFUSAL);
+
   if (reviewed.length === 0) {
     return refuse(turnIds.length === 0
       ? describeSplitDegeneracy('no_labeled_turns')
       : `${describeSplitDegeneracy('no_labeled_turns')} — none of the ${String(turnIds.length)} `
         + 'named turns carries an outcome');
   }
+
   return refinementRequestView(request);
 }
 
@@ -158,7 +168,9 @@ export async function refinementDebtRequest(
   deps: RefinementDeps,
 ): Promise<RefinementRequestView | null> {
   const debt = evolutionDebt(deps.control.sql, deps.control.rt.actor);
+
   if (!debt.owed) return null;
+
   return requestRefinement(deps, {
     trigger: 'evolution_debt',
     scope: 'workspace',
@@ -208,6 +220,7 @@ export async function advanceRefinementLane(
 ): Promise<RefinementLaneStep> {
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   store.resetStalePlanning();
+
   // BOTH stages, and `gated` is the one that matters. A host killed between
   // routing and the settle inside `plan` leaves the row at `gated` with every
   // route made; a scan that only looked at `evaluating` would never come back
@@ -215,14 +228,20 @@ export async function advanceRefinementLane(
   // section that nothing ever reconciled.
   for (const waiting of store.settleable()) {
     const settled = await settleRoutes(deps, waiting);
+
     if (settled) return { step: 'settled', request: settled };
   }
+
   const owed = store.nextRequested();
+
   if (!owed || !deps.refiner) return { step: 'idle' };
   const claimed = store.claim(owed.id);
+
   if (!claimed) return { step: 'idle' };
+
   try {
     const planned = await plan(deps, claimed);
+
     // Null is a pass that lost its claim to recovery: it wrote nothing, so it
     // planned nothing, and saying otherwise would report the SUCCESSOR's work.
     return planned === null ? { step: 'idle' } : { step: 'planned', request: planned };
@@ -260,6 +279,7 @@ function reviewedTrajectory(
     listTurnOutcomes(sql, actor, { turnIds: request.turnIds })
       .map((row) => [row.turnId, row] as const),
   );
+
   return request.turnIds
     .map((id) => byId.get(id))
     .filter((row): row is TurnOutcomeRow => row !== undefined);
@@ -299,20 +319,27 @@ async function plan(
 ): Promise<RefinementRequestView | null> {
   const { request } = claim;
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+
   const view = (): RefinementRequestView =>
     refinementRequestView(store.get(request.id) ?? request);
+
   const refuse = (detail: string, rejected?: RefinementProposal): RefinementRequestView | null => {
     let patch: SettleRefinementPatch = { detail };
+
     if (rejected !== undefined) patch = { ...patch, proposal: rejected, routes: [] };
+
     if (!claim.advance('refused', patch)) return null;
+
     return view();
   };
 
   // A resumed claim already has its plan. Re-asking would spend a second child
   // agent to get a different plan than the writes already on disk belong to.
   let proposal = request.proposal;
+
   if (proposal === null) {
     const answered = await askRefiner(deps, request);
+
     if (!answered.ok) return refuse(answered.error);
     proposal = answered.proposal;
   }
@@ -324,6 +351,7 @@ async function plan(
       proposal,
     );
   }
+
   if (proposal.edits.length === 0) {
     return refuse(`the refiner proposed no edits — ${proposal.summary}`, proposal);
   }
@@ -337,6 +365,7 @@ async function plan(
 
   const reviewed = reviewedTrajectory(deps.control.sql, deps.control.rt.actor, request);
   const routes: RefinementRoute[] = [];
+
   for (const [index, edit] of proposal.edits.entries()) {
     // A DECIDED route is never re-routed. A resumed pass re-runs the plan, and
     // re-routing a skill the owner already approved or rejected would replace
@@ -345,12 +374,15 @@ async function plan(
     // un-applying a promotion that really happened. The owner's word outlives a
     // crash; only an undecided route is this pass's to make again.
     const decided = request.routes[index];
+
     if (decided !== undefined && ownerHasDecided(decided)) {
       routes.push(decided);
       continue;
     }
+
     if (!claim.held()) return null;
     routes.push(await route(deps, { edit, request, reviewed }));
+
     // Persisted AFTER EACH route, not once at the end: a crash between two
     // owner writes must leave the completed ones recorded, or the resumed pass
     // would report a change it cannot see and the changelog would omit an edit
@@ -359,6 +391,7 @@ async function plan(
   }
 
   if (!claim.advance('gated', { routes, detail: proposal.summary })) return null;
+
   return await settleRoutes(deps, store.get(request.id) ?? request) ?? view();
 }
 
@@ -385,9 +418,11 @@ const REFINER_CONTEXT_CANDIDATES: readonly string[] = ['memory/MEMORY.md', 'AGEN
 async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
   const vfs = deps.control.rt.storage.vfs;
   const present: string[] = [];
+
   for (const path of REFINER_CONTEXT_CANDIDATES) {
     if (await vfs.exists(path)) present.push(path);
   }
+
   return present;
 }
 
@@ -396,8 +431,10 @@ async function askRefiner(
   request: RefinementRequest,
 ): Promise<RefinerAnswer> {
   const refiner = deps.refiner;
+
   if (!refiner) return { ok: false, error: 'this host wires no refiner' };
   const contextRefs = await presentContextRefs(deps);
+
   // Annotated rather than inlined into the call, because this is the ONE
   // production site that supplies `contextRefs`: the model-facing field it used
   // to mirror is gone, and a literal handed to an interface METHOD is a
@@ -412,20 +449,25 @@ async function askRefiner(
     // authority for every artifact it reviewed.
     mode: 'plan',
   };
+
   const outcome = await refiner.run(brief);
+
   if (!('status' in outcome)) {
     return { ok: false, error: `the refiner could not start — ${outcome.error}` };
   }
+
   if (outcome.status !== 'completed') {
     return {
       ok: false,
       error: `the refiner did not answer (${outcome.reason ?? 'unknown'}) — ${outcome.answer}`,
     };
   }
+
   const parsed = v.safeParse(
     RefinementProposalSchema,
     tolerate(() => extractJsonObject(outcome.answer), 'malformed-input'),
   );
+
   if (!parsed.success) {
     return {
       ok: false,
@@ -433,6 +475,7 @@ async function askRefiner(
         + parsed.issues.map((issue) => issue.message).join('; '),
     };
   }
+
   return { ok: true, proposal: parsed.output };
 }
 
@@ -463,22 +506,28 @@ async function askRefiner(
 function renderRefinerBrief(deps: RefinementDeps, request: RefinementRequest, contextRefs: readonly string[]): string {
   const sql = deps.control.sql;
   const actor = deps.control.rt.actor;
+
   const split = buildOutcomeEvalSplit(
     sql, actor, clampGepaEvalBudget(deps.control.config.getGepaEvalBudget()),
   );
+
   // The split's instances carry the turn's user message as `input`; that is the
   // only handle they share with the ledger rows, and it is what the section
   // metric is scored on, so it is the right thing to withhold by.
   const heldOut = new Set(split.val.map((instance) => instance.input));
+
   const reviewed = reviewedTrajectory(sql, actor, request)
     .filter((row) => !heldOut.has(row.userMessage));
+
   const withheld = request.turnIds.length - reviewed.length;
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
 
   const sections = PROMPT_SECTIONS
     .map((section) => `  - ${section.id} (${String(Buffer.byteLength(section.source, 'utf8'))} bytes)`)
     .join('\n');
+
   const facts = deps.facts.recentTopK(20);
+
   const factLines = facts.length === 0
     ? '  (none recorded)'
     : facts.map((fact) => `  - ${fact.key}`).join('\n');
@@ -582,6 +631,7 @@ async function route(
   },
 ): Promise<RefinementRoute> {
   const { edit } = input;
+
   switch (edit.kind) {
     case 'fact':
       return routeFact(deps, edit, input.request, input.reviewed);
@@ -617,6 +667,7 @@ async function route(
  * Below either bound the match carries no information about intent.
  */
 const MIN_QUOTE_CHARS = 20;
+
 const MIN_QUOTE_WORDS = 4;
 
 /**
@@ -636,6 +687,7 @@ type QuoteVerdict = { readonly ok: true } | { readonly ok: false; readonly reaso
 function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVerdict {
   const trimmed = quote.trim();
   const words = trimmed.split(/\s+/u).filter((word) => word !== '');
+
   if (trimmed.length < MIN_QUOTE_CHARS || words.length < MIN_QUOTE_WORDS) {
     return {
       ok: false,
@@ -645,12 +697,15 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
         + 'conversation, so it is evidence of nothing',
     };
   }
+
   // Whitespace-normalised, case-insensitive: the ledger windows and re-wraps
   // what it stored, so requiring byte equality would refuse real quotes. The
   // WORDS still have to be the user's, in order.
   const needle = trimmed.replace(/\s+/gu, ' ').toLowerCase();
+
   const said = reviewed.some((row) =>
     userEvidence(row).replace(/\s+/gu, ' ').toLowerCase().includes(needle));
+
   if (!said) {
     return {
       ok: false,
@@ -659,6 +714,7 @@ function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVe
         + 'for a trial',
     };
   }
+
   return { ok: true };
 }
 
@@ -684,13 +740,16 @@ function routeFact(
   reviewed: readonly TurnOutcomeRow[],
 ): RefinementRoute {
   const verdict = checkQuote(edit.quote, reviewed);
+
   if (!verdict.ok) {
     return {
       kind: 'fact', owner: 'agent_facts', target: edit.key,
       disposition: 'refused', reason: verdict.reason,
     };
   }
+
   const outcome = deps.facts.upsert(edit.key, edit.value, { source: `refinement:${request.id}` });
+
   return {
     kind: 'fact',
     owner: 'agent_facts',
@@ -716,6 +775,7 @@ async function routePromptSection(
   edit: Extract<RefinementEdit, { kind: 'prompt_section' }>,
 ): Promise<RefinementRoute> {
   const owner = 'prompt_section_versions';
+
   const pendingReason = (version: number, note: string): RefinementRoute => ({
     kind: 'prompt_section',
     owner,
@@ -728,11 +788,13 @@ async function routePromptSection(
   // Adoption first: a pending row already carrying these exact bytes IS this
   // route's own earlier write, recovered.
   const already = getPendingPromptSection(deps.control.sql, deps.control.rt.actor, edit.sectionId);
+
   if (already && already.source === edit.source) {
     return pendingReason(already.version, 'pending held-out trials (adopted from an earlier pass)');
   }
 
   let measured;
+
   try {
     measured = await proposeMeasuredPromptSection(deps.control, {
       sectionId: edit.sectionId,
@@ -745,12 +807,14 @@ async function routePromptSection(
       disposition: 'refused', reason: renderThrownChain({ cause: err }),
     };
   }
+
   if (!measured.ok) {
     return {
       kind: 'prompt_section', owner, target: edit.sectionId,
       disposition: 'refused', reason: `${measured.code}: ${measured.error}`,
     };
   }
+
   return pendingReason(
     measured.version,
     `pending held-out trials — candidate ${measured.candidateScore.mean.toFixed(3)} against `
@@ -795,17 +859,23 @@ async function settleRoutes(
   for (const route of request.routes) {
     if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
       const [sectionId, version] = route.target.split(':');
+
       const row = versions.find((candidate) =>
         candidate.sectionId === sectionId && String(candidate.version) === version);
+
       if (!row || row.status === 'pending') { pending += 1; continue; }
+
       if (row.status === 'rolled_back') rolledBack += 1;
       else promoted += 1;
       continue;
     }
+
     if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
       const settled = await settleSkillApproval(deps, request, route);
+
       if (settled.state === 'pending') {
         pending += 1;
+
         // A promotion that CANNOT complete is a fault an owner has to see, not a
         // quiet wait. It reads as pending because it is still owed, and the
         // reason says why it has not happened.
@@ -816,11 +886,13 @@ async function settleRoutes(
   }
 
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
+
   if (pending > 0) {
     // Still waiting on an owner. From `gated` that is a real transition — the
     // routes are made and the request is now in someone else's hands.
     const waiting = `${String(pending)} proposal${pending === 1 ? '' : 's'} awaiting their owners`
       + (blocked.length > 0 ? ` · ${blocked.join(' · ')}` : '');
+
     if (request.stage === 'evaluating') {
       // Already waiting, so there is no transition to make — but a BLOCKED
       // promotion is a fault an owner has to be able to read, and a detail line
@@ -828,11 +900,15 @@ async function settleRoutes(
       // is not the owner's fault. Recorded in place; no stage moves.
       if (blocked.length === 0 || request.detail === waiting) return null;
       store.record(request.id, 'evaluating', { detail: waiting });
+
       return refinementRequestView(store.get(request.id) ?? request);
     }
+
     if (!store.advance(request.id, 'gated', 'evaluating', { detail: waiting })) return null;
+
     return refinementRequestView(store.get(request.id) ?? request);
   }
+
   // "Applied" means at least one artifact IS in effect — a promoted proposal or
   // a fact the user's own words earned. A request that wrote a preference and
   // then lost its section trial has still changed the agent, so calling it
@@ -841,20 +917,27 @@ async function settleRoutes(
   const undone = rolledBack + rejected;
   const stage: RefinementStage = landed > 0 ? 'applied' : undone > 0 ? 'rolled_back' : 'refused';
   const parts: string[] = [];
+
   if (promoted > 0) {
     parts.push(`${String(promoted)} proposal${promoted === 1 ? '' : 's'} in effect on their `
       + "owners' own evidence");
   }
+
   if (alreadyApplied > 0) {
     parts.push(`${String(alreadyApplied)} edit${alreadyApplied === 1 ? '' : 's'} in effect: `
       + "preferences from the user's own words, and skills you approved");
   }
+
   if (rolledBack > 0) {
     parts.push(`${String(rolledBack)} rolled back — the incumbent won its trials`);
   }
+
   if (rejected > 0) parts.push(`${String(rejected)} rejected by you`);
+
   if (parts.length === 0) parts.push('every proposed edit was refused');
   const from: RefinementStage = request.stage === 'gated' ? 'gated' : 'evaluating';
+
   if (!store.advance(request.id, from, stage, { detail: parts.join('; ') })) return null;
+
   return refinementRequestView(store.get(request.id) ?? request);
 }

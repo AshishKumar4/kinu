@@ -35,10 +35,12 @@ export interface ResolveAgentTargetOptions {
  */
 export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOptions = {}): AgentTarget {
   const ref = resolveAgentRef(input);
+
   if (ref) {
     if (opts.backend && opts.backend !== ref.mode) {
       throw new Error(`"${input}" is a configured ${ref.mode} workspace; it cannot be opened as ${opts.backend}.`);
     }
+
     return {
       requestedName: input,
       name: ref.name,
@@ -49,17 +51,20 @@ export function resolveAgentTarget(input: string, opts: ResolveAgentTargetOption
       workspaceId: ref.workspaceId,
     };
   }
+
   if (opts.backend) return bareTarget(input, opts.backend);
 
   const dbPath = agentDbPath(input);
   const localDb = existsSync(dbPath);
   const cloudRef = localDb ? sameCloudWorkspace(input) : null;
+
   if (cloudRef) {
     throw new Error(
       `"${input}" names both a local workspace (${dbPath}) and the cloud workspace configured `
       + `as "${cloudRef.name}". Address the cloud one by its configured name, or rename one of them.`,
     );
   }
+
   return bareTarget(input, localDb ? 'local' : 'cloud');
 }
 

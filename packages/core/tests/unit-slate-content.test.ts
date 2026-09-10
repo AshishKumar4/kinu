@@ -6,6 +6,7 @@ import { createTestWorkspace, makeSqlExec } from './helpers';
 
 test('Slate content retains exact bytes across SQLite chunks and reopens', async () => {
   const ws = createTestWorkspace();
+
   try {
     const content = new SqliteSlateContentStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
     const bytes = Uint8Array.from({ length: CHUNK_SIZE + 7 }, (_, index) => index % 251);

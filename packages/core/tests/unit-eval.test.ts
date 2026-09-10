@@ -14,6 +14,7 @@ const SEED_CORPUS = `# Comment line — ignored
 
 function strategyContext(task: string): StrategyContext {
   const { rt } = createTestRuntime();
+
   return { task, mode: 'build', rt, model: new MockLanguageModelV3() };
 }
 
@@ -61,6 +62,7 @@ describe('eval runner', () => {
       { id: 'q1', task: 'q1?', reference: 'r1' },
       { id: 'q2', task: 'q2?', reference: 'r2' },
     ];
+
     const a = strat('alpha', 'alpha-answer');
     const b = strat('beta', 'beta-answer');
 
@@ -91,12 +93,14 @@ describe('eval runner', () => {
       runB: { caseId: 'c', strategyId: 'b', output: '', durationMs: 0 },
       verdict: { winner, scoreA: sA, scoreB: sB, rationale: '' },
     });
+
     const results: EvalResult[] = [
       fakeResult('a', 0.9, 0.5),
       fakeResult('a', 0.8, 0.6),
       fakeResult('b', 0.3, 0.7),
       fakeResult('tie', 0.5, 0.5),
     ];
+
     const s = summarizeEval(results);
     expect(s.total).toBe(4);
     expect(s.aWins).toBe(2);
@@ -111,7 +115,9 @@ describe('eval runner', () => {
       id: 'broken',
       async explore() { throw new Error('boom'); },
     };
+
     const ok = strat('ok', 'fine');
+
     const results = await runEvalPair({
       cases: [{ id: 'x', task: 't' }],
       strategyA: broken,
@@ -122,6 +128,7 @@ describe('eval runner', () => {
         rationale: runA.error ? `A errored: ${runA.error}` : '',
       }),
     });
+
     expect(results[0].runA.error).toContain('boom');
     expect(results[0].verdict.winner).toBe('b');
   });
@@ -144,11 +151,13 @@ describe('LLM judge adapter', () => {
     const judge = createLLMJudge(async (_prompt, _schema) => ({
       winner: 'a', scoreA: 0.8, scoreB: 0.4, rationale: 'a was clearer',
     }));
+
     const verdict = await judge(
       { id: 'c', task: 't' },
       { caseId: 'c', strategyId: 'a', output: 'A out', durationMs: 1 },
       { caseId: 'c', strategyId: 'b', output: 'B out', durationMs: 1 },
     );
+
     expect(verdict.winner).toBe('a');
     expect(verdict.scoreA).toBe(0.8);
   });

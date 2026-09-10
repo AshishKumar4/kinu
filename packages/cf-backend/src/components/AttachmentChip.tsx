@@ -13,6 +13,7 @@ export function dataUrlRawBytes(url: string): number {
 
 export function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
   const name = part.filename ?? "file";
+
   return (
     <span className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2">
       {part.mediaType.startsWith("image/")

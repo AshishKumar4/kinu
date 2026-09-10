@@ -44,13 +44,16 @@ const { rt } = createTestRuntime();
 // The full surface renders every unconditional section. Role/profile is
 // intentionally conditional, so its own matrix case is its proof surface.
 const FULL = PROMPT_MATRIX.find((c) => c.name === 'cf-full-surface');
+
 const ROLE = PROMPT_MATRIX.find((c) => c.name === 'role-general');
+
 if (!FULL || !ROLE) throw new Error('matrix lost a required proof surface');
 
 // The two baselines every comparison below is against, rendered once. Both are
 // taken in this run, from this source: a recorded rendering would only say
 // which prompt shipped the day it was recorded.
 const FULL_PROMPT = buildSystemPromptSync(rt, FULL.opts);
+
 const ROLE_PROMPT = buildSystemPromptSync(rt, ROLE.opts);
 
 /** The section's heading letter, changed. Always plain text, always rendered
@@ -60,6 +63,7 @@ function mutateOneCharacter(source: string): string {
   const at = source.indexOf('## ') + 3;
   expect(at).toBeGreaterThan(2);
   expect(source[at]).not.toBe(MUTANT);
+
   return `${source.slice(0, at)}${MUTANT}${source.slice(at + 1)}`;
 }
 
@@ -68,9 +72,11 @@ function mutateOneCharacter(source: string): string {
  *  failure names what moved instead of how much. */
 function movedCharacters(baseline: string, mutated: string): string[] {
   const moved = new Set<string>();
+
   for (let index = 0; index < Math.max(baseline.length, mutated.length); index += 1) {
     if (baseline[index] !== mutated[index]) moved.add(mutated[index] ?? '<end>');
   }
+
   return [...moved].sort();
 }
 
@@ -91,12 +97,14 @@ describe('every registered section reaches a rendered prompt', () => {
     // nothing, or two matrix cases that are the same request under two names,
     // would make the comparisons in this file free.
     const rendered = new Set<string>();
+
     for (const testCase of PROMPT_MATRIX) {
       const prompt = buildSystemPromptSync(rt, testCase.opts);
       expect({ name: testCase.name, long: prompt.length > 200 })
         .toEqual({ name: testCase.name, long: true });
       rendered.add(prompt);
     }
+
     expect(rendered.size).toBe(PROMPT_MATRIX.length);
   });
 });
@@ -113,10 +121,12 @@ describe('an override replaces exactly its own section', () => {
       const isRole = section.id === 'role/profile';
       const target = isRole ? ROLE : FULL;
       const baseline = isRole ? ROLE_PROMPT : FULL_PROMPT;
+
       const mutated = buildSystemPromptSync(rt, {
         ...target.opts,
         sectionOverrides: { [section.id]: mutateOneCharacter(section.source) },
       });
+
       expect(mutated).not.toBe(baseline);
       // One character for one character: nothing reflowed, nothing else moved.
       expect(mutated.length).toBe(baseline.length);
@@ -157,8 +167,10 @@ describe('the prompt stays inside its byte budget', () => {
     // Breadth/Doubt triggers and the payoff framing, and the placeholder
     // mission lost its heads/subordinates clause.
     const MATRIX_CEILING_BYTES = 111_800;
+
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
+
     expect({ total, over: total > MATRIX_CEILING_BYTES })
       .toEqual({ total, over: false });
   });
@@ -168,6 +180,7 @@ describe('PROMPT_SECTIONS — the addressing scheme', () => {
   test('eleven sections, unique ids, every one a real template', () => {
     expect(PROMPT_SECTIONS).toHaveLength(11);
     expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(11);
+
     for (const section of PROMPT_SECTIONS) {
       expect(section.source.startsWith('## ')).toBe(true);
       // Compiles, and its contract is readable — what the promotion gate compares

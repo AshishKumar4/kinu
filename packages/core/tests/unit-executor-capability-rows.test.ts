@@ -26,6 +26,7 @@ import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 function routerRows(provider: ExecutorProvider) {
   const router = new DefaultExecutionRouter();
   router.register(provider);
+
   return router.listExecutors();
 }
 
@@ -34,7 +35,9 @@ function routerRows(provider: ExecutorProvider) {
 function runsLine(provider: ExecutorProvider): string {
   const block = renderDynamicContextBlock({ executors: routerRows(provider) });
   const line = block?.split('\n').find((row) => row.startsWith(`- ${provider.name}:`));
+
   if (line === undefined) throw new Error(`no rendered row for ${provider.name}`);
+
   return line;
 }
 
@@ -51,6 +54,7 @@ const boundContainer: SandboxHandle = (() => {
   const unreachable = async (): Promise<never> => {
     throw new Error('the capability row must not depend on a container reply');
   };
+
   return {
     exec: unreachable, readFile: unreachable, writeFile: unreachable,
     listFiles: unreachable, deleteFile: unreachable, exposePort: unreachable,
@@ -94,6 +98,7 @@ function probedDevice(binaries: readonly string[], secondsAgo = 0): DeviceTransp
     registered: true,
     toolchain: deviceToolchainAnswer(binaries, Date.now() - secondsAgo * 1_000),
   };
+
   return { status: () => status, refreshStatus: async () => status, rpc: async () => undefined };
 }
 
@@ -105,9 +110,11 @@ describe('tunneled laptop capability row', () => {
     // Nothing has asked it what it holds, so none of these may be CLAIMED — an
     // over-claim sends work there and it fails on their machine.
     const [runs, notMeasured] = line.split(', not measured here: ');
+
     for (const unprobed of ['javascript', 'typescript', 'python', 'npm', 'git', 'docker', 'gpu']) {
       expect(runs).not.toContain(unprobed);
     }
+
     // And none may be reported ABSENT either. The row that replaced this one
     // simply omitted them, which reads to the model exactly like a denial: it
     // would never try python on a machine that may well have python.
@@ -175,6 +182,7 @@ describe('tunneled laptop capability row', () => {
     // `<name>.exposePort(port)`. While laptop declared it, the model was told
     // to call a method that answers `supported: false`.
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [

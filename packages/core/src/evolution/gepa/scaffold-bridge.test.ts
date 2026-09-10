@@ -20,8 +20,10 @@ import type { EvalInstance, MetricOutcome } from './types';
 
 function seededRng(seed: number): () => number {
   let s = seed;
+
   return () => {
     s = (s * 1664525 + 1013904223) % 0xffffffff;
+
     return s / 0xffffffff;
   };
 }
@@ -69,10 +71,12 @@ describe('runScaffoldGepa', () => {
 
     // The pending version's code should be in scaffold/agent.js.v{pendingVersion}.
     if (result.pendingVersion === null) throw new Error('expected a pending scaffold version');
+
     const pending = await rt.storage.vfs.readFile(
       `scaffold/agent.js.v${result.pendingVersion}`,
       { encoding: 'utf8' },
     );
+
     expect(v.parse(v.string(), pending)).toContain('improved');
 
     // The LIVE scaffold/agent.js MUST still hold the seed (Phase 0 invariant).
@@ -85,9 +89,11 @@ describe('runScaffoldGepa', () => {
     expect(result.winnerScore.lo).toBeCloseTo(0.2787, 4);
     expect(result.winnerScore.hi).toBeCloseTo(0.9953, 4);
     expect(result.seedScore.mean).toBe(0.5);
+
     const [rationale] = rt.storage.sql<{ rationale: string }>`
       SELECT rationale FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} AND version = ${result.pendingVersion!}`;
+
     expect(rationale.rationale).toContain('0.900 (95% CI 0.279–0.995)');
     expect(rationale.rationale).toContain('seed: 0.500 (95% CI 0.095–0.905)');
   });
@@ -98,6 +104,7 @@ describe('runScaffoldGepa', () => {
     await rt.identity.scaffold.write(VALID_SEED);
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
     const reflectionLm = async () => VALID_SEED; // no-op
+
     const result = await runScaffoldGepa({
       rt,
       evalSet: [{ id: 'i1', input: 'x' }],
@@ -106,6 +113,7 @@ describe('runScaffoldGepa', () => {
       budget: { maxIterations: 1, maxMetricCalls: 20, minibatchSize: 1 },
       random: seededRng(1),
     });
+
     expect(result.proposed).toBe(false);
     expect(result.skipReason).toBe('winner_equals_seed');
     expect(result.pendingVersion).toBeNull();
@@ -120,6 +128,7 @@ describe('runScaffoldGepa', () => {
     await rt.identity.scaffold.write(VALID_SEED);
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
     const reflectionLm = async () => VALID_IMPROVED; // different source, same score
+
     const result = await runScaffoldGepa({
       rt,
       evalSet: [{ id: 'i1', input: 'x' }],
@@ -128,6 +137,7 @@ describe('runScaffoldGepa', () => {
       budget: { maxIterations: 1, maxMetricCalls: 20, minibatchSize: 1 },
       random: seededRng(1),
     });
+
     expect(result.proposed).toBe(false);
     expect(result.skipReason).toBe('winner_equals_seed');
   });
@@ -139,6 +149,7 @@ describe('runScaffoldGepa', () => {
     // Reflection LM produces something that violates the required signature.
     const reflectionLm = async () => 'function notAGenerator(rt, task) { return null; }';
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.9, feedback: '' });
+
     const result = await runScaffoldGepa({
       rt,
       evalSet: [{ id: 'i1', input: 'x' }],
@@ -147,6 +158,7 @@ describe('runScaffoldGepa', () => {
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
       random: seededRng(1),
     });
+
     // Constraints should have rejected the candidate in-loop — the winner
     // remains the seed and proposed is false.
     expect(result.gepa.winner.source).toBe(VALID_SEED);
@@ -158,15 +170,19 @@ describe('runScaffoldGepa', () => {
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
     let calls = 0;
+
     const reflectionLm = async () => {
       calls++;
+
       switch (calls) {
         case 1: return `import fs from "fs";\n${VALID_IMPROVED}`;
         case 2: return `globalThis.fetch(); ${VALID_IMPROVED}`;
         default: return `eval("x"); ${VALID_IMPROVED}`;
       }
     };
+
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.9, feedback: '' });
+
     const result = await runScaffoldGepa({
       rt,
       evalSet: [{ id: 'i1', input: 'x' }],
@@ -175,6 +191,7 @@ describe('runScaffoldGepa', () => {
       budget: { maxIterations: 3, maxMetricCalls: 100, minibatchSize: 1 },
       random: seededRng(1),
     });
+
     // None of the proposed candidates pass; winner stays at seed.
     expect(result.gepa.winner.source).toBe(VALID_SEED);
     expect(result.proposed).toBe(false);

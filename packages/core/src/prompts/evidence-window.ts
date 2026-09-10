@@ -48,10 +48,12 @@ const HEAD_FRACTION = 0.5;
  */
 export function evidenceWindow(text: string, maxChars: number): string {
   if (maxChars <= 0) throw new Error(`evidence budget must be positive, got ${maxChars}`);
+
   if (text.length <= maxChars) return text;
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;
   const omitted = text.length - headLen - tailLen;
+
   return `${text.slice(0, headLen)}\n[... ${omitted} chars omitted from the middle ...]\n${text.slice(-tailLen)}`;
 }
 
@@ -171,8 +173,11 @@ export const EVIDENCE_BUDGETS = {
  *  content and never `String({...})`'s "[object Object]". */
 export function renderToolResult<T>(raw: T): string {
   const text = v.safeParse(v.string(), raw);
+
   if (text.success) return text.output;
+
   if (raw == null) return '';
+
   try { return JSON.stringify(raw) ?? String(raw); }
   catch (error) {
     return `unserializable value: ${renderThrownChain({ cause: error })}`;
@@ -188,10 +193,12 @@ export function synthesizeToolFallback<T>(
   steps: ReadonlyArray<{ readonly toolResults: ReadonlyArray<{ readonly toolName: string; readonly output: T }> }>,
 ): string {
   const lines: string[] = [];
+
   for (const step of steps) {
     for (const result of step.toolResults) {
       lines.push(`[${result.toolName}] ${evidenceWindow(renderToolResult(result.output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
     }
   }
+
   return lines.join('\n');
 }

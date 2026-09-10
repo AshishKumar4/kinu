@@ -68,6 +68,7 @@ function deviceRoutesSetup() {
   // observable through the same routes a browser uses.
   const tiers = new Map<string, string>();
   const calls: Array<{ deviceId: string; tier: string }> = [];
+
   const stub = {
     async ensureProfile() {},
     async listDeviceConsents(_caller: UserCaller) {
@@ -75,11 +76,14 @@ function deviceRoutesSetup() {
     },
     async setDeviceTier(_caller: UserCaller, deviceId: string, tier: string) {
       calls.push({ deviceId, tier });
+
       if (deviceId !== 'dev-1') return { ok: false };
       tiers.set(deviceId, tier);
+
       return { ok: true };
     },
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     UserDO: { idFromName: (name: string) => name, get: () => stub },
@@ -89,17 +93,20 @@ function deviceRoutesSetup() {
   // UserDO.get, and CREDENTIAL_ENCRYPTION_KEY, all constructed immediately
   // above; no other Env binding is reachable on these request paths.
   const env = partialEnv as Env;
+
   const call = (path: string, method: string, body?: JsonValue) =>
     handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     }), env, IDENTITY);
+
   return { call, calls, tiers };
 }
 
 function requiredResponse(response: Response | null | undefined): Response {
   if (!response) throw new Error('expected user route to return a response');
+
   return response;
 }
 
@@ -119,6 +126,7 @@ describe('the device Sandbox route', () => {
 
   test('a tier outside the vocabulary is refused before the DO call', async () => {
     const { call, calls } = deviceRoutesSetup();
+
     // `files_only` is what a machine REPORTS, never what an owner selects. A
     // route that accepted it would let the UI offer a third state that means
     // "run nothing", which no owner would choose on purpose.
@@ -126,6 +134,7 @@ describe('the device Sandbox route', () => {
       const bad = await call('/devices/dev-1/sandbox', 'PUT', { tier });
       expect(requiredResponse(bad).status).toBe(400);
     }
+
     const missing = await call('/devices/dev-1/sandbox', 'PUT', {});
     expect(requiredResponse(missing).status).toBe(400);
     expect(calls).toEqual([]);
@@ -143,10 +152,12 @@ describe('the device Sandbox route', () => {
     const { call } = deviceRoutesSetup();
     const list = await call('/devices/consents', 'GET');
     expect(requiredResponse(list).status).toBe(200);
+
     const rows = v.parse(
       v.array(v.looseObject({ agentName: v.string(), deviceId: v.string() })),
       await requiredResponse(list).json(),
     );
+
     expect(rows).toHaveLength(1);
     expect(Object.keys(rows[0] ?? {})).not.toContain('scope');
   });

@@ -46,10 +46,13 @@ export async function storeProviderSecret(opts: {
 }): Promise<'account' | 'local'> {
   const reachable = opts.endpoint === undefined || reachableFromTheInternet(opts.endpoint);
   const cloud = opts.local || !reachable ? null : resolveCloudSession();
+
   if (!cloud) {
     opts.storeLocally();
+
     return 'local';
   }
+
   try {
     await setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }));
   } catch (err) {
@@ -63,11 +66,13 @@ export async function storeProviderSecret(opts: {
       { cause: err },
     );
   }
+
   opts.clearLocally();
   setDefaultModel(opts.model);
   // The account now holds a credential it did not hold a moment ago, and the
   // local copy is gone. Both change what a resident session can resolve.
   bumpProviderRevision();
+
   return 'account';
 }
 
@@ -75,11 +80,15 @@ export async function storeProviderSecret(opts: {
  *  a loopback, private, link-local, IPv6 ULA or CGNAT host. */
 function reachableFromTheInternet(baseURL: string): boolean {
   const url = tolerate(() => new URL(baseURL), 'malformed-input');
+
   if (!url) return false;
+
   if (url.protocol !== 'https:') return false;
   const hostname = url.hostname;
   const host = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+
   if (isIPv6Ula(host) || isCgnat(host)) return false;
+
   return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname);
 }
 
@@ -87,16 +96,20 @@ function reachableFromTheInternet(baseURL: string): boolean {
 function isIPv6Ula(host: string): boolean {
   if (!host.includes(':')) return false;
   const first = Number.parseInt(host.split(':')[0] ?? '', 16);
+
   if (!Number.isFinite(first)) return false;
   const top = first >>> 8;
+
   return top === 0xfc || top === 0xfd;
 }
 
 /** Carrier-grade NAT (100.64.0.0/10): one provider's customers, not the internet. */
 function isCgnat(host: string): boolean {
   const octets = host.split('.');
+
   if (octets.length !== 4 || octets.some((o) => !/^\d+$/.test(o))) return false;
   const [first, second] = octets.map(Number);
+
   return first === 100 && (second ?? 0) >= 64 && (second ?? 0) <= 127;
 }
 
@@ -135,6 +148,7 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
       console.log(`${WARN('!')} Kinu account was not connected.`);
       console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
     }
+
     return 'handled';
   }
 
@@ -146,7 +160,9 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
       console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
       console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
     }
+
     console.log(DIM('Run kinu provider connect <provider> to configure local workspace model access.'));
+
     return 'handled';
   }
 
@@ -171,6 +187,7 @@ export async function setupCommand(opts: {
 
   const config = loadConfigFile();
   let cloudReady = Boolean(config.accessToken);
+
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
     console.log(DIM('While you are signed in, new local workspaces run on your Cloudflare account via Workers AI. No API key on this machine.'));
@@ -181,6 +198,7 @@ export async function setupCommand(opts: {
     // honest instruction paths below instead of letting readline hang on
     // a pipe (the `curl | bash` installer freeze).
     const shouldLogin = opts.yes || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
+
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
       cloudReady = Boolean(loadConfigFile().accessToken);
@@ -190,11 +208,13 @@ export async function setupCommand(opts: {
   if (await runSetupPreflight({ opts, cloudReady }) === 'handled') return;
 
   const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : await chooseProvider(cloudReady)));
+
   if (provider === 'skip') {
     console.log(`${WARN('!')} Skipped local model setup.`);
     console.log(DIM(cloudReady
       ? 'Cloud workspaces remain ready. Run kinu provider connect <provider> later for local workspaces.'
       : 'Run kinu setup later before creating workspaces.'));
+
     return;
   }
 
@@ -202,15 +222,19 @@ export async function setupCommand(opts: {
     if (!cloudReady) {
       console.log(`${WARN('!')} Workers AI needs a signed-in Kinu account.`);
       console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then kinu setup again.`));
+
       return;
     }
+
     if (opts.model) {
       const spec = `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
       setDefaultModel(spec);
       console.log(`${OK('✓')} Using Cloudflare Workers AI`);
       console.log(DIM(`Default model: ${spec}`));
+
       return;
     }
+
     // Storing nothing is deliberate: the platform default is one constant in
     // @kinu.run/core, and an unset model reads it at resolve time instead of
     // pinning a copy that would go stale.
@@ -218,14 +242,18 @@ export async function setupCommand(opts: {
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
     console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
+
     return;
   }
+
   if (provider === 'claude') {
     await connectClaude();
+
     return;
   }
 
   const next = loadConfigFile();
+
   if (provider === 'codex') {
     const model = stripProviderPrefix(opts.model ?? await ask('Default Codex model', next.model?.startsWith('codex/') ? next.model.slice('codex/'.length) : 'gpt-5.5'), 'codex');
     const credential = await runCodexDeviceFlow();
@@ -241,6 +269,7 @@ export async function setupCommand(opts: {
       },
     }));
     console.log(`${OK('✓')} Connected ChatGPT Codex subscription`);
+
     return;
   }
 
@@ -259,6 +288,7 @@ export async function setupCommand(opts: {
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openai; }),
       model: spec,
     }), 'OpenAI', spec);
+
     return;
   }
 
@@ -277,6 +307,7 @@ export async function setupCommand(opts: {
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
       model: spec,
     }), 'OpenRouter', spec);
+
     return;
   }
 
@@ -295,6 +326,7 @@ export async function setupCommand(opts: {
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
       model: spec,
     }), 'Anthropic', spec);
+
     return;
   }
 
@@ -322,6 +354,7 @@ export async function setupCommand(opts: {
       // from a Worker anyway, so that key belongs here.
       endpoint: baseURL,
     }), 'the OpenAI-compatible endpoint', spec);
+
     return;
   }
 
@@ -329,20 +362,26 @@ export async function setupCommand(opts: {
     console.log(ACCENT('Connecting to OpenCode…'));
     console.log(DIM('Reading your opencode auth and model configuration.'));
     const avail = await checkOpenCodeAvailability();
+
     if (!avail.binary) {
       console.log(`${WARN('!')} opencode CLI not found.`);
       console.log(DIM(INSTALL_HINT_OPENCODE));
+
       return;
     }
+
     if (!avail.authenticated) {
       console.log(`${WARN('!')} opencode is not authenticated.`);
       console.log(DIM(LOGIN_HINT_OPENCODE));
+
       return;
     }
+
     // Discover available models by creating the provider and calling listModels
     // with stub deps (the provider reads from the filesystem, not from deps).
     const ocProvider = createOpenCodeProvider();
     let model = opts.model ?? '';
+
     if (!model) {
       try {
         const models = await ocProvider.listModels({
@@ -350,18 +389,23 @@ export async function setupCommand(opts: {
           getAuth: async () => null,
           hasCredential: async () => false,
         });
+
         if (models.length === 0) {
           console.log(`${WARN('!')} No models found in your opencode configuration.`);
+
           return;
         }
+
         // Pick the provider's configured default, or fall back to the first model.
         model = models[0].id;
       } catch (e) {
         console.log(`${WARN('!')} Could not read opencode models: ${renderThrownChain({ cause: e })}`);
         console.log(DIM(LOGIN_HINT_OPENCODE));
+
         return;
       }
     }
+
     updateConfigFile((config) => withProvider(config, {
       model: `opencode/${model}`,
       providers: {},
@@ -369,6 +413,7 @@ export async function setupCommand(opts: {
     console.log(`${OK('✓')} Connected OpenCode`);
     console.log(DIM(`Default model: opencode/${model}`));
     console.log(DIM('Kinu reads models and auth from your local opencode install at request time.'));
+
     return;
   }
 
@@ -376,6 +421,7 @@ export async function setupCommand(opts: {
 }
 
 export const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
+
 export const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `kinu setup` again.';
 
 /**
@@ -413,14 +459,18 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(`  ${ACCENT('6')} OpenAI-compatible`);
   console.log(`  ${ACCENT('7')} OpenCode (share your opencode auth & models)`);
   console.log(`  ${ACCENT('8')} Skip`);
+
   if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
+
   // No-friction discovery: the Claude Code subscription stores no credential
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
   if ((await checkClaudeAvailability()).loggedIn) {
     console.log(DIM('  Claude Code detected. Or use --model claude/claude-opus-4-x for your subscription.'));
   }
+
   const value = await ask('Choice', '1');
+
   return value;
 }
 
@@ -434,6 +484,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
  */
 export function canonicalProviderName(value: string): string {
   const token = value.trim().toLowerCase();
+
   switch (token) {
     case 'cf':
     case 'workers-ai':
@@ -458,17 +509,26 @@ export function canonicalProviderName(value: string): string {
 
 function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
+
   // Menu positions on the --provider flag. The prompt resolves these same
   // answers interactively; the flag keeps accepting them, pinned by
   // setup-default-provider.test.ts which cannot drive the prompt headlessly.
   if (v === '1') return 'workers-ai';
+
   if (v === '2') return 'codex';
+
   if (v === '3') return 'openai';
+
   if (v === '4') return 'openrouter';
+
   if (v === '5') return 'anthropic';
+
   if (v === '6') return 'openai-compatible';
+
   if (v === '7') return 'opencode';
+
   if (v === '8' || v === 'skip' || v === 'none') return 'skip';
+
   // Anything else is a name, resolved through the one alias map. `cloudflare`
   // is this command's `workers-ai` branch; bare `claude` is the subscription,
   // not the Anthropic API key one position down the menu.
@@ -487,7 +547,9 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
 }
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
+
 export const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
+
 const CLAUDE_READY = 'Claude subscription ready. Use kinu create --model claude/claude-opus-4-x';
 
 /** Claude subscription "connect" is a status check, not a credential we store:
@@ -500,6 +562,7 @@ export async function connectClaude(): Promise<void> {
   console.log(DIM('Drives the `claude` binary with your Claude Code login. Local workspaces only.'));
   const { binary, loggedIn } = await checkClaudeAvailability();
   console.log('');
+
   if (binary && loggedIn) {
     console.log(`${OK('✓')} ${CLAUDE_READY}`);
     // Nothing was written here — the `claude` binary owns its own login — but
@@ -513,6 +576,7 @@ export async function connectClaude(): Promise<void> {
     console.log(`${WARN('!')} ${CLAUDE_INSTALL_HINT}`);
     console.log(DIM('Then run `claude` once to sign in.'));
   }
+
   console.log(DIM('Cloud workspaces cannot use the subscription. Connect an Anthropic API key for those.'));
 }
 
@@ -536,18 +600,24 @@ async function runCodexDeviceFlow(opts: { readonly signal?: AbortSignal } = {}) 
     intervalMs: Math.max(3, flow.pollIntervalSec) * 1000,
     onWaiting: () => process.stdout.write('.'),
   };
+
   const probe = async () => {
     const poll = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
+
     return poll.status === 'pending' ? undefined : poll;
   };
+
   const outcome = opts.signal
     ? await waitForAnswer(probe, { ...wait, signal: opts.signal })
     : await waitForAnswer(probe, wait);
+
   if (outcome === undefined) throw new Error('Codex login cancelled.');
+
   if (outcome.status === 'expired' || outcome.status === 'denied') throw new Error(outcome.message);
   console.log('');
   const credential = tokensToCredential(outcome.tokens);
   const accountId = decodeCodexAccountId(credential.accessToken);
+
   return {
     ...credential,
     metadata: accountId ? { accountId } : credential.metadata,

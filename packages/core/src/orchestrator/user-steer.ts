@@ -100,6 +100,7 @@ export class UserSteerDrain {
   accept(steer: UserSteer): UserSteerOutcome {
     if (!this.deps.turnInFlight()) return 'idle';
     this.pending.push(steer);
+
     return 'mid-turn';
   }
 
@@ -116,6 +117,7 @@ export class UserSteerDrain {
     if (this.landing.length > 0 || this.injections.recorded.length > 0) {
       throw new Error('cannot restore pending steers after this turn started draining');
     }
+
     this.pending = [...steers];
   }
 
@@ -139,8 +141,10 @@ export class UserSteerDrain {
    */
   async prepareStep(ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> {
     const drained = this.pending.splice(0);
+
     if (drained.length === 0) return this.injections.drain(ctx, []);
     this.landing = drained;
+
     return await this.persistDrain(ctx, drained);
   }
 
@@ -150,10 +154,13 @@ export class UserSteerDrain {
   ): Promise<ModelMessage[] | undefined> {
     try {
       await this.deps.onDrain?.(drained, ctx.stepNumber);
+
       const rewritten = this.injections.drain(ctx, [{
         message: steerUserMessage(drained), texts: drained.map((steer) => steer.text),
       }]);
+
       this.landing = [];
+
       return rewritten;
     } catch (cause) {
       // New steers may arrive while persistence is awaited. The failed prefix
@@ -206,7 +213,9 @@ export class UserSteerDrain {
 export function steerUserMessage(drained: ReadonlyArray<UserSteer>): ModelMessage {
   const text = drained.map((steer) => steer.text).join('\n\n');
   const files = drained.flatMap((steer) => steer.files ?? []);
+
   if (files.length === 0) return { role: 'user', content: text };
+
   return {
     role: 'user',
     content: [

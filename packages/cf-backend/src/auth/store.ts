@@ -45,6 +45,7 @@ import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/co
 import * as v from 'valibot';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface OAuthStateInput {
@@ -96,6 +97,7 @@ const OAuthStateSchema = v.object({
   createdAt: v.number(),
   expiresAt: v.number(),
 });
+
 export type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
 
 /** The projection of a session row that KV carries. Written from the row's own
@@ -128,6 +130,7 @@ export async function createOAuthState(
   const state = randomToken(32);
   const binding = randomToken(32);
   const expiresAt = now + OAUTH_STATE_TTL_MS;
+
   const record: OAuthStateRecord = {
     provider: input.provider,
     codeVerifier: input.codeVerifier,
@@ -138,7 +141,9 @@ export async function createOAuthState(
     createdAt: now,
     expiresAt,
   };
+
   await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, expiresAt);
+
   return { state, binding, expiresAt };
 }
 
@@ -163,10 +168,13 @@ export async function consumeOAuthState(
   await kv.delete(key);
 
   if (!record) throw new Error('OAuth state is invalid or already used.');
+
   if (!binding || !timingSafeEqual(await sha256Hex(binding), record.bindingHash)) {
     throw new Error('OAuth state was not issued to this browser. Start sign-in again.');
   }
+
   if (record.provider !== provider) throw new Error('OAuth state provider mismatch.');
+
   if (record.expiresAt <= Date.now()) throw new Error('OAuth state expired. Start sign-in again.');
 
   return { ...record, returnTo: sanitizeReturnTo(record.returnTo) };
@@ -178,6 +186,7 @@ export async function consumeOAuthState(
  *  sign-in's KV record needs to reach every colo. */
 function parseSessionTokenUserId(token: string): string | null {
   const match = /^ps_([a-f0-9]{32})_[A-Za-z0-9_-]{64,}$/.exec(token);
+
   return match?.[1] ?? null;
 }
 
@@ -189,6 +198,7 @@ export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): P
   const expiresAt = now + SESSION_TTL_MS;
   const caller = await ownerCaller(env);
   const authority = sessionAuthority(env, identity.userId);
+
   // ONE value for both stores, so the authority's row and the projection of it
   // cannot come to disagree about what this cookie stands for.
   const minted: BrowserSessionIdentity = {
@@ -202,6 +212,7 @@ export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): P
   // The authority goes first, so a cookie is never outstanding against a
   // session nothing can revoke.
   await authority.registerBrowserSession(caller, tokenHash, expiresAt, minted);
+
   try {
     await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
       userId: identity.userId,
@@ -220,6 +231,7 @@ export async function createSession(env: AuthStoreEnv, profile: OAuthProfile): P
         otherwise: 'unavailable',
       }));
     }
+
     throw new SessionAuthorityUnavailableError({ cause: writeFailed });
   }
 
@@ -260,9 +272,11 @@ export class SessionAuthorityUnavailableError extends Error {
  *  deletes the row, and the row is what is read here. */
 export async function verifySession(env: AuthStoreEnv, token: string): Promise<AuthIdentity | null> {
   const userId = parseSessionTokenUserId(token);
+
   if (!userId) return null;
   const tokenHash = await sha256Hex(token);
   let record: v.InferOutput<typeof SessionSchema> | null;
+
   try {
     record = await readKvJson(env.AUTH_KV, sessionKey(tokenHash), SessionSchema);
   } catch (unreadable) {
@@ -276,13 +290,16 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
     if (!isMalformedRecord({ cause: unreadable })) {
       throw new SessionAuthorityUnavailableError({ cause: unreadable });
     }
+
     await discardCorruptSession(env, userId, tokenHash, toKinuError({
       doing: 'decoding the browser session record this cookie names',
       cause: unreadable,
       otherwise: 'bad_input',
     }));
+
     return null;
   }
+
   // A projection past the deadline it carries is no projection: kv.ts floors a
   // TTL at a minute, so a record can outlive its own deadline by that much.
   // Nothing about lifetime is DECIDED here — the row drops lapsed sessions in
@@ -295,11 +312,13 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
   // that cannot be reached.
   const caller = await ownerCaller(env);
   let live: LiveBrowserSession | null;
+
   try {
     live = await sessionAuthority(env, userId).verifyBrowserSession(caller, tokenHash);
   } catch (unreachable) {
     throw new SessionAuthorityUnavailableError({ cause: unreachable });
   }
+
   if (!live) return null;
 
   // The projection normally answers. When it has not reached this colo yet, the
@@ -308,6 +327,7 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
   // would only lose the same race. `identity` is null only on a row registered
   // before the row carried one, where the projection is still its only copy.
   const snapshot = projected ?? live.identity;
+
   if (!snapshot) return null;
 
   // Annotated, not inferred, so the field-supply census sees the one site
@@ -327,6 +347,7 @@ export async function verifySession(env: AuthStoreEnv, token: string): Promise<A
     // the same reason `userId` is.
     sessionTokenHash: tokenHash,
   };
+
   return identity;
 }
 
@@ -392,10 +413,12 @@ async function discardCorruptSession(
  *  not, and would cost the browser the cookie it could retry with. */
 export async function revokeSession(env: AuthStoreEnv, token: string): Promise<void> {
   const userId = parseSessionTokenUserId(token);
+
   if (!userId) return;
   const tokenHash = await sha256Hex(token);
   const caller = await ownerCaller(env);
   await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
+
   try {
     await env.AUTH_KV.delete(sessionKey(tokenHash));
   } catch (cleanupFailed) {
@@ -420,13 +443,17 @@ function sessionAuthority(env: AuthStoreEnv, userId: string): DurableObjectStub<
 
 async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
   const email = profile.email.trim().toLowerCase();
+
   if (!email) throw new Error('OAuth provider did not return an email address.');
+
   if (!profile.providerSub) throw new Error('OAuth provider did not return a stable subject.');
+
   if (!profile.emailVerified) {
     throw new Error('OAuth provider did not report this email address as verified.');
   }
 
   const userId = await deriveUserId(email);
+
   const stored = await sessionAuthority(env, userId)
     .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
 
@@ -445,7 +472,10 @@ async function resolveIdentity(env: AuthStoreEnv, profile: OAuthProfile, now: nu
  *  into the auth flow itself. */
 export function sanitizeReturnTo(input: string): string {
   const raw = input.trim();
+
   if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+
   if (raw.startsWith('/auth/') || raw === '/login' || raw === '/logout') return '/';
+
   return raw;
 }

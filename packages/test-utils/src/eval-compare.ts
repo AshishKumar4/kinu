@@ -85,7 +85,9 @@ export const SOLVED_PREDICATE = `${TASK_OUTCOME} rate === 1 — every subgoal re
  */
 function fullySolved(o: ScoredObservation): boolean | null {
   const row = o.scores.find((s) => s.name === TASK_OUTCOME);
+
   if (!row || row.eligible === 0 || row.rate === null) return null;
+
   return row.passed === row.eligible;
 }
 
@@ -248,6 +250,7 @@ interface TaskPairs {
  */
 function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): ComparisonRefusal[] {
   const refusals: ComparisonRefusal[] = [];
+
   if (baseline.modelId !== candidate.modelId) {
     refusals.push({
       field: 'modelId',
@@ -255,6 +258,7 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
         + 'a model change and a code change cannot be separated in one delta',
     });
   }
+
   if (baseline.repeats !== candidate.repeats) {
     refusals.push({
       field: 'repeats',
@@ -262,6 +266,7 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
         + `${String(candidate.repeats)} — the two rates average away different amounts of noise`,
     });
   }
+
   if (baseline.arm.evolution !== candidate.arm.evolution) {
     refusals.push({
       field: 'arm.evolution',
@@ -270,6 +275,7 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
         + 'the mechanism, not the change under test',
     });
   }
+
   if (baseline.arm.settle !== candidate.arm.settle) {
     refusals.push({
       field: 'arm.settle',
@@ -277,8 +283,10 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
         + 'in the candidate',
     });
   }
+
   const baselineOnly = baseline.arm.tools.filter((t) => !candidate.arm.tools.includes(t));
   const candidateOnly = candidate.arm.tools.filter((t) => !baseline.arm.tools.includes(t));
+
   if (baselineOnly.length > 0 || candidateOnly.length > 0) {
     refusals.push({
       field: 'arm.tools',
@@ -286,6 +294,7 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
         + `only in candidate: [${candidateOnly.join(', ')}]`,
     });
   }
+
   for (const [side, record] of [['baseline', baseline], ['candidate', candidate]] as const) {
     if (!record.admissibility.admissible) {
       refusals.push({
@@ -295,15 +304,19 @@ function refusalsFor(baseline: EvalRunRecord, candidate: EvalRunRecord): Compari
       });
     }
   }
+
   return refusals;
 }
 
 function scorerNames(record: EvalRunRecord): string[] {
   const names: string[] = [];
+
   for (const o of record.observations) {
     if (o.outcome !== 'scored') continue;
+
     for (const s of o.scores) if (!names.includes(s.name)) names.push(s.name);
   }
+
   return names;
 }
 
@@ -317,22 +330,27 @@ function pairedMetric(
   const diffs: number[] = [];
   let sumBaseline = 0;
   let sumCandidate = 0;
+
   for (const task of tasks) {
     if (task.pairs.length === 0) continue;
     let baseline = 0;
     let candidate = 0;
+
     for (const pair of task.pairs) {
       baseline += select(pair.baseline);
       candidate += select(pair.candidate);
     }
+
     baseline /= task.pairs.length;
     candidate /= task.pairs.length;
     sumBaseline += baseline;
     sumCandidate += candidate;
     diffs.push(candidate - baseline);
   }
+
   const { mean, ci } = pairedBootstrapCI(diffs, opts);
   const n = diffs.length;
+
   return {
     tasks: n,
     baselineMean: n === 0 ? 0 : sumBaseline / n,
@@ -351,29 +369,37 @@ function collectScorerSamples(name: string, tasks: readonly TaskPairs[]) {
   let rateSumBaseline = 0;
   let rateSumCandidate = 0;
   let unmeasuredTasks = 0;
+
   for (const task of tasks) {
     let eligibleA = 0;
     let passedA = 0;
     let eligibleB = 0;
     let passedB = 0;
     let measured = true;
+
     for (const pair of task.pairs) {
       for (const s of pair.baseline.scores) {
         if (s.name !== name) continue;
         eligibleA += s.eligible;
         passedA += s.passed;
+
         if (s.eligible > 0 && s.rate === null) measured = false;
       }
+
       for (const s of pair.candidate.scores) {
         if (s.name !== name) continue;
         eligibleB += s.eligible;
         passedB += s.passed;
+
         if (s.eligible > 0 && s.rate === null) measured = false;
       }
     }
+
     baselineEligible += eligibleA;
     candidateEligible += eligibleB;
+
     if (!measured) { unmeasuredTasks++; continue; }
+
     if (eligibleA === 0 || eligibleB === 0) continue;
     const rateA = passedA / eligibleA;
     const rateB = passedB / eligibleB;
@@ -381,6 +407,7 @@ function collectScorerSamples(name: string, tasks: readonly TaskPairs[]) {
     rateSumCandidate += rateB;
     diffs.push(rateB - rateA);
   }
+
   return { diffs, baselineEligible, candidateEligible, rateSumBaseline, rateSumCandidate, unmeasuredTasks };
 }
 
@@ -397,17 +424,21 @@ function compareScorer(
   const differingPairs = wins + losses;
   const boot = hasMeasuredPairs ? pairedBootstrapCI(diffs, opts) : null;
   const dispersion = pairedTasks === 0 ? 0 : diffs.reduce((s, d) => s + d * d, 0) / pairedTasks;
+
   const mde = unmeasuredTasks > 0 ? Number.POSITIVE_INFINITY
     : minimumDetectableEffect({ pairs: pairedTasks, dispersion, alpha, power: opts.power });
+
   const pValue = binomialTwoSidedP(wins, differingPairs);
   const floor = floorPValue(differingPairs);
   const canReachSignificance = hasMeasuredPairs && differingPairs > 0 && floor <= alpha;
   const significant = hasMeasuredPairs && pValue < alpha;
   const effect = boot === null ? null : boot.mean;
   const resolvable = effect !== null && Number.isFinite(mde) && mde > 0 && Math.abs(effect) >= mde;
+
   const pairsNeeded = effect === null
     ? Number.POSITIVE_INFINITY
     : requiredPairs(effect, { dispersion, alpha, power: opts.power });
+
   const reach: ScorerReach = baselineEligible > 0 && candidateEligible > 0
     ? 'both'
     : baselineEligible > 0
@@ -419,7 +450,9 @@ function compareScorer(
     ? ''
     : ` [CI ${fmtPp(boot.ci.lo)}..${fmtPp(boot.ci.hi)}, ${String(differingPairs)} of `
       + `${String(pairedTasks)} paired tasks differed]`;
+
   let verdict: string;
+
   if (unmeasuredTasks > 0) {
     verdict = `UNMEASURED: ${String(unmeasuredTasks)} task(s) lack outcome attribution; `
       + 'observed opportunities remain counted, but this metric has no rate or effect to compare';
@@ -475,12 +508,14 @@ export function compareRuns(
   baseline: EvalRunRecord, candidate: EvalRunRecord, opts: ComparisonOptions = {},
 ): EvalComparison {
   const refusals = refusalsFor(baseline, candidate);
+
   if (refusals.length > 0) {
     return {
       comparable: false,
       baselineRunId: baseline.runId, candidateRunId: candidate.runId, refusals,
     };
   }
+
   const alpha = opts.alpha ?? DEFAULT_ALPHA;
 
   const baselineByKey = new Map(baseline.observations.map((o) => [observationKey(o), o]));
@@ -489,32 +524,42 @@ export function compareRuns(
 
   const diagnostics: PairDiagnostic[] = [];
   const pairsByTask = new Map<string, ObservationPair[]>();
+
   const drop = (key: string, reason: PairDropReason, extra = '') => {
     diagnostics.push({ key, reason, detail: `${DROP_REASONS[reason]}${extra}` });
   };
+
   for (const key of keys) {
     const a = baselineByKey.get(key);
     const b = candidateByKey.get(key);
+
     if (a === undefined) { drop(key, 'missing-in-baseline'); continue; }
+
     if (b === undefined) { drop(key, 'missing-in-candidate'); continue; }
+
     if (a.outcome !== 'scored') {
       drop(key, 'baseline-not-scored', ` (${a.outcome}: ${a.reason})`);
       continue;
     }
+
     if (b.outcome !== 'scored') {
       drop(key, 'candidate-not-scored', ` (${b.outcome}: ${b.reason})`);
       continue;
     }
+
     if (fullySolved(a) === null) {
       drop(key, 'baseline-unverified');
       continue;
     }
+
     if (fullySolved(b) === null) {
       drop(key, 'candidate-unverified');
       continue;
     }
+
     const pair: ObservationPair = { repetition: a.repetition, baseline: a, candidate: b };
     const existing = pairsByTask.get(a.taskId);
+
     if (existing === undefined) pairsByTask.set(a.taskId, [pair]);
     else existing.push(pair);
   }
@@ -525,16 +570,19 @@ export function compareRuns(
     ...baseline.observations.map((o) => o.taskId),
     ...candidate.observations.map((o) => o.taskId),
   ])].sort();
+
   const tasks: TaskPairs[] = taskIds.map((taskId) => ({
     taskId,
     pairs: (pairsByTask.get(taskId) ?? []).sort((x, y) => x.repetition - y.repetition),
   }));
+
   const eligiblePairs = tasks.reduce((n, t) => n + t.pairs.length, 0);
 
   // pass^k has no meaning across ragged repeats, and `pairedBinaryComparison`
   // throws rather than pretend otherwise. Excluded tasks are named, not padded.
   const outcomes: PairedOutcome[] = [];
   const raggedTasks: RaggedTask[] = [];
+
   for (const task of tasks) {
     if (task.pairs.length !== baseline.repeats) {
       raggedTasks.push({
@@ -542,6 +590,7 @@ export function compareRuns(
       });
       continue;
     }
+
     // Non-null by construction: an attempt with no verdict was dropped above, so
     // every surviving pair carries one on both sides.
     outcomes.push({
@@ -552,6 +601,7 @@ export function compareRuns(
   }
 
   const names = [...new Set([...scorerNames(baseline), ...scorerNames(candidate)])].sort();
+
   return {
     comparable: true,
     baselineRunId: baseline.runId,
@@ -578,25 +628,31 @@ export function compareRuns(
  *  per-scorer verdicts, then what it cost. */
 export function formatComparison(comparison: EvalComparison): string {
   const head = `comparison: ${comparison.baselineRunId} → ${comparison.candidateRunId}`;
+
   if (!comparison.comparable) {
     const lines = [head, '  REFUSED — this delta would be unattributable:'];
+
     for (const r of comparison.refusals) lines.push(`    ${r.field}: ${r.detail}`);
+
     return lines.join('\n');
   }
 
   const h = comparison.headline;
+
   const lines = [
     head,
     `  ${comparison.modelId}, ${String(comparison.repeats)} repeats`,
     `  pairs: ${String(comparison.eligiblePairs)} eligible of ${String(comparison.totalPairs)} `
       + '— both sides scored',
   ];
+
   for (const d of comparison.diagnostics) lines.push(`    dropped ${d.key}: ${d.detail}`);
   lines.push(`  OUTCOME, solved outright — success = ${SOLVED_PREDICATE}:`);
   lines.push(`    pass@1 ${h.passAtOneA.toFixed(3)} → ${h.passAtOneB.toFixed(3)}, `
     + `effect ${fmtPp(h.effect)} [CI ${fmtPp(h.ci.lo)}..${fmtPp(h.ci.hi)}, `
     + `${String(h.discordant)} of ${String(h.pairs)} tasks differed]`);
   lines.push(`    ${h.verdict}`);
+
   for (const t of comparison.raggedTasks) {
     lines.push(`    excluded from the headline: ${t.taskId} paired `
       + `${String(t.pairedRepetitions)} of ${String(t.repeats)} repetitions`);
@@ -606,11 +662,14 @@ export function formatComparison(comparison: EvalComparison): string {
   // climb. Printed as its own section rather than among the covariates, because
   // it is the metric and they are not.
   const outcome = comparison.scorers.find((s) => !isCovariateRow(s.name));
+
   if (outcome) {
     lines.push('  OUTCOME, partial credit — mean per-task score:');
+
     const rates = outcome.baselineRate === null || outcome.candidateRate === null
       ? 'n/a — no task was verified on both sides'
       : `${outcome.baselineRate.toFixed(3)} → ${outcome.candidateRate.toFixed(3)}`;
+
     lines.push(`    ${rates}`);
     lines.push(`      ${outcome.verdict}`);
     lines.push(`      psi ${outcome.dispersion.toFixed(6)} measured over `
@@ -622,25 +681,32 @@ export function formatComparison(comparison: EvalComparison): string {
   // rate of 15% came to be read as a fact about the agent rather than about the
   // corpus.
   lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
+
   for (const s of comparison.scorers) {
     if (!isCovariateRow(s.name)) continue;
+
     const rates = s.baselineRate === null || s.candidateRate === null
       ? 'n/a'
       : `${s.baselineRate.toFixed(3)} → ${s.candidateRate.toFixed(3)}`;
+
     lines.push(`    ${s.name.padEnd(22)} ${rates}`);
     lines.push(`      ${s.verdict}`);
   }
+
   lines.push('  cost, paired per task:');
+
   const metrics = [
     ['tokens in ', comparison.cost.tokensIn],
     ['tokens out', comparison.cost.tokensOut],
     ['reasoning tokens', comparison.cost.reasoning],
     ['latency ms', comparison.cost.ms],
   ] as const;
+
   for (const [label, d] of metrics) {
     lines.push(`    ${label} ${d.baselineMean.toFixed(1)} → ${d.candidateMean.toFixed(1)} = `
       + `${d.delta >= 0 ? '+' : ''}${d.delta.toFixed(1)} `
       + `[CI ${d.ci.lo.toFixed(1)}..${d.ci.hi.toFixed(1)} over ${String(d.tasks)} tasks]`);
   }
+
   return lines.join('\n');
 }

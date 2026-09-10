@@ -18,6 +18,7 @@ import {
 } from '../packages/core/src/bench/longhorizon';
 
 const encoded = process.argv[2];
+
 if (!encoded) {
   console.error('usage: bun scripts/bench-longhorizon-check.ts <encoded-spec>');
   process.exit(2);
@@ -29,6 +30,7 @@ if (!existsSync(LONGHORIZON_ANSWER_FILE)) {
 }
 
 const questions = buildLongHorizonQuestions(decodeLongHorizonSpec(encoded));
+
 const score = scoreLongHorizonAnswers(questions, readFileSync(LONGHORIZON_ANSWER_FILE, 'utf8'));
 
 // Which questions were missed, never what the answers were: check output is
@@ -36,4 +38,5 @@ const score = scoreLongHorizonAnswers(questions, readFileSync(LONGHORIZON_ANSWER
 for (const result of score.results) {
   console.log(`${result.ok ? 'ok  ' : 'MISS'} ${result.id}${result.submitted === null ? ' (unanswered)' : ''}`);
 }
+
 process.exit(score.passed ? 0 : 1);

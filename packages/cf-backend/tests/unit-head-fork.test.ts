@@ -36,17 +36,22 @@ mockAgentsSdk();
  *  Read through an accessor because the reset in the test narrows the binding
  *  itself to `null`, and the assignment that matters happens in the double. */
 let requestedSandboxId: string | null = null;
+
 const lastRequestedSandboxId = (): string | null => requestedSandboxId;
+
 /** Restores performed through the handle the runtime built. A head rides a
  *  container it does not own, so this must stay at zero however it is touched. */
 let restoresPerformed = 0;
+
 // The suite's double for the container a head rides: the shared stand-in owns
 // the module, this file only points it. Reset in `afterAll`, so a later file
 // meets the real SDK.
 await installSandboxSdkMock();
+
 setSandboxSdk({
   getSandbox: (_ns: NonNullable<Env['Sandbox']>, id: string) => {
     requestedSandboxId = id;
+
     return {
       ensureReady: async () => {},
       // A command with no caller-set deadline takes the PROCESS lane, so the
@@ -78,6 +83,7 @@ setSandboxSdk({
     };
   },
 });
+
 afterAll(() => { setSandboxSdk(null); });
 
 // After the sandbox double above, and it has to be after: the harness imports
@@ -97,10 +103,13 @@ const { hostedExplorationHarness, orchestratorHarness } = await import('./helper
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
   const workspace = orchestratorHarness();
   workspace.agent.declareContainerBinding();
+
   for (const [path, content] of Object.entries(files)) {
     const written = await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
+
     if (!written.ok) throw new Error(`the fixture could not seed ${path}`);
   }
+
   const head = await hostedExplorationHarness(workspace, 'head', id);
   /* SAFETY: this backend CONSTRUCTS every hosted runtime with `createCFRuntime`
    * — `ActorHostDeps.runtimeFor` here IS that function, so the value is a
@@ -110,6 +119,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
    * `hostHead` and `subordinate-hosting.ts`'s `runHostedTask` state the same. */
   const rt = head.actor.runtime as CFRuntime;
   const home = agentHome(headAgentName(parseActorKey(head.actor.record.storageKey).id));
+
   return { workspace, head, rt, home };
 }
 
@@ -117,7 +127,9 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1') {
  *  acquired the parent's file plane at all, which is the original defect. */
 function workspacePlane(rt: CFRuntime) {
   const provider = rt.executionRouter?.getProvider('workspace');
+
   if (!provider) throw new Error('the hosted head acquired no workspace execution plane');
+
   return provider;
 }
 
@@ -141,6 +153,7 @@ describe('a head forks its parent workspace', () => {
       v.array(v.string()),
       await workspacePlane(rt).tools.readdir.execute('/home/user/repo'),
     );
+
     expect(names.sort()).toEqual(['package.json', 'src']);
   });
 
@@ -155,6 +168,7 @@ describe('a head forks its parent workspace', () => {
     // workspace user's. That is what a per-actor `shellId` buys — the shell
     // state a head accumulates is its own, over a tree it shares.
     const shell = rt.shell;
+
     if (!shell) throw new Error('a hosted head runtime carries a shell');
     const identity = await shell.exec('printf "%s %s" "$HOME" "$TMPDIR"');
     expect(identity.exitCode).toBe(0);
@@ -185,6 +199,7 @@ describe('a head forks its parent workspace', () => {
       .run(head.actor.handle.actorId, JSON.stringify({ id: 'bk-1', dir: '/workspace' }));
 
     const handle = rt.sandboxHandle;
+
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
     await handle.exec('true');
     await handle.exec('true');

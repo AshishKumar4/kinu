@@ -47,7 +47,9 @@ import type { JsonPrimitive } from '../utils/json';
 import { uiMessageText } from '../utils/ui-message';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
+
 type NativeArchiveDatabaseValue = ArchiveDatabaseValue | Uint8Array;
+
 interface NativeArchiveDatabaseRow {
   [column: string]: NativeArchiveDatabaseValue;
 }
@@ -55,11 +57,13 @@ interface NativeArchiveDatabaseRow {
 const ArchiveDatabaseValueSchema: v.GenericSchema<ArchiveDatabaseValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.instance(ArrayBuffer),
 ]);
+
 const ArchiveDatabaseRowSchema = v.record(v.string(), ArchiveDatabaseValueSchema);
 
 function bytesAsArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
+
   return copy.buffer;
 }
 
@@ -78,6 +82,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
       // binds TypedArrays only — the same coercion `wrapDatabase` makes.
       const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
       const rows = db.prepare<NativeArchiveDatabaseRow>(query).all(...bound);
+
       return {
         toArray: () => rows.map((row) => Object.fromEntries(
           Object.entries(row).map(([column, value]) => [column, canonicalDatabaseValue(value)]),
@@ -291,6 +296,7 @@ type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | FileRecord | Dir
 const EncodedSqlValueSchema: v.GenericSchema<EncodedSqlValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.object({ $b64: v.string() }),
 ]);
+
 const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
   v.object({
     t: v.literal('header'),
@@ -318,6 +324,7 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
 ]);
 
 const DEFAULT_MAX_BYTES = 512 * 1024;
+
 /**
  * Rows fetched before anything is known about how big this table's rows are.
  * Small on purpose: one `SELECT` of a VFS chunk table pulls whole file bodies
@@ -335,7 +342,9 @@ const DEFAULT_MAX_BYTES = 512 * 1024;
  * derivation.
  */
 const FIRST_BATCH = 8;
+
 const MAX_BATCH = 200;
+
 /** Column the row query adds to carry the keyset position; stripped before a
  *  row is emitted. */
 const ROWID_ALIAS = '__kinu_rowid';
@@ -363,6 +372,7 @@ function readSchema(sql: SqlExec): SchemaObject[] {
     type: v.picklist(['table', 'index', 'trigger', 'view']),
     sql: v.string(),
   });
+
   const rows = sql.exec(
     `SELECT name, type, sql FROM sqlite_master
       WHERE sql IS NOT NULL AND type IN ('table', 'index', 'trigger', 'view')`,
@@ -371,17 +381,20 @@ function readSchema(sql: SqlExec): SchemaObject[] {
   const virtualNames = rows
     .filter((r) => r.type === 'table' && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(r.sql))
     .map((r) => r.name);
+
   // FTS5 keeps its inverted index in `<name>_data` / `_idx` / `_docsize` /
   // `_config` tables. They are rebuilt from the virtual table, never dumped.
   const isShadow = (name: string) => virtualNames.some((v) => name.startsWith(`${v}_`));
 
   const objects: SchemaObject[] = [];
+
   for (const row of rows) {
     if (
       isInternalTable(row.name)
       || Object.hasOwn(EXCLUDED_TABLES, row.name)
       || row.name.startsWith('conversation_rev_')
     ) continue;
+
     if (row.type === 'table' && isShadow(row.name)) continue;
     const virtual = row.type === 'table' && virtualNames.includes(row.name);
     // dumping the index too would duplicate the content and fight the triggers
@@ -397,19 +410,24 @@ function readSchema(sql: SqlExec): SchemaObject[] {
       withoutRowid: /WITHOUT\s+ROWID/i.test(row.sql),
     });
   }
+
   // Base tables first so a streaming restore can create them as they arrive.
   const rank = (o: SchemaObject) => (o.kind === 'table' && !o.virtual ? 0 : 1);
+
   return objects.sort((a, b) => rank(a) - rank(b));
 }
 
 function encodeValue(value: ArchiveDatabaseValue): EncodedSqlValue {
   if (value instanceof ArrayBuffer) return { $b64: bytesToBase64(new Uint8Array(value)) };
+
   return value;
 }
 
 function decodeValue(value: EncodedSqlValue): ArchiveDatabaseValue {
   const encoded = v.safeParse(v.object({ $b64: v.string() }), value);
+
   if (encoded.success) return bytesAsArrayBuffer(base64ToBytes(encoded.output.$b64));
+
   return v.parse(v.union([v.string(), v.number(), v.boolean(), v.null()]), value);
 }
 
@@ -427,8 +445,10 @@ function countArchivedActors(sql: SqlExec): number {
   const present = sql.exec(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspace_actors'`,
   ).toArray();
+
   if (present.length === 0) return 0;
   const counted = sql.exec(`SELECT COUNT(*) AS n FROM workspace_actors`).toArray()[0];
+
   return v.parse(v.number(), counted?.n);
 }
 
@@ -439,6 +459,7 @@ function quoteIdent(name: string): string {
 /** A keyset anchor crosses the wire as JSON inside the cursor; parse it back
  *  at this trust boundary rather than trusting the round trip. */
 const KeysetValueSchema = v.union([v.string(), v.number()]);
+
 const KeysetAnchorSchema = v.array(KeysetValueSchema);
 
 /** The primary-key COLUMNS a WITHOUT ROWID table is walked by, in key order —
@@ -452,9 +473,11 @@ function withoutRowidKey(sql: SqlExec, table: SchemaObject): readonly string[] {
     .map((row) => v.parse(v.object({ name: v.string(), pk: v.number() }), row))
     .filter((column) => column.pk > 0)
     .sort((a, b) => a.pk - b.pk);
+
   if (columns.length === 0) {
     throw new Error(`Cannot order a WITHOUT ROWID export of "${table.name}": it has no primary key.`);
   }
+
   return columns.map((column) => column.name);
 }
 
@@ -462,10 +485,13 @@ function archivePath(path: string): string {
   if (!path || path.startsWith('/') || path.endsWith('/')) {
     throw new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`);
   }
+
   const parts = path.split('/');
+
   if (parts.some((part) => !part || part === '.' || part === '..')) {
     throw new Error(`Invalid workspace archive path: ${JSON.stringify(path)}.`);
   }
+
   return path;
 }
 
@@ -474,12 +500,15 @@ async function archiveEntries(source: ArchiveFileSource): Promise<ArchiveFileEnt
     path: archivePath(entry.path),
     type: entry.type,
   }));
+
   entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+
   for (let i = 1; i < entries.length; i++) {
     if (entries[i - 1]!.path === entries[i]!.path) {
       throw new Error(`Workspace archive file source listed ${JSON.stringify(entries[i]!.path)} more than once.`);
     }
   }
+
   return entries;
 }
 
@@ -505,6 +534,7 @@ export async function readWorkspaceArchivePage(
   const dumpable = sqlCursor === null ? live : live.filter((o) => pinned.includes(o.name));
   const lines: string[] = [];
   let bytes = 0;
+
   const emit = (
     record: ArchiveRecord,
   ): void => {
@@ -516,11 +546,14 @@ export async function readWorkspaceArchivePage(
   let index = fileCursor ? dumpable.length : 0;
   let after: number | string | null = null;
   let rows = opts.cursor?.rows ?? 0;
+
   if (sqlCursor) {
     index = dumpable.findIndex((o) => o.name === sqlCursor.table);
+
     if (index < 0) {
       throw new Error(`Cannot resume this export: table "${sqlCursor.table}" no longer exists.`);
     }
+
     after = sqlCursor.after;
   } else if (!fileCursor) {
     const header: ArchiveHeader = {
@@ -530,7 +563,9 @@ export async function readWorkspaceArchivePage(
       source: opts.source,
       exported_at: opts.now ?? Date.now(),
     };
+
     emit(header);
+
     for (const object of schema) {
       emit({
         t: 'schema',
@@ -550,8 +585,10 @@ export async function readWorkspaceArchivePage(
   // file-chunk table it is about to open.
   let emitted = 0;
   let emittedBytes = 0;
+
   const nextBatch = (): number => {
     if (emitted === 0) return FIRST_BATCH;
+
     return Math.min(MAX_BATCH, Math.max(1, Math.ceil(maxBytes / (emittedBytes / emitted))));
   };
 
@@ -566,30 +603,38 @@ export async function readWorkspaceArchivePage(
     // every offset and duplicates the row at it, which is exactly what the
     // paging test caught.
     const keyset = table.withoutRowid ? withoutRowidKey(sql, table) : null;
+
     const rawBatch = ((): readonly unknown[] => {
       if (keyset === null) {
         return after === null
           ? sql.exec(`${rowidSelect} ORDER BY rowid LIMIT ?`, size).toArray()
           : sql.exec(`${rowidSelect} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, size).toArray();
       }
+
       const cols = keyset.map(quoteIdent).join(', ');
+
       if (after === null) {
         return sql.exec(`SELECT * FROM ${quoteIdent(table.name)} ORDER BY ${cols} LIMIT ?`, size).toArray();
       }
+
       const anchor = v.parse(KeysetAnchorSchema, JSON.parse(v.parse(v.string(), after)));
+
       return sql.exec(
         `SELECT * FROM ${quoteIdent(table.name)} WHERE (${cols}) > (${keyset.map(() => '?').join(', ')}) `
         + `ORDER BY ${cols} LIMIT ?`,
         ...anchor, size,
       ).toArray();
     })();
+
     const batch = rawBatch.map((row) => v.parse(ArchiveDatabaseRowSchema, row));
 
     for (const row of batch) {
       const values: Record<string, EncodedSqlValue> = {};
+
       for (const [column, value] of Object.entries(row)) {
         if (column !== ROWID_ALIAS) values[column] = encodeValue(value);
       }
+
       const before = bytes;
       emit({ t: 'row', table: table.name, values });
       rows++;
@@ -601,6 +646,7 @@ export async function readWorkspaceArchivePage(
           KeysetValueSchema, row[name],
           { message: `"${table.name}"."${name}" holds a non-keyset value; a WITHOUT ROWID export key must be TEXT, INTEGER or REAL` },
         )));
+
       // Checked per row, not per batch: one oversized row must end the page
       // rather than ride along with a batch's worth of others.
       if (bytes >= maxBytes) {
@@ -617,16 +663,21 @@ export async function readWorkspaceArchivePage(
   }
 
   let files = fileCursor?.files ?? 0;
+
   if (opts.files) {
     const entries = await archiveEntries(opts.files);
+
     for (const entry of entries) {
       if (fileCursor && entry.path <= fileCursor.after) continue;
+
       if (entry.type === 'directory') {
         emit({ t: 'directory', path: entry.path });
       } else {
         emit({ t: 'file', path: entry.path, data: bytesToBase64(await opts.files.readFile(entry.path)) });
       }
+
       files++;
+
       if (bytes >= maxBytes) {
         return {
           lines,
@@ -639,6 +690,7 @@ export async function readWorkspaceArchivePage(
   }
 
   emit({ t: 'end', rows, files, actors: countArchivedActors(sql) });
+
   return { lines, next: null };
 }
 
@@ -647,11 +699,13 @@ export async function readWorkspaceArchivePage(
 export async function writeWorkspaceArchive(sql: SqlExec, opts: ArchiveExportOptions): Promise<string[]> {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
+
   do {
     const page = await readWorkspaceArchivePage(sql, { ...opts, cursor });
     lines.push(...page.lines);
     cursor = page.next;
   } while (cursor);
+
   return lines;
 }
 
@@ -699,22 +753,27 @@ export async function restoreWorkspaceArchive(
 
   for (const line of lines) {
     const trimmed = line.trim();
+
     if (!trimmed) continue;
     let record: ArchiveRecord;
+
     try {
       record = v.parse(ArchiveRecordSchema, JSON.parse(trimmed));
     } catch (error) {
       throw new Error('This file is not a Kinu workspace archive (unparsable line).', { cause: error });
     }
+
     if (!header) {
       if (record.t !== 'header' || record.kinu_workspace_archive !== WORKSPACE_ARCHIVE_VERSION) {
         throw new Error(
           `This file is not a Kinu workspace archive v${WORKSPACE_ARCHIVE_VERSION}.`,
         );
       }
+
       header = record;
       continue;
     }
+
     if (end) throw new Error('This archive has records after its end marker.');
 
     switch (record.t) {
@@ -727,9 +786,11 @@ export async function restoreWorkspaceArchive(
         } else {
           deferred.push(record);
         }
+
         break;
       case 'row': {
         const columns = Object.keys(record.values);
+
         if (!insert || insert.table !== record.table || insert.columns.length !== columns.length) {
           insert = {
             table: record.table,
@@ -738,29 +799,36 @@ export async function restoreWorkspaceArchive(
               + ` VALUES (${columns.map(() => '?').join(', ')})`,
           };
         }
+
         sql.exec(insert.statement, ...columns.map((c) => decodeValue(record.values[c])));
         rows++;
         break;
       }
+
       case 'directory': {
         const path = archivePath(record.path);
         fileTarget ??= opts.files?.() ?? null;
+
         if (!fileTarget) throw new Error('This archive contains workspace files, but no filesystem target was provided.');
         await fileTarget.mkdir(path, { recursive: true });
         fileRecords++;
         break;
       }
+
       case 'file': {
         const path = archivePath(record.path);
         fileTarget ??= opts.files?.() ?? null;
+
         if (!fileTarget) throw new Error('This archive contains workspace files, but no filesystem target was provided.');
         const slash = path.lastIndexOf('/');
+
         if (slash > 0) await fileTarget.mkdir(path.slice(0, slash), { recursive: true });
         await fileTarget.writeFile(path, base64ToBytes(record.data));
         fileRecords++;
         files++;
         break;
       }
+
       case 'end':
         end = record;
         break;
@@ -768,13 +836,17 @@ export async function restoreWorkspaceArchive(
   }
 
   if (!header) throw new Error('This file is not a Kinu workspace archive (no header).');
+
   if (!end) throw new Error('This archive is incomplete — the export did not finish.');
+
   if (end.rows !== rows) {
     throw new Error(`This archive is damaged: it declares ${end.rows} rows but carries ${rows}.`);
   }
+
   if (end.files !== fileRecords) {
     throw new Error(`This archive is damaged: it declares ${end.files} file records but carries ${fileRecords}.`);
   }
+
   // ACTOR COVERAGE. A workspace holds N logical actors in ONE database, so
   // "the archive is complete" is not answered by a row count alone: a restore
   // that dropped every row of one actor and none of another has the right
@@ -782,11 +854,13 @@ export async function restoreWorkspaceArchive(
   // roster carried; the restore counts the roster it rebuilt and refuses a
   // mismatch, which is the same detectability the row and file counts buy.
   const restoredActors = countArchivedActors(sql);
+
   if (end.actors !== restoredActors) {
     throw new Error(`This archive is damaged: it declares ${end.actors} actors but restored ${restoredActors}.`);
   }
 
   for (const record of deferred) sql.exec(record.sql);
+
   // External-content FTS indexes carry no rows of their own; they are derived
   // from the content tables, which are now populated.
   for (const record of deferred) {
@@ -794,6 +868,7 @@ export async function restoreWorkspaceArchive(
       sql.exec(`INSERT INTO ${quoteIdent(record.name)} (${quoteIdent(record.name)}) VALUES ('rebuild')`);
     }
   }
+
   normalizeImportedPaneRows(sql);
 
   return {
@@ -825,6 +900,7 @@ function importedConversationActorId(sql: SqlExec): string {
     `SELECT name FROM sqlite_master
      WHERE type = 'table' AND name IN ('workspace_identity', 'workspace_actors')`,
   ).toArray();
+
   const rows = directory.length === 2
     ? sql.exec(
       `SELECT a.actor_id AS actor_id FROM workspace_actors a
@@ -832,12 +908,14 @@ function importedConversationActorId(sql: SqlExec): string {
        WHERE a.kind = 'main'`,
     ).toArray()
     : [];
+
   if (rows.length !== 1) {
     throw new Error(
       'This archive carries a chat pane but no single main actor to attribute it to, '
       + 'so the imported conversation cannot be filed.',
     );
   }
+
   return v.parse(v.object({ actor_id: v.pipe(v.string(), v.nonEmpty()) }), rows[0]).actor_id;
 }
 
@@ -853,7 +931,9 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
   const pane = sql.exec(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
   ).toArray();
+
   if (pane.length === 0) return;
+
   // WHOSE rows these are is read from the archive when the archive can say, and
   // only attributed when it cannot. Two archive vintages reach this line:
   //
@@ -875,8 +955,10 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
       `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
     ).toArray()[0],
   ).sql;
+
   const paneCarriesOwner = paneDdl !== null && /\bactor_id\b/.test(paneDdl);
   const attributedTo = paneCarriesOwner ? null : importedConversationActorId(sql);
+
   const rows = sql.exec(
     paneCarriesOwner
       ? `SELECT actor_id, id, parent_id, role, content, created_at FROM assistant_messages
@@ -884,18 +966,23 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
       : `SELECT id, parent_id, role, content, created_at FROM assistant_messages
          ORDER BY rowid ASC`,
   ).toArray();
+
   for (const raw of rows) {
     const row = v.parse(v.object({
       actor_id: v.optional(v.pipe(v.string(), v.nonEmpty())),
       id: v.string(), parent_id: v.nullable(v.string()), role: v.string(),
       content: v.string(), created_at: v.string(),
     }), raw);
+
     const owner = row.actor_id ?? attributedTo;
+
     if (owner === null || owner === undefined) {
       throw new Error(`imported pane row ${row.id} has no owner and none could be attributed`);
     }
+
     const text = uiMessageText(row.content);
     const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);
+
     if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
     sql.exec(
       `INSERT OR IGNORE INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
@@ -903,5 +990,6 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
       owner, row.id, 'default', row.parent_id, row.role, text, ms,
     );
   }
+
   sql.exec(`DROP TABLE assistant_messages`);
 }

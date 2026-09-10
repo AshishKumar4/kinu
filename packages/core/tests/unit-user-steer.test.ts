@@ -26,6 +26,7 @@ const HISTORY: ModelMessage[] = [
 
 function drain(inFlight = true) {
   const drained: Array<{ steers: UserSteer[]; atStep: number }> = [];
+
   return {
     drained,
     drain: new UserSteerDrain({
@@ -52,10 +53,12 @@ describe('UserSteerDrain — accepting', () => {
 
   test('durable reset state replaces the process-local queue in its stored order', () => {
     const { drain: d } = drain();
+
     const restored = [
       { id: 's1', text: 'first' },
       { id: 's2', text: 'second' },
     ];
+
     d.restorePending(restored);
     expect(d.pendingSteers()).toEqual(restored);
     expect(d.pendingSteers()).not.toBe(restored);
@@ -139,18 +142,23 @@ describe('UserSteerDrain — draining into the step', () => {
 
   test('awaits durable landing before returning provider-visible words', async () => {
     const landing = Promise.withResolvers<void>();
+
     const d = new UserSteerDrain({
       turnInFlight: () => true,
       onDrain: async () => landing.promise,
     });
+
     d.beginTurn();
     d.accept({ id: 's1', text: 'wait for storage' });
 
     let returned = false;
+
     const preparing = d.prepareStep(step(0, HISTORY)).then((messages) => {
       returned = true;
+
       return messages;
     });
+
     await Promise.resolve();
 
     expect(returned).toBe(false);
@@ -167,13 +175,16 @@ describe('UserSteerDrain — draining into the step', () => {
 
   test('a failed durable landing restores the exact prefix before newer steers', async () => {
     let attempt = 0;
+
     const d = new UserSteerDrain({
       turnInFlight: () => true,
       onDrain: async () => {
         attempt += 1;
+
         if (attempt === 1) throw new Error('storage unavailable');
       },
     });
+
     d.beginTurn();
     d.accept({ id: 's1', text: 'first' });
 
@@ -196,6 +207,7 @@ describe('UserSteerDrain — draining into the step', () => {
       text: 'look at this',
       files: [{ filename: 'trace.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }],
     }]);
+
     expect(message).toEqual({
       role: 'user',
       content: [
@@ -272,6 +284,7 @@ describe('UserSteerDrain — the three load-bearing semantics', () => {
     const response: ModelMessage[] = [
       { role: 'assistant', content: 'checked staging' },
     ];
+
     expect(d.replayInto(response)).toEqual([
       { role: 'user', content: 'also check staging' },
       { role: 'assistant', content: 'checked staging' },

@@ -76,6 +76,7 @@ export interface DeviceActionSummary {
 
 export function summarizeDeviceAction(method: string, params: unknown[]): DeviceActionSummary {
   if (method === 'exec') return { method, command: String(params[0] ?? '') };
+
   return {
     method,
     command: `${method}(${params.map((p) => summarizeParam(p)).join(', ')})`,
@@ -85,6 +86,7 @@ export function summarizeDeviceAction(method: string, params: unknown[]): Device
 function summarizeParam<Value>(value: Value): string {
   const text = v.safeParse(v.string(), value);
   const rendered = text.success ? text.output : JSON.stringify(value);
+
   return (rendered ?? String(value)).slice(0, 120);
 }
 
@@ -154,6 +156,7 @@ function sameRequest(pending: DeviceConsentRequest, request: DeviceConsentReques
     pending.deviceId !== request.deviceId
     || pending.workspaceName !== request.workspaceName
   ) return false;
+
   return pending.method === request.method && pending.command === request.command;
 }
 
@@ -180,29 +183,37 @@ export class DeviceConsentRegistry {
   request(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
     const { promise, resolve } = Promise.withResolvers<DeviceConsentDecision>();
     const already = this.pendingLike(req);
+
     if (already) {
       already.awaiting.push(resolve);
+
       return promise;
     }
+
     const consentId = this.deps.newId();
     const view: PendingDeviceConsent = { ...req, consentId, createdAt: this.now() };
     const awaiting = [resolve];
+
     const timer = setTimeout(() => {
       if (!this.waiting.delete(consentId)) return;
       this.deps.announce({ kind: 'settled', consentId });
+
       for (const settle of awaiting) settle('timeout');
     }, this.timeoutMs);
+
     this.waiting.set(consentId, {
       view,
       awaiting,
       settle: (decision) => {
         clearTimeout(timer);
+
         for (const settle of awaiting) settle(decision);
       },
     });
     // Announced only once the id can be answered: a surface that resolves
     // synchronously on the notice was otherwise told the id is unknown.
     this.deps.announce({ kind: 'raised', consent: view });
+
     return promise;
   }
 
@@ -210,6 +221,7 @@ export class DeviceConsentRegistry {
     for (const pending of this.waiting.values()) {
       if (sameRequest(pending.view, req)) return pending;
     }
+
     return undefined;
   }
 
@@ -217,13 +229,16 @@ export class DeviceConsentRegistry {
    *  from a previous instance of this host. */
   resolve(consentId: string, decision: DeviceConsentAnswer): boolean {
     const pending = this.waiting.get(consentId);
+
     if (!pending) return false;
     this.waiting.delete(consentId);
     this.deps.announce({ kind: 'settled', consentId });
     // Anything unrecognised is the weakest grant, never a stronger one.
     const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
     pending.settle(effective);
+
     if (effective === 'always') this.settleBoundByGrant(pending.view);
+
     return true;
   }
 
@@ -243,11 +258,13 @@ export class DeviceConsentRegistry {
   private settleBoundByGrant(granted: PendingDeviceConsent): void {
     // The provisioning card names no machine and binds nothing.
     if (!granted.deviceId) return;
+
     // Iterated directly: deleting the CURRENT key mid-iteration is defined
     // behaviour for a Map, and this loop deletes nothing else, so a snapshot
     // copy would buy nothing.
     for (const [consentId, pending] of this.waiting) {
       if (pending.view.deviceId !== granted.deviceId) continue;
+
       if (pending.view.workspaceName !== granted.workspaceName) continue;
       this.waiting.delete(consentId);
       this.deps.announce({ kind: 'settled', consentId });

@@ -27,7 +27,9 @@ interface RunInput {
 
 function markerPath(clamped: string): string {
   const m = clamped.match(/full output saved to (\S+) —/);
+
   if (!m?.[1]) throw new Error('clamped result did not include a restorable output path');
+
   return m[1];
 }
 
@@ -90,20 +92,24 @@ describe('clampSerializedToolResult', () => {
     const clamped = await clampSerializedToolResult({ output: value }, { vfs: rt.storage.vfs });
     const clampedText = v.parse(v.string(), clamped);
     expect(clampedText).toContain('chars omitted');
+
     const restored = v.parse(
       v.string(),
       await rt.storage.vfs.readFile(markerPath(clampedText), { encoding: 'utf8' }),
     );
+
     expect(parseJsonValue(restored)).toEqual(value);
   });
 
   test('withClampedToolResult wraps execute without touching schema/description', async () => {
     const { rt } = createTestRuntime();
+
     const entry = tool({
       description: 'desc',
       inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
       execute: async () => 'b'.repeat(120_000),
     });
+
     const wrapped = withClampedToolResult(entry, { vfs: rt.storage.vfs });
     expect(wrapped.description).toBe('desc');
     const out = await toolExecute(wrapped)({});
@@ -117,13 +123,17 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     const original = 'BEGIN UNIQUE-MIDDLE-MARKER-' + 'log line\n'.repeat(80_000) + ' FINAL-ERROR-LINE';
     // The runtime's OWN shell, over the same bytes `rt.storage.vfs` reads.
     const realShell = rt.shell;
+
     if (!realShell) throw new Error('test runtime did not provide its workspace shell');
+
     const fakeShellExec = async (command: string) => {
       // First call: the huge command output. Filtered reads of the marker
       // path go through the REAL workspace shell over the same VFS.
       if (command.startsWith('grep ')) return realShell.exec(command);
+
       return { stdout: original, stderr: '', exitCode: 0 };
     };
+
     const rtWithShell: AgentRuntime = { ...rt, shell: { exec: fakeShellExec } };
     const tools = buildBuiltinTools({ rt: rtWithShell });
     const run = toolExecute<RunInput, string>(tools.run);
@@ -145,9 +155,11 @@ describe('run tool result budget (behavior through the public tool surface)', ()
 
   test('huge stderr on failure is clamped too', async () => {
     const { rt } = createTestRuntime();
+
     const shell = {
       exec: async () => ({ stdout: '', stderr: 'E'.repeat(150_000), exitCode: 2 }),
     };
+
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
     const run = toolExecute<RunInput, string>(tools.run);
@@ -168,10 +180,12 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const { rt } = createTestRuntime();
     const shell = { exec: async () => ({ stdout: output(), stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
+
     const tools = buildBuiltinTools({
       rt: rtWithShell,
       contextBudget: budget,
     });
+
     return { run: toolExecute<RunInput, string>(tools.run), rt };
   }
 
@@ -180,6 +194,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
     const sizes: number[] = [];
+
     for (let i = 0; i < 5; i++) sizes.push((await run({ command: `big-${i}` })).length);
 
     // 40k per result until 120k cumulative is admitted → three full, then floor.
@@ -194,6 +209,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   test('the tightened result still spills the whole output and keeps the same recipe', async () => {
     const budget = new TurnContextBudget();
     const { run, rt } = runToolWithBudget(budget, () => `UNIQUE-${'M'.repeat(200_000)}-END`);
+
     for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
     const tightened = await run({ command: 'big-last' });
 
@@ -228,6 +244,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   test('a fresh turn starts at full fidelity again', async () => {
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+
     for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
     budget.reset();
     expect((await run({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
@@ -245,6 +262,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const shell = { exec: async () => ({ stdout: 'L'.repeat(200_000), stderr: '', exitCode: 0 }) };
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const run = toolExecute<RunInput, string>(buildBuiltinTools({ rt: rtWithShell }).run);
+
     for (let i = 0; i < 3; i++) await run({ command: `big-${i}` });
     expect((await run({ command: 'big-4' })).length).toBeLessThan(9_000);
   });
@@ -254,6 +272,7 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
   test('every entry rides the same budget, and the counters name the producer', async () => {
     const { rt } = createTestRuntime();
     const budget = new TurnContextBudget();
+
     const entry = (payload: JsonValue) => tool({
       description: 'd',
       inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
@@ -264,22 +283,26 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
       { mcp_srv_a: entry('A'.repeat(300_000)), mcp_srv_b: entry({ rows: 'B'.repeat(300_000) }) },
       { vfs: rt.storage.vfs, budget, producer: 'external_tool' },
     );
+
     expect(Object.keys(wrapped)).toEqual(['mcp_srv_a', 'mcp_srv_b']);
 
     for (const key of Object.keys(wrapped)) {
       const out = await toolExecute(wrapped[key])({});
       expect(String(out)).toContain('chars omitted');
     }
+
     expect(budget.snapshot().trips).toEqual({ external_tool: 2 });
     expect(budget.snapshot().referenced).toBe(2);
   });
 
   test('an entry with no execute (a provider-native tool) passes through untouched', () => {
     const budget = new TurnContextBudget();
+
     const declarative = tool({
       description: 'd',
       inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
     });
+
     const wrapped = withClampedToolResults({ native: declarative }, { budget });
     expect(wrapped.native).toBe(declarative);
   });

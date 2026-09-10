@@ -31,6 +31,7 @@ describe('workdirForPath temp boundary', () => {
     process.env.TMPDIR = temp;
     const base = mkdtempSync(join(temp, 'store-'));
     const engine = createHostCheckpoints({ agent: 'bound', base });
+
     return {
       temp,
       engine,
@@ -44,6 +45,7 @@ describe('workdirForPath temp boundary', () => {
 
   test('a marker at the temp directory is not a project for paths beneath it', () => {
     const { temp, engine, cleanup } = withTempBoundary('marker-at-root');
+
     try {
       mkdirSync(join(temp, 'scratch'), { recursive: true });
       writeFileSync(join(temp, 'pyproject.toml'), '[tool]\n');
@@ -60,6 +62,7 @@ describe('workdirForPath temp boundary', () => {
     // a marker in a directory BETWEEN the temp dir and `/`. The walk stops at
     // the boundary, so the marker is never probed.
     const { temp, engine, cleanup } = withTempBoundary('marker-above');
+
     try {
       mkdirSync(join(temp, 'scratch'), { recursive: true });
       writeFileSync(join(temp, '..', 'Cargo.toml'), '');
@@ -70,6 +73,7 @@ describe('workdirForPath temp boundary', () => {
 
   test('a real project beneath the temp directory still resolves to itself', () => {
     const { temp, engine, cleanup } = withTempBoundary('project-beneath');
+
     try {
       const project = join(temp, 'real-project');
       mkdirSync(join(project, 'src'), { recursive: true });
@@ -85,6 +89,7 @@ describe('workdirForPath temp boundary', () => {
     // and a walk that probes the real path must agree where the boundary is,
     // or the walk walks straight past it through the alias.
     const { temp, engine, cleanup } = withTempBoundary('symlink');
+
     try {
       const link = join(temp, '..', 'alias');
       rmSync(link, { force: true });

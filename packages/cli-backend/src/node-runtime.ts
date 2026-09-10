@@ -30,12 +30,15 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     // claim ledger would present the parent's turns as its own working
     // history, which is the one thing `/context` must never do.
     const stores = createAgentStores(() => origin.storage.sql, () => actor, origin.storage.transactionSync);
+
     const ownContext = contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     });
+
     let vfs = origin.storage.vfs;
     let shell = origin.shell;
     let router = origin.executionRouter;
+
     if (node.isolation === 'private-home') {
       const plane = await deps.workspace.asAgent({ cred: node.cred, home: node.home, tmp: node.tmp });
       requireLocalActorWorkspace(origin.actor, actor);
@@ -44,11 +47,14 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
       vfs = withMountTable(files, [...standardMounts((name) => ownRouter.getProvider(name)), ownContext]);
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell }));
+
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;
         const provider = origin.executionRouter?.getProvider(info.name);
+
         if (provider) ownRouter.register(provider);
       }
+
       if (deps.laptop && !ownRouter.getProvider(deps.laptop.name)) ownRouter.register(deps.laptop);
       router = ownRouter;
     } else {
@@ -58,6 +64,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       // rather than re-declaring a table the node has no different answer for.
       vfs = withMountTable(vfs, [ownContext]);
     }
+
     return {
       actor,
       storage: { ...origin.storage, vfs },

@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { Devbox, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
 
 const COMMAND = 'bun run server.ts';
+
 /** The transient the caller retries on, and the one that can strike between
  *  the reservation and the process. */
 const LOST = 'network connection lost';
@@ -56,6 +57,7 @@ describe('starting a supervised process reserves its id before the process exist
       // A NEW isolate on the same durable rows and a replaced container: the
       // reset the caller is retrying through.
       const second = harness(Devbox);
+
       for (const [key, value] of first.rows) second.rows.set(key, value);
 
       const retried = await second.box.startSupervised(COMMAND);
@@ -187,6 +189,7 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
       expect(state.supervised.map(spec => spec.processId)).toEqual([processId]);
       expect(state.incidents.total).toBe(attempt);
     }
+
     // The process the box refused to forget really is still running.
     expect(container.processes.has(processId)).toBe(true);
   });

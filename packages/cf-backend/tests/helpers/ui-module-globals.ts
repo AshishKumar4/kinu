@@ -21,6 +21,7 @@ const media = (): MediaQueryListShim => ({ matches: false, addEventListener: () 
 if (!("window" in globalThis)) {
   Object.assign(globalThis, { window: { matchMedia: media } });
 }
+
 if (!("localStorage" in globalThis)) {
   Object.assign(globalThis, {
     localStorage: {

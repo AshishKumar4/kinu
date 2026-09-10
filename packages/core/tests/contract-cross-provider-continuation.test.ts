@@ -34,15 +34,20 @@ import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
  *  nothing any other family would mint — which is what makes its presence or
  *  absence on the destination wire an unambiguous reading. */
 const ANTHROPIC_NATIVE_ID = 'toolu_01SourceMinted';
+
 const ANTHROPIC_REASONING = 'I should look this up.';
+
 const ANTHROPIC_REASONING_SIGNATURE = 'anthropic-source-signature';
+
 const COMPAT_NATIVE_ID = 'call_source_minted';
+
 const COMPAT_REASONING = 'I should use the lookup tool.';
 
 const COMPAT_BASE = 'https://compat.example/v1';
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
+
   return {
     env: {},
     fetch: fetchFn,
@@ -56,16 +61,19 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
  *  up as a second execution rather than as a formatting difference. */
 function countingTools() {
   let executions = 0;
+
   const tools: ToolSet = {
     look: tool({
       description: 'look the answer up',
       inputSchema: z.object({ topic: z.string() }),
       execute: async (): Promise<string> => {
         executions += 1;
+
         return 'the answer is 41';
       },
     }),
   };
+
   return { tools, executions: () => executions } as const;
 }
 
@@ -112,6 +120,7 @@ function compatSse(chunks: ReadonlyArray<readonly [JsonObject, string | null]>):
     id: 'cmpl-1', object: 'chat.completion.chunk', created: 1, model: 'llama-4',
     choices: [{ index: 0, delta, finish_reason: finish }],
   })}\n\n`).join('');
+
   return `${body}data: [DONE]\n\n`;
 }
 
@@ -137,19 +146,24 @@ const COMPAT_TOOL_USE = compatSse([
 
 async function drain(opts: Parameters<typeof runChat>[0]): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
+
   for await (const event of runChat(opts)) events.push(event);
+
   return events;
 }
 
 function doneOf(events: readonly ChatEvent[]) {
   const done = events.find((event) => event.type === 'done');
+
   if (done?.type !== 'done') throw new Error('the turn produced no done event');
+
   return { text: done.text, responseMessages: done.responseMessages } as const;
 }
 
 function bodyOf(handle: MockFetchHandle, index: number): JsonObject {
   const request = handle.requests[index];
   expect(request?.body).toBeDefined();
+
   return parseJsonObject(v.parse(v.string(), request?.body));
 }
 
@@ -182,13 +196,17 @@ function anthropicPairing(body: JsonObject) {
   const messages = v.parse(AnthropicMessagesSchema, body.messages);
   const calls: string[] = [];
   const results: string[] = [];
+
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
+
     for (const part of message.content) {
       if (part.type === 'tool_use' && part.id !== undefined) calls.push(part.id);
+
       if (part.type === 'tool_result' && part.tool_use_id !== undefined) results.push(part.tool_use_id);
     }
   }
+
   return { calls, results } as const;
 }
 
@@ -204,12 +222,15 @@ function anthropicPairing(body: JsonObject) {
 function compatPairing(body: JsonObject) {
   const messages = v.parse(CompatMessagesSchema, body.messages);
   const calls = messages.flatMap((message) => message.tool_calls?.map((call) => call.id) ?? []);
+
   const results = messages.flatMap((message) =>
     message.role === 'tool' && message.tool_call_id !== undefined ? [message.tool_call_id] : []);
+
   const order = messages.flatMap((message) => [
     ...(message.tool_calls ?? []).map((call) => `assistant#${call.id}`),
     ...(message.role === 'tool' && message.tool_call_id !== undefined ? [`tool#${message.tool_call_id}`] : []),
   ]);
+
   return { calls, results, order } as const;
 }
 
@@ -230,6 +251,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
     anthropicText('msg_2', 'the tool said', 'max_tokens'),
     anthropicText('msg_3', ' 41, and here is the rest', 'end_turn'),
   ];
+
   const mock = createMockFetch([{
     match: 'api.anthropic.com',
     respond: (_req, callIndex) => ({
@@ -238,9 +260,11 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
       body: scripts[Math.min(callIndex, scripts.length - 1)] ?? '',
     }),
   }]);
+
   const deps = makeDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
+
   const events = await drain({
     model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
     system: 'sys',
@@ -248,7 +272,9 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
     tools,
     cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
   });
+
   const done = doneOf(events);
+
   return { mock, responseMessages: done.responseMessages, text: done.text };
 }
 
@@ -266,22 +292,27 @@ async function replayOnCompat(
       body: compatText('still 41'),
     }),
   }]);
+
   const deps = makeDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
+
   let options: Parameters<typeof drain>[0] = {
     model: createOpenAICompatProvider().createModel('llama-4', deps),
     system: 'sys',
     history: [...history, { role: 'user', content: 'are you sure' }],
     tools,
   };
+
   if (destination.providerId !== undefined) {
     options = {
       ...options,
       cache: { providerId: destination.providerId, modelId: 'llama-4', sessionKey: 'kinu-xprov' },
     };
   }
+
   await drain(options);
+
   return mock;
 }
 
@@ -292,6 +323,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
   text: string;
 }> {
   const scripts = [COMPAT_TOOL_USE, compatText('the answer is 41')];
+
   const mock = createMockFetch([{
     match: 'compat.example',
     respond: (_req, callIndex) => ({
@@ -300,9 +332,11 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
       body: scripts[Math.min(callIndex, scripts.length - 1)] ?? '',
     }),
   }]);
+
   const deps = makeDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
+
   const done = doneOf(await drain({
     model: createOpenAICompatProvider().createModel('llama-4', deps),
     system: 'sys',
@@ -310,6 +344,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
     tools,
     cache: { providerId: 'openai-compat', modelId: 'llama-4', sessionKey: 'kinu-xprov' },
   }));
+
   return { mock, responseMessages: done.responseMessages, text: done.text };
 }
 
@@ -326,9 +361,11 @@ async function replayOnAnthropic(
       body: anthropicText('msg_replay', 'still 41', 'end_turn'),
     }),
   }]);
+
   const deps = makeDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
+
   await drain({
     model: createAnthropicProvider().createModel('claude-opus-4-7', deps),
     system: 'sys',
@@ -336,6 +373,7 @@ async function replayOnAnthropic(
     tools,
     cache: { providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'kinu-xprov' },
   });
+
   return mock;
 }
 
@@ -380,6 +418,7 @@ describe('an output-limit continuation, across two provider adapters', () => {
     expect(pairing.calls.length).toBe(1);
     expect(pairing.results).toEqual(pairing.calls);
     expect(pairing.order).toEqual([`assistant#${pairing.calls[0]}`, `tool#${pairing.calls[0]}`]);
+
     for (const id of pairing.calls) expect(isPortableToolCallId(id)).toBe(true);
     // Nothing executed during the transformation: the replay is a request
     // rewrite, and the work the first turn did stays done.
@@ -459,9 +498,11 @@ describe('reasoning replay from an OpenAI-compatible model to Anthropic', () => 
     expect(mock.requests).toHaveLength(1);
     const body = bodyOf(mock, 0);
     const messages = v.parse(AnthropicMessagesSchema, body.messages);
+
     const assistant = messages.find((message) =>
       Array.isArray(message.content)
       && message.content.some((part) => part.type === 'tool_use'));
+
     const content = assistant && Array.isArray(assistant.content) ? assistant.content : [];
 
     expect(content.some((part) => part.type === 'text' && part.text === COMPAT_REASONING)).toBe(true);
@@ -470,6 +511,7 @@ describe('reasoning replay from an OpenAI-compatible model to Anthropic', () => 
     const pairing = anthropicPairing(body);
     expect(pairing.calls).toHaveLength(1);
     expect(pairing.results).toEqual(pairing.calls);
+
     for (const id of pairing.calls) expect(isPortableToolCallId(id)).toBe(true);
     expect(executions()).toBe(1);
   });

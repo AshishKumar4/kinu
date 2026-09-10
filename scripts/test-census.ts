@@ -91,6 +91,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/test-census.lock.json`;
 
 /* ── The corpus ───────────────────────────────────────────────────────── */
@@ -111,6 +112,7 @@ export const CATEGORIES = [
   'source_text', 'mirror', 'tautology_suspect', 'private_reach', 'internal_mock',
   'assertion_free', 'silent_skip', 'golden_regenerated',
 ] as const;
+
 export type Category = (typeof CATEGORIES)[number];
 
 /** The axes a ratchet would pin: a NEW instance fails by name. The three left
@@ -157,8 +159,11 @@ const FILE_SCOPE = '(file scope)';
 
 function packageOf(file: string): string {
   if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
+
   if (file.startsWith('scripts/')) return 'scripts';
+
   if (file.startsWith('tests/')) return 'tests';
+
   return file.split('/')[0] ?? '(root)';
 }
 
@@ -178,35 +183,48 @@ const parseCache = new Map<string, ParsedFile>();
  *  imports. */
 function parseFile(file: string, text: string): ParsedFile {
   const cached = parseCache.get(file);
+
   if (cached !== undefined && cached.text === text) return cached;
   const { root: tree, lineAt } = parse(file, text);
   const parsed: ParsedFile = { file, text, tree, lineAt };
   parseCache.set(file, parsed);
+
   return parsed;
 }
 
 /** `a.b.c` as text, for reading a matcher chain, a mock target or a callee. */
 function chainText(node: Node | null | undefined): string {
   if (node === null || node === undefined) return '';
+
   if (node.type === 'Identifier') return node.name;
+
   if (node.type === 'ThisExpression') return 'this';
+
   if (node.type === 'MemberExpression') {
     const property = node.computed ? '[…]'
       : node.property.type === 'Identifier' ? `.${node.property.name}` : '.?';
+
     return `${chainText(node.object)}${property}`;
   }
+
   if (node.type === 'CallExpression') return `${chainText(node.callee)}()`;
+
   if (node.type === 'AwaitExpression') return chainText(node.argument);
+
   return '?';
 }
 
 /** The callee's plain identifier name, or a member call's property name. */
 function calleeName(node: SyntaxNode): string | undefined {
   const r = node.raw;
+
   if (r.type !== 'CallExpression') return undefined;
+
   if (r.callee.type === 'Identifier') return r.callee.name;
+
   if (r.callee.type === 'MemberExpression' && !r.callee.computed
     && r.callee.property.type === 'Identifier') return r.callee.property.name;
+
   return undefined;
 }
 
@@ -219,8 +237,10 @@ function calleeName(node: SyntaxNode): string | undefined {
  */
 function argumentNodes(node: SyntaxNode): SyntaxNode[] {
   const r = node.raw;
+
   if (r.type !== 'CallExpression' && r.type !== 'NewExpression') return [];
   const starts = new Set(r.arguments.map((argument) => argument.start));
+
   return node.children.filter((child) => starts.has(child.start));
 }
 
@@ -239,6 +259,7 @@ function nodeAt(node: SyntaxNode, start: number, end: number): SyntaxNode | unde
   walk(node, (candidate) => {
     if (hit === undefined && candidate.start === start && candidate.end === end) hit = candidate;
   });
+
   return hit;
 }
 
@@ -253,6 +274,7 @@ interface TestSpan {
 }
 
 const TEST_CALLS: ReadonlySet<string> = new Set(['test', 'it']);
+
 const TEST_MODIFIERS: ReadonlySet<string> = new Set([
   'skip', 'todo', 'only', 'skipIf', 'todoIf', 'failing', 'each', 'concurrent', 'if',
 ]);
@@ -271,10 +293,12 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
   const spans: TestSpan[] = [];
   walk(parsed.tree, (node) => {
     const r = node.raw;
+
     if (r.type !== 'CallExpression') return;
     const callee = r.callee;
     let base: string | undefined;
     let modifier: string | undefined;
+
     if (callee.type === 'Identifier') {
       base = callee.name;
     } else if (callee.type === 'MemberExpression' && !callee.computed
@@ -288,9 +312,12 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
       modifier = callee.callee.property.name;
       base = callee.callee.object.name;
     }
+
     if (base === undefined || !TEST_CALLS.has(base)) return;
+
     if (modifier !== undefined && !TEST_MODIFIERS.has(modifier)) return;
     const bodyless = modifier === 'todo';
+
     if (!bodyless && !hasFunctionArgument(node)) return;
     spans.push({
       node,
@@ -300,6 +327,7 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
       endLine: parsed.lineAt(node.end),
     });
   });
+
   return spans;
 }
 
@@ -307,10 +335,13 @@ function testSpans(parsed: ParsedFile): TestSpan[] {
  *  a shared helper, a fixture constant, a `beforeAll`. */
 function titleAt(spans: readonly TestSpan[], line: number): string {
   let best: TestSpan | undefined;
+
   for (const span of spans) {
     if (line < span.line || line > span.endLine) continue;
+
     if (best === undefined || (span.endLine - span.line) < (best.endLine - best.line)) best = span;
   }
+
   return best?.title ?? FILE_SCOPE;
 }
 
@@ -324,6 +355,7 @@ const ASSERTING_IMPORT = /^(assert|expect|must|require|verify)[A-Z_]/u;
  *  workspace file inside the system under test, and counting it reported two
  *  executor tests as reading their own source. */
 const FS_READ = /^(readFileSync|readFile)$/u;
+
 const FS_OBJECT = /^(fs|fsp|promises|node:fs)$/u;
 
 /** The repo's own source-reading assertion helpers. Named rather than
@@ -366,9 +398,11 @@ function productFileNamed(
   const parts = from.split('/');
   parts.pop();
   const candidates = literal.startsWith('.') ? [] : [collapsePath(literal)];
+
   for (let depth = parts.length; depth >= 0; depth -= 1) {
     candidates.push(collapsePath(`${parts.slice(0, depth).join('/')}/${literal}`));
   }
+
   return candidates.find((path) => tracked.has(path) && !isTestFile(path)
     && (isParseable(path) || isStylesheet(path)));
 }
@@ -391,22 +425,29 @@ function productPathRead(
   node: SyntaxNode, from: string, tracked: ReadonlySet<string>,
 ): string | undefined {
   const r = node.raw;
+
   if (r.type !== 'CallExpression') return undefined;
   const chain = chainText(r.callee);
   const bare = chain.split('.').pop() ?? '';
+
   const isFsRead = (FS_READ.test(chain) || (FS_READ.test(bare) && FS_OBJECT.test(chain.split('.')[0] ?? '')))
     || chain === 'Bun.file' || chain === 'readRepositoryFile';
+
   if (!isFsRead) return undefined;
   let named: string | undefined;
+
   for (const argument of argumentNodes(node)) {
     walk(argument, (inner) => {
       if (named !== undefined) return;
       const text = literalText(inner);
+
       if (text === undefined) return;
       named = productFileNamed(text, from, tracked);
     });
+
     if (named !== undefined) return named;
   }
+
   return undefined;
 }
 
@@ -414,13 +455,17 @@ function productPathRead(
  *  arrow is assigned to. */
 function functionName(node: SyntaxNode): string | undefined {
   const own = declaredName(node);
+
   if (own !== undefined) return own;
   const parent = node.parent;
+
   if (parent === undefined) return undefined;
   const type = parent.raw.type;
+
   if (type === 'VariableDeclarator' || type === 'PropertyDefinition' || type === 'Property') {
     return declaredName(parent);
   }
+
   return undefined;
 }
 
@@ -436,21 +481,27 @@ function functionName(node: SyntaxNode): string | undefined {
  */
 function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFacts {
   interface Fn { readonly direct: boolean; readonly reads: boolean; readonly calls: Set<string> }
+
   const fns = new Map<string, Fn>();
 
   walk(parsed.tree, (node) => {
     if (!isFunctionLike(node) && node.raw.type !== 'ArrowFunctionExpression') return;
     const name = functionName(node);
+
     if (name === undefined) return;
     let direct = false;
     let reads = false;
     const calls = new Set<string>();
     walk(node, (inner) => {
       if (inner.raw.type === 'ThrowStatement') direct = true;
+
       if (inner.raw.type !== 'CallExpression') return;
       const called = calleeName(inner);
+
       if (called === undefined) return;
+
       if (called === 'expect' || called === 'assert' || ASSERTING_IMPORT.test(called)) direct = true;
+
       if (SOURCE_HELPERS.has(called)
         || productPathRead(inner, parsed.file, tracked) !== undefined) reads = true;
       calls.add(called);
@@ -460,17 +511,21 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
 
   const asserting = new Set([...fns].filter(([, f]) => f.direct).map(([name]) => name));
   const sourceReaders = new Set([...fns].filter(([, f]) => f.reads).map(([name]) => name));
+
   for (let pass = 0; pass < 8; pass += 1) {
     let grew = false;
+
     for (const [name, fn] of fns) {
       for (const called of fn.calls) {
         if (!asserting.has(name) && asserting.has(called)) { asserting.add(name); grew = true; }
+
         if (!sourceReaders.has(name) && sourceReaders.has(called)) {
           sourceReaders.add(name);
           grew = true;
         }
       }
     }
+
     if (!grew) break;
   }
 
@@ -480,23 +535,30 @@ function localFacts(parsed: ParsedFile, tracked: ReadonlySet<string>): LocalFact
   walk(parsed.tree, (node) => {
     if (node.raw.type === 'ImportDeclaration' && String(node.raw.source.value).includes('?raw')) {
       for (const bound of importBindings(node)) sourceValues.add(bound.local);
+
       return;
     }
+
     if (node.raw.type !== 'VariableDeclarator') return;
     const name = declaredName(node);
     const init = node.raw.init;
+
     if (name === undefined || init === null || init === undefined) return;
     const initNode = nodeAt(node, init.start, init.end);
+
     if (initNode === undefined) return;
     let fromSource = false;
     walk(initNode, (inner) => {
       const called = calleeName(inner);
+
       if (called === undefined) return;
+
       if (SOURCE_HELPERS.has(called) || sourceReaders.has(called)
         || productPathRead(inner, parsed.file, tracked) !== undefined) {
         fromSource = true;
       }
     });
+
     if (fromSource) sourceValues.add(name);
   });
 
@@ -522,22 +584,27 @@ function expectations(parsed: ParsedFile): Expectation[] {
   const found: Expectation[] = [];
   walk(parsed.tree, (node) => {
     const r = node.raw;
+
     if (r.type !== 'CallExpression' || r.callee.type !== 'MemberExpression') return;
+
     if (r.callee.computed || r.callee.property.type !== 'Identifier') return;
     const matcher = r.callee.property.name;
     const modifiers: string[] = [];
     let object: Node = r.callee.object;
+
     while (object.type === 'MemberExpression' && !object.computed
       && object.property.type === 'Identifier') {
       modifiers.unshift(object.property.name);
       object = object.object;
     }
+
     if (object.type !== 'CallExpression' || object.callee.type !== 'Identifier'
       || object.callee.name !== 'expect') return;
     found.push({
       call: node, matcher, modifiers, subject: nodeAt(node, object.start, object.end),
     });
   });
+
   return found;
 }
 
@@ -561,30 +628,40 @@ function sourceText(
   tracked: ReadonlySet<string>,
 ): Finding[] {
   const found: Finding[] = [];
+
   const at = (node: SyntaxNode, what: string, detail: string): Finding => {
     const line = parsed.lineAt(node.start);
+
     return { file: parsed.file, line, test: titleAt(spans, line), what, detail };
   };
 
   walk(parsed.tree, (node) => {
     const r = node.raw;
+
     if (r.type === 'ImportDeclaration' && String(r.source.value).includes('?raw')) {
       found.push(at(node, 'raw source import', String(r.source.value)));
+
       return;
     }
+
     if (r.type !== 'CallExpression') return;
     const called = calleeName(node);
+
     if (called !== undefined && SOURCE_HELPERS.has(called)) {
       found.push(at(node, `${called}() over source text`, (stringArguments(node)[0] ?? '').slice(0, 70)));
+
       return;
     }
+
     const read = productPathRead(node, parsed.file, tracked);
+
     if (read !== undefined) found.push(at(node, 'reads a source file', read));
   });
 
   for (const expectation of expectations(parsed)) {
     if (expectation.subject === undefined) continue;
     const [actual] = argumentNodes(expectation.subject);
+
     if (actual === undefined) continue;
     let overSource: string | undefined;
     walk(actual, (inner) => {
@@ -593,24 +670,37 @@ function sourceText(
       // `agent.beforeTurn(turn)` reads no `beforeTurn` binding even when the
       // file slices a source value under that name for another test.
       const parent = inner.parent?.raw;
+
       const isPropertyName = parent?.type === 'MemberExpression' && !parent.computed
         && parent.property.start === inner.start && parent.property.end === inner.end;
+
       const name = inner.raw.type === 'Identifier' && !isPropertyName ? inner.raw.name : undefined;
-      if (name !== undefined && facts.sourceValues.has(name)) { overSource = name; return; }
+
+      if (name !== undefined && facts.sourceValues.has(name)) {
+        overSource = name;
+
+        return;
+      }
+
       const called = calleeName(inner);
+
       if (called !== undefined && (SOURCE_HELPERS.has(called) || facts.sourceReaders.has(called))) {
         overSource = `${called}()`;
       }
     });
+
     if (overSource === undefined) continue;
+
     const expected = argumentNodes(expectation.call).map((argument) => literalText(argument))
       .find((text) => text !== undefined) ?? '';
+
     found.push(at(
       expectation.call,
       `expect(<source text>).${[...expectation.modifiers, expectation.matcher].join('.')}`,
       `over ${overSource}: ${expected.replace(/\s+/gu, ' ').slice(0, 60)}`,
     ));
   }
+
   return found;
 }
 
@@ -621,11 +711,15 @@ function sourceText(
  *  assertion — so weakness is decided per call site, not per matcher name. */
 function isWeak(expectation: Expectation): boolean {
   const { matcher, modifiers } = expectation;
+
   if (matcher === 'toBeDefined' || matcher === 'toBeTruthy') return true;
+
   if (matcher === 'toThrow' || matcher === 'toThrowError') {
     if (modifiers.includes('not')) return true;
+
     return argumentNodes(expectation.call).length === 0;
   }
+
   return false;
 }
 
@@ -649,6 +743,7 @@ function tautologies(
 
   for (const span of spans) {
     const mine = all.filter((e) => e.call.start >= span.node.start && e.call.end <= span.node.end);
+
     if (mine.length === 0 || !mine.every(isWeak)) continue;
     found.push({
       file: parsed.file, line: span.line, test: span.title,
@@ -660,14 +755,19 @@ function tautologies(
   for (const expectation of all) {
     if (expectation.subject === undefined) continue;
     const [actual] = argumentNodes(expectation.subject);
+
     if (actual === undefined) continue;
     const left = calledLocalNames(actual, localNames);
+
     if (left.size === 0) continue;
     const right = new Set<string>();
+
     for (const argument of argumentNodes(expectation.call)) {
       for (const name of calledLocalNames(argument, localNames)) right.add(name);
     }
+
     const shared = [...left].filter((name) => right.has(name));
+
     if (shared.length === 0) continue;
     const line = parsed.lineAt(expectation.call.start);
     found.push({
@@ -676,6 +776,7 @@ function tautologies(
       detail: `both sides call ${shared.join(', ')}`,
     });
   }
+
   return found;
 }
 
@@ -684,8 +785,10 @@ function calledLocalNames(node: SyntaxNode, localNames: ReadonlySet<string>): Se
   const names = new Set<string>();
   walk(node, (inner) => {
     const called = calleeName(inner);
+
     if (called !== undefined && localNames.has(called)) names.add(called);
   });
+
   return names;
 }
 
@@ -704,8 +807,11 @@ const HTTP_STATUS: ReadonlySet<number> = new Set([
 function distinctiveNumber(value: number): boolean {
   if (!Number.isFinite(value)) return false;
   const magnitude = Math.abs(value);
+
   if (magnitude < 32) return false;
+
   if (HTTP_STATUS.has(magnitude)) return false;
+
   return !(Number.isInteger(magnitude) && magnitude >= 1900 && magnitude <= 2100);
 }
 
@@ -727,6 +833,7 @@ interface NamedValue {
 }
 
 const NumberLiteral = v.object({ value: v.number() });
+
 const StringLiteral = v.object({ value: v.string() });
 
 /** `const NAME = <literal>` declarations at any depth — the shape a mirrored
@@ -739,21 +846,28 @@ function namedValues(parsed: ParsedFile): NamedValue[] {
     if (node.raw.type !== 'VariableDeclarator') return;
     const name = declaredName(node);
     const init = node.raw.init;
+
     if (name === undefined || init === null || init === undefined) return;
+
     if (init.type !== 'Literal') return;
     const line = parsed.lineAt(node.start);
     const asNumber = v.safeParse(NumberLiteral, init);
+
     if (asNumber.success) {
       if (distinctiveNumber(asNumber.output.value)) {
         found.push({ name, line, kind: 'number', value: asNumber.output.value });
       }
+
       return;
     }
+
     const asString = v.safeParse(StringLiteral, init);
+
     if (asString.success && distinctiveString(asString.output.value)) {
       found.push({ name, line, kind: 'string', value: asString.output.value });
     }
   });
+
   return found;
 }
 
@@ -765,11 +879,15 @@ function arrowBodies(parsed: ParsedFile): Map<string, string> {
   walk(parsed.tree, (node) => {
     if (node.raw.type !== 'ArrowFunctionExpression') return;
     const name = functionName(node);
+
     if (name === undefined || node.raw.body.type === 'BlockStatement') return;
+
     const body = parsed.text.slice(node.raw.body.start, node.raw.body.end)
       .replace(/\s+/gu, ' ').trim();
+
     if (body.length >= 16) bodies.set(name, body);
   });
+
   return bodies;
 }
 
@@ -787,6 +905,7 @@ function mirrors(
 ): Finding[] {
   const found: Finding[] = [];
   const lines = parsed.text.split('\n');
+
   for (const [index, line] of lines.entries()) {
     if (!MIRROR_COMMENT.test(line)) continue;
     found.push({
@@ -795,14 +914,17 @@ function mirrors(
       detail: line.trim().slice(0, 90),
     });
   }
+
   if (imported.length === 0) return found;
 
   const testValues = namedValues(parsed);
   const testArrows = arrowBodies(parsed);
+
   if (testValues.length === 0 && testArrows.size === 0) return found;
 
   for (const module of imported) {
     const text = sources.get(module);
+
     if (text === undefined) continue;
     // No `try` here on purpose: `parse` already refuses loudly and names the
     // file, and a census that silently drops a module it cannot read measures a
@@ -811,14 +933,17 @@ function mirrors(
     const parsedModule = parseFile(module, text);
 
     const byValue = new Map<string, string[]>();
+
     for (const entry of namedValues(parsedModule)) {
       const key = `${entry.kind}:${String(entry.value)}`;
       const names = byValue.get(key) ?? [];
       names.push(entry.name);
       byValue.set(key, names);
     }
+
     for (const entry of testValues) {
       const names = byValue.get(`${entry.kind}:${String(entry.value)}`);
+
       if (names === undefined) continue;
       found.push({
         file: parsed.file, line: entry.line, test: titleAt(spans, entry.line),
@@ -826,7 +951,9 @@ function mirrors(
         detail: `${entry.name} = ${JSON.stringify(entry.value)} duplicates ${names.join('/')} in ${module}`,
       });
     }
+
     const moduleBodies = new Set(arrowBodies(parsedModule).values());
+
     for (const [name, body] of testArrows) {
       if (!moduleBodies.has(body)) continue;
       found.push({
@@ -836,6 +963,7 @@ function mirrors(
       });
     }
   }
+
   return found;
 }
 
@@ -847,6 +975,7 @@ function mirrors(
  *  between 30 findings and the 8 that are real. */
 export function nonPublicMembers(sources: ReadonlyMap<string, string>): Map<string, string> {
   const owners = new Map<string, string>();
+
   for (const [file, text] of sources) {
     if (!/\b(private|protected)\s|#[A-Za-z_]/u.test(text)) continue;
     // Parsed without a tolerance: `parse` names the file it cannot read, and a
@@ -855,16 +984,20 @@ export function nonPublicMembers(sources: ReadonlyMap<string, string>): Map<stri
     const parsed = parseFile(file, text);
     walk(parsed.tree, (node) => {
       if (node.raw.type !== 'ClassDeclaration' && node.raw.type !== 'ClassExpression') return;
+
       for (const member of classMembers(node)) {
         const r = member.raw;
         const accessibility = 'accessibility' in r ? r.accessibility : undefined;
         const isPrivateName = 'key' in r && r.key !== null && r.key.type === 'PrivateIdentifier';
+
         if (accessibility !== 'private' && accessibility !== 'protected' && !isPrivateName) continue;
         const name = declaredName(member);
+
         if (name !== undefined && !owners.has(name)) owners.set(name, file);
       }
     });
   }
+
   return owners;
 }
 
@@ -894,24 +1027,31 @@ export interface ClassMembers {
 export function classNonPublicMembers(sources: ReadonlyMap<string, string>): ClassMembers {
   const nonPublic = new Map<string, string>();
   const base = new Map<string, string>();
+
   for (const [file, text] of sources) {
     const parsed = parseFile(file, text);
     walk(parsed.tree, (node) => {
       if (node.raw.type !== 'ClassDeclaration' && node.raw.type !== 'ClassExpression') return;
       const owner = declaredName(node);
+
       if (owner === undefined) return;
       const parent = superClassName(node);
+
       if (parent !== undefined) base.set(owner, parent);
+
       for (const member of classMembers(node)) {
         const r = member.raw;
         const accessibility = 'accessibility' in r ? r.accessibility : undefined;
         const isPrivateName = 'key' in r && r.key !== null && r.key.type === 'PrivateIdentifier';
+
         if (accessibility !== 'private' && accessibility !== 'protected' && !isPrivateName) continue;
         const name = declaredName(member);
+
         if (name !== undefined) nonPublic.set(`${owner}#${name}`, file);
       }
     });
   }
+
   return { nonPublic, base };
 }
 
@@ -924,23 +1064,30 @@ function privateReaches(
   nonPublic: ReadonlyMap<string, string>,
 ): Finding[] {
   const found: Finding[] = [];
+
   const at = (node: SyntaxNode, what: string, detail: string): Finding => {
     const line = parsed.lineAt(node.start);
+
     return { file: parsed.file, line, test: titleAt(spans, line), what, detail };
   };
 
   walk(parsed.tree, (node) => {
     const r = node.raw;
+
     if (r.type === 'MemberExpression' && r.computed && r.property.type === 'Literal') {
       const key = v.safeParse(StringLiteral, r.property);
+
       if (!key.success) return;
       const owner = nonPublic.get(key.output.value);
+
       if (owner !== undefined) {
         found.push(at(node, 'bracket reach to a non-public member',
           `${chainText(r.object)}['${key.output.value}'] — declared non-public in ${owner}`));
       }
+
       return;
     }
+
     if (r.type === 'TSAsExpression') {
       if (r.typeAnnotation.type === 'TSAnyKeyword') {
         found.push(at(node, 'as any', chainText(r.expression).slice(0, 60)));
@@ -948,12 +1095,15 @@ function privateReaches(
         && r.expression.typeAnnotation.type === 'TSUnknownKeyword') {
         found.push(at(node, 'as unknown as', chainText(r.expression.expression).slice(0, 60)));
       }
+
       return;
     }
+
     if (r.type === 'CallExpression' && chainText(r.callee) === 'Reflect.get') {
       found.push(at(node, 'Reflect.get', stringArguments(node).join(', ').slice(0, 60)));
     }
   });
+
   return found;
 }
 
@@ -978,19 +1128,25 @@ function bridgesOf(parsed: ParsedFile, classes: ClassMembers): Bridge[] {
   walk(parsed.tree, (node) => {
     if (node.raw.type !== 'MethodDefinition') return;
     const name = declaredName(node);
+
     if (name === undefined || !name.startsWith('harness')) return;
     const fn = node.children.find(isFunctionLike);
+
     if (fn === undefined) return;
 
     const own = new Set<string>();
     let cls: SyntaxNode | undefined = node.parent;
+
     while (cls !== undefined && cls.raw.type !== 'ClassDeclaration') cls = cls.parent;
+
     if (cls !== undefined) {
       for (const member of classMembers(cls)) {
         const memberName = declaredName(member);
+
         if (memberName !== undefined) own.add(memberName);
       }
     }
+
     // The helper's OWN chain, so `this.x` is judged against the class that
     // really declares it: see {@link classNonPublicMembers}. A chain that
     // leaves product source (an `agents` base) contributes nothing, which is
@@ -998,23 +1154,36 @@ function bridgesOf(parsed: ParsedFile, classes: ClassMembers): Bridge[] {
     // surface as far as this tree can tell.
     const chain: string[] = [];
     let up = cls === undefined ? undefined : superClassName(cls);
+
     for (let hop = 0; up !== undefined && hop < 16; hop += 1) {
       chain.push(up);
       up = classes.base.get(up);
     }
+
     const declaredNonPublic = (member: string): string | undefined => {
       for (const owner of chain) {
         const declaring = classes.nonPublic.get(`${owner}#${member}`);
+
         if (declaring !== undefined) return declaring;
       }
+
       return undefined;
     };
+
     const forwards = new Set<string>();
     walk(fn, (inner) => {
       const r = inner.raw;
+
       if (r.type !== 'MemberExpression' || r.computed) return;
+
       if (r.object.type !== 'ThisExpression') return;
-      if (r.property.type === 'PrivateIdentifier') { forwards.add(`#${r.property.name}`); return; }
+
+      if (r.property.type === 'PrivateIdentifier') {
+        forwards.add(`#${r.property.name}`);
+
+        return;
+      }
+
       if (r.property.type !== 'Identifier' || own.has(r.property.name)) return;
       forwards.add(r.property.name);
     });
@@ -1026,6 +1195,7 @@ function bridgesOf(parsed: ParsedFile, classes: ClassMembers): Bridge[] {
       nonPublic: [...forwards].filter((member) => declaredNonPublic(member) !== undefined).sort(),
     });
   });
+
   return found;
 }
 
@@ -1039,8 +1209,10 @@ function bridgeCalls(
   const found: Finding[] = [];
   walk(parsed.tree, (node) => {
     const called = calleeName(node);
+
     if (called === undefined) return;
     const bridge = bridges.get(called);
+
     if (bridge === undefined || bridge.file === parsed.file || bridge.nonPublic.length === 0) return;
     const line = parsed.lineAt(node.start);
     found.push({
@@ -1049,6 +1221,7 @@ function bridgeCalls(
       detail: `${called}() -> ${bridge.nonPublic.join(', ')} (${bridge.file}:${String(bridge.line)})`,
     });
   });
+
   return found;
 }
 
@@ -1090,6 +1263,7 @@ function mocks(
   const external: Finding[] = [];
   walk(parsed.tree, (node) => {
     const called = calleeName(node);
+
     if (called === undefined) return;
     const line = parsed.lineAt(node.start);
     const test = titleAt(spans, line);
@@ -1103,8 +1277,10 @@ function mocks(
           detail: `${called}('${id}')`,
         });
       }
+
       return;
     }
+
     if (called !== 'spyOn') return;
     const [target, method] = argumentNodes(node);
     const targetText = target === undefined ? '?' : chainText(target.raw);
@@ -1117,6 +1293,7 @@ function mocks(
       detail: `spyOn(${targetText}, '${methodName}')`,
     });
   });
+
   return { internal, external };
 }
 
@@ -1143,9 +1320,11 @@ export function fixtureGenerators(tracked: readonly string[]): Map<string, strin
   const generators = new Map<string, string>();
   const trackedSet = new Set(tracked);
   const scope = workspaceScope();
+
   for (const file of tracked) {
     if (!file.startsWith('scripts/') || !isParseable(file) || isTestFile(file)) continue;
     const text = readRepositoryFile(root, file);
+
     if (!/writeFileSync|Bun\.write/u.test(text)) continue;
     const parsed = parseFile(file, text);
 
@@ -1154,25 +1333,32 @@ export function fixtureGenerators(tracked: readonly string[]): Map<string, strin
     walk(parsed.tree, (node) => {
       for (const specifier of moduleSpecifiers(node)) specifiers.add(specifier);
       const literal = literalText(node);
+
       if (literal !== undefined) literals.push(literal);
     });
+
     // RESOLVED, then asked. `isProductSource` over the file a specifier really
     // names, rather than a `src` path pattern this program owns: a
     // specifier that resolves nowhere imports nothing, and the set of product
     // files has one definition in `sources.ts`.
     const importsProduct = [...specifiers].some((specifier) => {
       const target = resolveSpecifier(specifier, 'scripts', trackedSet, scope);
+
       return target !== undefined && isProductSource(target);
     });
+
     if (!importsProduct) continue;
+
     if (!literals.some((literal) => literal === 'fixtures' || literal.includes('fixtures/'))) continue;
 
     for (const literal of literals) {
       const basename = literal.split('/').at(-1) ?? '';
+
       if (!/^[\w.-]+\.(json|jsonl|ndjson|txt|md|snap|csv)$/u.test(basename)) continue;
       generators.set(basename, file);
     }
   }
+
   return generators;
 }
 
@@ -1187,8 +1373,10 @@ function goldenReads(
   const found: Finding[] = [];
   walk(parsed.tree, (node) => {
     const text = literalText(node);
+
     if (text === undefined) return;
     const generator = generators.get(text.split('/').at(-1) ?? text);
+
     if (generator === undefined) return;
     const line = parsed.lineAt(node.start);
     found.push({
@@ -1197,6 +1385,7 @@ function goldenReads(
       detail: `${text} is written by ${generator}`,
     });
   });
+
   return found;
 }
 
@@ -1218,6 +1407,7 @@ const SKIP_MODIFIERS: ReadonlySet<string> = new Set(['skip', 'todo', 'skipIf', '
  */
 function silentSkips(parsed: ParsedFile, spans: readonly TestSpan[]): Finding[] {
   const found: Finding[] = [];
+
   for (const span of spans) {
     if (span.modifier !== undefined && SKIP_MODIFIERS.has(span.modifier)) {
       found.push({
@@ -1226,28 +1416,37 @@ function silentSkips(parsed: ParsedFile, spans: readonly TestSpan[]): Finding[] 
         detail: 'a skip the runner reports — governed by gate:skip-ratchet',
       });
     }
+
     // A guard AFTER an assertion is TypeScript narrowing, not a skip:
     // `expect(out.ok).toBe(true); if (!out.ok) return;` has already asserted the
     // thing it then narrows. A credential skip sits before any assertion, which
     // is what separates the two without reading intent.
     let asserted = false;
+
     for (const statement of testBodyStatements(span)) {
       const r = statement.raw;
+
       if (!asserted) {
         walk(statement, (inner) => {
           if (calleeName(inner) === 'expect') asserted = true;
         });
       }
+
       if (asserted) continue;
+
       if (r.type !== 'IfStatement' || r.alternate !== null) continue;
       const negated = r.test.type === 'UnaryExpression' && r.test.operator === '!';
+
       const nullish = r.test.type === 'BinaryExpression'
         && (r.test.operator === '===' || r.test.operator === '==')
         && (chainText(r.test.right) === 'undefined' || chainText(r.test.right) === 'null');
+
       if (!negated && !nullish) continue;
       const body = r.consequent;
+
       const only = body.type === 'BlockStatement' && body.body.length === 1
         ? body.body[0] : body;
+
       if (only?.type !== 'ReturnStatement' || only.argument !== null) continue;
       found.push({
         file: parsed.file, line: parsed.lineAt(statement.start), test: span.title,
@@ -1256,6 +1455,7 @@ function silentSkips(parsed: ParsedFile, spans: readonly TestSpan[]): Finding[] 
       });
     }
   }
+
   return found;
 }
 
@@ -1264,8 +1464,10 @@ function silentSkips(parsed: ParsedFile, spans: readonly TestSpan[]): Finding[] 
 function testBodyStatements(span: TestSpan): SyntaxNode[] {
   const body = argumentNodes(span.node).find((argument) =>
     argument.raw.type === 'ArrowFunctionExpression' || argument.raw.type === 'FunctionExpression');
+
   if (body === undefined) return [];
   const block = body.children.find((child) => child.raw.type === 'BlockStatement');
+
   return block === undefined ? [] : [...block.children];
 }
 
@@ -1285,6 +1487,7 @@ function assertionFree(
   asserting: ReadonlySet<string>,
 ): Finding[] {
   const found: Finding[] = [];
+
   for (const span of spans) {
     if (span.modifier === 'todo') {
       found.push({
@@ -1293,16 +1496,26 @@ function assertionFree(
       });
       continue;
     }
+
     let asserts = false;
     let waits = false;
     walk(span.node, (node) => {
-      if (node.raw.type === 'ThrowStatement') { asserts = true; return; }
+      if (node.raw.type === 'ThrowStatement') {
+        asserts = true;
+
+        return;
+      }
+
       const called = calleeName(node);
+
       if (called === undefined) return;
+
       if (called === 'expect' || called === 'assert' || ASSERTING_IMPORT.test(called)
         || asserting.has(called)) asserts = true;
+
       if (WAIT_CALL.test(called)) waits = true;
     });
+
     if (asserts) continue;
     found.push({
       file: parsed.file, line: span.line, test: span.title,
@@ -1312,6 +1525,7 @@ function assertionFree(
         : 'no expect, no throw, no call to an asserting helper',
     });
   }
+
   return found;
 }
 
@@ -1327,6 +1541,7 @@ function publicEntries(
 ): Finding[] {
   const found: Finding[] = [];
   const seen = new Set<string>();
+
   const push = (node: SyntaxNode, what: string, detail: string): void => {
     if (seen.has(what)) return;
     seen.add(what);
@@ -1337,49 +1552,65 @@ function publicEntries(
 
   walk(parsed.tree, (node) => {
     const r = node.raw;
+
     if (r.type === 'NewExpression') {
       const constructed = chainText(r.callee);
+
       if (constructed === 'WebSocket') push(node, 'WS entry', 'new WebSocket(...)');
+
       if (constructed === 'Request') push(node, 'HTTP entry', 'new Request(...)');
+
       return;
     }
+
     if (r.type !== 'CallExpression') return;
     const called = calleeName(node);
+
     if (called === undefined) return;
     const chain = chainText(r.callee);
+
     if (/^handle[A-Z]\w*Request$|^handleRequest$/u.test(called)) push(node, 'HTTP entry', `${called}()`);
+
     if (called === 'request' && /app|worker|server|handler|client/iu.test(chain)) {
       push(node, 'HTTP entry', `${chain}()`);
     }
+
     if (called === 'fetch' && r.callee.type === 'MemberExpression') {
       push(node, 'HTTP entry', `${chain}()`);
     }
+
     if (/^runCli$|^runCommand$|^execCli$/u.test(called)) push(node, 'CLI entry', `${called}()`);
+
     if (called.startsWith('spawn')) {
       // The argv is usually an ARRAY literal, so every literal in the call is
       // read rather than only its direct string arguments.
       const literals: string[] = [];
       walk(node, (inner) => {
         const literal = literalText(inner);
+
         if (literal !== undefined) literals.push(literal);
       });
       const argv = literals.join(' ');
+
       if (/cli\/bin|(^|\s)kinu(\s|$)/u.test(argv)) {
         push(node, 'CLI spawn entry', argv.slice(0, 70));
       }
     }
+
     if (/^callRpc$|^rpc$|^callable$/u.test(called)) push(node, 'RPC entry', `${chain}()`);
   });
 
   const publicImport = specifiers.find((specifier) =>
     new RegExp(`^${scope}/[a-z-]+$`, 'u').test(specifier)
     || specifier.endsWith('/src/index') || /^\.\.\/src$/u.test(specifier));
+
   if (publicImport !== undefined) {
     found.push({
       file: parsed.file, line: 1, test: FILE_SCOPE,
       what: 'package API entry', detail: `imports ${publicImport}`,
     });
   }
+
   return found;
 }
 
@@ -1389,19 +1620,28 @@ const BROWSER_IMPORT = /puppeteer|playwright/u;
 
 function kindOf(file: string, specifiers: readonly string[], runner: string): Kind {
   if (!isRunnableSuite(file)) return 'support';
+
   if (specifiers.some((specifier) => BROWSER_IMPORT.test(specifier))) return 'ui';
+
   if (runner === 'vitest-evals') return 'eval';
+
   if (file.startsWith('scripts/')) return 'gate';
+
   if (runner === 'vitest-workerd') return 'integration';
   const base = (file.split('/').pop() ?? '').replace(/\.(test|eval|spec)\.tsx?$/u, '');
+
   if (file.startsWith('tests/')) {
     return base.startsWith('e2e') || base.includes('lifecycle') || base.includes('live')
       ? 'e2e' : 'integration';
   }
+
   if (file.includes('/tests/e2e/') || base.startsWith('e2e') || base.startsWith('smoke')) return 'e2e';
+
   if (specifiers.some((s) => s.includes('cli-driver') || s.includes('eval-target'))) return 'e2e';
+
   if (base.startsWith('integration') || base.startsWith('contract')
     || base.startsWith('conformance')) return 'integration';
+
   return 'unit';
 }
 
@@ -1409,10 +1649,15 @@ function kindOf(file: string, specifiers: readonly string[], runner: string): Ki
  *  already draw. */
 function runnerOf(file: string): string {
   if (!isRunnableSuite(file)) return 'imported only';
+
   if (isVitestEvalSuite(file)) return 'vitest-evals';
+
   if (/\/tests\/workerd\//u.test(file)) return 'vitest-workerd';
+
   if (isPythonSuite(file)) return 'python';
+
   if (isBunDiscoverableSuite(file)) return 'bun';
+
   return 'no runner shape claims it';
 }
 
@@ -1443,21 +1688,27 @@ export interface RunnerClaim {
 export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
   const testFiles = new Set(tracked.filter((file) => isTestFile(file) || isPythonSuite(file)));
   const out: RunnerClaim[] = [];
+
   const add = (name: string, tier: string, source: string, files: readonly string[]): void => {
     const kept = [...new Set(files)].filter((file) => testFiles.has(file)).sort();
+
     if (kept.length > 0) out.push({ name, tier, source, files: kept });
   };
 
   for (const gate of LADDER) {
     add(gate.run, gate.tier, 'scripts/ladder.ts LADDER', claims(gate.run, tracked));
   }
+
   const declared = new Set(LADDER.map((gate) => gate.run));
+
   for (const run of deployGates()) {
     if (declared.has(run)) continue;
     add(run, 'deploy', 'scripts/deploy.sh roster', claims(run, tracked));
     declared.add(run);
   }
+
   const scripts = packageScripts();
+
   const nonLadder: readonly (readonly [string, string])[] = [
     ['test', 'root `bun run test` — the partly disjoint agent-utils/core/compaction set'],
     ['test:cli', 'the full CLI suite runner'],
@@ -1466,13 +1717,16 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     ['test:mutation', 'the exploration-policy mutation suite'],
     ['test:anti-slop', 'the vendored plugin suites, under Node'],
   ];
+
   for (const [key, source] of nonLadder) {
     if (scripts[key] === undefined) continue;
     const command = `bun run ${key}`;
+
     if (declared.has(command)) continue;
     add(command, 'named runner', source, claims(command, tracked));
     declared.add(command);
   }
+
   // `scripts/test.sh` names its four directories WITHOUT a trailing slash, and
   // `claims()` resolves a bare directory to nothing — only `dir/` sweeps the
   // paths under it. Bun runs both spellings identically, so the claim is
@@ -1486,6 +1740,7 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
   add('tools/oxlint/anti-slop rules.test.ts', 'aggregator',
     'dynamic import inside the aggregator (isAntiSlopRuleSuite)',
     tracked.filter(isAntiSlopRuleSuite));
+
   return out;
 }
 
@@ -1586,13 +1841,16 @@ function resolveSpecifier(
   specifier: string, dir: string, tracked: ReadonlySet<string>, scope: string,
 ): string | undefined {
   let base: string | undefined;
+
   if (specifier.startsWith('.')) base = collapsePath(`${dir}/${specifier}`);
   else if (specifier.startsWith(`${scope}/`)) {
     const rest = specifier.slice(scope.length + 1).split('/');
     base = collapsePath(`packages/${rest[0] ?? ''}/src/${rest.slice(1).join('/')}`);
   }
+
   if (base === undefined) return undefined;
   const at = base;
+
   return IMPORT_CANDIDATES.map((suffix) => at + suffix).find((path) => tracked.has(path));
 }
 
@@ -1616,16 +1874,21 @@ function resolveImports(parsed: ParsedFile, tracked: ReadonlySet<string>, scope:
 
   for (const statement of parsed.tree.children) {
     const named = moduleSpecifiers(statement);
+
     for (const specifier of named) specifiers.push(specifier);
     const [specifier] = named;
+
     if (specifier === undefined) continue;
     const bound = importBindings(statement);
 
     const target = resolveSpecifier(specifier, dir, tracked, scope);
+
     if (target === undefined) continue;
     local.push(target);
+
     for (const binding of bound) localNames.add(binding.local);
   }
+
   return { local: [...new Set(local)], specifiers, localNames };
 }
 
@@ -1679,6 +1942,7 @@ export function measureFile(file: string, text: string, inputs: CensusInputs): M
     silent_skip: silentSkips(parsed, spans),
     golden_regenerated: goldenReads(parsed, spans, inputs.generators),
   };
+
   const publicSurface = publicEntries(parsed, specifiers, inputs.scope);
   const runner = runnerOf(file);
 
@@ -1728,10 +1992,13 @@ export function censusInputs(tracked: readonly string[]): CensusInputs {
   const nonPublic = nonPublicMembers(sources);
   const classes = classNonPublicMembers(sources);
   const bridges = new Map<string, Bridge>();
+
   for (const file of tracked.filter(isCensusFile)) {
     const parsed = parseFile(file, readRepositoryFile(root, file));
+
     for (const bridge of bridgesOf(parsed, classes)) bridges.set(bridge.name, bridge);
   }
+
   return {
     sources,
     nonPublic,
@@ -1763,6 +2030,7 @@ export function runCensus(): Census {
 
   for (const file of corpus) {
     const measured = measureFile(file, readRepositoryFile(root, file), inputs);
+
     for (const category of CATEGORIES) findings[category].push(...measured.findings[category]);
     publicSurface.push(...measured.publicSurface);
     externalSeam.push(...measured.externalSeam);
@@ -1772,6 +2040,7 @@ export function runCensus(): Census {
 
   const claimsTable = runnerClaims(tracked);
   const claimedBy = new Map<string, string[]>();
+
   for (const claim of claimsTable) {
     for (const file of claim.files) {
       const names = claimedBy.get(file) ?? [];
@@ -1779,28 +2048,35 @@ export function runCensus(): Census {
       claimedBy.set(file, names);
     }
   }
+
   const joined: FileRow[] = rows.map((row) => ({ ...row, runners: claimedBy.get(row.file) ?? [] }));
 
   // THE DENOMINATOR IS THE WHOLE CORPUS, then split. `unclaimed` answers "what
   // does no listed runner run"; `neverRun` narrows it to the runnable half,
   // which is what the per-package column counts.
   const unclaimed = joined.filter((row) => row.runners.length === 0).map((row) => row.file);
+
   const neverRun = joined
     .filter((row) => row.kind !== 'support' && row.runners.length === 0)
     .map((row) => row.file);
+
   const supportOnly = joined.filter((row) => row.kind === 'support').map((row) => row.file);
 
   const perPackage = new Map<string, PackageCounts>();
+
   for (const row of joined) {
     const bucket = perPackage.get(row.package) ?? blankCounts();
     perPackage.set(row.package, bucket);
     bucket.files += 1;
     bucket.tests += row.tests;
     bucket[row.kind] += 1;
+
     if (row.kind !== 'support') bucket.suites += 1;
+
     for (const category of CATEGORIES) bucket[category] += row[category];
     bucket.external_seam_mock += row.external_seam_mock;
     bucket.public_surface_entry += row.public_surface_entry;
+
     if (row.kind !== 'support' && row.runners.length === 0) bucket.never_run += 1;
   }
 
@@ -1891,7 +2167,9 @@ export const BLIND_SPOTS: readonly string[] = [
 
 function offenders(findings: readonly Finding[], limit: number): [string, number][] {
   const byFile = new Map<string, number>();
+
   for (const finding of findings) byFile.set(finding.file, (byFile.get(finding.file) ?? 0) + 1);
+
   return [...byFile.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, limit);
@@ -1912,38 +2190,47 @@ export function markdown(census: Census): string {
   p();
   p('| Category | Files | Findings |');
   p('|---|---:|---:|');
+
   for (const category of CATEGORIES) {
     const rows = census.findings[category];
     p(`| \`${category}\` | ${String(new Set(rows.map((r) => r.file)).size)} | ${String(rows.length)} |`);
   }
+
   p(`| \`public_surface_entry\` (good) | ${String(new Set(census.publicSurface.map((r) => r.file)).size)} | ${String(census.publicSurface.length)} |`);
   p(`| \`external_seam_mock\` (good) | ${String(new Set(census.externalSeam.map((r) => r.file)).size)} | ${String(census.externalSeam.length)} |`);
   p();
 
   p('## Per package');
   p();
+
   const head = ['Package', 'Files', 'Suites', 'Tests', 'unit', 'int', 'e2e', 'eval', 'gate', 'ui',
     ...CATEGORIES, 'public', 'never run'];
+
   p(`| ${head.join(' | ')} |`);
   p(`|${head.map(() => '---').join('|')}|`);
   const KINDS: readonly Kind[] = ['unit', 'integration', 'e2e', 'eval', 'gate', 'ui'];
+
   for (const pkg of Object.keys(census.perPackage).sort()) {
     const bucket = census.perPackage[pkg];
+
     if (bucket === undefined) continue;
     const kinds = KINDS.map((kind) => String(bucket[kind])).join(' | ');
     p(`| ${pkg} | ${String(bucket.files)} | ${String(bucket.suites)} | `
       + `${String(bucket.tests)} | ${kinds} | ${CATEGORIES.map((c) => String(bucket[c])).join(' | ')} `
       + `| ${String(bucket.public_surface_entry)} | ${String(bucket.never_run)} |`);
   }
+
   p();
 
   p('## Who runs what — and what nothing runs');
   p();
   p('| Runner / gate | Tier | Test files claimed | Resolved from |');
   p('|---|---|---:|---|');
+
   for (const claim of census.runnerClaims) {
     p(`| \`${claim.name}\` | ${claim.tier} | ${String(claim.files.length)} | ${claim.source} |`);
   }
+
   p();
 
   // THE DENOMINATOR, STATED. Every claim above is a count of files one command
@@ -1965,6 +2252,7 @@ export function markdown(census: Census): string {
     + `${String(census.supportOnly.length - unclaimedSupport.length)} support modules ARE claimed, `
     + 'by runners whose directory globs sweep them up.');
   p();
+
   if (aggregated !== undefined) {
     p(`Outside this corpus by contract: the ${String(aggregated.files.length)} `
       + `\`${ANTI_SLOP_RULES}*\` suites, which run only through the aggregator's dynamic import.`);
@@ -1973,11 +2261,13 @@ export function markdown(census: Census): string {
 
   p('### Never run by any named runner');
   p();
+
   if (unclaimedSuites.length === 0) {
     p('None: every runnable suite in the census corpus is claimed by at least one runner or gate.');
   } else {
     for (const file of unclaimedSuites) p(`- \`${file}\``);
   }
+
   p();
   p(`### Imported-only support modules no runner claims (${String(unclaimedSupport.length)} `
     + `of ${String(census.supportOnly.length)})`);
@@ -1986,6 +2276,7 @@ export function markdown(census: Census): string {
     + 'no runner claims it by name. Named rather than counted because a support module carrying '
     + 'its OWN assertions is a test nobody schedules, and a count cannot tell you which one.');
   p();
+
   for (const file of unclaimedSupport) p(`- \`${file}\``);
   p();
 
@@ -1995,31 +2286,40 @@ export function markdown(census: Census): string {
   p(`${String(census.bridges.length)} \`harness*\` bridges exist; ${String(crossing.length)} forward `
     + 'to a member production declares `private` or `protected`.');
   p();
+
   if (crossing.length > 0) {
     p('| Bridge | Declared at | Non-public members it reaches |');
     p('|---|---|---|');
+
     for (const bridge of crossing) {
       p(`| \`${bridge.name}\` | ${bridge.file}:${String(bridge.line)} | `
         + `${bridge.nonPublic.map((member) => `\`${member}\``).join(', ')} |`);
     }
+
     p();
   }
 
   p('## Top offenders, per category');
   p();
+
   for (const category of CATEGORIES) {
     const rows = census.findings[category];
+
     if (rows.length === 0) { p(`### ${category} — none`); p(); continue; }
+
     p(`### ${category} — ${String(rows.length)} findings across `
       + `${String(new Set(rows.map((r) => r.file)).size)} files`);
     p();
+
     for (const [file, count] of offenders(rows, 15)) p(`- ${file} — ${String(count)}`);
     p();
     p('Examples:');
     p();
+
     for (const row of rows.slice(0, 8)) {
       p(`- \`${row.file}:${String(row.line)}\` [${row.test}] ${row.what} — ${row.detail}`);
     }
+
     p();
   }
 
@@ -2028,16 +2328,20 @@ export function markdown(census: Census): string {
   const cols = ['File', 'Kind', 'Runner', 'Tests', 'Runners', ...CATEGORIES, 'public'];
   p(`| ${cols.join(' | ')} |`);
   p(`|${cols.map(() => '---').join('|')}|`);
+
   for (const row of census.files) {
     p(`| ${row.file} | ${row.kind} | ${row.runner} | ${String(row.tests)} | `
       + `${String(row.runners.length)} | ${CATEGORIES.map((c) => String(row[c])).join(' | ')} | `
       + `${String(row.public_surface_entry)} |`);
   }
+
   p();
   p('## What this census cannot see');
   p();
+
   for (const spot of census.blindSpots) p(`- ${spot}`);
   p();
+
   return out.join('\n');
 }
 
@@ -2073,12 +2377,14 @@ export function ratchetCounts(
   findings: Readonly<Record<Category, readonly Finding[]>>,
 ): Map<string, number> {
   const counts = new Map<string, number>();
+
   for (const category of RATCHETED) {
     for (const finding of findings[category]) {
       const key = ratchetKey(category, finding);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
   }
+
   return counts;
 }
 
@@ -2089,14 +2395,18 @@ export function checkRatchet(
   const locked = new Map(
     v.parse(LockSchema, JSON.parse(lock)).entries.map((entry) => [entry.key, entry.count]),
   );
+
   const today = ratchetCounts(findings);
   const added: string[] = [];
   const grown: string[] = [];
+
   for (const [key, count] of today) {
     const before = locked.get(key);
+
     if (before === undefined) added.push(key);
     else if (count > before) grown.push(`${key} (${String(before)} -> ${String(count)})`);
   }
+
   return {
     added: added.sort(),
     grown: grown.sort(),
@@ -2111,6 +2421,7 @@ export function lockText(
   const entries = [...ratchetCounts(findings)]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([key, count]) => ({ key, count }));
+
   return `${JSON.stringify({ measured, entries }, null, 2)}\n`;
 }
 
@@ -2120,9 +2431,11 @@ export function mergeFindings(
   parts: readonly Readonly<Record<Category, readonly Finding[]>>[],
 ): Findings {
   const merged = noFindings();
+
   for (const part of parts) {
     for (const category of CATEGORIES) merged[category].push(...part[category]);
   }
+
   return merged;
 }
 
@@ -2139,11 +2452,14 @@ function assertMeasured(census: Census): string {
     ['runners', census.runnerClaims.length],
     ['non-public product members', census.bridges.length],
   ];
+
   const empty = counts.filter(([, count]) => count <= 0).map(([label]) => label);
+
   if (empty.length > 0) {
     throw new Error(`test-census: measured nothing (${empty.join(', ')} is zero) — `
       + 'a census that reads nothing reports a clean corpus');
   }
+
   return counts.map(([label, count]) => `${String(count)} ${label}`).join(', ');
 }
 
@@ -2154,36 +2470,51 @@ function main(argv: readonly string[]): number {
   if (argv.includes('--lock')) {
     writeFileSync(LOCK, lockText(census.findings, `${census.tree.sha}: ${measured}`));
     console.log(`test-census: locked ${String(ratchetCounts(census.findings).size)} keys — ${measured}`);
+
     return 0;
   }
+
   if (argv.includes('--ratchet')) {
     let lock: string;
+
     try {
       lock = readFileSync(LOCK, 'utf8');
     } catch {
       console.error('test-census: no lock file. Run `bun scripts/test-census.ts --lock` first.');
+
       return 1;
     }
+
     const verdict = checkRatchet(census.findings, lock);
+
     if (verdict.added.length === 0 && verdict.grown.length === 0 && verdict.stale.length === 0) {
       console.log(`test-census: ratchet ok — ${measured}`);
+
       for (const spot of census.blindSpots) console.log(`  blind: ${spot}`);
+
       return 0;
     }
+
     for (const key of verdict.added) console.error(`test-census: NEW      ${key}`);
+
     for (const key of verdict.grown) console.error(`test-census: MORE     ${key}`);
+
     for (const key of verdict.stale) console.error(`test-census: RESOLVED ${key}`);
     console.error('\ntest-census: a new coupled test is debt this ratchet refuses. Enter through the '
       + 'public surface instead, or run `bun scripts/test-census.ts --lock` to record a deliberate '
       + 'exception and say why in the commit.');
+
     return 1;
   }
 
   const json = JSON.stringify(census, null, 2);
+
   if (argv.includes('--json')) {
     console.log(json);
+
     return 0;
   }
+
   console.log(markdown(census));
   console.error(`test-census: ${measured}`);
 
@@ -2196,6 +2527,7 @@ function main(argv: readonly string[]): number {
     writeFileSync(join(out, `${date}.md`), `${markdown(census)}\n`);
     console.error(`test-census: wrote bench-artifacts/test-census/${date}.{json,md}`);
   }
+
   return 0;
 }
 

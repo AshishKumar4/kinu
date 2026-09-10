@@ -25,6 +25,7 @@ import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 const V0 = 'async function* run(rt, task) { yield "v0"; }';
+
 const V1 = 'async function* run(rt, task) { yield "v1"; }';
 
 function scaffoldVfsPath(rt: AgentRuntime, suffix: string): string {
@@ -34,6 +35,7 @@ function scaffoldVfsPath(rt: AgentRuntime, suffix: string): string {
 /** A second runtime over the same durable state — the cold reopen. */
 function reopen(rt: AgentRuntime): AgentRuntime {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
+
   return {
     ...rt,
     identity: {
@@ -56,12 +58,15 @@ async function currentCount(rt: AgentRuntime): Promise<number> {
 async function seedAndPropose(rt: AgentRuntime): Promise<number> {
   await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
   await bootstrapScaffold(rt);
+
   const mod = await modifyScaffold(
     rt,
     'Pointer-authority test proposal — long enough rationale for gate one.',
     V1,
   );
+
   expect(mod.ok).toBe(true);
+
   return mod.version!;
 }
 
@@ -125,6 +130,7 @@ describe('proposal boundary — source lands before the pending row', () => {
       ...vfs,
       writeFile: async (path: string, data: string | Uint8Array) => {
         if (path === scaffoldVfsPath(rt, '.v1')) throw new Error('injected disk failure');
+
         return realWrite(path, data);
       },
     };
@@ -143,11 +149,13 @@ describe('proposal boundary — source lands before the pending row', () => {
 
     // A retry succeeds cleanly once the disk recovers.
     rt.agentStateVfs = undefined;
+
     const retry = await modifyScaffold(
       rt,
       'Retry after the injected failure — long enough rationale for gate one.',
       V1,
     );
+
     expect(retry.ok).toBe(true);
     expect(await readScaffoldVersion(rt, retry.version!)).toBe(V1);
   });
@@ -192,6 +200,7 @@ describe('promotion boundary — one current pointer, executed source follows it
     rt.identity.scaffold.write = async () => {
       throw new Error('injected view-write failure');
     };
+
     await expect(applyPromotionDecision(rt, pending, 'rollback'))
       .rejects.toThrow('injected view-write failure');
 
@@ -231,6 +240,7 @@ describe('promotion boundary — one current pointer, executed source follows it
       const code = `async function* run(rt, task) { yield "v${i}"; }`;
       const mod = await modifyScaffold(rt, `Cycle ${i} proposal carrying a rationale well past the gate.`, code);
       expect(mod.ok).toBe(true);
+
       if (i % 2 === 1) {
         const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
         expect(promo.action).toBe('promote');
@@ -239,8 +249,10 @@ describe('promotion boundary — one current pointer, executed source follows it
         const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
         expect(rb.action).toBe('rollback');
       }
+
       expect(currentCount(rt)).resolves.toBe(1);
     }
+
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(3);
   });
 });

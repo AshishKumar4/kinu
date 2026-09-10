@@ -97,16 +97,19 @@ export interface SlotCensus {
  */
 export function assertWithinPlatformLimits(census: SlotCensus): void {
   const { dataset } = census;
+
   if (census.blobBytes.length > MAX_BLOBS) {
     throw new RangeError(
       `${dataset}: ${census.blobBytes.length} blob slots exceeds the platform's ${MAX_BLOBS}`,
     );
   }
+
   if (census.doubles > MAX_DOUBLES) {
     throw new RangeError(
       `${dataset}: ${census.doubles} double slots exceeds the platform's ${MAX_DOUBLES}`,
     );
   }
+
   for (const index of census.indexes) {
     if (index.maxBytes > MAX_INDEX_BYTES) {
       throw new RangeError(
@@ -115,6 +118,7 @@ export function assertWithinPlatformLimits(census: SlotCensus): void {
       );
     }
   }
+
   // The platform takes ONE index per data point, and a schema holds exactly one —
   // so this is the assertion that the shape and the platform's count agree,
   // checked rather than assumed. A future second slot would be silently dropped
@@ -124,8 +128,11 @@ export function assertWithinPlatformLimits(census: SlotCensus): void {
       `${dataset}: ${census.indexes.length} index slots, but the platform takes ${MAX_INDEXES}`,
     );
   }
+
   let budget = 0;
+
   for (const bytes of census.blobBytes) budget += bytes;
+
   if (budget > MAX_BLOB_BYTES) {
     throw new RangeError(
       `${dataset}: blob slots declare ${budget} bytes in total, `

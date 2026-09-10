@@ -87,12 +87,15 @@ export type SwarmResolution =
  */
 export function swarmResolutionOf(label: string | null | undefined): SwarmResolution | null {
   const named = label?.trim();
+
   if (!named) return null;
   const preset = NAMED_SWARM_PRESETS.find((candidate) => candidate === named);
+
   if (preset === undefined) return { kind: "custom", label: named };
   // Widened to the declared row type on the way out of the table: the table is
   // `as const`, so its own inferred type is the six literal rows.
   const row: SwarmPresetRow = SWARM_PRESET_POINTS[preset];
+
   return {
     kind: "preset",
     preset,
@@ -158,8 +161,10 @@ export function swarmAxisRows(config: SwarmConfig): readonly SwarmAxisRow[] {
  */
 export function fanInArity(rationale: string | null | undefined): number | null {
   const matched = /^fan-in over (\d+) parents\b/.exec(rationale?.trim() ?? "");
+
   if (matched === null) return null;
   const parents = Number(matched[1]);
+
   // A fan-in over fewer than two parents is `sample` under another name and the
   // engine refuses to relabel it, so a count below two is a sentence this parser
   // has misread rather than a vertex it has found.
@@ -170,10 +175,13 @@ export function fanInArity(rationale: string | null | undefined): number | null 
  *  for a run with no journal and for one that only ever sampled. */
 export function fanInVertices(head: HeadRunView | null): ReadonlyMap<string, number> {
   const vertices = new Map<string, number>();
+
   for (const node of head?.heads ?? []) {
     const parents = fanInArity(node.rationale);
+
     if (parents !== null) vertices.set(node.id, parents);
   }
+
   return vertices;
 }
 
@@ -182,9 +190,11 @@ export function fanInVertices(head: HeadRunView | null): ReadonlyMap<string, num
  *  vertex carries is the sentence {@link fanInArity} reads. */
 export function nodeRationales(head: HeadRunView | null): ReadonlyMap<string, string> {
   const why = new Map<string, string>();
+
   for (const node of head?.heads ?? []) {
     if (node.rationale.trim() !== "") why.set(node.id, node.rationale.trim());
   }
+
   return why;
 }
 
@@ -227,18 +237,22 @@ export function runRefusal(
 ): RunRefusal | null {
   if (run.status === "running") return null;
   const branchError = head?.heads.find((node) => node.errorMessage !== null)?.errorMessage ?? null;
+
   if (run.status === "failed") {
     return { reason: "failed", error: branchError ?? REFUSAL_PROSE.failed };
   }
+
   if (run.status === "partial") {
     return { reason: "stopped", error: branchError ?? REFUSAL_PROSE.stopped };
   }
+
   // A completed run that expanded nothing. Reported rather than drawn as a one-dot
   // tree: an empty picture under a settled label reads as "the search found
   // nothing", which is a claim about the world and not about this run.
   if (run.branches === 0) {
     return { reason: "no_branch", error: branchError ?? REFUSAL_PROSE.no_branch };
   }
+
   return null;
 }
 
@@ -292,22 +306,30 @@ export interface RunLiveness {
  *  exactly that case and must never inflate `running`. */
 function bucketOf(status: string): "running" | "reported" | "failed" | null {
   if (status === "running") return "running";
+
   if (status === "completed") return "reported";
+
   if (status === "errored" || status === "aborted") return "failed";
+
   return null;
 }
 
 export function runLiveness(head: HeadRunView | null): RunLiveness | null {
   const nodes = head?.heads ?? [];
+
   if (nodes.length === 0) return null;
   const totals = { running: 0, reported: 0, failed: 0 };
   const byDepth = new Map<number, { running: number; reported: number; failed: number; total: number }>();
   let lastEventAt = 0;
+
   for (const node of nodes) {
     const bucket = bucketOf(node.status);
+
     if (bucket !== null) totals[bucket] += 1;
+
     const level = byDepth.get(node.depth)
       ?? { running: 0, reported: 0, failed: 0, total: 0 };
+
     if (bucket !== null) level[bucket] += 1;
     level.total += 1;
     byDepth.set(node.depth, level);
@@ -315,6 +337,7 @@ export function runLiveness(head: HeadRunView | null): RunLiveness | null {
     // in-flight branch has instead of a step — see `HeadRunHeadView.lastStepAt`.
     lastEventAt = Math.max(lastEventAt, node.lastStepAt ?? node.spawnedAt);
   }
+
   return {
     ...totals,
     total: nodes.length,
@@ -335,5 +358,6 @@ export function runLiveness(head: HeadRunView | null): RunLiveness | null {
  */
 export function formatEvidenceValue(value: number): string {
   if (Number.isInteger(value)) return String(value);
+
   return String(Math.round(value * 1000) / 1000);
 }

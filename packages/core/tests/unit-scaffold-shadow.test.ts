@@ -35,6 +35,7 @@ function setup() {
   initScaffoldTables(execRaw);
   initShadowTables(execRaw);
   const sql = makeSql(db);
+
   // A REAL handle over this database: every reader below is actor-scoped, so a
   // fixture that seeded rows under one id and read under another would pass
   // vacuously on empty results.
@@ -46,8 +47,10 @@ describe('initShadowTables', () => {
     const { sql, execRaw } = setup();
     initShadowTables(execRaw);
     initShadowTables(execRaw); // double-call OK
+
     const tables = sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scaffold_evaluations'`;
+
     expect(tables.length).toBe(1);
   });
 
@@ -83,6 +86,7 @@ describe('getPendingScaffold', () => {
         VALUES (${actor.actorId}, 4, ${Date.now()}, 'try new loop', 'pending')`;
 
     const judge = { winner: 'pending' as const, rationale: '', currentScore: 0.5, pendingScore: 0.8 };
+
     for (let i = 0; i < 3; i++) {
       recordShadowEvaluation(sql, actor, {
         currentVersion: 3, pendingVersion: 4,
@@ -90,6 +94,7 @@ describe('getPendingScaffold', () => {
         judgeResult: judge,
       });
     }
+
     recordShadowEvaluation(sql, actor, {
       currentVersion: 3, pendingVersion: 4,
       task: 'task-4', currentOutput: 'c', pendingOutput: 'p',
@@ -262,11 +267,13 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
                    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     const pendingCode = 'async function* run(rt, task) { yield "v1-pending"; }';
+
     const modResult = await modifyScaffold(
       rt,
       'Pending scaffold version 1 — proves the live file stays untouched on proposal.',
       pendingCode,
     );
+
     expect(modResult.ok).toBe(true);
 
     // Live file is still v0 after the proposal.
@@ -275,6 +282,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     // Promote: live file now holds the pending code.
     const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
+
     if (!pending) return;
     const promo = await applyPromotionDecision(rt, pending, 'promote');
     expect(promo.action).toBe('promote');
@@ -299,6 +307,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     );
     const pending = getPendingScaffold(rt.storage.sql, rt.actor);
     expect(pending).not.toBeNull();
+
     if (!pending) return;
 
     const rb = await applyPromotionDecision(rt, pending, 'rollback');
@@ -309,6 +318,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     expect(statuses.find(s => s.version === 0)?.status).toBe('current');
     expect(statuses.find(s => s.version === 1)?.status).toBe('rolled_back');
   });
@@ -325,6 +335,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
       rt, 'First pending proposal — should be accepted as v1.',
       'async function* run(rt, task) { yield "v1"; }',
     );
+
     expect(first.ok).toBe(true);
 
     // A second proposal while v1 is pending must be refused (not clobber v1).
@@ -332,6 +343,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
       rt, 'Second pending proposal — must be refused while v1 is in flight.',
       'async function* run(rt, task) { yield "v2"; }',
     );
+
     expect(second.ok).toBe(false);
     expect(second.stage).toBe(3);
     // v1's versioned code is intact (not clobbered by the refused proposal).
@@ -369,9 +381,11 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(rb.action).toBe('rollback');
     expect(rb.newCurrentVersion).toBe(1); // back to the promoted v1, not pending-1=1 by luck
     expect(await rt.identity.scaffold.read()).toBe(v1);
+
     const cur = rt.storage.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} AND status='current' ORDER BY version DESC LIMIT 1`;
+
     expect(cur[0]?.version).toBe(1);
   });
 });

@@ -86,7 +86,9 @@ export interface AnalyticsSchema {
 }
 
 export type BlobName<S extends AnalyticsSchema> = S['blobs'][number]['name'];
+
 export type DoubleName<S extends AnalyticsSchema> = S['doubles'][number]['name'];
+
 export type IndexName<S extends AnalyticsSchema> = S['index']['name'];
 
 /**
@@ -142,20 +144,25 @@ function defineSchema<const S extends AnalyticsSchema>(
     ...pinned.blobs.map((slot) => slot.name),
     ...pinned.doubles.map((slot) => slot.name),
   ]);
+
   return pinned;
 }
 
 /** The SQL column a named blob occupies. 1-based, because AE's columns are. */
 export function blobColumn<S extends AnalyticsSchema>(schema: S, name: BlobName<S>): string {
   const at = schema.blobs.findIndex((slot) => slot.name === name);
+
   if (at < 0) throw new RangeError(`${schema.dataset}: no blob slot named "${String(name)}"`);
+
   return `blob${at + 1}`;
 }
 
 /** The SQL column a named double occupies. */
 export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleName<S>): string {
   const at = schema.doubles.findIndex((slot) => slot.name === name);
+
   if (at < 0) throw new RangeError(`${schema.dataset}: no double slot named "${String(name)}"`);
+
   return `double${at + 1}`;
 }
 
@@ -193,6 +200,7 @@ export function analyticsDataset(schema: AnalyticsSchema, suffix: string): strin
   if (!DATASET_SUFFIX.test(suffix)) {
     throw new RangeError(`"${suffix}" is not an analytics dataset suffix`);
   }
+
   return schema.dataset + suffix;
 }
 

@@ -85,6 +85,7 @@ function openGate(initial: readonly LanguageModelV3StreamPart[]): StreamGate {
   const release = Promise.withResolvers<void>();
   const parked = Promise.withResolvers<void>();
   const queued = [...initial];
+
   return {
     queued,
     released: release.promise,
@@ -107,6 +108,7 @@ function openGate(initial: readonly LanguageModelV3StreamPart[]): StreamGate {
  */
 function gatedModel(gate: StreamGate): LanguageModelV3 {
   let calls = 0;
+
   return {
     specificationVersion: 'v3',
     provider: 'kinu-probe',
@@ -119,32 +121,43 @@ function gatedModel(gate: StreamGate): LanguageModelV3 {
     },
     async doStream() {
       calls += 1;
+
       if (calls > 1) {
         throw new Error('the scripted model was invoked twice: the finalization re-issued a request');
       }
+
       let announced = false;
+
       const stream = new ReadableStream<LanguageModelV3StreamPart>({
         async pull(controller) {
           const part = gate.queued.shift();
+
           if (part !== undefined) {
             controller.enqueue(part);
+
             return;
           }
+
           // Dry: PARK rather than close, and say so, so the test can act at
           // exactly this point instead of guessing when the SDK got here.
           if (!announced) {
             announced = true;
             gate.announceParked();
           }
+
           await gate.released;
           const next = gate.queued.shift();
+
           if (next !== undefined) {
             controller.enqueue(next);
+
             return;
           }
+
           controller.close();
         },
       });
+
       return { stream };
     },
   };
@@ -187,6 +200,7 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
         signal: abort.signal,
       })) {
         events.push(event);
+
         if (event.type === 'done') abort.abort();
       }
     } catch (error) {
@@ -229,6 +243,7 @@ describe('KINU-084 — the abort-at-final-chunk boundary', () => {
         signal: abort.signal,
       })) {
         events.push(event);
+
         if (event.type === 'text-delta' && !cut) {
           cut = true;
           abort.abort();

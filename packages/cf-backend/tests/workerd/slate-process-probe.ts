@@ -17,13 +17,17 @@ import { codemodeEgress } from '../../src/codemode-egress';
 export class SlateChainProbe extends WorkerEntrypoint {
   async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
+
     try {
       const chain = resolveSlateChain({ invocations: SlateProcessProbeDO.invocations, id: 'probe', invocation });
       const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, invocation }, chain });
+
       if (route.kind !== 'app') throw new Error('Expected app route');
+
       return { ok: true, value: { chain: [...route.chain], args: [...route.args] } };
     } catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
+
       return { ok: false, reason: cause.code, error: cause.message };
     }
   }
@@ -88,10 +92,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     try { await this.start(source, false, cred); }
     catch (cause) {
       if (!(cause instanceof KinuError)) throw cause;
+
       return { code: cause.code, detail: renderThrownChain({ cause }) };
     }
+
     const response = await this.request('/private');
     await this.stop();
+
     return response;
   }
 
@@ -106,11 +113,14 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     // can keep and replay as a root lineage.
     const invocation = crypto.randomUUID();
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain: chain ?? [] });
+
     try {
       const response = await this.ports.routeRequest(8789, new Request(
         'https://slate.invalid' + path, { headers: { 'x-slate-call': invocation } },
       ), path);
+
       if (response === null) return { status: 404, body: 'No listener' };
+
       return { status: response.status, body: await response.text() };
     } finally {
       SlateProcessProbeDO.invocations.delete(invocation);

@@ -70,21 +70,27 @@ export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<string | null>
  */
 export function memorySnippetRehydrator(memory: Pick<Memory, 'read'>): SnippetRehydrator {
   const reads = new Map<string, Promise<string | null>>();
+
   return async (hit) => {
     if (!hit.path) return null;
     let content = reads.get(hit.path);
+
     if (!content) {
       content = memory.read(hit.path);
       reads.set(hit.path, content);
     }
+
     let text: string | null;
+
     try {
       text = await content;
     } catch (cause) {
       if (reads.get(hit.path) === content) reads.delete(hit.path);
       throw cause;
     }
+
     if (text === null) return null;
+
     // 1-based, inclusive — the line convention memory chunk ids are minted with.
     return text.split('\n').slice(Math.max(0, hit.startLine - 1), hit.endLine).join('\n');
   };
@@ -157,6 +163,7 @@ export async function hybridSearch(
       };
     }
   })();
+
   const semanticArm: Promise<SemanticOutcome> = vectorStore.available
     ? (async (): Promise<SemanticOutcome> => {
         try {
@@ -171,6 +178,7 @@ export async function hybridSearch(
         }
       })()
     : Promise.resolve({ kind: 'skipped' });
+
   // Both arms are already in flight; awaiting them together keeps a slow source
   // off the other's critical path, exactly as before.
   const [lexical, semantic] = await Promise.all([lexicalArm, semanticArm]);
@@ -182,6 +190,7 @@ export async function hybridSearch(
     if (lexical.kind === 'failed') {
       diagnostics.failure('memory.lexical_search_failed', lexical.error);
     }
+
     if (semantic.kind === 'failed') {
       diagnostics.failure('memory.semantic_search_failed', semantic.error);
     }
@@ -201,6 +210,7 @@ export async function hybridSearch(
 
   // Only now, past the classification, does a lost arm become no candidates.
   const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
+
   const semanticHits: readonly VectorSearchHit[] = semantic.kind === 'answered'
     ? semantic.hits
     : [];
@@ -216,11 +226,14 @@ export async function hybridSearch(
     const l = byIdLex.get(m.id);
     const s = byIdSem.get(m.id);
     const sources: Array<'lexical' | 'semantic'> = [];
+
     if (l) sources.push('lexical');
+
     if (s) sources.push('semantic');
     // A semantic-only hit has no lexical snippet to borrow: read its text back
     // from the chunk's own address, or it arrives blank and unusable.
     let snippet = l?.snippet ?? s?.text ?? '';
+
     if (!snippet && s && options.rehydrate) {
       try {
         snippet = await options.rehydrate(s) ?? '';
@@ -233,6 +246,7 @@ export async function hybridSearch(
         snippet = '';
       }
     }
+
     return {
       id: m.id,
       path: l?.path ?? s?.path ?? '',

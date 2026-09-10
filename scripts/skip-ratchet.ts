@@ -183,12 +183,15 @@ const XML_ENTITIES = {
 
 function unescapeXML(text: string): string {
   let out = text;
+
   for (const [entity, char] of Object.entries(XML_ENTITIES)) out = out.replaceAll(entity, char);
+
   return out;
 }
 
 function attribute(attrs: string, name: string): string {
   const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
+
   return match?.[1] === undefined ? '' : unescapeXML(match[1]);
 }
 
@@ -215,6 +218,7 @@ export function parseJUnit(xml: string): TestReport {
   let total = 0;
 
   const testcase = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
+
   for (const match of xml.matchAll(testcase)) {
     const attrs = match[1] ?? '';
     const body = match[2] ?? '';
@@ -223,11 +227,13 @@ export function parseJUnit(xml: string): TestReport {
     const name = attribute(attrs, 'name');
     const declared = attribute(attrs, 'file');
     const file = declared || classname;
+
     if (file) files.add(file);
     // With the path in `classname` there is no separate suite to name — vitest
     // already joined the describe path into `name` — so spelling one would put
     // the file in the key twice.
     const key = declared ? `${file} › ${classname} › ${name}` : `${file} › ${name}`;
+
     if (body.includes('<failure')) {
       // The MARKER decides, never a guess at the message. A classifier that
       // sniffed for "timeout" or "503" would let a real behavioural failure hide
@@ -241,8 +247,10 @@ export function parseJUnit(xml: string): TestReport {
         infra: unescapeXML(body).includes(INFRA_FAILURE_MARKER),
       });
     }
+
     if (body.includes('<skipped')) skipped.push({ key, file });
   }
+
   return { total, failed, skipped, files };
 }
 
@@ -269,11 +277,14 @@ const LockEntrySchema = v.object({
    */
   family: v.optional(v.literal(true)),
 });
+
 const LockSchema = v.array(LockEntrySchema);
+
 export type SkipLockEntry = v.InferOutput<typeof LockEntrySchema>;
 
 export function readSkipLock(path = SKIP_LOCK_PATH): SkipLockEntry[] {
   if (!existsSync(path)) return [];
+
   return v.parse(LockSchema, JSON.parse(readFileSync(path, 'utf8')));
 }
 
@@ -292,6 +303,7 @@ export function reconcileSkips(
   const exact = new Set(lock.filter((entry) => entry.family !== true).map((entry) => entry.key));
   const families = lock.filter((entry) => entry.family === true).map((entry) => entry.key);
   const found = report.skipped.map((s) => s.key);
+
   return {
     added: [...new Set(found.filter((key) =>
       !exact.has(key) && !families.some((prefix) => key.startsWith(prefix))))].sort(),
@@ -353,9 +365,11 @@ export function unmatchedTargets(
 ): readonly string[] {
   const prefixes = targets.map((target) => target.replace(/^\.\//, ''));
   const seen = [...report.files];
+
   return targets.filter((_target, index) => {
     const prefix = prefixes[index] ?? '';
     const bunArgv = prefix.endsWith('/');
+
     return !seen.some((file) => file.startsWith(prefix)
       && (!bunArgv || isBunDiscoverableSuite(file))
       && !prefixes.some((other) => other.length > prefix.length && file.startsWith(other)));
@@ -374,6 +388,7 @@ export function unmatchedTargets(
  */
 function runTargets(): readonly string[] {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-skip-ratchet-'));
+
   const arms: readonly { readonly what: string; readonly argv: readonly string[] }[] = [
     { what: 'bun test', argv: ['test', ...SKIP_RATCHET_TARGETS, '--reporter=junit'] },
     {
@@ -382,21 +397,25 @@ function runTargets(): readonly string[] {
         '--reporter=junit'],
     },
   ];
+
   try {
     return arms.map(({ what, argv }, index) => {
       const out = join(dir, `junit-${String(index)}.xml`);
+
       const result = spawnSync(
         'bun',
         // Bun spells the destination `--reporter-outfile`, vitest `--outputFile`.
         [...argv, what === 'vitest' ? `--outputFile=${out}` : `--reporter-outfile=${out}`],
         { cwd: root, encoding: 'utf8', stdio: ['ignore', 'inherit', 'inherit'] },
       );
+
       if (!existsSync(out)) {
         throw new Error(
           `skip-ratchet: ${what} produced no JUnit report (exit ${String(result.status)}) — `
           + 'nothing to measure, so the gate cannot pass',
         );
       }
+
       return readFileSync(out, 'utf8');
     });
   } finally {
@@ -420,12 +439,15 @@ export function mergeReports(reports: readonly TestReport[]): TestReport {
  *  silently measured whichever arm the caller happened to name. */
 function junitPaths(argv: readonly string[]): readonly string[] | null {
   const paths: string[] = [];
+
   for (const [index, arg] of argv.entries()) {
     if (arg !== '--junit') continue;
     const path = argv[index + 1];
+
     if (path === undefined || path.startsWith('--')) return null;
     paths.push(path);
   }
+
   return paths;
 }
 
@@ -447,12 +469,15 @@ function junitPaths(argv: readonly string[]): readonly string[] | null {
  */
 function targetPrefixes(argv: readonly string[]): readonly string[] | null {
   const targets: string[] = [];
+
   for (const [index, arg] of argv.entries()) {
     if (arg !== '--target') continue;
     const target = argv[index + 1];
+
     if (target === undefined || target.startsWith('--')) return null;
     targets.push(target);
   }
+
   return targets;
 }
 
@@ -465,15 +490,21 @@ function main(argv: readonly string[]): number {
   // the banner, so the line a reader sees and the mode this runs in agree.
   const expectLive = argv.includes('--expect-live');
   const paths = junitPaths(argv);
+
   if (paths === null) {
     console.error('skip-ratchet: --junit needs a path');
+
     return 1;
   }
+
   const named = targetPrefixes(argv);
+
   if (named === null) {
     console.error('skip-ratchet: --target needs a path prefix');
+
     return 1;
   }
+
   // The EXECUTED set, never a wider claim. Standalone this file's own list is
   // the executed set because `runTargets` runs it; with reports handed over, the
   // caller ran the arms and says which.
@@ -482,6 +513,7 @@ function main(argv: readonly string[]): number {
   const xmls = paths.length === 0 ? runTargets() : paths.map((p) => readFileSync(p, 'utf8'));
   const report = mergeReports(xmls.map(parseJUnit));
   const missing = unmatchedTargets(report, targets);
+
   if (missing.length > 0) {
     console.error(finding({
       invariant: 'every skip-ratchet target contributes at least one test',
@@ -501,6 +533,7 @@ function main(argv: readonly string[]): number {
           + 'eval-tier.sh both come from the one ARM_* array, so they cannot — check '
           + 'that array first',
     }));
+
     return 1;
   }
 
@@ -515,6 +548,7 @@ function main(argv: readonly string[]): number {
       + `not something a script can generate. Edit ${SKIP_LOCK_PATH} by hand:\n`
       + JSON.stringify(report.skipped.map((s) => ({ key: s.key, reason: 'TODO' })), null, 2),
     );
+
     return 1;
   }
 
@@ -527,21 +561,27 @@ function main(argv: readonly string[]): number {
     console.error(`skip-ratchet: ${String(report.failed.length)} test failure(s) in the report — `
       + `${String(infra.length)} infrastructure, ${String(behavioural.length)} behavioural. `
       + 'Fix those first; the skip set is only meaningful over a run that otherwise passed.');
+
     if (infra.length > 0) {
       console.error('\n  INFRASTRUCTURE — the environment did not answer. Nothing here is a '
         + 'statement about the agent:');
+
       for (const test of infra) console.error(`    ${test.key}`);
     }
+
     if (behavioural.length > 0) {
       console.error('\n  BEHAVIOURAL — or unmarked. A failure counts as infrastructure only '
         + 'where the code raising it said so through `infraBoundary`, so an environment '
         + 'error thrown outside one of those boundaries lands in this list:');
+
       for (const test of behavioural) console.error(`    ${test.key}`);
     }
+
     return 1;
   }
 
   const debt = skipDebt(verdict, { expectLive });
+
   if (debt.length === 0) {
     console.log(
       `skip-ratchet: ok — ${measured}, ${String(report.skipped.length)} skipped, all declared`
@@ -549,12 +589,15 @@ function main(argv: readonly string[]): number {
         ? `; ${String(verdict.stale.length)} locked skip(s) RAN against the resolved target`
         : ''),
     );
+
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+
     return 0;
   }
 
   if (verdict.added.length > 0) {
     console.error(`skip-ratchet: ${String(verdict.added.length)} undeclared skip(s)\n`);
+
     for (const key of verdict.added) {
       console.error(finding({
         invariant: 'a skipped test is declared in the skip lock with a reason',
@@ -570,13 +613,16 @@ function main(argv: readonly string[]): number {
       }));
     }
   }
+
   if (!expectLive && verdict.stale.length > 0) {
     console.error(
       `\nskip-ratchet: ${String(verdict.stale.length)} locked skip(s) now run. Ratchet down — `
       + `remove these from ${SKIP_LOCK_PATH}:`,
     );
+
     for (const key of verdict.stale) console.error(`  ${key}`);
   }
+
   return 1;
 }
 

@@ -20,11 +20,15 @@ export function surfaceHasContent(
 	slates: readonly SlateSummary[] | undefined,
 ): boolean {
 	if (surface === "Releases") return tabPresence?.releases ?? true;
+
 	if (surface === "Exploration") return (tabPresence?.explorations ?? true) || mctsTrees.size > 0;
+
 	if (surface.startsWith(SLATE_PREFIX)) {
 		const id = surface.slice(SLATE_PREFIX.length);
+
 		return slates?.some((slate) => slate.id === id) ?? false;
 	}
+
 	return true;
 }
 
@@ -45,12 +49,15 @@ export function pruneSlateReloads(
 ): ReadonlyMap<string, number> {
 	if (previous.size === 0) return previous;
 	const ids = new Set<string>();
+
 	for (const slate of slates) ids.add(slate.id);
 	let next: Map<string, number> | undefined;
+
 	for (const id of previous.keys()) {
 		if (ids.has(id)) continue;
 		next ??= new Map(previous);
 		next.delete(id);
 	}
+
 	return next ?? previous;
 }

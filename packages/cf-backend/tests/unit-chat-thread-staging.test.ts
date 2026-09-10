@@ -44,10 +44,13 @@ import type { Rpc } from '../src/lib/protocol';
 /** Stored rows the reader has paged back to — the half a token must not pay
  *  for. Large enough that a per-token re-walk is unmistakable in the counts. */
 const HISTORY = 200;
+
 /** The live window: the SDK seed plus what the socket has appended. */
 const LIVE = 12;
+
 /** Deltas in one turn. Every one replaces the live list. */
 const TOKENS = 50;
+
 /** Ticks the RECONCILER half drives. A render-phase update is a re-render and
  *  React caps a component at 25 before it calls the loop runaway, so this half
  *  runs a shorter turn than the counting half above. It proves per-tick
@@ -81,7 +84,11 @@ function storedRow(meter: Meter, index: number): ChatHistoryEntry {
     id: `stored-${String(index)}`,
     role: 'assistant',
     createdAt: index,
-    get content(): string { meter.reads += 1; return `stored message ${String(index)}`; },
+    get content(): string {
+      meter.reads += 1;
+
+      return `stored message ${String(index)}`;
+    },
   };
 }
 
@@ -92,7 +99,11 @@ function liveMessage(meter: Meter, id: string, text: string): UIMessage {
   return {
     id,
     parts: [{ type: 'text', text }],
-    get role(): 'assistant' { meter.reads += 1; return 'assistant'; },
+    get role(): 'assistant' {
+      meter.reads += 1;
+
+      return 'assistant';
+    },
   };
 }
 
@@ -106,6 +117,7 @@ function storedConversation(meter: Meter): ChatHistoryEntry[] {
 function tokenTicks(meter: Meter, count: number = TOKENS): readonly UIMessage[][] {
   const settled = Array.from({ length: LIVE - 1 },
     (_, i) => liveMessage(meter, `live-${String(i)}`, `live message ${String(i)}`));
+
   return Array.from({ length: count }, (_, t) =>
     [...settled, liveMessage(meter, 'streaming', 'x'.repeat(t + 1))]);
 }
@@ -115,9 +127,11 @@ function wholeListPerToken(): WalkCost {
   const stored: Meter = { reads: 0 };
   const live: Meter = { reads: 0 };
   const older = storedConversation(stored);
+
   for (const window of tokenTicks(live)) {
     buildTranscript(mergeTranscript(older, window), NO_STEERS);
   }
+
   return { stored: stored.reads, live: live.reads };
 }
 
@@ -128,9 +142,11 @@ function stagedPerToken(): WalkCost {
   const live: Meter = { reads: 0 };
   const older = storedConversation(stored);
   const olderFold = extendTranscript(EMPTY_TRANSCRIPT_FOLD, restoredRows(older));
+
   for (const window of tokenTicks(live)) {
     sealTranscript(extendTranscript(olderFold, window), NO_STEERS);
   }
+
   return { stored: stored.reads, live: live.reads };
 }
 
@@ -168,6 +184,7 @@ describe('what a streamed token costs (KINU-072)', () => {
     const older = storedConversation(meter);
     const held = restoredRows(older);
     expect(new Set(held).size).toBe(HISTORY);
+
     // Re-projected per token instead, every row is a new object every time.
     for (let tick = 0; tick < TOKENS; tick++) {
       expect(restoredRows(older)[0]).not.toBe(held[0]);
@@ -188,6 +205,7 @@ function threadOverTicks(windows: readonly (readonly UIMessage[])[]): RenderedTi
   const threads: Transcript[] = [];
   const transcripts: (readonly UIMessage[])[] = [];
   const rpcCalls: string[] = [];
+
   // Refuses rather than answers. Deriving the thread must reach no page, so a
   // call here is the defect, not a value the harness has to invent one of —
   // and `Promise<never>` satisfies the RPC's caller-chosen return with nothing
@@ -203,10 +221,14 @@ function threadOverTicks(windows: readonly (readonly UIMessage[])[]): RenderedTi
     const { transcript, thread } = useChatThread(rpc, windows[at]!, true);
     threads.push(thread);
     transcripts.push(transcript);
+
     if (tick < windows.length - 1) setTick(tick + 1);
+
     return null;
   }
+
   renderToStaticMarkup(createElement(Probe));
+
   return { threads, transcripts, rpcCalls };
 }
 
@@ -217,6 +239,7 @@ describe('the chat pane performs the staged derivation (KINU-072)', () => {
     const windows = tokenTicks({ reads: 0 }, RENDER_TICKS);
     const { transcripts } = threadOverTicks(windows);
     expect(transcripts).toHaveLength(RENDER_TICKS);
+
     for (const [i, transcript] of transcripts.entries()) {
       expect(transcript).toBe(windows[i]);
     }

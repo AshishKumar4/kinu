@@ -45,6 +45,7 @@ class ProbeSession extends LocalAgentSession {
       this.terminalEffectFault = null;
       throw new TerminalEffectInterrupt(at, effect, scope);
     };
+
     this.terminalEffectFault = fault;
   }
 
@@ -79,11 +80,14 @@ function workspace(): { db: Database; rt: CLIRuntime } {
 // that the bookkeeping about it did.
 const completedTurns = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM completed_turns`[0]?.n ?? 0;
+
 const queuedTrials = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM scaffold_trial_queue
     WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
+
 const claimedTakes = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM alternate_takes WHERE turn_id IS NOT NULL`[0]?.n ?? 0;
+
 /** Every row the transition is still waiting on. Empty means it closed. */
 const stillOwed = (rt: CLIRuntime) =>
   rt.storage.sql<{ effect_name: string; status: string }>`
@@ -102,6 +106,7 @@ async function restart(
   // The replay may enqueue a turn (the completion gate does) and may start a
   // detached lane; this is the join a real one-shot process makes before exit.
   await next.settleBackgroundWork();
+
   return next;
 }
 
@@ -187,20 +192,26 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     // unevenly, and a gate with nothing to show declines by design — which would
     // let this test pass without ever gating.
     const probed: string[] = [];
+
     const shell: Shell = {
       exec: async (command) => {
         probed.push(command);
+
         return { stdout: `output of ${command}`, stderr: '', exitCode: 0 };
       },
     };
+
     const gated: CLIRuntime = { ...rt, shell };
+
     // The gate's trigger is tool calls plus a completed stream, never anything
     // the model said — so the turn has to actually call something.
     const { model } = scriptedModel(
       'I renamed them',
       { toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } } },
     );
+
     const events: SessionEvent[] = [];
+
     const session = new ProbeSession({
       rt: gated, db, model, oneShot: true, onEvent: (e) => events.push(e),
     });
@@ -211,6 +222,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     const asked = () => events.filter(
       (e) => e.type === 'turn-start' && e.event === COMPLETION_GATE_EVENT,
     ).length;
+
     expect(asked()).toBe(0);
     expect(probed).toEqual([]);
 
@@ -247,6 +259,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     const settled = {
       turns: completedTurns(rt), trials: queuedTrials(rt), titles: state.titleCalls,
     };
+
     expect(settled.turns).toBe(1);
     expect(settled.trials).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
@@ -307,8 +320,10 @@ describe('a killed CLI process is recovered by the next start', () => {
       ['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
       { cwd: new URL('../../..', import.meta.url).pathname, stdout: 'pipe', stderr: 'pipe' },
     );
+
     const out = await new Response(child.stdout).text();
     await child.exited;
+
     return out.trim().split('\n').at(-1) ?? '';
   }
 
@@ -422,9 +437,11 @@ describe('a recovery reads the record, not the session that finds it', () => {
       stream: async function* () { yield ''; },
       complete: async (prompt: string) => {
         asked.push(prompt);
+
         return JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' });
       },
     };
+
     return asked;
   }
 
@@ -444,6 +461,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
       },
       reachable: [], minSeverity: 'concern', recent: [], gateOpen: opts.gateOpen,
     };
+
     void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
       VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${'advisor.review'},
               ${JSON.stringify(snapshot)}, 1)`;
@@ -452,9 +470,11 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const advisorFibers = (rt: CLIRuntime) =>
     rt.storage.sql<{ n: number }>`
       SELECT count(*) AS n FROM fibers WHERE name = 'advisor.review'`[0]?.n ?? 0;
+
   const notes = (rt: CLIRuntime) =>
     rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.message);
+
   const programmaticTurns = (events: SessionEvent[]) =>
     events.filter((e) => e.type === 'turn-start' && e.kind === 'programmatic').length;
 
@@ -531,6 +551,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const next = new ProbeSession({
       rt, db, model, noAutoEvolve: true, onEvent: (e) => events.push(e),
     });
+
     next.skipBackoff();
     await next.recoverBackgroundJobs();
     await next.settleBackgroundWork();
@@ -545,6 +566,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const { db, rt } = workspace();
     const { model } = scriptedModel('answered');
     const events: SessionEvent[] = [];
+
     const session = new ProbeSession({
       rt, db, model, noAutoEvolve: true, onEvent: (e) => events.push(e),
     });
@@ -566,18 +588,22 @@ describe('a recovery reads the record, not the session that finds it', () => {
   test('a retry that falls due while the confirming turn is running queues no second one', async () => {
     const { db, rt } = workspace();
     const probed: string[] = [];
+
     const shell: Shell = {
       exec: async (command) => {
         probed.push(command);
+
         return { stdout: `output of ${command}`, stderr: '', exitCode: 0 };
       },
     };
+
     const gated: CLIRuntime = { ...rt, shell };
     // The confirming turn HOLDS inside its model call, which is where a retry
     // timer finds it: five seconds after the attempt that queued it, with the
     // turn's own message row not yet written.
     const inGateTurn = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
+
     const { model } = scriptedModel('I renamed them', {
       toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } },
       onStream: async (prompt) => {
@@ -586,7 +612,9 @@ describe('a recovery reads the record, not the session that finds it', () => {
         await release.promise;
       },
     });
+
     const events: SessionEvent[] = [];
+
     const session = new ProbeSession({
       rt: gated, db, model, oneShot: true, onEvent: (e) => events.push(e),
     });
@@ -597,6 +625,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const asked = () => events.filter(
       (e) => e.type === 'turn-start' && e.event === COMPLETION_GATE_EVENT,
     ).length;
+
     expect(asked()).toBe(0);
 
     // The replay queues the confirming turn and does NOT await it: the pump runs
@@ -605,6 +634,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const next = new ProbeSession({
       rt: gated, db, model, oneShot: true, onEvent: (e) => events.push(e),
     });
+
     next.skipBackoff();
     const replay = next.recoverBackgroundJobs();
     await inGateTurn.promise;
@@ -655,22 +685,28 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
 const assistantRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM messages WHERE role = 'assistant'`[0]?.n ?? 0;
+
 const recordedIntents = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;
+
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
+
 /** The transition's own effect claims — the outer ones, keyed apart from any
  *  tool claim the turn itself made. `open` counts the ones with no disposition:
  *  a sequence that has not been closed. */
 const terminalClaims = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims
     WHERE normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`[0]?.n ?? 0;
+
 const openTerminalClaims = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims
     WHERE normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
       AND result_json IS NULL`[0]?.n ?? 0;
+
 const rosterRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_effects`[0]?.n ?? 0;
+
 /** How many attempts the completion-gate row has taken. The witness that a
  *  sweep actually reached the body rather than finding the row not yet due. */
 const gateAttempts = (rt: CLIRuntime) =>
@@ -686,18 +722,22 @@ describe('a terminal close that fails leaves a way back', () => {
     const real: SqlExecutor = rt.storage.sql;
     let settleAttempts = 0;
     let failuresLeft = 1;
+
     const cutting: SqlExecutor = <T = unknown>(
       query: TemplateStringsArray, ...values: SqlValue[]
     ): T[] => {
       if (query.join('').includes('UPDATE tool_effect_claims SET result_json')) {
         settleAttempts += 1;
+
         if (failuresLeft > 0) {
           failuresLeft -= 1;
           throw new Error('the claim settle failed');
         }
       }
+
       return real<T>(query, ...values);
     };
+
     const storage: { sql: SqlExecutor } = rt.storage;
     storage.sql = cutting;
 
@@ -739,5 +779,6 @@ async function waitForClose(condition: () => boolean): Promise<boolean> {
     if (condition()) return true;
     await Bun.sleep(10);
   }
+
   return condition();
 }

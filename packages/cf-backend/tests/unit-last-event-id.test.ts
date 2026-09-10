@@ -55,6 +55,7 @@ describe('Last-Event-ID resume index', () => {
       null, '0', '1', '42', '-1', '-2', '-7', '3.14', '-0.5', 'NaN', 'abc', '',
       'Infinity', '1e21', '0x10', '7 ', ' 7', '+7', '1_000',
     ];
+
     for (const header of headers) {
       const index = resumeIndexFromLastEventId(header);
       expect(Number.isInteger(index)).toBe(true);

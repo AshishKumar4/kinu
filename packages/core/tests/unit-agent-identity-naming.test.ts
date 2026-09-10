@@ -88,6 +88,7 @@ describe('the mission-derived title', () => {
 // behind both the first-turn title and that lazy heal.
 describe('automatic workspace titling — the decision', () => {
   const MISSION = 'Audit the OAuth callback flow\n\nstart with the token exchange';
+
   const slugNamed: WorkspaceTitleState = {
     slug: 'workspace-1a4e20',
     displayName: 'workspace-1a4e20',
@@ -146,12 +147,15 @@ describe('automatic workspace titling — applying it', () => {
       mission: 'Audit the OAuth callback flow',
       ...state,
     };
+
     const persisted: string[] = [];
+
     const persist = (title: string) => {
       persisted.push(title);
       stored.displayName = title;
       stored.nameOrigin = 'auto';
     };
+
     return { stored, persisted, persist };
   }
 
@@ -188,7 +192,11 @@ describe('automatic workspace titling — applying it', () => {
 
     expect(await applyWorkspaceTitle(stored, {
       persist,
-      suggest: async () => { suggested += 1; return 'OAuth Callback Audit'; },
+      suggest: async () => {
+        suggested += 1;
+
+        return 'OAuth Callback Audit';
+      },
     })).toBe(null);
     expect(persisted).toEqual([]);
     expect(suggested).toBe(0);
@@ -199,17 +207,21 @@ describe('automatic workspace titling — applying it', () => {
     const { stored, persisted, persist } = workspace();
     let resolveSuggestion: ((value: string) => void) | undefined;
     const suggestion = new Promise<string>((resolve) => { resolveSuggestion = resolve; });
+
     const pending = applyWorkspaceTitle(stored, {
       persist: (title) => {
         if (stored.nameOrigin === 'user') return false;
         persist(title);
+
         return true;
       },
       suggest: () => suggestion,
     });
+
     await Promise.resolve();
     stored.displayName = 'Jarvis';
     stored.nameOrigin = 'user';
+
     if (resolveSuggestion === undefined) throw new Error('suggestion was never requested');
     resolveSuggestion('OAuth Callback Audit');
 
@@ -277,6 +289,7 @@ describe('a minted subordinate name', () => {
   test('two children of one role do not collide', () => {
     const minted = new Set(Array.from({ length: 64 }, () => mintSubordinateName('auditor')));
     expect(minted.size).toBe(64);
+
     // One entropy source, and it is the 36-character alphabet rather than the
     // 16 of a hex suffix.
     for (const name of minted) expect(name).toMatch(/^auditor-[a-z0-9]{6}$/);

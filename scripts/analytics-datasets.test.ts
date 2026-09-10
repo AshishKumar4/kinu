@@ -28,6 +28,7 @@ import { parseJsonc } from './jsonc';
 import { ANALYTICS_SCHEMAS, analyticsDataset } from '../packages/cf-backend/src/analytics/schemas';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 
 /** Only the two blocks this file is about. A narrow schema rather than the
@@ -71,20 +72,24 @@ function deployments(): readonly Deployment[] {
   const config = parseJsonc(
     readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER,
   );
+
   const blocks: [string, v.InferOutput<typeof DeploymentSchema>][] = [
     ['production', config],
     ...Object.entries(config.env ?? {}),
   ];
+
   return blocks
     .filter(([, block]) => (block.analytics_engine_datasets ?? []).length > 0)
     .map(([name, block]) => {
       const suffix = block.vars?.ANALYTICS_DATASET_SUFFIX;
+
       if (suffix === undefined) {
         throw new Error(
           `${WRANGLER}: environment "${name}" binds analytics datasets but declares no `
           + "ANALYTICS_DATASET_SUFFIX, so its reader would name production's datasets",
         );
       }
+
       return {
         name,
         suffix,
@@ -118,6 +123,7 @@ describe('every deployment reads the datasets it writes', () => {
     // while staging went back to reading production. This is the assertion that
     // says the separation exists at all.
     const [production, staging] = DEPLOYMENTS;
+
     for (const [binding, dataset] of Object.entries(staging.bound)) {
       expect(dataset).not.toBe(production.bound[binding]);
     }
@@ -136,6 +142,7 @@ describe('the derivation itself', () => {
     // request field, which is why a throw is the right answer: the shipped
     // config cannot be malformed without this file failing first.
     const [agent] = ANALYTICS_SCHEMAS;
+
     for (const bad of ['staging', '_Staging', '_stag ing', "_x'", `_${'x'.repeat(64)}`]) {
       expect(() => analyticsDataset(agent, bad)).toThrow(RangeError);
     }

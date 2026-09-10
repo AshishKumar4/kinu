@@ -76,6 +76,7 @@ interface DeliveredSignal extends AgentSignal {
 export function readSignalId<Metadata>(metadata: Metadata): string | undefined {
   const parsed = v.safeParse(SignalIdMetadataSchema, metadata);
   const id = parsed.success ? parsed.output[SIGNAL_ID_METADATA_KEY] : undefined;
+
   return id || undefined;
 }
 
@@ -115,16 +116,20 @@ export class SignalDelivery implements SignalDeliverer {
     const cardId = signal.idempotencyKey ? `sig:${signal.idempotencyKey}` : `sig-${nanoid()}`;
     const delivered: DeliveredSignal = { ...signal, cardId };
     const signalMode = signal.metadata?.kinuMode;
+
     const modeMismatch = isWorkMode(signalMode)
       && this.activeWorkMode?.() !== signalMode;
+
     // A `blocker` says continuing wastes the work, so it gets its own turn for
     // the same reason a mode mismatch does: spliced into a step it would be read
     // beside the work it is telling the agent to stop.
     const ownTurn = signal.requiresOwnTurn === true || signal.severity === 'blocker';
+
     if (!this.host.turnInFlight() || ownTurn || modeMismatch) return this.queue(delivered);
     this.pending.push(delivered);
     this.openCard(delivered, stepBody(delivered));
     this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
+
     return Promise.resolve('mid-turn');
   }
 
@@ -141,8 +146,10 @@ export class SignalDelivery implements SignalDeliverer {
   prepareStep(ctx: PrepareStepContext, steering: readonly AgentSignal[] = []): ModelMessage[] | undefined {
     const drained = this.pending.splice(0);
     this.absorbed.push(...drained);
+
     for (const signal of drained) this.moveCard(signal.cardId, 'shown');
     const bodies = [...drained, ...steering].map(stepBody);
+
     return this.injections.drain(ctx, bodies.length > 0
       ? [{ message: { role: 'user', content: bodies.join('\n\n') } }]
       : []);
@@ -165,9 +172,11 @@ export class SignalDelivery implements SignalDeliverer {
     this.settled = opts.completed ? absorbed : [];
     this.absorbed = [];
     this.injections.reset();
+
     for (const signal of requeue) {
       void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
     }
+
     return { absorbed };
   }
 
@@ -184,8 +193,10 @@ export class SignalDelivery implements SignalDeliverer {
   beginTurn(continuation: boolean, signalId?: string): void {
     this.absorbed = [];
     this.injections.reset();
+
     if (continuation) this.pending.unshift(...this.settled);
     this.settled = [];
+
     if (signalId) this.moveCard(signalId, 'shown');
   }
 
@@ -201,12 +212,15 @@ export class SignalDelivery implements SignalDeliverer {
   private async queue(signal: DeliveredSignal): Promise<SignalOutcome> {
     this.openCard(signal, signal.text);
     let reason: SignalUndeliveredReason;
+
     try {
       const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
       const { idempotencyKey, text } = signal;
+
       const result = await this.host.enqueueTurn(
         idempotencyKey === undefined ? { text, metadata } : { text, metadata, idempotencyKey },
       );
+
       if (result.status === 'queued') return 'queued';
       reason = 'preempted';
       diagnostics.failure(
@@ -222,8 +236,10 @@ export class SignalDelivery implements SignalDeliverer {
         { signal: signal.kind },
       );
     }
+
     this.moveCard(signal.cardId, 'undelivered');
     signal.compensate?.(reason);
+
     return 'undelivered';
   }
 
@@ -255,7 +271,9 @@ const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text
  *  overwrite the stamp underneath the seam. */
 const turnMetadata = (signal: AgentSignal): JsonObject => {
   const metadata: JsonObject = { ...signal.metadata, kinuEvent: signal.kind };
+
   if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
+
   return stampTurnAuthor(metadata);
 };
 

@@ -17,15 +17,18 @@ function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
   return (_args: string[], _opts: { signal?: AbortSignal }) => {
     const encoder = new TextEncoder();
     const chunks = output.match(/[\s\S]{1,1024}/g) ?? [output];
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
         controller.close();
       },
     });
+
     const errStream = new ReadableStream<Uint8Array>({
       start(controller) { controller.close(); },
     });
+
     const spawned: SpawnedOpenCode = {
       stdout: stream,
       stderr: errStream,
@@ -33,6 +36,7 @@ function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
       kill() {},
       exit: Promise.resolve(exitCode),
     };
+
     return spawned;
   };
 }
@@ -40,6 +44,7 @@ function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
 function makeAuthFile(origin: string, token: string): string {
   const path = scratchPath('opencode-provider-auth', 'auth.json');
   writeFileSync(path, JSON.stringify({ [origin]: { type: 'wellknown', key: 'TOKEN', token } }));
+
   return path;
 }
 
@@ -84,12 +89,15 @@ const FAKE_MODELS_OUTPUT = [
 function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): typeof fetch {
   return asFetchFunction(mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = new Request(input).url;
+
     if (url.endsWith('/.well-known/opencode')) {
       return new Response(wellKnown, { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
+
     if (url.includes('/config/opencode.json')) {
       return new Response(configJson, { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
+
     return new Response('Not Found', { status: 404 });
   }));
 }
@@ -125,6 +133,7 @@ const FAKE_CHAT_REPLY = {
 
 function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): OpenCodeProviderOptions {
   const authPath = makeAuthFile('https://opencode.example.com', 'test-token-123');
+
   return {
     authPath,
     fetch: makeFakeFetch(),
@@ -137,19 +146,26 @@ function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): Ope
 function makeRoutingFetch() {
   const requests: string[] = [];
   const requestBodies: string[] = [];
+
   const fetchImpl = asFetchFunction(mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input).url;
+
     if (url.endsWith('/.well-known/opencode')) {
       return new Response(FAKE_WELLKNOWN, { status: 200 });
     }
+
     if (url.includes('/config/opencode.json')) {
       return new Response(FAKE_CONFIG, { status: 200 });
     }
+
     requests.push(url);
     const body = v.safeParse(v.string(), init?.body);
+
     if (body.success) requestBodies.push(body.output);
+
     return Response.json(url.endsWith('/responses') ? FAKE_RESPONSES_REPLY : FAKE_CHAT_REPLY);
   }));
+
   return { fetchImpl, requests, requestBodies };
 }
 
@@ -175,6 +191,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn('opencode 1.17.13\n'),
     }));
+
     expect(await provider.isAvailable({
       env: {},
       getAuth: async () => null,
@@ -186,6 +203,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn('', 1), // exit code 1 = not found
     }));
+
     expect(await provider.isAvailable({
       env: {},
       getAuth: async () => null,
@@ -199,6 +217,7 @@ describe('OpenCode provider', () => {
       fetch: makeFakeFetch(),
       spawn: makeSpawn('opencode 1.17.13\n'),
     });
+
     expect(await provider.isAvailable({
       env: {},
       getAuth: async () => null,
@@ -210,11 +229,13 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn(FAKE_MODELS_OUTPUT),
     }));
+
     const models = await provider.listModels({
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
     });
+
     expect(models.length).toBe(2);
     expect(models[0].id).toBe('openai/gpt-5.6-sol');
     expect(models[0].label).toBe('GPT 5.6 Sol');
@@ -238,14 +259,17 @@ describe('OpenCode provider', () => {
       }),
       '',
     ].join('\n');
+
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn(output),
     }));
+
     const models = await provider.listModels({
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
     });
+
     expect(models.length).toBe(1);
     expect(models[0].id).toBe('openai/good-model');
   });
@@ -254,11 +278,13 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({
       spawn: makeSpawn('', 1),
     }));
+
     const reason = await provider.unavailableReason?.({
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
     });
+
     expect(reason).toContain('Install opencode');
   });
 
@@ -268,21 +294,25 @@ describe('OpenCode provider', () => {
       fetch: makeFakeFetch(),
       spawn: makeSpawn('opencode 1.17.13\n'),
     });
+
     const reason = await provider.unavailableReason?.({
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
     });
+
     expect(reason).toContain('opencode auth login');
   });
 
   test('createModel returns a LanguageModel', async () => {
     const provider = createOpenCodeProvider(makeProviderOpts());
+
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {},
       getAuth: async () => null,
       hasCredential: async () => false,
     });
+
     expect(model).toBeDefined();
     const resolved = v.parse(v.object({ modelId: v.string() }), model);
     expect(resolved.modelId).toBe('openai/gpt-5.6-sol');
@@ -293,9 +323,11 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
@@ -303,17 +335,23 @@ describe('OpenCode provider', () => {
 
   test('routes model requests through the patient rate-limit fetch', async () => {
     let modelCalls = 0;
+
     const fetchImpl = asFetchFunction(mock(async (input: RequestInfo | URL) => {
       const url = new Request(input).url;
+
       if (url.endsWith('/.well-known/opencode')) return new Response(FAKE_WELLKNOWN);
+
       if (url.includes('/config/opencode.json')) return new Response(FAKE_CONFIG);
       modelCalls++;
+
       return modelCalls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
         : Response.json(FAKE_RESPONSES_REPLY);
     }));
+
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
@@ -328,9 +366,11 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model, {
       openai: {
         include: [
@@ -355,18 +395,21 @@ describe('OpenCode provider', () => {
       id: 'rs_missing',
       summary: [{ type: 'summary_text', text: 'summary' }],
     };
+
     const reasoningWithEncryptedContent = {
       type: 'reasoning',
       id: 'rs_encrypted',
       encrypted_content: 'encrypted-payload',
       summary: [],
     };
+
     const nonReasoningItem = {
       type: 'message',
       id: 'msg_inline',
       role: 'assistant',
       content: [],
     };
+
     const nonPersistedReference = { type: 'item_reference', id: 'call_local' };
 
     const body: JsonObject = {
@@ -380,6 +423,7 @@ describe('OpenCode provider', () => {
         nonPersistedReference,
       ],
     };
+
     rewriteOpenCodeResponsesBody(body);
 
     // With store:false NOTHING is persisted server-side, so every
@@ -413,6 +457,7 @@ describe('OpenCode provider', () => {
         { type: 'function_call_output', call_id: 'call_abc', output: 'ok' },
       ],
     };
+
     rewriteOpenCodeResponsesBody(body);
 
     expect(body.input).toEqual([
@@ -426,9 +471,11 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
     const model = provider.createModel('openai/gpt-5.4-nano', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
@@ -450,13 +497,16 @@ describe('OpenCode provider', () => {
       }),
       '',
     ].join('\n');
+
     const { fetchImpl, requests } = makeRoutingFetch();
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(output) }));
 
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
+
     const model = provider.createModel('openai/sdk-routed-model', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
@@ -472,6 +522,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
@@ -484,6 +535,7 @@ describe('OpenCode provider', () => {
     const model = provider.createModel('openai/gpt-4.1-mini', {
       env: {}, getAuth: async () => null, hasCredential: async () => false,
     });
+
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
@@ -500,12 +552,15 @@ describe('OpenCode provider', () => {
 
   test('config is cached and not re-fetched within TTL', async () => {
     let fetchCount = 0;
+
     const countingFetch = asFetchFunction(mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
       fetchCount++;
       const url = new Request(input).url;
+
       if (url.endsWith('/.well-known/opencode')) {
         return new Response(FAKE_WELLKNOWN, { status: 200 });
       }
+
       return new Response(FAKE_CONFIG, { status: 200 });
     }));
 

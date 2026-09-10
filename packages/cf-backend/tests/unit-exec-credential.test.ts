@@ -33,32 +33,42 @@ afterEach(() => {
 });
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
+
 const SESSION_USER: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };
+
 const AGENT_A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
 async function openWorkspace(): Promise<NimbusWorkspace> {
   const database = new Database(':memory:');
   databases.push(database);
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   return NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
@@ -68,6 +78,7 @@ async function openWorkspace(): Promise<NimbusWorkspace> {
 
 function workerHost(workspace: NimbusWorkspace): ProgrammaticHost {
   const durableState = new Map<string, unknown>();
+
   return {
     _w1SessionDestroyed: false,
     env: {},
@@ -106,6 +117,7 @@ function sdkBox(host: ProgrammaticHost) {
     ),
     _rpcProcessLogs: (pid: number) => rpcProcessLogs(host, pid),
   };
+
   return Nimbus.fromEnv({ NIMBUS_SESSION: { idFromName: (name: string) => name, get: () => stub } })
     .sandbox('workspace', { root: '/home/user' });
 }
@@ -124,7 +136,9 @@ function provisionHome(workspace: NimbusWorkspace, path: string, cred: VfsCred):
 
 async function statUid(workspace: NimbusWorkspace, path: string): Promise<number> {
   const stat = await workspace.vfs.as(ROOT).stat(path);
+
   if (stat === null) throw new Error(`no inode at ${path}`);
+
   return stat.uid;
 }
 

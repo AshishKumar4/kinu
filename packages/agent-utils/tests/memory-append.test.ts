@@ -12,6 +12,7 @@ function createStore() {
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
+
 	return { sql, db, fs, store };
 }
 
@@ -36,6 +37,7 @@ describe("MemoryStore.appendToFile", () => {
 		const { sql } = createTestDb();
 		const fs = createMemoryVfs({ "memory/MEMORY.md": "# precious notes" });
 		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };
+
 		const store = new MemoryStore(fs, sql);
 		store.ensureSchema();
 

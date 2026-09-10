@@ -26,17 +26,25 @@ const INK = {
 } as const;
 
 const BRAND = chalk.bold.hex(INK.sheen)('Kinu');
+
 /** The build stamp the dist build folds in at bundle time
  *  (`bun build --define process.env.KINU_BUILD_STAMP`), so an installed copy
  *  reports `0.2.0+<sha>` while package.json stays the one version source and
  *  the source tree is never written. A source run carries no stamp. */
 const BUILD_STAMP = process.env.KINU_BUILD_STAMP;
+
 const VERSION = BUILD_STAMP === undefined ? cliPackage.version : `${cliPackage.version}+${BUILD_STAMP}`;
+
 const DIM = chalk.dim;
+
 const ACCENT = chalk.hex(INK.thread);
+
 const OK = chalk.hex(INK.success);
+
 const WARN = chalk.hex(INK.warning);
+
 const ERR = chalk.hex(INK.danger);
+
 const MUTED = chalk.hex(INK.dim);
 
 export { BRAND, VERSION, DIM, ACCENT, OK, WARN, ERR, MUTED };
@@ -60,6 +68,7 @@ function boxBot(width: number): string {
 function boxRow(label: string, value: string, width: number): string {
   const raw = `${label}${value}`;
   const padding = Math.max(0, width - 4 - stripAnsi(raw).length);
+
   return `${DIM(BOX.v)} ${label}${value}${' '.repeat(padding)}`;
 }
 
@@ -70,16 +79,19 @@ function stripAnsi(s: string): string {
 // ── Spinner ──────────────────────────────────────────────────────
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 const isTTY = process.stdout.isTTY ?? false;
 
 export function createSpinner(initialMessage: string) {
   let i = 0;
   let message = initialMessage;
   let timer: ReturnType<typeof setInterval> | null = null;
+
   const paint = () => {
     process.stdout.write(`\r\x1b[K${ACCENT(SPINNER_FRAMES[i % SPINNER_FRAMES.length])} ${message}`);
     i++;
   };
+
   return {
     start() {
       if (!isTTY) return;
@@ -93,6 +105,7 @@ export function createSpinner(initialMessage: string) {
      *  is the wrong way round for the mode a person actually watches. */
     update(next: string) {
       message = next;
+
       if (isTTY) paint();
       else console.log(`${DIM('·')} ${next}`);
     },
@@ -103,11 +116,14 @@ export function createSpinner(initialMessage: string) {
     },
     stop(finalMessage?: string) {
       if (timer) clearInterval(timer);
+
       if (isTTY) process.stdout.write(`\r\x1b[K`);
+
       if (finalMessage) console.log(`${OK('✓')} ${finalMessage}`);
     },
     fail(finalMessage: string) {
       if (timer) clearInterval(timer);
+
       if (isTTY) process.stdout.write(`\r\x1b[K`);
       console.log(`${ERR('✗')} ${finalMessage}`);
     },
@@ -138,14 +154,17 @@ export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } =
   let frame = 0;
   let label: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+
   const draw = () => {
     if (label === null || opts.hold?.()) return;
     process.stdout.write(`\r\x1b[K${ACCENT(SPINNER_FRAMES[frame % SPINNER_FRAMES.length])} ${DIM(label)}`);
     frame++;
   };
+
   return {
     show(next) {
       label = next;
+
       if (!tty || timer) return;
       timer = setInterval(draw, 80);
       draw();
@@ -155,10 +174,12 @@ export function createTurnStatus(opts: { hold?: () => boolean; tty?: boolean } =
         clearInterval(timer);
         timer = null;
       }
+
       if (tty && label !== null) process.stdout.write('\r\x1b[K');
     },
     resume() {
       if (label === null || !tty) return;
+
       if (!timer) timer = setInterval(draw, 80);
       draw();
     },
@@ -221,9 +242,11 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
   console.log(boxRow(L('MCTS Nodes:'), String(info.searchNodeCount), w));
   console.log(boxRow(L('Tasks:'), String(info.taskCount), w));
+
   if (extra?.conversationCount !== undefined) {
     console.log(boxRow(L('Chats:'), String(extra.conversationCount), w));
   }
+
   console.log(DIM(`${BOX.v}${'─'.repeat(w - 3)}`));
 
   // Tools section
@@ -245,6 +268,7 @@ export function printAgentList(agents: Array<{
 }>): void {
   if (agents.length === 0) {
     console.log(`\n${DIM('No agents found.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
+
     return;
   }
 
@@ -275,6 +299,7 @@ export function printAgentList(agents: Array<{
     const size = a.dbSize ? DIM(formatBytes(a.dbSize).padStart(8)) : DIM('    —   ');
     console.log(`  ${name}${mode}${purpose} ${ver}  ${size}`);
   }
+
   console.log('');
 }
 
@@ -295,13 +320,16 @@ export interface SearchTreeNode {
 export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[] {
   return nodes.map((node) => {
     const indent = '  '.repeat(node.depth + 1);
+
     const icon = node.status === 'terminal' ? OK('●')
       : node.status === 'pruned' ? ERR('○')
       : node.status === 'failed' ? ERR('✗')
       : WARN('◌');
+
     const value = WARN(node.value.toFixed(3));
     const visits = DIM(`n=${node.visits}`);
     const action = clipText((node.action ?? '').replace(/\n/g, ' '), 50);
+
     return `${indent}${icon} ${value} ${visits} ${DIM(action)}`;
   });
 }
@@ -309,10 +337,12 @@ export function renderSearchTreeLines(nodes: readonly SearchTreeNode[]): string[
 export function printSearchTree(nodes: SearchNode[]): void {
   if (nodes.length === 0) {
     console.log(DIM('  (no search history)'));
+
     return;
   }
 
   console.log(`\n${DIM('MCTS Search Tree:')}`);
+
   for (const line of renderSearchTreeLines(nodes)) console.log(line);
   console.log('');
 }
@@ -333,8 +363,10 @@ export function printSearchTree(nodes: SearchNode[]): void {
 export function printToolCall(toolName: string, args: JsonObject): void {
   console.log(`\n${DIM('  ▸ ')}${MUTED(toolName)} ${DIM('━'.repeat(Math.max(1, 40 - toolName.length)))}`);
   const action = describeToolCall(toolName, args);
+
   if (action) console.log(`${DIM('  ')}${ACCENT(action)}`);
   const summary = summarizeToolCall(toolName, args);
+
   if (summary) console.log(`${DIM('  ')}${MUTED(summary)}`);
 }
 
@@ -342,13 +374,18 @@ export function printToolCall(toolName: string, args: JsonObject): void {
 export function printToolResult(result: string, outcome: ToolOutcome): void {
   if (!outcome.success) {
     console.log(ERR('  ' + TUI_MARKS.failure + ' failed (' + (outcome.reason ?? 'unclassified') + ')'));
+
     for (const line of result.split('\n')) console.log(MUTED('      ' + line));
+
     return;
   }
+
   const lines = result.split('\n');
+
   for (const line of lines.slice(0, 5)) {
     console.log(`${DIM('  → ')}${MUTED(clipText(line, 70))}`);
   }
+
   if (lines.length > 5) console.log(DIM(`  → … (${lines.length - 5} more lines)`));
   console.log(DIM('  ' + '━'.repeat(44)));
 }
@@ -369,6 +406,7 @@ export function printEvolutionEvent(type: string, message: string): void {
 
 export function printError(message: string, hint?: string): void {
   console.error(`\n${ERR('error')} ${message}`);
+
   if (hint) console.error(`${DIM('hint:')} ${hint}`);
   console.error('');
 }
@@ -386,6 +424,7 @@ export function printFailure(failure: { readonly cause: unknown }): void {
  *  than the end of the process. */
 export function formatFailure(failure: { readonly cause: unknown }): string {
   const { message, hint } = guideFailure(failure);
+
   return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
 }
 
@@ -431,6 +470,7 @@ export interface HelpEntry {
  *  list a command the other misses. */
 export function commandEntries(program: Command): HelpEntry[] {
   const helper = program.createHelp();
+
   // visibleCommands() applies the hidden-command policy but also appends
   // Commander's implicit `help` placeholder, which is not a registered command;
   // intersecting with .commands keeps the policy and drops the placeholder.
@@ -438,23 +478,29 @@ export function commandEntries(program: Command): HelpEntry[] {
     helper.visibleCommands(cmd).filter((child) => cmd.commands.includes(child));
 
   const entries: HelpEntry[] = [];
+
   const walk = (parent: Command, prefix: string, inherited: string): void => {
     for (const cmd of children(parent)) {
       const term = `${prefix}${cmd.name()}${argumentSuffix(cmd)}`;
       const heading = cmd.helpGroup() || inherited;
+
       if (children(cmd).length > 0) walk(cmd, `${term} `, heading);
       else entries.push({ command: cmd, term, description: cmd.description(), heading });
     }
   };
+
   walk(program, '', UNGROUPED_HEADING);
+
   return entries;
 }
 
 function argumentSuffix(cmd: Command): string {
   const args = cmd.registeredArguments.map((arg) => {
     const name = `${arg.name()}${arg.variadic ? '...' : ''}`;
+
     return arg.required ? `<${name}>` : `[${name}]`;
   });
+
   return args.length > 0 ? ` ${args.join(' ')}` : '';
 }
 
@@ -467,6 +513,7 @@ function renderHelp(program: Command): string {
   const entries = commandEntries(program);
   const width = termWidth();
   const termColumn = Math.min(Math.max(0, ...entries.map((e) => e.term.length)) + 2, 34);
+
   const lines: string[] = [
     '',
     `${BRAND} ${DIM(`v${VERSION}`)}`,
@@ -476,8 +523,10 @@ function renderHelp(program: Command): string {
   ];
 
   const headings = [...new Set(entries.map((e) => e.heading))];
+
   for (const heading of headings) {
     lines.push('', chalk.bold(heading));
+
     for (const entry of entries.filter((e) => e.heading === heading)) {
       lines.push(...helpRow(ACCENT(entry.term), entry.term.length, entry.description, termColumn, width));
     }
@@ -488,13 +537,16 @@ function renderHelp(program: Command): string {
   lines.push(...helpRow(DIM('-h, --help'), 10, `Show this help; \`${program.name()} <command> --help\` for one command`, termColumn, width));
 
   lines.push('', chalk.bold('Environment:'));
+
   for (const [name, description] of GLOBAL_ENVIRONMENT) {
     lines.push(...helpRow(DIM(name), name.length, description, termColumn, width));
   }
 
   lines.push('', chalk.bold('Examples:'));
+
   for (const example of HELP_EXAMPLES) lines.push(`  ${DIM('$')} ${example}`);
   lines.push('');
+
   return lines.join('\n');
 }
 
@@ -505,10 +557,13 @@ function helpRow(term: string, termLength: number, description: string, termColu
   const descriptionWidth = Math.max(24, width - gutter.length - termColumn);
   const wrapped = description ? wrapText(description, descriptionWidth) : [];
   const continuation = `${gutter}${' '.repeat(termColumn)}`;
+
   if (termLength + 1 > termColumn) {
     return [`${gutter}${term}`, ...wrapped.map((line) => `${continuation}${DIM(line)}`)];
   }
+
   const [first = '', ...rest] = wrapped;
+
   return [
     `${gutter}${term}${' '.repeat(termColumn - termLength)}${DIM(first)}`,
     ...rest.map((line) => `${continuation}${DIM(line)}`),
@@ -518,12 +573,15 @@ function helpRow(term: string, termLength: number, description: string, termColu
 function wrapText(text: string, width: number): string[] {
   const lines: string[] = [];
   let current = '';
+
   for (const word of text.split(/\s+/)) {
     if (!current) current = word;
     else if (current.length + 1 + word.length <= width) current += ` ${word}`;
     else { lines.push(current); current = word; }
   }
+
   if (current) lines.push(current);
+
   return lines;
 }
 
@@ -535,7 +593,9 @@ export function printHelp(program: Command): void {
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
+
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 

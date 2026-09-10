@@ -2,9 +2,11 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { TUI_ADVERTISED_PRESET_BINDINGS } from '@kinu.run/core';
 
 export const KEYMAP_PRESET_IDS = ['pi-omp', 'kinu', 'opencode'] as const;
+
 export type KeymapPresetId = (typeof KEYMAP_PRESET_IDS)[number];
 
 const KEY_SCOPES = ['consent', 'device', 'modal', 'home', 'editor', 'conversation', 'global'] as const;
+
 export type KeyScope = (typeof KEY_SCOPES)[number];
 
 export interface TuiKeyEvent {
@@ -70,9 +72,11 @@ const TUI_ACTIONS = {
 } as const satisfies Record<string, { readonly scope: KeyScope; readonly label: string }>;
 
 export type TuiActionId = keyof typeof TUI_ACTIONS;
+
 export function isTuiActionId(value: string): value is TuiActionId {
   return value in TUI_ACTIONS;
 }
+
 export type KeymapOverrides = Partial<Readonly<Record<TuiActionId, readonly string[]>>>;
 
 interface KeyStroke {
@@ -203,11 +207,14 @@ const SCOPE_PRIORITY = {
   conversation: 30,
   global: 10,
 } as const satisfies Record<KeyScope, number>;
+
 const TUI_ACTION_IDS = (() => {
   const ids: TuiActionId[] = [];
+
   for (const actionId in TUI_ACTIONS) {
     if (isTuiActionId(actionId)) ids.push(actionId);
   }
+
   return Object.freeze(ids);
 })();
 
@@ -220,29 +227,37 @@ export function createKeybindingRegistry(input: {
   readonly overrides?: KeymapOverrides;
 } = {}): KeybindingRegistry {
   const presetId = input.presetId ?? 'pi-omp';
+
   if (!KEYMAP_PRESET_IDS.includes(presetId)) throw new Error(`Unknown keymap preset: ${presetId}`);
+
   for (const actionId of Object.keys(input.overrides ?? {})) {
     if (!isTuiActionId(actionId)) throw new Error(`Unknown TUI action override: ${actionId}`);
   }
+
   const bindings: ActionBinding[] = [];
   const presetBindings = PRESET_BINDINGS[presetId];
+
   for (const actionId of TUI_ACTION_IDS) {
     const configured = input.overrides?.[actionId]
       ?? configuredBindings(presetBindings, actionId)
       ?? configuredBindings(COMMON_BINDINGS, actionId)
       ?? [];
+
     for (const display of configured) {
       const sequence = parseSequence(display);
       bindings.push({ actionId, scope: TUI_ACTIONS[actionId].scope, sequence, display: formatSequence(sequence) });
     }
   }
+
   rejectConflicts(bindings);
   const byAction = new Map<TuiActionId, string[]>();
+
   for (const binding of bindings) {
     const current = byAction.get(binding.actionId) ?? [];
     current.push(binding.display);
     byAction.set(binding.actionId, current);
   }
+
   return Object.freeze({
     presetId,
     actionIds: TUI_ACTION_IDS,
@@ -259,6 +274,7 @@ function keyEventAction(
 ): TuiActionId | null {
   const stroke = strokeOf(event);
   const active = new Set(activeScopes);
+
   return registry.bindings
     .filter((binding) => binding.sequence.length === 1 && active.has(binding.scope) && sameStroke(binding.sequence[0]!, stroke))
     .sort((left, right) => SCOPE_PRIORITY[right.scope] - SCOPE_PRIORITY[left.scope])[0]?.actionId ?? null;
@@ -276,25 +292,34 @@ export interface TuiKeyDispatcher {
 
 export function createKeyDispatcher(registry: KeybindingRegistry): TuiKeyDispatcher {
   let prefix: KeyStroke[] = [];
+
   return {
     feed(event, activeScopes) {
       const stroke = strokeOf(event);
       const active = new Set(activeScopes);
       const nextPrefix = [...prefix, stroke];
+
       const candidates = registry.bindings
         .filter((binding) => active.has(binding.scope) && sequenceStartsWith(binding.sequence, nextPrefix))
         .sort((left, right) => SCOPE_PRIORITY[right.scope] - SCOPE_PRIORITY[left.scope]);
+
       const exact = candidates.find((binding) => binding.sequence.length === nextPrefix.length);
+
       if (exact) {
         prefix = [];
+
         return { actionId: exact.actionId, pending: false };
       }
+
       if (candidates.length > 0) {
         prefix = nextPrefix;
+
         return { actionId: null, pending: true };
       }
+
       prefix = [];
       const direct = keyEventAction(registry, event, activeScopes);
+
       return { actionId: direct, pending: false };
     },
     reset() {
@@ -316,17 +341,23 @@ export function openTuiKeyBindings(
   actionId: 'editor.submit' | 'editor.newline',
 ): OpenTuiKeyBinding[] {
   const action = actionId === 'editor.submit' ? 'submit' : 'newline';
+
   return registry.bindings
     .filter((binding) => binding.actionId === actionId && binding.sequence.length === 1)
     .map((binding) => {
       const stroke = binding.sequence[0]!;
+
       const result: OpenTuiKeyBinding = {
         name: stroke.name,
         action,
       };
+
       if (stroke.ctrl) result.ctrl = true;
+
       if (stroke.shift) result.shift = true;
+
       if (stroke.meta || stroke.alt) result.meta = true;
+
       return result;
     });
 }
@@ -347,20 +378,25 @@ export function useKeybindingRegistry(): KeybindingRegistry {
 
 function parseSequence(input: string): readonly KeyStroke[] {
   const value = input.trim().toLowerCase();
+
   if (value === '') throw new Error('Keybinding cannot be empty.');
+
   return Object.freeze(value.split(/\s+/u).map(parseStroke));
 }
 
 function parseStroke(input: string): KeyStroke {
   const parts = input.split('+');
   const name = parts.pop()?.trim() ?? '';
+
   if (name === '') throw new Error(`Invalid keybinding: ${input}`);
   const modifiers = new Set(parts);
+
   for (const modifier of modifiers) {
     if (!['ctrl', 'shift', 'alt', 'meta', 'super'].includes(modifier)) {
       throw new Error(`Unknown key modifier "${modifier}" in ${input}`);
     }
   }
+
   return Object.freeze({
     name: normalizeKeyName(name),
     ctrl: modifiers.has('ctrl'),
@@ -373,9 +409,13 @@ function parseStroke(input: string): KeyStroke {
 
 function normalizeKeyName(name: string): string {
   if (name === 'enter') return 'return';
+
   if (name === 'esc') return 'escape';
+
   if (name === 'pgup') return 'pageup';
+
   if (name === 'pgdown') return 'pagedown';
+
   return name;
 }
 
@@ -392,6 +432,7 @@ function strokeOf(event: TuiKeyEvent): KeyStroke {
 
 function sameStroke(left: KeyStroke, right: KeyStroke): boolean {
   if (left.name !== right.name) return false;
+
   return left.ctrl === right.ctrl
     && left.shift === right.shift
     && left.alt === right.alt
@@ -420,18 +461,25 @@ function formatSequence(sequence: readonly KeyStroke[]): string {
 
 function displayKeyName(name: string): string {
   if (name === 'return') return 'Enter';
+
   if (name === 'escape') return 'Esc';
+
   if (name === 'pageup') return 'PgUp';
+
   if (name === 'pagedown') return 'PgDn';
+
   return name.length === 1 ? name.toUpperCase() : name[0]!.toUpperCase() + name.slice(1);
 }
 
 function rejectConflicts(bindings: readonly ActionBinding[]): void {
   for (let leftIndex = 0; leftIndex < bindings.length; leftIndex += 1) {
     const left = bindings[leftIndex]!;
+
     for (let rightIndex = leftIndex + 1; rightIndex < bindings.length; rightIndex += 1) {
       const right = bindings[rightIndex]!;
+
       if (left.actionId === right.actionId) continue;
+
       if (!sameSequence(left.sequence, right.sequence) || !scopesOverlap(left.scope, right.scope)) continue;
       throw new Error(`Keybinding conflict for ${left.display}: ${left.actionId} and ${right.actionId} overlap.`);
     }
@@ -440,7 +488,9 @@ function rejectConflicts(bindings: readonly ActionBinding[]): void {
 
 function scopesOverlap(left: KeyScope, right: KeyScope): boolean {
   if (left === right) return true;
+
   if (left === 'global' || right === 'global') return true;
+
   return (left === 'editor' && right === 'conversation')
     || (left === 'conversation' && right === 'editor');
 }

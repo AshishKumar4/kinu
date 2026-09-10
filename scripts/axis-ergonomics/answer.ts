@@ -18,6 +18,7 @@ import * as v from 'valibot';
 import { extractJsonObject } from '@kinu.run/core';
 
 const OptText = v.fallback(v.nullable(v.string()), null);
+
 const OptMap = v.fallback(v.record(v.string(), v.string()), {});
 
 /** What a phase-1 / phase-2 reply is asked for. */
@@ -58,6 +59,7 @@ const EMPTY: Answer = v.parse(AnswerSchema, {});
 
 export function readAnswer(text: string): ReadAnswer {
   let object;
+
   try {
     object = extractJsonObject(text);
   } catch (error) {
@@ -68,7 +70,9 @@ export function readAnswer(text: string): ReadAnswer {
       answer: EMPTY,
     };
   }
+
   const strict = v.safeParse(StrictAnswerSchema, object);
+
   return {
     parsed: true,
     conformed: strict.success,
@@ -124,11 +128,13 @@ export interface Reply {
 
 export function readOllamaReply(body: string): Reply {
   const r = v.parse(OllamaReplySchema, JSON.parse(body));
+
   return { text: r.message.content, tokensIn: r.prompt_eval_count, tokensOut: r.eval_count };
 }
 
 export function readChatCompletion(body: string): Reply {
   const r = v.parse(ChatCompletionSchema, JSON.parse(body));
+
   return {
     text: r.choices[0]?.message.content ?? '',
     tokensIn: r.usage.prompt_tokens,
@@ -143,15 +149,18 @@ const ForwardProbeSchema = v.looseObject({
   values: OptMap,
   confidence: v.fallback(v.string(), ''),
 });
+
 export type ForwardProbeAnswer = v.InferOutput<typeof ForwardProbeSchema>;
 
 const ReverseProbeSchema = v.looseObject({
   pair: v.fallback(v.string(), ''),
   confidence: v.fallback(v.string(), ''),
 });
+
 export type ReverseProbeAnswer = v.InferOutput<typeof ReverseProbeSchema>;
 
 const EMPTY_FORWARD: ForwardProbeAnswer = v.parse(ForwardProbeSchema, {});
+
 const EMPTY_REVERSE: ReverseProbeAnswer = v.parse(ReverseProbeSchema, {});
 
 /** A probe reply plus why it could not be read, when it could not. A probe that
@@ -162,6 +171,7 @@ export interface ForwardProbeRead {
   readonly answer: ForwardProbeAnswer;
   readonly unreadable: string | null;
 }
+
 export interface ReverseProbeRead {
   readonly answer: ReverseProbeAnswer;
   readonly unreadable: string | null;

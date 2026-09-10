@@ -38,6 +38,7 @@ function jsonReply(serialized: string): FetchFunction {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
+
   // `FetchFunction` is the platform `typeof fetch`, which carries `preconnect`.
   return Object.assign(stub, { preconnect: async (): Promise<void> => {} });
 }
@@ -75,7 +76,9 @@ async function workersAIStepUsage(): Promise<Usage> {
       usage: WORKERS_AI_USAGE,
     })),
   });
+
   const r = await generateText({ model: provider('@cf/deepseek-ai/deepseek-v4-pro-0813'), prompt: 'hi' });
+
   return normalizeUsage(r.usage);
 }
 
@@ -94,7 +97,9 @@ async function anthropicStepUsage(): Promise<Usage> {
       },
     })),
   });
+
   const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
+
   return normalizeUsage(r.usage);
 }
 
@@ -103,6 +108,7 @@ function setup() {
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
   const recorder = new RunEventRecorder(sql, testActorHandle(sql));
+
   return { recorder };
 }
 
@@ -115,12 +121,15 @@ function runOneTurn(recorder: RunEventRecorder, runId: string, steps: readonly U
       recorder.emit(runId, event);
     },
   });
+
   acc.reset(0);
   recorder.emit(runId, { type: 'run_start', agentId: 'a' });
   recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
+
   for (const usage of steps) {
     acc.recordStep({ usage, response: { messages: [] }, finishReason: 'stop' });
   }
+
   // `'stop'` here was a model step's finishReason copied into the RUN's reason —
   // a fourth spelling of a three-value vocabulary, which is what typing
   // closeTurnRun's `reason` caught. This harness closes a turn that finished.
@@ -137,6 +146,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     // Stage 1 — the durable step row, read back THROUGH the valibot schema.
     const stored = recorder.read('run-wai');
     const step = stored.find((e) => e.type === 'step_finish');
+
     if (step?.type !== 'step_finish') throw new Error('no step_finish row was recorded');
     expect(step.usage?.input).toBe(88);
     expect(step.usage?.output).toBe(24);
@@ -152,6 +162,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
 
     // Stage 2 — the turn row.
     const turn = stored.find((e) => e.type === 'turn_end');
+
     if (turn?.type !== 'turn_end') throw new Error('no turn_end row was recorded');
     expect(turn.usage?.cacheRead).toBe(0);
     expect('reasoning' in (turn.usage ?? {})).toBe(false);
@@ -188,11 +199,14 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     runOneTurn(recorder, 'run-silent', [{}, {}]);
 
     const stored = recorder.read('run-silent');
+
     // No usage row is fabricated for a silent step...
     for (const e of stored) {
       if (e.type === 'step_finish') expect(e.usage).toBeUndefined();
+
       if (e.type === 'turn_end') expect(e.usage).toBeUndefined();
     }
+
     // ...and the read model says the totals are unknown, not zero.
     const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage).toEqual({});

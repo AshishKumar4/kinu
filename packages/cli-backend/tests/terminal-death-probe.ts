@@ -42,7 +42,9 @@ import { armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel } f
 const MODES = ['before-claim', 'inside-claim', 'inside-title'] as const;
 
 const [dbPath, rawMode] = process.argv.slice(2);
+
 const mode = MODES.find((candidate) => candidate === rawMode);
+
 if (dbPath === undefined || mode === undefined) {
   throw new Error(`usage: terminal-death-probe.ts <dbPath> <${MODES.join('|')}>`);
 }
@@ -57,7 +59,9 @@ function die(at: string): never {
 }
 
 const { db, rt } = openTerminalWorkspace(dbPath);
+
 await armShadowTrials(rt);
+
 captureTakes(rt, 'root-child', Date.now() + 1_000);
 
 if (mode === 'inside-claim') {
@@ -65,12 +69,15 @@ if (mode === 'inside-claim') {
   // claim. Installed before the session is built, so every store it opens reads
   // through this executor.
   const real: SqlExecutor = rt.storage.sql;
+
   const cutting: SqlExecutor = <T = unknown>(
     query: TemplateStringsArray, ...values: SqlValue[]
   ): T[] => {
     if (query.join('').includes('INSERT INTO terminal_effects')) die('inside-claim');
+
     return real<T>(query, ...values);
   };
+
   // The runtime's storage bag is one plain object with a readonly `sql` seam.
   // Naming the mutable view is the whole of the fixture's reach into it.
   const storage: { sql: SqlExecutor } = rt.storage;
@@ -80,6 +87,7 @@ if (mode === 'inside-claim') {
 const modelOptions = mode === 'inside-title'
   ? { onGenerate: () => die('inside-title') }
   : {};
+
 const { model } = scriptedModel('the parser is fixed', modelOptions);
 
 const session = new LocalAgentSession({
@@ -98,11 +106,14 @@ const session = new LocalAgentSession({
 });
 
 await session.send('refactor the parser');
+
 // The title lane is DETACHED, so `send` resolves before it runs — this is the
 // join a real one-shot process makes before it exits, and it is what carries the
 // process into the body the `inside-title` cut lands in.
 await session.settleBackgroundWork();
+
 // Reached only if the kill point was missed, which is a defect in this fixture
 // rather than in the subject — so it says so instead of exiting 0.
 process.stdout.write('MISSED\n');
+
 process.exit(2);

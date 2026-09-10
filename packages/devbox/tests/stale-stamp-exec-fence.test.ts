@@ -32,6 +32,7 @@ import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, gate, harness } from './support/devbox-harness';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
+
 const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
 const StampedBootIdSchema = v.string();

@@ -110,6 +110,7 @@ export function seekPage<Item>(
 ): Page<Item> {
   if (fetched.length <= limit) return { status: 'end', items: fetched };
   const items = fetched.slice(0, limit);
+
   return { status: 'more', items, next: { after: anchorOf(items[items.length - 1]!) } };
 }
 
@@ -135,6 +136,7 @@ export function mapPage<In, Out>(
   project: (items: readonly In[]) => Out[],
 ): Page<Out> {
   const items = project(page.items);
+
   return page.status === 'more' ? { status: 'more', items, next: page.next } : { status: 'end', items };
 }
 

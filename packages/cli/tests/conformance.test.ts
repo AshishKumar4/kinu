@@ -83,6 +83,7 @@ type CapturedTool = NonNullable<Parameters<LanguageModelV2['doStream']>[0]['tool
  *  streams a one-word answer. */
 function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
   const usage = { inputTokens: 3, outputTokens: 2, totalTokens: 5 };
+
   return new TestLanguageModelV2({
     provider: 'conformance',
     modelId: 'conformance-model',
@@ -91,6 +92,7 @@ function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
     }),
     doStream: async (options: { tools?: CapturedTool[] }) => {
       sink(options.tools ?? []);
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -140,6 +142,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   const model = capturingModel((tools) => { captured = tools; });
   const resolver = staticResolver(model);
   const openConfig = { llm: resolveLLMConfig(OFFLINE_PROVIDER) };
+
   const host = new LocalAgentHost({
     // The real refs `kinu create` just wrote, read through the same roster the
     // daemon iterates: the host binds planes and peer groups from placement,
@@ -149,6 +152,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
     open: async (_ref, db, path) => {
       const opened = await openWorkspaceCLI(db, path, openConfig);
       runtime = opened.rt;
+
       return {
         rt: opened.rt,
         openConfig,
@@ -157,16 +161,20 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
       };
     },
   });
+
   const session = await host.acquire(AGENT_NAME);
   await session.send('what can you do?');
 
   const db = new Database(dbPath, { readonly: true });
   const byName = new Map(captured.map((tool) => [tool.name, tool]));
+
   const tables = db.query<{ name: string }, []>(
     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
   ).all().map((row) => row.name);
+
   db.close();
   await host.close();
+
   if (!runtime) throw new Error('LocalAgentHost did not open the workspace runtime');
 
   return {

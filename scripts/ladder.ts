@@ -54,6 +54,7 @@ const ANTI_SLOP_RULE_COUNT = Object.keys(
 ).filter((rule) => rule.startsWith('anti-slop/')).length;
 
 const root = new URL('..', import.meta.url).pathname;
+
 /** Where the tracked hooks live, RELATIVE so git resolves it against each
  *  worktree's own root — see `--install-hooks`. */
 export const HOOKS_DIR = '.githooks';
@@ -72,6 +73,7 @@ export const HOOKS_DIR = '.githooks';
  * silently.
  */
 export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
+
 export type Tier = (typeof TIERS)[number];
 
 export interface Gate {
@@ -1765,6 +1767,7 @@ export interface ExclusionGroup {
   readonly why: string;
   readonly gates: readonly string[];
 }
+
 export const EXCLUSION_GROUPS: Readonly<Record<string, ExclusionGroup>> = {};
 
 /**
@@ -1778,10 +1781,13 @@ export function deployGates(
   source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
 ): string[] {
   const gates: string[] = [];
+
   for (const line of source.split('\n')) {
     const match = /^run_required_gate\s+"[^"]*"\s+(.+?)\s*$/.exec(line);
+
     if (match?.[1] !== undefined) gates.push(match[1]);
   }
+
   return gates;
 }
 
@@ -1803,16 +1809,21 @@ export function deployWaves(
 ): string[][] {
   const waves: string[][] = [];
   let wave: string[] = [];
+
   for (const line of source.split('\n')) {
     if (/^flush_gates\s*$/.test(line)) {
       if (wave.length > 0) waves.push(wave);
       wave = [];
       continue;
     }
+
     const match = /^run_required_gate\s+"[^"]*"\s+(.+?)\s*$/.exec(line);
+
     if (match?.[1] !== undefined) wave.push(match[1]);
   }
+
   if (wave.length > 0) waves.push(wave);
+
   return waves;
 }
 
@@ -1847,19 +1858,24 @@ export const GATE_DEADLINES = {
 function bashTable(source: string, name: string): [string, string][] {
   const lines = source.split('\n');
   const opened = lines.findIndex((line) => line.includes(`declare -A ${name}=(`));
+
   if (opened === -1) return [];
   const rows: [string, string][] = [];
+
   for (let index = opened; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     const match = /^\s*\['([^']+)'\]=(\S+)\s*$/.exec(line);
     const key = match?.[1];
     const value = match?.[2];
+
     if (key !== undefined && value !== undefined) rows.push([key, value]);
+
     // The array closes on the first line ending in `)`, which is also the
     // OPENING line for an empty table written `declare -A NAME=()`. Reading
     // past it is what let one table's rows be attributed to another's.
     if (line.trimEnd().endsWith(')')) break;
   }
+
   return rows;
 }
 
@@ -1883,7 +1899,9 @@ export function deployExclusions(
   source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
 ) {
   const groups: Record<string, string[]> = {};
+
   for (const [run, group] of bashTable(source, 'GATE_GROUP')) (groups[group] ??= []).push(run);
+
   return groups;
 }
 
@@ -1925,41 +1943,52 @@ export function evalTierArms(
   const bunTargets: string[] = [];
   const vitestSelected: string[] = [];
   const vitestExcluded: string[] = [];
+
   // `"$NAME"` resolves against the assignments above it, so a rename that moves
   // an arm's path moves both spellings at once and this parse cannot disagree
   // with the shell.
   const resolveWord = (word: string): string | undefined => {
     const named = /^"?\$\{?([A-Z_][A-Z0-9_]*)\}?"?$/.exec(word);
+
     return named?.[1] === undefined ? word.replace(/^"|"$/g, '') : assigned.get(named[1]);
   };
+
   for (const line of source.split('\n')) {
     const assignment = /^([A-Z_][A-Z0-9_]*)=([^\s()]+)\s*$/.exec(line.trim());
+
     if (assignment?.[1] !== undefined && assignment[2] !== undefined) {
       assigned.set(assignment[1], assignment[2]);
       continue;
     }
+
     // The FIRST `TARGETS=(…)` only: the second sits inside the `--backend
     // cloud` branch, and a resolver that took the last one would credit the
     // default invocation with the cloud arm's single file.
     const targets = /^TARGETS=\(([^)]*)\)\s*$/.exec(line.trim());
+
     if (targets?.[1] !== undefined && bunTargets.length === 0) {
       bunTargets.push(...targets[1].split(/\s+/).filter((word) => word.length > 0));
       continue;
     }
+
     for (const match of line.matchAll(/--exclude\s+(\S+)/g)) {
       const path = resolveWord(match[1] ?? '');
+
       if (path !== undefined) vitestExcluded.push(path);
     }
+
     // A single-family arm is a positional path after the config flag. The
     // behaviour arm passes none, which is what makes it the complement: its
     // invocation wraps immediately after the flag, so the next word is `\` —
     // bash's line continuation, not an argument. A flag is not a path either.
     const invocation = /--config\s+vitest\.evals\.config\.ts\s+(\S+)/.exec(line);
     const selected = invocation?.[1] === undefined ? undefined : resolveWord(invocation[1]);
+
     if (selected !== undefined && selected !== '\\' && !selected.startsWith('-')) {
       vitestSelected.push(selected);
     }
   }
+
   return { bunTargets, vitestSelected, vitestExcluded };
 }
 
@@ -2007,8 +2036,10 @@ export const CI_EXEMPT = {
 export function gatesFor(tier: Tier, deploy: readonly string[]): Gate[] {
   const upto = TIERS.indexOf(tier);
   const gates = LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
+
   if (tier !== 'deploy') return gates;
   const declared = new Set(gates.map((gate) => gate.run));
+
   return [
     ...gates,
     ...deploy.filter((run) => !declared.has(run)).map((run): Gate => ({
@@ -2050,6 +2081,7 @@ const ManifestSchema = v.object({ scripts: v.record(v.string(), v.string()) });
 
 export function packageScripts() {
   const text = readFileSync(resolve(root, 'package.json'), 'utf8');
+
   return v.parse(ManifestSchema, JSON.parse(text)).scripts;
 }
 
@@ -2064,6 +2096,7 @@ const BunfigSchema = v.object({ test: v.object({ pathIgnorePatterns: v.array(v.s
 
 export function bunIgnoredPatterns(): string[] {
   const text = readFileSync(resolve(root, 'bunfig.toml'), 'utf8');
+
   return v.parse(BunfigSchema, Bun.TOML.parse(text)).test.pathIgnorePatterns;
 }
 
@@ -2088,12 +2121,16 @@ export function claims(command: string, tracked: readonly string[]): string[] {
 
   if (words[0] === 'bun' && words[1] === 'run') {
     const body = packageScripts()[words[2] ?? ''];
+
     if (body === undefined) return [];
+
     return [...new Set(body.split('&&').flatMap((part) => claims(part.trim(), tracked)))];
   }
+
   if (words[0] === 'bun' && words[1] === 'scripts/test-cli.ts') {
     return tracked.filter((path) => path.startsWith(`${CLI_TEST_ROOT}/`) && !bunWouldSkip(path));
   }
+
   // The PYTHON suites, whose runner is not a JS one. Named like the CLI form
   // above rather than parsed, because `python-suites.ts` derives its own
   // discovery roots from `isPythonSuite` over the same enumeration — so the set
@@ -2101,6 +2138,7 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'bun' && words[1] === PYTHON_SUITES_SCRIPT) {
     return tracked.filter(isPythonSuite);
   }
+
   // The EVAL TIER. Two runners inside one script, so the claim is the union of
   // both: the bun argv it runs by default, and every vitest eval suite its arms
   // execute. Parsed rather than assumed for the reason `deployGates` is —
@@ -2109,14 +2147,17 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   // them.
   if (words[0] === 'bash' && words[1] === EVAL_TIER_SCRIPT) {
     const arms = evalTierArms();
+
     return [...new Set([
       ...claims(['bun', 'test', ...arms.bunTargets].join(' '), tracked),
       ...tracked.filter(isVitestEvalSuite),
     ])];
   }
+
   if (words[0] === 'node') {
     return words.filter((word) => isRunnableSuite(word) && tracked.includes(word));
   }
+
   // `vitest run --root R <dir>/` — the workerd layer. Resolved from the command
   // text like every other form, so its files are monotonicity- and
   // reachability-checked rather than exempted. The positional is a filter on
@@ -2126,9 +2167,12 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     const rootAt = words.indexOf('--root');
     const base = rootAt === -1 ? undefined : words[rootAt + 1];
     const targets = words.slice(2).filter((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
+
     if (base === undefined || targets.length === 0) return [];
+
     return tracked.filter((path) => targets.some((target) => path.startsWith(`${base}/${target}`)));
   }
+
   if (words[0] !== 'bun' || words[1] !== 'test') return [];
   // Root-relative only. `--cwd` is deliberately NOT understood: it makes bun
   // load a bunfig.toml from that directory instead of the repo root, dropping
@@ -2137,19 +2181,24 @@ export function claims(command: string, tracked: readonly string[]): string[] {
 
   const targets = words.slice(2).filter((word) => !word.startsWith('-'));
   const claimed: string[] = [];
+
   for (const target of targets) {
     const clean = target.replace(/^\.\//, '');
+
     if (clean.includes('*')) {
       const pattern = new RegExp(`^${clean.replace(/[.]/g, '\\.').replace(/\*/g, '[^/]*')}$`);
       claimed.push(...tracked.filter((path) => pattern.test(path)));
       continue;
     }
+
     if (clean.endsWith('/')) {
       claimed.push(...tracked.filter((path) => path.startsWith(clean)));
       continue;
     }
+
     if (tracked.includes(clean)) claimed.push(clean);
   }
+
   // TWO narrowings, and both are what bun would really run. `bunWouldSkip` is
   // the bunfig `pathIgnorePatterns` half; `isBunDiscoverableSuite` is the
   // MATCHER half, and its absence is how `bun test ./tests/` came to be
@@ -2176,8 +2225,10 @@ export function claims(command: string, tracked: readonly string[]): string[] {
  */
 export function runnableArgv(run: string, tracked: readonly string[]): string[] {
   const words = run.split(' ');
+
   if (!words.some((word) => word.includes('*'))) return words;
   const files = claims(run, tracked);
+
   if (files.length === 0) throw new Error(`${run} — glob matched no tracked test file`);
   // Every path word is dropped and re-supplied from `claims()`, in that
   // resolution's own order. Hoisting literals ahead of the expansion instead
@@ -2186,6 +2237,7 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   // matched it — so a row mixing a glob with a named file ran one suite twice
   // and compared unequal to the set it is measured as.
   const flags = words.filter((word) => !word.includes('/'));
+
   return [...flags, ...files];
 }
 
@@ -2222,6 +2274,7 @@ const BUDGET_LOCK = `${root}scripts/ladder.lock.json`;
 
 /** The tiers with a pinned budget: the two hooks. */
 const BUDGET_TIERS = ['commit', 'push'] as const;
+
 export type BudgetTier = (typeof BUDGET_TIERS)[number];
 
 const TierBudgetSchema = v.object({
@@ -2244,6 +2297,7 @@ const LadderBudgetSchema = v.object({
 });
 
 export type TierBudget = v.InferOutput<typeof TierBudgetSchema>;
+
 export type LadderBudget = v.InferOutput<typeof LadderBudgetSchema>;
 
 export function readBudget(path = BUDGET_LOCK): LadderBudget {
@@ -2252,6 +2306,7 @@ export function readBudget(path = BUDGET_LOCK): LadderBudget {
 
 export function writeBudget(budget: LadderBudget, path = BUDGET_LOCK): number {
   writeFileSync(path, `${JSON.stringify(budget, null, 2)}\n`);
+
   return Object.keys(budget.tiers.commit.steps).length
     + Object.keys(budget.tiers.push.steps).length;
 }
@@ -2264,7 +2319,9 @@ export interface TierCost {
 
 export function declaredTierCost(tier: BudgetTier, deploy: readonly string[]): TierCost {
   const steps: Record<string, number> = {};
+
   for (const gate of gatesFor(tier, deploy)) steps[gate.run] = gate.seconds;
+
   return {
     total: Object.values(steps).reduce((sum, seconds) => sum + seconds, 0),
     steps,
@@ -2287,6 +2344,7 @@ export function judgeBudgets(
   budget: LadderBudget,
 ): BudgetBreach[] {
   const breaches: BudgetBreach[] = [];
+
   for (const tier of BUDGET_TIERS) {
     const locked = budget.tiers[tier];
     const current = declared[tier];
@@ -2297,13 +2355,16 @@ export function judgeBudgets(
       ['locked steps', Object.keys(locked.steps).length],
       ['locked seconds', locked.seconds],
     ]);
+
     if (current.total <= locked.seconds * (1 + BUDGET_TOLERANCE)) continue;
     let step = '';
     let stepWas = 0;
     let stepNow = 0;
     let growth = Number.NEGATIVE_INFINITY;
+
     for (const [name, seconds] of Object.entries(current.steps)) {
       const was = locked.steps[name] ?? 0;
+
       if (seconds - was > growth) {
         growth = seconds - was;
         step = name;
@@ -2311,10 +2372,12 @@ export function judgeBudgets(
         stepNow = seconds;
       }
     }
+
     breaches.push({
       tier, locked: locked.seconds, declared: current.total, step, stepWas, stepNow,
     });
   }
+
   return breaches;
 }
 
@@ -2343,6 +2406,7 @@ function printMatrix(deploy: readonly string[]): void {
   const tracked = trackedTestFiles();
   const width = Math.max(...all.map((gate) => gate.run.length));
   console.log(`${'gate'.padEnd(width)}  ${TIERS.map((tier) => tier.padEnd(7)).join('')}cost    files`);
+
   for (const gate of all) {
     const at = TIERS.indexOf(gate.tier);
     const cells = TIERS.map((_, index) => (index >= at ? 'yes    ' : '-      ')).join('');
@@ -2353,7 +2417,9 @@ function printMatrix(deploy: readonly string[]): void {
       + `${String(files).padStart(4)}${note}`,
     );
   }
+
   console.log('');
+
   for (const tier of TIERS) {
     const gates = gatesFor(tier, deploy).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
     const cost = gates.reduce((sum, gate) => sum + gate.seconds, 0);
@@ -2405,10 +2471,12 @@ if (import.meta.main) {
   // only once, here.
   if (process.argv.includes('--install-hooks')) {
     const set = Bun.spawnSync(['git', 'config', 'core.hooksPath', HOOKS_DIR], { cwd: root });
+
     if (set.exitCode !== 0) {
       console.error('ladder: could not set core.hooksPath');
       process.exit(1);
     }
+
     console.log(
       `ladder: core.hooksPath = ${HOOKS_DIR} (relative, so every worktree resolves its own) `
       + '— pre-commit runs the commit tier, pre-push the push tier, commit-msg the message rules',
@@ -2418,11 +2486,14 @@ if (import.meta.main) {
 
   if (process.argv.includes('--check-budget')) {
     const budget = readBudget();
+
     const declared = {
       commit: declaredTierCost('commit', deploy),
       push: declaredTierCost('push', deploy),
     };
+
     const breaches = judgeBudgets(declared, budget);
+
     for (const tier of BUDGET_TIERS) {
       console.log(
         `${tier}: ${declared[tier].total.toFixed(1)}s declared across `
@@ -2430,16 +2501,21 @@ if (import.meta.main) {
         + `${budget.tiers[tier].seconds.toFixed(1)}s (${budget.tiers[tier].measuredAt})`,
       );
     }
+
     if (breaches.length === 0) {
       const stale = BUDGET_TIERS.flatMap((tier) => Object.entries(budget.tiers[tier].steps)
         .filter(([name]) => !(name in declared[tier].steps))
         .map(([name, was]) => `${tier}: ${name} (locked at ${String(was)}s, no longer a gate)`));
+
       console.log('\nladder-budget: ok — both tiers within tolerance of the locked figures');
       console.log(`  locked: ${budget.reason}`);
+
       for (const line of stale) console.log(`  stale: ${line} — re-lock to drop it`);
+
       for (const spot of BUDGET_BLIND_SPOTS) console.log(`  blind: ${spot}`);
       process.exit(0);
     }
+
     for (const breach of breaches) {
       console.error(finding({
         at: `${breach.tier} tier: ${breach.declared.toFixed(1)}s declared vs `
@@ -2454,6 +2530,7 @@ if (import.meta.main) {
         + 'in the commit body',
       }));
     }
+
     process.exit(1);
   }
 
@@ -2462,6 +2539,7 @@ if (import.meta.main) {
       .find((argument) => argument.startsWith('--reason='))
       ?.slice('--reason='.length)
       .trim() ?? '';
+
     if (reason.length === 0) {
       console.error(
         'ladder --lock: refusing without --reason=<what grew and why>. The reason lands in '
@@ -2470,11 +2548,14 @@ if (import.meta.main) {
       );
       process.exit(2);
     }
+
     const machine = `${osPlatform()} ${arch()}, ${cpus()[0]?.model ?? 'unknown cpu'} `
       + `(${String(cpus().length)} threads)`;
+
     const today = new Date().toISOString().slice(0, 10);
     const commit = declaredTierCost('commit', deploy);
     const push = declaredTierCost('push', deploy);
+
     const count = writeBudget({
       reason,
       tiers: {
@@ -2492,6 +2573,7 @@ if (import.meta.main) {
         },
       },
     });
+
     console.log(`ladder --lock: pinned ${String(count)} gate cost(s) — ${reason}`);
     process.exit(0);
   }
@@ -2499,6 +2581,7 @@ if (import.meta.main) {
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
   const asked = flag?.slice('--tier='.length);
   const tier = TIERS.find((candidate) => candidate === asked);
+
   if (tier === undefined) {
     console.error(
       `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
@@ -2508,6 +2591,7 @@ if (import.meta.main) {
 
   const gates = gatesFor(tier, deploy)
     .filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],
     ['gates declared by deploy.sh', deploy.length],
@@ -2522,6 +2606,7 @@ if (import.meta.main) {
   const configured = Bun.spawnSync(['git', 'config', '--get', 'core.hooksPath'], {
     cwd: root, stdout: 'pipe',
   }).stdout.toString().trim();
+
   console.log(
     configured === HOOKS_DIR
       ? `hooks: installed (${HOOKS_DIR}) — pre-commit runs the commit tier, pre-push the push tier, commit-msg the message rules`
@@ -2531,15 +2616,18 @@ if (import.meta.main) {
 
   const started = performance.now();
   const tracked = trackedTestFiles();
+
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
     const at = performance.now();
     const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
     const seconds = (performance.now() - at) / 1000;
+
     if (proc.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
       continue;
     }
+
     console.error(`\nFAILED  ${gate.run}  after ${seconds.toFixed(1)}s\n`);
     console.error(finding({
       at: gate.run,
@@ -2550,6 +2638,7 @@ if (import.meta.main) {
     }));
     process.exit(1);
   }
+
   console.log(
     `\nladder --tier=${tier}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,
   );

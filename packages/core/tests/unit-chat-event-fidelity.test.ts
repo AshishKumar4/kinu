@@ -38,11 +38,13 @@ function toolThenTextModel(opts: {
   firstUsage?: FinishPart['usage'];
 }): MockLanguageModelV3 {
   let step = 0;
+
   return new MockLanguageModelV3({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async () => {
       step += 1;
+
       const stream = step === 1
         ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
@@ -62,6 +64,7 @@ function toolThenTextModel(opts: {
               c.close();
             },
           });
+
       return { stream, response: { headers: {} } };
     },
   });
@@ -69,6 +72,7 @@ function toolThenTextModel(opts: {
 
 async function collect(model: LanguageModel, tools: ToolSet, extensions?: ExtensionHost): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
+
   const request = {
     model,
     system: 'sys',
@@ -76,12 +80,15 @@ async function collect(model: LanguageModel, tools: ToolSet, extensions?: Extens
     tools,
     stopWhen: stepCountIs(3),
   };
+
   const stream = extensions === undefined
     ? runChat(request)
     : runChat({ ...request, extensions });
+
   for await (const ev of stream) {
     events.push(ev);
   }
+
   return events;
 }
 
@@ -89,10 +96,12 @@ describe('ChatEvent tool success/error fidelity', () => {
   test('successful JSON-looking command data does not fail the invocation', async () => {
     const stdout = JSON.stringify({ reason: 'denied', error: 'historical incident' });
     const failures: boolean[] = [];
+
     const extension: KinuExtension = {
       name: 'outcome-probe',
       onToolResult: (ctx) => { failures.push(isFailingToolResult(ctx)); },
     };
+
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } } });
     const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'cat incident.json' }) });
@@ -103,9 +112,11 @@ describe('ChatEvent tool success/error fidelity', () => {
 
   test('native command failure retains observed exit provenance through the SDK', async () => {
     const { rt } = createTestRuntime();
+
     const tools = buildBuiltinTools({ rt: { ...rt, shell: {
       exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
     } } });
+
     const model = toolThenTextModel({ toolName: 'run', input: JSON.stringify({ command: 'test' }) });
     const events = await collect(model, tools);
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
@@ -125,6 +136,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     { stage: 'runtime', input: { action: 'swarm', preset: 'ideate', task: 'inspect', models: ['fake/missing'] }, reason: 'unsupported', detail: 'resolver' },
   ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
     const { rt, db } = createTestRuntime();
+
     // A real seat per node: each refusal below is raised BEFORE any node runs,
     // but the seam has to be the production one or the refusal would be the
     // fixture's rather than the run's.
@@ -132,6 +144,7 @@ describe('ChatEvent tool success/error fidelity', () => {
       mode: 'build',
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3() },
     } satisfies Parameters<typeof createAgentsTool>[0];
+
     const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });
     const namespace = createAgentsCodemodeProvider(() => deps);
@@ -140,11 +153,14 @@ describe('ChatEvent tool success/error fidelity', () => {
 
   test('a throwing tool yields a tool-result with success:false and the error text', async () => {
     const seenByExtension: string[] = [];
+
     const ext: KinuExtension = {
       name: 'recorder',
       onToolResult: ({ result }) => { seenByExtension.push(result); },
     };
+
     const model = toolThenTextModel({ toolName: 'boom' });
+
     const tools = {
       boom: tool({
         description: 'always fails',
@@ -164,6 +180,7 @@ describe('ChatEvent tool success/error fidelity', () => {
 
   test('a structured (object) tool result renders as JSON content, not "[object Object]"', async () => {
     const model = toolThenTextModel({ toolName: 'structured' });
+
     const tools = {
       structured: tool({
         description: 'returns an object',
@@ -171,6 +188,7 @@ describe('ChatEvent tool success/error fidelity', () => {
         execute: async () => ({ result: 42, logs: ['printed'] }),
       }),
     };
+
     const events = await collect(model, tools);
     const result = events.find((e) => e.type === 'tool-result');
     expect(result?.type === 'tool-result' && result.result).toBe('{"result":42,"logs":["printed"]}');
@@ -179,9 +197,11 @@ describe('ChatEvent tool success/error fidelity', () => {
 
   test('a succeeding tool yields success:true and no error', async () => {
     const model = toolThenTextModel({ toolName: 'ok' });
+
     const tools = {
       ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
     };
+
     const events = await collect(model, tools);
     const result = events.find((e) => e.type === 'tool-result');
     expect(result).toMatchObject({ type: 'tool-result', toolName: 'ok', result: 'fine', success: true });
@@ -190,9 +210,11 @@ describe('ChatEvent tool success/error fidelity', () => {
 
   test('the call and its result both carry the provider toolCallId', async () => {
     const model = toolThenTextModel({ toolName: 'ok' });
+
     const tools = {
       ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
     };
+
     const events = await collect(model, tools);
     // 'tc1' is what the fake model's stream part declares — surfaces that
     // report calls out of band (ACP tool_call/tool_call_update) pair on it.
@@ -214,9 +236,11 @@ describe('ChatEvent tool-result completeness', () => {
     const ext: KinuExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
     const body = `${preamble}THE-TAIL`;
     const model = toolThenTextModel({ toolName: 'big' });
+
     const tools = {
       big: tool({ description: 'verbose', inputSchema: z.object({}), execute: async () => body }),
     };
+
     const events = await collect(model, tools, new ExtensionHost().register(ext));
     const result = events.find((e) => e.type === 'tool-result');
     expect(result?.type === 'tool-result' && result.result).toBe(body);
@@ -227,6 +251,7 @@ describe('ChatEvent tool-result completeness', () => {
     const seen: string[] = [];
     const ext: KinuExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
     const model = toolThenTextModel({ toolName: 'boom' });
+
     const tools = {
       boom: tool({
         description: 'fails verbosely',
@@ -234,6 +259,7 @@ describe('ChatEvent tool-result completeness', () => {
         execute: async (): Promise<string> => { throw new Error(`${preamble}kaboom`); },
       }),
     };
+
     const events = await collect(model, tools, new ExtensionHost().register(ext));
     const result = events.find((e) => e.type === 'tool-result');
     expect(result?.type === 'tool-result' && result.result.endsWith('kaboom')).toBe(true);
@@ -251,7 +277,9 @@ describe('ChatEvent usage fidelity', () => {
     const model = toolThenTextModel({ toolName: 'ok', firstUsage });
     const events = await collect(model, okTool);
     const step = events.find((e) => e.type === 'step-finish');
+
     if (step?.type !== 'step-finish') throw new Error('the turn produced no step-finish');
+
     return step.usage;
   }
 
@@ -260,6 +288,7 @@ describe('ChatEvent usage fidelity', () => {
       inputTokens: { total: 20, noCache: 8, cacheRead: 12, cacheWrite: undefined },
       outputTokens: { total: 5, text: 5, reasoning: 2 },
     });
+
     expect(usage).toEqual({ input: 20, output: 5, cacheRead: 12, reasoning: 2 });
   });
 
@@ -271,6 +300,7 @@ describe('ChatEvent usage fidelity', () => {
       inputTokens: { total: 20, noCache: 20, cacheRead: 0, cacheWrite: undefined },
       outputTokens: { total: 5, text: 5, reasoning: undefined },
     });
+
     expect(usage?.cacheRead).toBe(0);
     expect(Object.keys(usage ?? {}).sort()).toEqual(['cacheRead', 'input', 'output']);
   });
@@ -280,6 +310,7 @@ describe('ChatEvent usage fidelity', () => {
       inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: undefined, text: undefined, reasoning: undefined },
     });
+
     expect(usage).toBeUndefined();
   });
 });

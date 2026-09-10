@@ -61,4 +61,5 @@ export interface HeadStreamFrame {
  * Neither is awaited and neither may fail the work it watches.
  */
 export type ReportHeadDelta = (kind: HeadStreamKind, delta: string) => void;
+
 export type PublishHeadStream = (frame: HeadStreamFrame) => void;

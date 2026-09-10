@@ -50,6 +50,7 @@ function turnCalling(calls: readonly ScriptedCall[]): MockLanguageModelV3 {
     modelId: 'fake-task',
     doGenerate: async (options): Promise<ScriptedTurnResult> => {
       const next = calls[step(options)];
+
       if (!next) {
         return {
           content: [{ type: 'text' as const, text: 'done' }],
@@ -57,6 +58,7 @@ function turnCalling(calls: readonly ScriptedCall[]): MockLanguageModelV3 {
           usage: USAGE, warnings: [],
         };
       }
+
       return {
         content: [{
           type: 'tool-call' as const,
@@ -85,9 +87,11 @@ interface AnsweredCall {
 
 function toolResults(model: MockLanguageModelV3): AnsweredCall[] {
   const seen = new Map<string, AnsweredCall>();
+
   for (const call of model.doStreamCalls) {
     for (const message of call.prompt) {
       if (message.role !== 'tool') continue;
+
       for (const part of message.content) {
         if (part.type !== 'tool-result') continue;
         seen.set(part.toolCallId, {
@@ -98,6 +102,7 @@ function toolResults(model: MockLanguageModelV3): AnsweredCall[] {
       }
     }
   }
+
   return [...seen.values()];
 }
 
@@ -109,20 +114,24 @@ function systemPrompt(model: MockLanguageModelV3): string {
       if (message.role === 'system') return message.content;
     }
   }
+
   throw new Error('the turn issued no request carrying a system prompt');
 }
 
 test('a hired subordinate saves and searches memory and lists its roster in its assigned turn', async () => {
   const workspace = orchestratorHarness();
+
   const child = await hostedSubordinateHarness(workspace, {
     name: 'surface-prover', displayName: 'Surface prover', nameOrigin: 'user',
     mission: 'prove the delegated surface runs',
   });
+
   const model = turnCalling([
     { tool: 'memory', args: { action: 'save', content: NOTE } },
     { tool: 'memory', args: { action: 'search', query: 'streaming parser' } },
     { tool: 'agents', args: { action: 'list' } },
   ]);
+
   workspace.agent.overrideProviderRegistry({
     registry: createProviderRegistry(),
     deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
@@ -160,10 +169,12 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
  */
 test('a hired subordinate is framed as a hire, not as a head', async () => {
   const workspace = orchestratorHarness();
+
   const child = await hostedSubordinateHarness(workspace, {
     name: 'framing-prover', displayName: 'Framing prover', nameOrigin: 'user',
     mission: 'prove the delegated framing',
   });
+
   const model = turnCalling([]);
   workspace.agent.overrideProviderRegistry({
     registry: createProviderRegistry(),

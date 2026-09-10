@@ -310,9 +310,11 @@ export interface PtyRun {
  *  releases it for the whole run. */
 function installDriver() {
   const python = Bun.which('python3');
+
   if (!python) throw new Error('python3 is required for the pty tests');
   const driver = scratchPath('pty-screen', 'driver.py');
   writeFileSync(driver, DRIVER);
+
   return { python, driver };
 }
 
@@ -332,6 +334,7 @@ export function runTuiInPty(entry: string, options: {
   // The pty child's KINU_HOME is the driver's own directory.
   const { python, driver } = installDriver();
   const home = join(driver, '..');
+
   const spec = {
     cmd: [process.execPath, entry],
     cols: options.cols ?? 100,
@@ -347,6 +350,7 @@ export function runTuiInPty(entry: string, options: {
     },
     steps: options.steps,
   };
+
   const proc = Bun.spawnSync({
     cmd: [python, driver, JSON.stringify(spec)],
     // `import.meta.dirname` — not Bun's `import.meta.dir`, which is undefined
@@ -356,18 +360,24 @@ export function runTuiInPty(entry: string, options: {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const stdout = proc.stdout.toString().trim();
+
   if (!proc.success || !stdout.startsWith('{')) {
     throw new Error(`pty driver failed (${String(proc.exitCode)}): ${proc.stderr.toString()}${stdout}`);
   }
+
   const result = v.parse(PtyResultSchema, JSON.parse(stdout));
+
   if (result.unmodelled !== '') {
     // A grid the terminal never showed proves nothing either way, so the run
     // is refused rather than read. Extending the model is the fix.
     throw new Error(`the pty screen model met CSI controls it does not follow (final bytes `
       + `${JSON.stringify(result.unmodelled)}), so no wait over this run can be trusted`);
   }
+
   const raw = Buffer.from(result.output, 'base64').toString('utf8');
+
   return { raw, screen: result.screen, waits: result.waits };
 }
 
@@ -378,15 +388,18 @@ export function runTuiInPty(entry: string, options: {
  */
 export function screenOf(bytes: string, size: { readonly rows: number; readonly cols: number }): string {
   const { python, driver } = installDriver();
+
   const proc = Bun.spawnSync({
     cmd: [python, driver, '--screen', String(size.rows), String(size.cols)],
     stdin: Buffer.from(bytes, 'utf8'),
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   if (!proc.success) {
     throw new Error(`pty screen model failed (${String(proc.exitCode)}): ${proc.stderr.toString()}`);
   }
+
   return proc.stdout.toString();
 }
 
@@ -399,11 +412,14 @@ const ESC = String.fromCharCode(27);
  */
 export function inkBefore(raw: string, text: string): string | null {
   const index = raw.indexOf(text);
+
   if (index < 0) return null;
   const sgr = new RegExp(`${ESC}\\[38;2;(\\d+);(\\d+);(\\d+)m`, 'gu');
   let ink: string | null = null;
+
   for (let match = sgr.exec(raw); match !== null && match.index < index; match = sgr.exec(raw)) {
     ink = `#${[match[1], match[2], match[3]].map((channel) => Number(channel).toString(16).padStart(2, '0')).join('')}`.toUpperCase();
   }
+
   return ink;
 }

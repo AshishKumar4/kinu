@@ -46,22 +46,28 @@ export function createModelsDevCatalogSource(opts: ModelsDevCatalogSourceOptions
     get(providerId) {
       if (excluded.has(providerId) || !PROVIDER_ID_PATTERN.test(providerId)) return undefined;
       let provider = providers.get(providerId);
+
       if (!provider) {
         provider = createCatalogProvider(providerId);
         providers.set(providerId, provider);
       }
+
       return provider;
     },
 
     async listIds(deps) {
       const keys = await deps.listCredentialKeys?.() ?? [];
       const ids: string[] = [];
+
       for (const key of keys) {
         const id = CRED_KEY_PATTERN.exec(key)?.[1];
+
         if (!id || excluded.has(id) || ids.includes(id)) continue;
         const info = await getModelsDevProvider(id, deps);
+
         if (info && modelsDevCompatBaseURL(info)) ids.push(id);
       }
+
       return ids.sort();
     },
   };
@@ -72,6 +78,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
 
   async function compatBaseURL(deps: Pick<ProviderDeps, 'fetch'>): Promise<string | null> {
     const info = await getModelsDevProvider(providerId, deps);
+
     return info ? modelsDevCompatBaseURL(info) : null;
   }
 
@@ -83,6 +90,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
 
     async listModels(deps) {
       if (!(await compatBaseURL(deps))) return [];
+
       return listModelsDevProviderModels(providerId, deps);
     },
 
@@ -91,6 +99,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
       // construction, but ours lives in the models.dev catalog. customFetch
       // resolves it per request (cached) and rewrites the prefix.
       const placeholder = `https://models-dev-${providerId}.invalid`;
+
       const customFetch = createAuthedFetch(deps, {
         credKey,
         missingCredentialError: `No API key for ${providerId} (cred key: ${credKey})`,
@@ -100,6 +109,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
           ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
           : url,
       });
+
       return createOpenAICompatible({
         name: providerId,
         baseURL: placeholder,

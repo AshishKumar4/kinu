@@ -25,6 +25,7 @@ afterEach(() => {
 function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-attach-'));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -42,6 +43,7 @@ describe('prompt token shapes through resolution', () => {
       `look at @${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`,
       { limitBytes: CAP, cwd: dir },
     );
+
     // The @mention inlines and loses its @. The quoted path stays quoted.
     // The ~ path and the bare word name nothing on disk and pass through.
     expect(result.text).toBe(`look at ${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`);
@@ -200,12 +202,14 @@ describe('the inline cap belongs to the backend, not to the CLI', () => {
     const local = await resolvePromptAttachments(`look at @${img}`, {
       limitBytes: LOCAL_MAX_INLINE_ATTACHMENT_BYTES, cwd: dir,
     });
+
     expect(local.files).toHaveLength(1);
     expect(local.errors).toEqual([]);
 
     const cloud = await resolvePromptAttachments(`look at @${img}`, {
       limitBytes: CLOUD_MAX_INLINE_ATTACHMENT_BYTES, cwd: dir,
     });
+
     expect(cloud.files).toEqual([]);
     expect(cloud.errors[0]).toContain('screenshot.png is too large to attach');
   });
@@ -224,6 +228,7 @@ describe('a quoted sentence is prose, not a path', () => {
     + 'This is a weak, poorly-connected hand, so raising would be a risky bluff with little equity. '
     + 'Since the opponent only limped, I can see the flop for free, which is the safest and most '
     + 'profitable default against an unknown opponent.';
+
   test('a quoted token longer than a filename resolves to nothing and throws nothing', async () => {
     const dir = makeDir();
     expect(SENTENCE.length).toBeGreaterThan(255);

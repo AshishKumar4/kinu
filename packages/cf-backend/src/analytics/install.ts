@@ -92,6 +92,7 @@ assertPublishableNames('the diagnostics sink allowlist', [
 ]);
 
 type PublishableText = (typeof PUBLISHABLE_TEXT)[number];
+
 type PublishableNumber = (typeof PUBLISHABLE_NUMBERS)[number];
 
 /**
@@ -103,6 +104,7 @@ type PublishableNumber = (typeof PUBLISHABLE_NUMBERS)[number];
  */
 function text(fields: LogFields, name: PublishableText, fallback = ''): string {
   const held = v.safeParse(v.string(), fields[name]);
+
   return held.success ? held.output : fallback;
 }
 
@@ -110,6 +112,7 @@ function text(fields: LogFields, name: PublishableText, fallback = ''): string {
  *  stores a double, and `NaN` is not one. */
 function count(fields: LogFields, name: PublishableNumber): number {
   const held = v.safeParse(FiniteNumber, fields[name]);
+
   return held.success ? held.output : 0;
 }
 
@@ -137,6 +140,7 @@ const CLASSIFICATION = /^[a-z][a-z0-9_]{0,31}$/;
  *  meaning its event name gives it instead of carrying a fragment of prose. */
 function classification(fields: LogFields, name: PublishableText, fallback = ''): string {
   const held = text(fields, name);
+
   return CLASSIFICATION.test(held) ? held : fallback;
 }
 
@@ -152,6 +156,7 @@ function classification(fields: LogFields, name: PublishableText, fallback = '')
 function errorCode(fields: LogFields, reported: ErrorCode | ''): ErrorCode | '' {
   if (reported !== '') return reported;
   const held = text(fields, 'code');
+
   return ERROR_CODES.find((candidate) => candidate === held) ?? '';
 }
 
@@ -167,6 +172,7 @@ function opsRow(
   reported: ErrorCode | '',
 ): AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA> {
   const code = errorCode(fields, reported);
+
   return {
     actor: identityValue(text(fields, 'actor')),
     kind: 'op',
@@ -191,6 +197,7 @@ function agentRow(
   reported: ErrorCode | '',
 ): AnalyticsRow<typeof AGENT_METRICS_SCHEMA> {
   const code = errorCode(fields, reported);
+
   return {
     // THE ONLY SOURCE IS THE LINE ITSELF. There is deliberately no isolate-level
     // default: `setDiagnosticsSink` is module-global, Cloudflare co-locates
@@ -249,13 +256,17 @@ function agentRow(
  */
 function createAnalyticsLogger(env: AnalyticsEnv): Logger {
   const plane = analyticsPlane(env);
+
   const route = (name: LogEventName, fields: LogFields, code: ErrorCode | ''): void => {
     if (name.startsWith(CONTROL_PLANE_PREFIX)) {
       plane.ops.write(opsRow(name, fields, code));
+
       return;
     }
+
     plane.agent.write(agentRow(name, fields, code));
   };
+
   return {
     event(name: LogEventName, fields?: LogFields): void {
       route(name, fields ?? {}, '');
@@ -294,17 +305,22 @@ const INSTALLED = new WeakSet<AnalyticsEnv>();
 export function installAnalyticsDiagnostics(env: AnalyticsEnv): () => void {
   const plane = analyticsPlane(env);
   plane.window.open();
+
   if (INSTALLED.has(env)) return () => {};
+
   INSTALLED.add(env);
+
   const restore = setDiagnosticsSink(createCompositeLogger([
     createConsoleLogger(),
     createAnalyticsLogger(env),
   ]));
+
   diagnostics.event('analytics.sink_installed', {
     agentMetrics: env.AGENT_METRICS !== undefined,
     feedbackMarkers: env.FEEDBACK_MARKERS !== undefined,
     controlPlaneOps: env.CONTROL_PLANE_OPS !== undefined,
   });
+
   return () => {
     INSTALLED.delete(env);
     restore();

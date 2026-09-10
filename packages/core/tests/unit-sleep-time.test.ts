@@ -8,10 +8,12 @@ describe('Sleep-time compute', () => {
       upserts: [{ key: 'user.tz', value: 'America/Los_Angeles', confidence: 0.9, rationale: 'mentioned in turn' }],
       decay: ['stale.fact'],
     });
+
     const update = await runSleepTimeCompute(judge, {
       task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'],
       currentFacts: [],
     });
+
     expect(update).not.toBeNull();
     expect(update!.upserts.length).toBe(1);
     expect(update!.decay).toEqual(['stale.fact']);
@@ -19,11 +21,13 @@ describe('Sleep-time compute', () => {
 
   test('prompt explicitly lists existing keys for exact reuse', async () => {
     const judge = createScriptedLLM(['{"upserts":[],"decay":[]}']);
+
     const currentFacts = Array.from({ length: 31 }, (_, index) => ({
       key: `existing.key_${index}`,
       value: index,
       confidence: 1,
     }));
+
     await runSleepTimeCompute(judge, {
       task: 'inspect runtime', output: 'done', toolCalls: [],
       currentFacts,
@@ -36,9 +40,11 @@ describe('Sleep-time compute', () => {
 
   test('returns null on unparseable response', async () => {
     const judge = createScriptedLLM(['No JSON here']);
+
     const update = await runSleepTimeCompute(judge, {
       task: 't', output: 'o', toolCalls: [], currentFacts: [],
     });
+
     expect(update).toBeNull();
   });
 
@@ -60,9 +66,11 @@ describe('Sleep-time compute', () => {
 
   test('rejects an update with a missing fact value before any write', async () => {
     const { facts } = createTestFactsStore();
+
     const judge = createScriptedLLM([
       '{"upserts":[{"key":"ok.1","value":"fine","confidence":1,"rationale":""},{"key":"bad","confidence":1,"rationale":""}],"decay":[]}',
     ]);
+
     const update = await runSleepTimeCompute(judge, {
       task: 't', output: 'o', toolCalls: [], currentFacts: [],
     });
@@ -74,6 +82,7 @@ describe('Sleep-time compute', () => {
 
   test('canonicalizes upsert keys before writing', () => {
     const { facts } = createTestFactsStore();
+
     const summary = applySleepTimeUpdate(facts, {
       upserts: [{
         key: '  Sandbox.NPM   Version  ', value: 'npm v10', confidence: 0.9, rationale: '',
@@ -120,9 +129,11 @@ describe('Sleep-time compute', () => {
 
   test('rejects an update with out-of-range confidence before any write', async () => {
     const { facts } = createTestFactsStore();
+
     const judge = createScriptedLLM([
       '{"upserts":[{"key":"ok.1","value":"fine","confidence":99,"rationale":""}],"decay":[]}',
     ]);
+
     const update = await runSleepTimeCompute(judge, {
       task: 't', output: 'o', toolCalls: [], currentFacts: [],
     });

@@ -89,9 +89,12 @@ export async function resumeBackgroundJob(
   signal: AbortSignal,
 ): Promise<JsonValue | undefined> {
   const resumed = resumableAgentsInput(kind, input);
+
   if (!resumed) throw new JobNotResumable(kind);
   const exec = rawTools(mode).agents?.execute;
+
   if (!exec) throw new JobNotResumable(kind);
+
   // Typed as a variable rather than written inline, for `background-wrap.ts`'s reason:
   // the SDK's own options type is closed, so an extra key in a literal fails overload
   // resolution instead of widening.
@@ -99,7 +102,9 @@ export async function resumeBackgroundJob(
     abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
     [RESUME_REDRIVE_OPTION]: true,
   };
+
   const result = await exec(resumed, execOptions);
+
   return result === undefined ? undefined : decodeJsonValue({ value: result });
 }
 
@@ -125,13 +130,17 @@ export function harvestBackgroundJob(
   input: JsonValue,
 ): JsonValue | null {
   const resumed = resumableAgentsInput(kind, input);
+
   if (!resumed) return null;
   // PARSED, not duck-typed: `resumed` is a durable row this build did not write, and
   // the task string is the key the whole harvest is read by. A row with no readable
   // task has nothing to harvest, which is a refusal rather than a guess.
   const task = v.safeParse(v.pipe(v.string(), v.minLength(1)), resumed.task);
+
   if (!task.success) return null;
   const harvest = harvestSwarm(deps, task.output);
+
   if (!harvest) return null;
+
   return decodeJsonValue({ value: harvest });
 }

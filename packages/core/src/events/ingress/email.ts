@@ -36,6 +36,7 @@ import { diagnostics, toKinuError } from '../../obs/index';
  * makes it silently deaf while it believes it has seen its inbox.
  */
 export const EMAIL_INBOUND_RATE_PER_MIN = 30;
+
 const EmailAllowlistSchema = v.object({ allow: v.optional(v.array(v.string())) });
 
 /** All senders share one rate-limit window; the key is not a trigger id. */
@@ -44,6 +45,7 @@ const EMAIL_INBOUND_RATE_KEY = 'email:inbound';
 /** Lowercase, trim, and strip a single `Name <addr>` / `<addr>` wrapper. */
 export function normalizeEmailAddress(raw: string): string {
   const angled = raw.match(/<([^<>]+)>\s*$/);
+
   return (angled ? angled[1] : raw).trim().toLowerCase();
 }
 
@@ -61,6 +63,7 @@ export function inboundEmailDropNotice(
   limitPerMin: number, windowResetsAt: number, now: number,
 ): MissingCapability | null {
   if (now >= windowResetsAt) return null;
+
   return {
     source: 'inbound email',
     reason:
@@ -92,7 +95,9 @@ const MSG_ID = /^<[\x21-\x3D\x3F-\x7E]+>$/;
  */
 export function boundedMessageId(raw: string | null, fieldName = 'Message-ID'): string | null {
   const id = raw?.trim() ?? '';
+
   if (!MSG_ID.test(id)) return null;
+
   return id.length + fieldName.length + 2 <= RFC5322_LINE_OCTETS ? id : null;
 }
 
@@ -111,17 +116,22 @@ export function boundedMessageId(raw: string | null, fieldName = 'Message-ID'): 
 export function boundedReferences(references: string | null, appended: string | null): string | null {
   const chain = (references ?? '').split(/\s+/)
     .filter((id) => MSG_ID.test(id));
+
   const last = boundedMessageId(appended, 'References');
+
   if (last && chain[chain.length - 1] !== last) chain.push(last);
+
   if (chain.length === 0) return null;
 
   const budget = RFC5322_LINE_OCTETS - 'References'.length - 2;
   // Each entry after the first costs its own length plus the separating space.
   let octets = chain.reduce((sum, id) => sum + id.length + 1, -1);
+
   while (octets > budget && chain.length > 1) {
     octets -= chain[1]!.length + 1;
     chain.splice(1, 1);
   }
+
   // A single id longer than the whole budget cannot be represented at all.
   return octets > budget ? null : chain.join(' ');
 }
@@ -208,7 +218,9 @@ function classifyEmailSender(
   // why even the owner's mail caps at trust `authenticated` (events/hub/trust.ts).
   const sender = normalizeEmailAddress(from);
   const owner = ownerEmail ? normalizeEmailAddress(ownerEmail) : null;
+
   if (owner && sender === owner) return 'owner';
+
   return allowlist.some((a) => normalizeEmailAddress(a) === sender) ? 'allowlisted' : null;
 }
 
@@ -218,9 +230,11 @@ export async function acceptInboundEmail(
   msg: IncomingEmail,
 ): Promise<EmailIngressResult> {
   const sender_class = classifyEmailSender(msg.from, deps.owner_email, deps.allowlist);
+
   if (!sender_class) {
     return { admitted: false, reason: 'sender not authorized for this agent' };
   }
+
   if (!deps.tryConsumeRateLimit(msg.now)) {
     return { admitted: false, reason: 'inbound email rate limit exceeded' };
   }
@@ -232,6 +246,7 @@ export async function acceptInboundEmail(
   const bodyPath = await spillEventContent(deps.vfs, msg.body_text);
 
   const thread = emailThreadAddr(msg);
+
   const payload: EmailPayload = {
     from: msg.from,
     to: msg.to,
@@ -281,6 +296,7 @@ export function readEmailAllowlist(registry: TriggerRegistry): string[] {
   return registry.list({ kind: 'email_route', state: 'active' })
     .flatMap((t) => {
       const spec = v.safeParse(EmailAllowlistSchema, t.spec);
+
       return spec.success ? (spec.output.allow ?? []) : [];
     });
 }
@@ -297,12 +313,15 @@ export async function setEmailAllowlist(
   const cleaned = [...new Set(
     allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
   )];
+
   for (const t of registry.list({ kind: 'email_route' })) {
     if (t.state !== 'revoked') registry.revoke(t.id, now);
   }
+
   if (cleaned.length > 0) {
     await registry.register({ kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner' }, now);
   }
+
   return { allowlist: cleaned };
 }
 
@@ -349,8 +368,10 @@ export class EmailInbox {
   /** Gate, publish, and wake. Unauthorized senders never produce an event. */
   async accept(msg: IncomingEmail): Promise<EmailAdmission> {
     const ownerEmail = await this.deps.ownerEmail();
+
     if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
     let rateDrop: { limit: number; resetAt: number } | null = null;
+
     const result = await acceptInboundEmail({
       log: this.deps.log,
       replies: this.deps.replies,
@@ -361,17 +382,23 @@ export class EmailInbox {
         const decision = tryConsumeWebhookRateLimit(
           this.deps.sql, EMAIL_INBOUND_RATE_KEY, EMAIL_INBOUND_RATE_PER_MIN, now,
         );
+
         if (!decision.allowed) rateDrop = { limit: decision.limit, resetAt: decision.resetAt };
+
         return decision.allowed;
       },
     }, msg);
+
     if (!result.admitted) {
       if (rateDrop) this.noteRateDrop(rateDrop, msg.now);
+
       return { admitted: false, reason: result.reason };
     }
+
     // Wake the agent for a turn, debounced — only on fresh admission (a
     // duplicate delivery is already bound or in flight).
     if (!result.duplicate) this.deps.onAdmitted();
+
     return {
       admitted: true, duplicate: result.duplicate, event_id: result.event_id, thread: result.thread,
     };
@@ -389,8 +416,10 @@ export class EmailInbox {
    */
   async authorizes(from: string): Promise<{ authorized: boolean; reason?: string }> {
     const ownerEmail = await this.deps.ownerEmail();
+
     if (!ownerEmail) return { authorized: false, reason: 'agent owner email unknown' };
     const sender_class = classifyEmailSender(from, ownerEmail, readEmailAllowlist(this.deps.triggers));
+
     return sender_class
       ? { authorized: true }
       : { authorized: false, reason: 'sender not authorized for this agent' };
@@ -413,8 +442,11 @@ export class EmailInbox {
       this.dropWindow = drop.resetAt;
       this.dropCount = 0;
     }
+
     this.dropCount += 1;
+
     if (this.dropCount > 1) return;
+
     try {
       this.deps.log.publish({
         descriptor: {
@@ -468,5 +500,6 @@ export function planOwnerNotification(input: {
 }): OwnerNotification | null {
   if (!input.enabled || input.operatorConnected) return null;
   const { subject, text } = input;
+
   return { subject, text, key: argumentDigest({ subject, text }) };
 }

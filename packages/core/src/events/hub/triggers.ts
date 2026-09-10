@@ -85,7 +85,9 @@ const TriggerRowSchema = v.object({
   last_fire_at: v.nullable(v.number()),
   fire_count: v.number(),
 });
+
 const OptionalNextFireRowSchema = v.object({ next_fire_at: v.nullable(v.number()) });
+
 const NextFireRowSchema = v.object({ next_fire_at: v.number() });
 
 export interface AlarmScheduler {
@@ -130,32 +132,43 @@ export class TriggerRegistry {
       this.actorId, id, spec.kind, JSON.stringify(spec.spec), spec.creator_trust, fp,
       spec.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN, now, spec.next_fire_at ?? null,
     );
+
     if (spec.next_fire_at) await this.alarm.scheduleAt(spec.next_fire_at);
+
     return id;
   }
 
   get(id: TriggerId): TriggerRow | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
               created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count
        FROM triggers WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray();
+
     if (rows.length === 0) return null;
+
     return rowToTrigger(rows[0]);
   }
 
   list(filter?: { kind?: TriggerKind; state?: 'active' | 'paused' | 'revoked' }): TriggerRow[] {
     this.actor.assertCurrent();
+
     let sql = `SELECT id, kind, spec, creator_trust, fork_policy, state,
                       rate_limit_per_min, created_at, paused_at, revoked_at,
                       next_fire_at, last_fire_at, fire_count
                FROM triggers WHERE actor_id = ?`;
+
     const bindings: SqlValue[] = [this.actorId];
+
     if (filter?.kind) { sql += ` AND kind = ?`; bindings.push(filter.kind); }
+
     if (filter?.state) { sql += ` AND state = ?`; bindings.push(filter.state); }
+
     sql += ` ORDER BY created_at DESC`;
     const rows = this.sql.exec(sql, ...bindings).toArray();
+
     return rows.map(rowToTrigger);
   }
 
@@ -164,11 +177,13 @@ export class TriggerRegistry {
    *  drop if paused. Returns true if state changed. */
   pause(id: TriggerId, now: number): boolean {
     const before = this.get(id);
+
     if (!before || before.state !== 'active') return false;
     this.sql.exec(
       `UPDATE triggers SET state = 'paused', paused_at = ? WHERE actor_id = ? AND id = ?`,
       now, this.actorId, id,
     );
+
     return true;
   }
 
@@ -176,18 +191,22 @@ export class TriggerRegistry {
    *  `paused_at` defines the "missed window" that's gone. */
   async resume(id: TriggerId, now: number): Promise<boolean> {
     const before = this.get(id);
+
     if (!before || before.state !== 'paused') return false;
     this.sql.exec(
       `UPDATE triggers SET state = 'active', paused_at = NULL WHERE actor_id = ? AND id = ?`,
       this.actorId, id,
     );
+
     // Re-schedule the trigger if it has a next_fire_at in the future.
     const fire = this.sql.exec(
       `SELECT next_fire_at FROM triggers WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray().map((row) => v.parse(OptionalNextFireRowSchema, row));
+
     if (fire[0]?.next_fire_at && fire[0].next_fire_at > now) {
       await this.alarm.scheduleAt(fire[0].next_fire_at);
     }
+
     return true;
   }
 
@@ -198,6 +217,7 @@ export class TriggerRegistry {
       `UPDATE triggers SET state = 'paused', paused_at = ?
        WHERE actor_id = ? AND state = 'active'`, now, this.actorId,
     );
+
     return before;
   }
 
@@ -208,16 +228,19 @@ export class TriggerRegistry {
       `UPDATE triggers SET state = 'active', paused_at = NULL
        WHERE actor_id = ? AND state = 'paused'`, this.actorId,
     );
+
     // Re-arm alarms for triggers whose next_fire_at is in the future.
     const fireRows = this.sql.exec(
       `SELECT next_fire_at FROM triggers
        WHERE actor_id = ? AND state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at > ?`,
       this.actorId, now,
     ).toArray().map((row) => v.parse(NextFireRowSchema, row));
+
     if (fireRows.length > 0) {
       const soonest = Math.min(...fireRows.map(r => r.next_fire_at));
       await this.alarm.scheduleAt(soonest);
     }
+
     return candidates.length;
   }
 
@@ -225,12 +248,14 @@ export class TriggerRegistry {
    *  cancel + ephemeral webhook TTL expiry. */
   revoke(id: TriggerId, now: number): boolean {
     const before = this.get(id);
+
     if (!before || before.state === 'revoked') return false;
     this.sql.exec(
       `UPDATE triggers SET state = 'revoked', revoked_at = ?, next_fire_at = NULL
        WHERE actor_id = ? AND id = ?`,
       now, this.actorId, id,
     );
+
     return true;
   }
 
@@ -241,6 +266,7 @@ export class TriggerRegistry {
       `UPDATE triggers SET state = 'revoked', revoked_at = ?, next_fire_at = NULL
        WHERE actor_id = ? AND state != 'revoked'`, now, this.actorId,
     );
+
     return before;
   }
 
@@ -251,6 +277,7 @@ export class TriggerRegistry {
    *  the caller must call `markFired()`. */
   due(now: number): TriggerRow[] {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, kind, spec, creator_trust, fork_policy, state,
               rate_limit_per_min, created_at, paused_at, revoked_at,
@@ -260,6 +287,7 @@ export class TriggerRegistry {
          AND next_fire_at IS NOT NULL AND next_fire_at <= ?`,
       this.actorId, now,
     ).toArray();
+
     return rows.map(rowToTrigger);
   }
 
@@ -275,6 +303,7 @@ export class TriggerRegistry {
        WHERE actor_id = ? AND id = ?`,
       now, nextFireAt, this.actorId, id,
     );
+
     if (nextFireAt) await this.alarm.scheduleAt(nextFireAt);
   }
 
@@ -288,18 +317,23 @@ export class TriggerRegistry {
     const all = this.list({ state: 'active' });
     const copy: TriggerRow[] = [];
     const share: TriggerRow[] = [];
+
     for (const t of all) {
       const policy = t.fork_policy ?? DEFAULT_FORK_POLICY[t.kind];
+
       if (policy === 'copy')  copy.push(t);
+
       if (policy === 'share') share.push(t);
       // 'sever' → not included
     }
+
     return { copy, share };
   }
 }
 
 function rowToTrigger<T>(row: T): TriggerRow {
   const r = v.parse(TriggerRowSchema, row);
+
   return {
     id: r.id,
     kind: r.kind,

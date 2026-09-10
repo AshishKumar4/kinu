@@ -50,6 +50,7 @@ describe('BUG-1: the initial value prior', () => {
     const node = rt.storage.sql<{ value: number; visits: number }>`
       SELECT value, visits FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'fresh'`[0]!;
+
     // Lean initial_in_range: visits = 0 admits scaledSum = 0 only.
     expect(node.visits).toBe(0);
     expect(node.value).toBe(0);
@@ -95,9 +96,11 @@ describe('BUG-1: the initial value prior', () => {
     const defaultsOf = (init: (db: Database) => void): Record<string, string | null> => {
       const db = new Database(':memory:');
       init(db);
+
       const cols = db.query<{ name: string; dflt_value: string | null }, []>(
         `PRAGMA table_info('search_nodes')`,
       ).all();
+
       return Object.fromEntries(cols.map((c) => [c.name, c.dflt_value]));
     };
 

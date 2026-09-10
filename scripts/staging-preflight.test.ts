@@ -53,6 +53,7 @@ describe('the staging preflight', () => {
     const verdict = stagingDeploymentVerdict({
       localSha: 'abc1234', health: null, failure: 'HTTP 503',
     });
+
     expect(verdict.kind).toBe('unreachable');
     // The status is the whole evidence for calling it infrastructure. A verdict
     // that dropped it would be asking to be trusted instead.
@@ -66,13 +67,16 @@ describe('the staging preflight', () => {
       stagingDeploymentVerdict({ localSha: 'a', health: health(null) }),
       stagingDeploymentVerdict({ localSha: 'a', health: null, failure: 'boom' }),
     ];
+
     for (const verdict of verdicts) {
       const line = describeStagingVerdict(verdict, ORIGIN);
+
       // `current` states the build it verified; the other three must name the
       // remedy. A state reported without either has moved the problem.
       const actionable = verdict.kind === 'current'
         ? line.includes('runs this checkout')
         : line.includes('deploy:staging') || line.includes('--allow-stale');
+
       expect(actionable, `${verdict.kind}: ${line}`).toBe(true);
     }
   });

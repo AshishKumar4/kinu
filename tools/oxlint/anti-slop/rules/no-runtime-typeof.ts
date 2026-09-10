@@ -1,6 +1,8 @@
 import { defineRule } from "@oxlint/plugins";
 
-import type { ESTree, Scope, SourceCode } from "@oxlint/plugins";
+import { resolveVariable } from "../shared/scope.ts";
+
+import type { ESTree, SourceCode } from "@oxlint/plugins";
 
 type RuntimeFunction = ESTree.ArrowFunctionExpression | ESTree.Function;
 
@@ -25,7 +27,9 @@ function isInsideTypeGuard(node: ESTree.Node): boolean {
 
 /**
  * KINU-LOCAL: `instanceof Object` is the same evasion as `typeof`, so it is rejected here too.
- * Upstream has never carried this check; see tools/oxlint/anti-slop/upstream.json.
+ * Upstream has never carried this check, and its `typeof x === "undefined"` existence-probe
+ * exemption is not vendored: a binding whose presence is unknown is boundary input, and
+ * `globalThis.x === undefined` probes it without a typeof. See tools/oxlint/anti-slop/upstream.json.
  */
 function isGlobalObjectConstructor(
 	sourceCode: SourceCode,
@@ -33,13 +37,8 @@ function isGlobalObjectConstructor(
 ): boolean {
 	if (expression.type !== "Identifier" || expression.name !== "Object") return false;
 	if (sourceCode.isGlobalReference(expression)) return true;
-	let scope: Scope | null = sourceCode.getScope(expression);
-	while (scope !== null) {
-		const variable = scope.set.get(expression.name);
-		if (variable !== undefined) return variable.defs.length === 0;
-		scope = scope.upper;
-	}
-	return true;
+	const variable = resolveVariable(sourceCode, expression);
+	return variable === null || variable.defs.length === 0;
 }
 
 /** Disallow runtime typeof checks that narrow unparsed values instead of decoding them. */

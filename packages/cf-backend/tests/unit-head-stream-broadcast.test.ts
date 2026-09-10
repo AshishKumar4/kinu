@@ -31,6 +31,7 @@ function captureFrames(agent: HarnessOrchestratorAgent): string[] {
     configurable: true,
     value: (payload: string) => { sent.push(payload); },
   });
+
   return sent;
 }
 
@@ -59,8 +60,10 @@ describe('publishHeadStreamFrame', () => {
         v.object({ n: v.number() }),
         harness.db.prepare('SELECT COUNT(*) AS n FROM head_steps').get(),
       );
+
       return counted.n;
     };
+
     const before = rows();
     harness.agent.observePublishHeadStreamFrame({ headId: 'head-7', kind: 'text', delta: 'a partial answer' });
     // The durable channel is `recordHeadStep`, and it is the ONLY writer of this

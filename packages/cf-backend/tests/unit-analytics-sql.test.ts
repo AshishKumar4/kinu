@@ -33,6 +33,7 @@ const CONFIGURED: AnalyticsSqlEnv = {
 const ONE: ReadonlyMap<string, string> = new Map([['ops', 'SELECT 1']]);
 
 const originalFetch = globalThis.fetch;
+
 let logs: RecordingLogger;
 
 beforeEach(() => {
@@ -58,8 +59,11 @@ function answering(status: number, body: string): void {
 async function reasonOf(env: AnalyticsSqlEnv = CONFIGURED): Promise<string> {
   const panels = await runAnalyticsBatch(env, ONE);
   const panel = panels.ops;
+
   if (panel === undefined) throw new Error('the batch produced no panel');
+
   if (panel.status !== 'failed') throw new Error(`the panel is ${panel.status}, not failed`);
+
   return panel.reason;
 }
 
@@ -84,6 +88,7 @@ describe('an error response whose body is not the documented envelope', () => {
     const line = logs.emitted.find(
       (emitted) => emitted.event === 'control_plane.analytics_error_body_unreadable',
     );
+
     expect(line).toBeDefined();
     // `bad_input` and not `unavailable`: at a decoder, an unrecognised failure
     // means the bytes are not the shape they were declared to be. A fleet query
@@ -126,6 +131,7 @@ describe('a batch fill that rejects', () => {
    *  `runAnalyticsSql`'s own try, so nothing below it can absorb this. */
   function poisoned() {
     let reads = 0;
+
     const env = {
       get CLOUDFLARE_ACCOUNT_ID(): string {
         reads += 1;
@@ -133,6 +139,7 @@ describe('a batch fill that rejects', () => {
       },
       ANALYTICS_SQL_API_TOKEN: 'token',
     } satisfies AnalyticsSqlEnv;
+
     return { env, reads: () => reads };
   }
 
@@ -159,6 +166,7 @@ describe('a batch fill that rejects', () => {
     let calls = 0;
     globalThis.fetch = asFetchFunction(async () => {
       calls += 1;
+
       return new Response(JSON.stringify({ data: [{ n: 1 }] }), { status: 200 });
     });
 

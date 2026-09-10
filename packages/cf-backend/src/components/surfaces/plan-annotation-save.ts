@@ -19,6 +19,7 @@ export function createPlanAnnotationSaveQueue<T>(
         () => { pending--; },
         () => { pending--; },
       );
+
       return result;
     },
     pending: () => pending,

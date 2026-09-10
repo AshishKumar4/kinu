@@ -27,10 +27,13 @@ import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs
 function toolThenTextModel() {
   let step = 0;
   let toolNames: string[] = [];
+
   const model = new MockLanguageModelV3({
     doStream: async (options) => {
       step += 1;
+
       if (step === 1) toolNames = (options.tools ?? []).map((t) => t.name);
+
       const stream = step === 1
         ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
@@ -64,9 +67,11 @@ function toolThenTextModel() {
               c.close();
             },
           });
+
       return { stream, response: { headers: {} } };
     },
   });
+
   return { model, toolNames: () => toolNames };
 }
 
@@ -83,13 +88,18 @@ describe('extension seam through runChat', () => {
       onToolCall: ({ toolName }) => { order.push(`tool-call:${toolName}`); },
       onToolResult: ({ toolName }) => { order.push(`tool-result:${toolName}`); },
       onTurnEnd: ({ text }) => { order.push('turn-end'); endText = text; },
-      prepareStep: ({ stepNumber }) => { startedSteps = Math.max(startedSteps, stepNumber + 1); return undefined; },
+      prepareStep: ({ stepNumber }) => {
+        startedSteps = Math.max(startedSteps, stepNumber + 1);
+
+        return undefined;
+      },
       registerTools: () => ({
         ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }),
       }),
     };
 
     const events: ChatEvent[] = [];
+
     for await (const ev of runChat({
       model,
       system: 'sys',
@@ -117,6 +127,7 @@ describe('extension seam through runChat', () => {
   test('a turn with no extensions still streams (seam is optional)', async () => {
     const { model } = toolThenTextModel();
     const texts: string[] = [];
+
     for await (const ev of runChat({
       model,
       system: 'sys',
@@ -126,6 +137,7 @@ describe('extension seam through runChat', () => {
     })) {
       if (ev.type === 'text-delta') texts.push(ev.delta);
     }
+
     expect(texts.join('')).toBe('all done');
   });
 });
@@ -133,9 +145,11 @@ describe('extension seam through runChat', () => {
 /** A one-step text model that captures the prompt it was handed. */
 function promptCapturingModel() {
   let prompt: PromptMessage[] = [];
+
   const model = new MockLanguageModelV3({
     doStream: async (options) => {
       prompt = parsePrompt({ value: options.prompt });
+
       return {
         stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
@@ -158,6 +172,7 @@ function promptCapturingModel() {
       };
     },
   });
+
   return { model, prompt: () => prompt };
 }
 
@@ -165,10 +180,12 @@ const ContentPartsSchema = v.array(v.object({
   type: v.string(),
   text: v.optional(v.string()),
 }));
+
 const PromptSchema = v.array(v.object({
   role: v.string(),
   content: v.union([v.string(), ContentPartsSchema]),
 }));
+
 type PromptMessage = v.InferOutput<typeof PromptSchema>[number];
 
 function parsePrompt(input: { value: unknown }): PromptMessage[] {
@@ -180,6 +197,7 @@ function userTexts(prompt: PromptMessage[]): string[] {
     .filter((m) => m.role === 'user')
     .map((m) => {
       const text = v.safeParse(v.string(), m.content);
+
       return text.success
         ? text.output
         : v.parse(ContentPartsSchema, m.content)
@@ -196,6 +214,7 @@ describe('transformContext through runChat', () => {
       name: 'compactor',
       transformContext: async ({ messages }) => {
         transformSaw = messages.map((m) => String(m.content));
+
         return [{ role: 'user', content: 'summary-of-history' }];
       },
     };
@@ -224,6 +243,7 @@ describe('transformContext through runChat', () => {
     const { model } = promptCapturingModel();
     let sawTokens: number | undefined;
     const stepUsage: Array<Usage | undefined> = [];
+
     for await (const ev of runChat({
       model,
       system: 'sys',
@@ -235,12 +255,14 @@ describe('transformContext through runChat', () => {
         name: 'observer',
         transformContext: async (ctx) => {
           sawTokens = ctx.providerReportedTokens;
+
           return undefined;
         },
       }),
     })) {
       if (ev.type === 'step-finish') stepUsage.push(ev.usage);
     }
+
     expect(sawTokens).toBe(123_456);
     // promptCapturingModel reports a 1-token prompt and a 1-token completion and
     // no cache or reasoning split, so those fields stay absent rather than 0.
@@ -250,12 +272,19 @@ describe('transformContext through runChat', () => {
 
   test("transformTrigger threads into the transform context ('force' on overflow recovery, 'auto' default)", async () => {
     const triggers: string[] = [];
+
     const observer: KinuExtension = {
       name: 'observer',
-      transformContext: async (ctx) => { triggers.push(ctx.trigger); return undefined; },
+      transformContext: async (ctx) => {
+        triggers.push(ctx.trigger);
+
+        return undefined;
+      },
     };
+
     for (const transformTrigger of [undefined, 'force' as const]) {
       const { model } = promptCapturingModel();
+
       for await (const _ of runChat({
         model,
         system: 'sys',
@@ -266,12 +295,14 @@ describe('transformContext through runChat', () => {
         extensions: new ExtensionHost().register(observer),
       })) { /* drain */ }
     }
+
     expect(triggers).toEqual(['auto', 'force']);
   });
 
   test('a throwing transform never breaks the turn (fail-open)', async () => {
     const { model, prompt } = promptCapturingModel();
     let doneText = '';
+
     for await (const ev of runChat({
       model,
       system: 'sys',
@@ -285,6 +316,7 @@ describe('transformContext through runChat', () => {
     })) {
       if (ev.type === 'done') doneText = ev.text;
     }
+
     expect(doneText).toBe('ok');
     expect(userTexts(prompt())).toEqual(['go']);
   });
@@ -301,8 +333,10 @@ describe('composePrepareStep (the shared step pipeline)', () => {
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'steered' }],
     });
+
     const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base, steps: [] });
     expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
+
     // The marker rides the injected tail message — proof the markers were
     // applied AFTER the extension rewrite.
     const tail = v.parse(v.object({
@@ -310,6 +344,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
         anthropic: v.object({ cacheControl: v.object({ type: v.literal('ephemeral') }) }),
       }),
     }), out?.messages.at(-1));
+
     expect(tail.providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
   });
 
@@ -317,6 +352,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     const out = await composePrepareStep({
       cache: { strategy: { kind: 'anthropic' }, system: { role: 'system', content: 'cached-sys' } },
     }, { stepNumber: 0, messages: base, steps: [] });
+
     expect(out?.system).toEqual({ role: 'system', content: 'cached-sys' });
     expect(out?.messages).toHaveLength(2);
   });
@@ -326,6 +362,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
       name: 'steer',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 's' }],
     });
+
     expect((await composePrepareStep({ extensions: host }, { stepNumber: 1, messages: base, steps: [] }))?.messages).toHaveLength(3);
     expect(await composePrepareStep({}, { stepNumber: 1, messages: base, steps: [] })).toBeUndefined();
     expect(await composePrepareStep({ extensions: new ExtensionHost() }, { stepNumber: 1, messages: base, steps: [] })).toBeUndefined();
@@ -337,6 +374,7 @@ describe('ExtensionHost', () => {
     const host = new ExtensionHost()
       .register({ name: 'a', registerTools: () => ({ alpha: tool({ description: 'a', inputSchema: z.object({}) }) }) })
       .register({ name: 'b', registerTools: () => ({ beta: tool({ description: 'b', inputSchema: z.object({}) }) }) });
+
     expect(Object.keys(host.tools()).sort()).toEqual(['alpha', 'beta']);
     expect(host.size).toBe(2);
   });
@@ -345,22 +383,27 @@ describe('ExtensionHost', () => {
     const host = new ExtensionHost()
       .register({ name: 'a', registerTools: () => ({ dup: tool({ description: 'a', inputSchema: z.object({}) }) }) })
       .register({ name: 'b', registerTools: () => ({ dup: tool({ description: 'b', inputSchema: z.object({}) }) }) });
+
     expect(() => host.tools()).toThrow(/already registered by "a"/);
   });
 
   test('emit* hooks run every extension in registration order', async () => {
     const order: string[] = [];
+
     const host = new ExtensionHost()
       .register({ name: 'first', onTurnStart: () => { order.push('first'); } })
       .register({ name: 'second', onTurnStart: () => { order.push('second'); } });
+
     await host.emitTurnStart({ system: 's', history: [] });
     expect(order).toEqual(['first', 'second']);
   });
   test('a throwing emit hook never breaks the turn: it resolves and records the failure', async () => {
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       const order: string[] = [];
+
       const host = new ExtensionHost()
         .register({
           name: 'thrower',
@@ -373,6 +416,7 @@ describe('ExtensionHost', () => {
         .register({ name: 'witness', onToolCall: () => { order.push('witness-call'); } })
         .register({ name: 'witness', onToolResult: () => { order.push('witness-result'); } })
         .register({ name: 'witness', onTurnEnd: () => { order.push('witness-end'); } });
+
       await host.emitTurnStart({ system: 's', history: [] });
       await host.emitToolCall({ toolName: 'ping', args: {} });
       await host.emitToolResult({ toolName: 'ping', args: {}, result: 'pong', success: true });
@@ -395,10 +439,12 @@ describe('ExtensionHost', () => {
       name: 'aborted',
       onTurnStart: () => { throw new KinuError('cancelled', 'injected abort'); },
     });
+
     // The caller's own abort is not the plugin's failure: it must propagate
     // with its class intact, never read as a silent skip. (The message names
     // the seam's `doing`; the class rides on `code`, the detail on `cause`.)
     let abortPropagated = false;
+
     try {
       await aborted.emitTurnStart({ system: 's', history: [] });
     } catch (error) {
@@ -407,12 +453,16 @@ describe('ExtensionHost', () => {
       expect(error.message).toBe('run an extension onTurnStart hook');
       abortPropagated = true;
     }
+
     expect(abortPropagated).toBe(true);
+
     const starved = new ExtensionHost().register({
       name: 'starved',
       onTurnStart: () => { throw new KinuError('oom', 'injected oom'); },
     });
+
     let oomPropagated = false;
+
     try {
       await starved.emitTurnStart({ system: 's', history: [] });
     } catch (error) {
@@ -420,25 +470,30 @@ describe('ExtensionHost', () => {
       expect(error.code).toBe('oom');
       oomPropagated = true;
     }
+
     expect(oomPropagated).toBe(true);
+
     // A plain Error stays fail-open: an unclassified plugin failure is the
     // plugin's fault, and the turn continues past it.
     const clumsy = new ExtensionHost().register({
       name: 'clumsy',
       onTurnStart: () => { throw new Error('clumsy exploded'); },
     });
+
     await expect(clumsy.emitTurnStart({ system: 's', history: [] })).resolves.toBeUndefined();
   });
 
 
   test('runTransformContext is awaited, chained, and fail-open', async () => {
     const seen: string[][] = [];
+
     const host = new ExtensionHost()
       .register({
         name: 'appender',
         transformContext: async ({ messages }) => {
           seen.push(messages.map((m) => String(m.content)));
           await Promise.resolve(); // genuinely async
+
           return [...messages, { role: 'user', content: 'from-appender' }];
         },
       })
@@ -450,6 +505,7 @@ describe('ExtensionHost', () => {
         name: 'chained',
         transformContext: async ({ messages }) => {
           seen.push(messages.map((m) => String(m.content)));
+
           return [...messages, { role: 'user', content: 'from-chained' }];
         },
       });
@@ -458,6 +514,7 @@ describe('ExtensionHost', () => {
       sessionKey: 's', messages: [{ role: 'user', content: 'base' }],
       system: 'sys', contextWindow: 1000, trigger: 'auto',
     });
+
     // The thrower is skipped (fail-open); the chain still completes.
     expect(out?.map((m) => m.content)).toEqual(['base', 'from-appender', 'from-chained']);
     // Extension N sees extension N-1's output (thrower contributed nothing).
@@ -469,6 +526,7 @@ describe('ExtensionHost', () => {
       sessionKey: 's', messages: [{ role: 'user', content: 'base' }] as const,
       system: 'sys', contextWindow: 1000, trigger: 'auto' as const,
     };
+
     const noop = new ExtensionHost().register({ name: 'p', transformContext: async () => undefined });
     expect(await noop.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
     const failing = new ExtensionHost().register({ name: 'f', transformContext: async () => { throw new Error('x'); } });
@@ -484,16 +542,22 @@ describe('ExtensionHost', () => {
         p.then(() => 'settled' as const, () => 'rejected' as const),
         new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 200)),
       ]);
+
     const never = (): Promise<never> => new Promise(() => undefined);
+
     const host = new ExtensionHost()
       .register({ name: 'stuck-prepare', prepareStep: never })
       .register({ name: 'stuck-transform', transformContext: never });
+
     const controller = new AbortController();
     const prepare = Promise.resolve(host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal }));
+
     const transform = host.runTransformContext({
       sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
     });
+
     controller.abort(new Error('user stopped the turn'));
+
     for (const pending of [prepare, transform]) {
       expect(await settledOrHung(pending)).toBe('rejected');
       await expect(pending).rejects.toBeInstanceOf(KinuError);
@@ -504,19 +568,27 @@ describe('ExtensionHost', () => {
   test('a hook that does I/O receives the signal the turn was given', async () => {
     const controller = new AbortController();
     let seen: AbortSignal | undefined;
+
     const host = new ExtensionHost().register({
-      name: 'io', prepareStep: ({ abortSignal }) => { seen = abortSignal; return undefined; },
+      name: 'io', prepareStep: ({ abortSignal }) => {
+        seen = abortSignal;
+
+        return undefined;
+      },
     });
+
     await host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal });
     expect(seen).toBe(controller.signal);
   });
 
   test('runPrepareStep chains outputs and reports no-change as undefined', async () => {
     const base: ModelMessage[] = [{ role: 'user', content: 'a' }];
+
     const appendB: KinuExtension = {
       name: 'b',
       prepareStep: ({ messages }) => [...messages, { role: 'user', content: 'b' }],
     };
+
     const passthrough: KinuExtension = { name: 'p', prepareStep: () => undefined };
 
     const host = new ExtensionHost().register(passthrough).register(appendB);
@@ -531,11 +603,13 @@ describe('ExtensionHost', () => {
   test('runPrepareStep awaits an async rewrite before the next extension sees it', async () => {
     const admitted = Promise.withResolvers<void>();
     const seen: string[][] = [];
+
     const host = new ExtensionHost()
       .register({
         name: 'durable',
         prepareStep: async ({ messages }) => {
           await admitted.promise;
+
           return [...messages, { role: 'user', content: 'persisted' }];
         },
       })
@@ -543,6 +617,7 @@ describe('ExtensionHost', () => {
         name: 'observer',
         prepareStep: ({ messages }) => {
           seen.push(messages.map((message) => String(message.content)));
+
           return undefined;
         },
       });
@@ -551,6 +626,7 @@ describe('ExtensionHost', () => {
       stepNumber: 0,
       messages: [{ role: 'user', content: 'base' }],
     });
+
     await Promise.resolve();
     expect(seen).toEqual([]);
 

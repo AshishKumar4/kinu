@@ -142,9 +142,11 @@ const EXEC_RATIO: VerifierKindEntry = {
   preflight: preflightRatioHarness,
   bind: (spec) => {
     const parsed = v.safeParse(ExecRatioSpecSchema, spec);
+
     // Named fields, not a shape complaint: the caller has to know WHICH one.
     if (!parsed.success) return { issues: renderIssues(parsed.issues) };
     const problem = parsed.output;
+
     return {
       verify: async (ctx): Promise<Measurement> => {
         // No catch: a harness that could not run is a BROKEN INSTRUMENT and must fault
@@ -153,9 +155,11 @@ const EXEC_RATIO: VerifierKindEntry = {
         // fields below.
         const m = await runRatioMeasurement(ctx, problem);
         const measured = { refOps: m.refOps, candOps: m.candOps, refMs: m.refMs, candMs: m.candMs };
+
         if (m.failure !== null) {
           return { kind: 'unmeasurable', detail: `no usable solution: ${m.failure}`, measured };
         }
+
         if (!m.correct) {
           return {
             kind: 'unmeasurable',
@@ -164,6 +168,7 @@ const EXEC_RATIO: VerifierKindEntry = {
             measured,
           };
         }
+
         return {
           kind: 'measured',
           // RAW, in the objective's own unit. Normalisation is the harness's job and
@@ -247,9 +252,11 @@ export async function preflightVerifier(
  */
 export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmRefusal {
   const kind = registeredVerifierKind(source.kind);
+
   if (kind === null) return unregisteredKindRefusalFor(source.kind);
   const entry = ENTRIES[kind];
   const bound = entry.bind(source.spec);
+
   if ('issues' in bound) {
     return {
       reason: 'bad_input',
@@ -261,6 +268,7 @@ export function resolveVerifier(source: VerifierSpec): ResolvedVerifier | SwarmR
       )).error,
     };
   }
+
   return {
     kind,
     artifact: entry.artifact,

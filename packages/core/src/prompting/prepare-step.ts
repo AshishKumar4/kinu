@@ -156,13 +156,16 @@ export function composePrepareStep(
   ctx: StepPrepareContext,
 ): StepPrepareResult | Promise<StepPrepareResult> {
   const refusal = pipeline.budget?.guard('model_call');
+
   if (refusal) throw new MissionBudgetExhausted(refusal);
   const projected = projectToolErrorFeedback(ctx.messages, ctx.steps);
   const prepared = { ...ctx, messages: projected ?? ctx.messages, abortSignal: pipeline.abortSignal };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
+
   if (steered instanceof Promise) {
     return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages ?? projected));
   }
+
   return finishPrepareStep(pipeline, ctx, steered ?? projected);
 }
 
@@ -179,12 +182,14 @@ function finishPrepareStep(
   const applied = workingBase === null ? null : applyStagedContext(steeredBase, workingBase);
   const rebased = applied?.kind === 'landed' ? applied.messages : null;
   const base = rebased ?? steeredBase;
+
   // A LANDING moves every message index in the array, and the ledger's frozen
   // blocks are indices. `weave` self-heals only when a block runs past the end
   // or backwards; an edit that shortens the history BETWEEN two block positions
   // leaves both in range and both wrong, so the landing step resets the ledger
   // and the next weave starts over with one fresh block at the tail.
   if (rebased !== null && workingBase?.pending === true) pipeline.dynamic?.ledger.reset();
+
   // The weave runs AFTER pruning: frozen block positions refer to the final
   // message array. Reserve its overhead before pruning, or the request would
   // be priced smaller than the one actually sent.
@@ -193,6 +198,7 @@ function finishPrepareStep(
       ? { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + pipeline.dynamic.ledger.overheadTokens }
       : pipeline.prune)
     : undefined;
+
   const shrunk = pruned ?? base;
   // The weave always rewrites (frozen blocks must be re-applied every step —
   // a prepareStep override never feeds the next step's input).
@@ -214,6 +220,8 @@ function finishPrepareStep(
     base: rebased === null ? null : workingBase,
     deferred: applied?.kind === 'deferred' ? applied.reason : null,
   });
+
   if (!plan) return steered || rebased || pruned || woven || replayed ? { messages } : undefined;
+
   return plan.system !== undefined ? { system: plan.system, messages } : { messages };
 }

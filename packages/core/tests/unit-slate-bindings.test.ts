@@ -21,9 +21,11 @@ function routeApp(member: string, chain: string[]) {
 
 test('Slate bridge forwards only public method names and names its invocation', () => {
   for (const name of ['list', 'addItem', 'get_state', 'v2']) expect(isSlateMethodName(name)).toBe(true);
+
   for (const name of ['constructor', '_private', '#secret', 'a.b', '', 'x'.repeat(65)]) {
     expect(isSlateMethodName(name)).toBe(false);
   }
+
   expect(v.safeParse(SlateBindingRequestSchema, { member: 'list', args: [] }).success).toBe(false);
   expect(v.safeParse(SlateBindingRequestSchema, { member: 'list', args: [], invocation: '' }).success).toBe(false);
   expect(v.safeParse(SlateBindingRequestSchema, { member: 'list', args: [], chain: [] }).success).toBe(false);
@@ -54,6 +56,7 @@ test('a lineage comes from the host record, never from the caller', () => {
     ['live', { id: 'notes', chain: ['root'] }],
     ['other-slate', { id: 'shelf', chain: [] }],
   ]);
+
   const resolve = (invocation: string | null) => resolveSlateChain({ invocations, id: 'notes', invocation });
   // A request the host issued no invocation for is the root, which is a preview
   // hit rather than a hop.

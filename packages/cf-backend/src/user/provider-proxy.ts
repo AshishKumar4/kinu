@@ -77,9 +77,11 @@ export async function handleUserProviderProxyRequest(
   if (path === '/credentials' && request.method === 'GET') {
     return json({ credentials: await listProxyableCredentials(cli.userDO, owner) });
   }
+
   if (path === '/forward') {
     return forwardUpstream(request, cli.userDO, owner);
   }
+
   return errorResponse(404, `No such provider proxy route: ${request.method} ${path}`);
 }
 
@@ -96,9 +98,11 @@ async function listProxyableCredentials(
 ): Promise<ProxyableCredential[]> {
   const stored = await userDO.listCredentials(owner);
   const out: ProxyableCredential[] = [];
+
   for (const { key } of stored) {
     if (PROXY_DENIED_CRED_KEYS.includes(key)) continue;
     const credentialBase = await userDO.getCredentialBaseURL(owner, key);
+
     if (credentialBase) {
       // The forward route sends to https only, so a credential naming anything
       // else is not proxyable however well-formed it is — an endpoint on the
@@ -107,8 +111,10 @@ async function listProxyableCredentials(
       if (credentialBase.startsWith('https://')) out.push({ key, baseURL: credentialBase });
       continue;
     }
+
     if (await providerProxyBaseURL(key, { fetch })) out.push({ key });
   }
+
   return out;
 }
 
@@ -119,33 +125,43 @@ async function forwardUpstream(
 ): Promise<Response> {
   const credKey = request.headers.get(PROXY_CRED_HEADER)?.trim();
   const target = request.headers.get(PROXY_TARGET_HEADER)?.trim();
+
   if (!credKey) return errorResponse(400, `${PROXY_CRED_HEADER} is required — name the credential to attach.`);
+
   if (!target) return errorResponse(400, `${PROXY_TARGET_HEADER} is required — name the upstream URL.`);
+
   try { validateCredentialKey(credKey); }
   catch (err) { return errorResponse(400, err instanceof Error ? renderCauseChain(err) : 'Invalid credential key.'); }
+
   if (PROXY_DENIED_CRED_KEYS.includes(credKey)) {
     return errorResponse(403, `${credKey} is not served by this proxy — Cloudflare-backed models go through /api/user/ai/v1, and Codex must be connected on the machine that uses it.`);
   }
 
   const base = await userDO.getCredentialBaseURL(owner, credKey)
     ?? await providerProxyBaseURL(credKey, { fetch });
+
   if (!base) {
     return errorResponse(400, `No upstream endpoint is known for credential "${credKey}", so it cannot be proxied.`);
   }
+
   if (!proxyTargetAllowed(target, base, request.method)) {
     return errorResponse(403, `${request.method} "${target}" is outside what credential "${credKey}" may be spent on (${base}).`);
   }
 
   const auth = await userDO.getAuthHeaders(owner, credKey);
+
   if (!auth) {
     return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Kinu user settings.`);
   }
 
   const headers = new Headers(request.headers);
+
   for (const name of STRIPPED_REQUEST_HEADERS) headers.delete(name);
+
   for (const [name, value] of Object.entries(auth)) headers.set(name, value);
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+
   // `redirect: 'manual'` is load-bearing, not tidiness: following a 3xx would
   // re-send the attached credential to whatever origin the provider named,
   // which is the one way a target that passed the allowlist could still end up
@@ -155,6 +171,8 @@ async function forwardUpstream(
     headers,
     redirect: 'manual',
   };
+
   if (hasBody) init.body = await request.arrayBuffer();
+
   return fetch(target, init);
 }

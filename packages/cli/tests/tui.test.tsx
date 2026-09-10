@@ -38,6 +38,7 @@ describe('CLI TUI layout', () => {
   test('status bar makes the model control discoverable and shows effort without version noise', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 110, height: 8, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <StatusBar
@@ -64,6 +65,7 @@ describe('CLI TUI layout', () => {
   test('status bar drops the model control whole on narrow terminals and retains connection state', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 52, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <StatusBar
@@ -85,6 +87,7 @@ describe('CLI TUI layout', () => {
       // control is gone, not an ellipsized fragment.
       expect(frame).not.toContain('A Very Long Model Name That Cannot Fit');
       expect(frame).not.toContain('…');
+
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(52);
       }
@@ -101,7 +104,9 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <StatusBar
@@ -119,6 +124,7 @@ describe('CLI TUI layout', () => {
       expect(frame).toContain('check');
       expect(frame).toContain('local');
       expect(frame).toContain('●');
+
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(20);
       }
@@ -132,6 +138,7 @@ describe('CLI TUI layout', () => {
   test('status bar keeps the mode visible while a long workspace name clips', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 56, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <StatusBar
@@ -155,6 +162,7 @@ describe('CLI TUI layout', () => {
     const render = async (width: number, assertions: (frame: string) => void) => {
       const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
+
       try {
         root.render(
           <StatusBar
@@ -177,6 +185,7 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
       }
     };
+
     // A running branch survives a mid-size bar and the live settings follow
     // it; the statics are the first to go.
     await render(72, (frame) => {
@@ -201,6 +210,7 @@ describe('CLI TUI layout', () => {
     const render = async (width: number, assertions: (frame: string) => void) => {
       const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
+
       try {
         root.render(
           <StatusBar
@@ -223,6 +233,7 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
       }
     };
+
     await render(88, (frame) => {
       expect(frame).toContain('[Ctrl+L]');
     });
@@ -244,9 +255,11 @@ describe('CLI TUI layout', () => {
     const EMOJI = /[\u{1F000}-\u{1FFFF}\u{23E9}-\u{23FA}\u{2B00}-\u{2BFF}\u{2600}-\u{26FF}]/gu;
     const VARIATION_SELECTOR = /\uFE0F/u;
     const frames: string[] = [];
+
     const collect = async (width: number, element: ReactNode) => {
       const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
       const root = createRoot(renderer);
+
       try {
         root.render(element);
         await renderSettled(renderOnce);
@@ -256,6 +269,7 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
       }
     };
+
     await collect(96, (
       <StatusBar
         name="checkout"
@@ -284,10 +298,12 @@ describe('CLI TUI layout', () => {
         />
       </box>
     ));
+
     for (const frame of frames) {
       const offenders = [...frame.matchAll(EMOJI)]
         .map((match) => match[0])
         .filter((char) => char !== '\u2605');
+
       expect(offenders).toEqual([]);
       expect(VARIATION_SELECTOR.test(frame)).toBe(false);
     }
@@ -300,6 +316,7 @@ describe('CLI TUI layout', () => {
     );
 
     expect(VERSION).toBe(packageJson.version);
+
     // What the CLI reports is the contract. The greps this replaced named the
     // wiring instead — display.ts's package.json import, program.ts's
     // `.version(VERSION)` call, home-app.tsx's header literal — and passed for
@@ -312,6 +329,7 @@ describe('CLI TUI layout', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     expect({ exitCode: reported.exitCode, stdout: reported.stdout.toString().trim() })
       .toEqual({ exitCode: 0, stdout: VERSION });
   });
@@ -331,6 +349,7 @@ describe('CLI TUI layout', () => {
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
     const selected: AgentModelEntry[] = [];
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -364,7 +383,9 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     // Plain system rows: one line each, no markdown, so which rows are on
     // screen is an exact read of where the transcript is scrolled to.
     const transcript = Array.from({ length: 60 }, (_, index) => ({
@@ -372,7 +393,9 @@ describe('CLI TUI layout', () => {
       role: 'system' as const,
       content: `line-${String(index).padStart(2, '0')}`,
     }));
+
     const agent = fakeClient({ name: 'scroller', history: async () => transcript });
+
     try {
       root.render(<ChatApp client={agent.client} hydrateHistory={true} onExit={() => {}} />);
       await renderSettled(renderOnce);
@@ -428,6 +451,7 @@ describe('CLI TUI layout', () => {
     const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null });
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -458,6 +482,7 @@ describe('CLI TUI layout', () => {
   test('command palette clips rows inside the overlay frame', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 58, height: 18, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -473,13 +498,17 @@ describe('CLI TUI layout', () => {
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
+
       for (const line of frame.split('\n')) {
         expect([...line].length).toBeLessThanOrEqual(58);
       }
+
       const hintLine = lineContaining(frame, 'Type to filter');
       const commandLine = lineContaining(frame, '/very-long');
+
       const closingLine = frame.split('\n').findIndex((line, index) =>
         index > commandLine && line.includes('╰'));
+
       expect(commandLine).toBeGreaterThan(hintLine);
       expect(closingLine).toBeGreaterThan(commandLine);
       expect(frame).toContain('/very-long');
@@ -497,7 +526,9 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -510,8 +541,10 @@ describe('CLI TUI layout', () => {
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
       const commandLine = lineContaining(frame, '/status');
+
       const closingLine = frame.split('\n').findIndex((line, index) =>
         index > commandLine && line.includes('╰'));
+
       expect(closingLine).toBeGreaterThan(commandLine);
     } finally {
       flushSync(() => { root.unmount(); });
@@ -526,8 +559,10 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
     const selected: string[] = [];
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -577,7 +612,9 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -695,7 +732,9 @@ describe('CLI TUI layout', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -725,6 +764,7 @@ describe('CLI TUI layout', () => {
   test('walk-back overlay lists recent user messages newest first', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -753,6 +793,7 @@ describe('CLI TUI layout', () => {
   test('device-connect overlay offers connect, session, not-now, and dismiss choices', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -778,6 +819,7 @@ describe('CLI TUI layout', () => {
   test('device-connect overlay shows connect progress and the result', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -854,11 +896,13 @@ describe('CLI TUI layout', () => {
         console.log(JSON.stringify(observed));
       `,
     });
+
     try {
       // The actions stay unmodelled records: v.object would quietly drop a field
       // the screen has no business sending, which is exactly the field that
       // would carry a mission into chat.
       const homeAction = v.nullable(v.record(v.string(), v.unknown()));
+
       const observed = v.parse(v.object({
         listed: v.array(v.string()),
         initial: v.nullable(v.string()),
@@ -892,6 +936,7 @@ describe('CLI TUI layout', () => {
   // string 'initialPrompt' from three files.
   test('creating a workspace from a mission opens it without sending the mission', () => {
     const mission = 'My personal assistant, Jarvis';
+
     const run = runHomeScreen({
       width: 80,
       driver: `
@@ -903,20 +948,24 @@ describe('CLI TUI layout', () => {
         console.log(JSON.stringify({ opened: await opened }));
       `,
     });
+
     try {
       const observed = v.parse(
         v.object({ opened: v.record(v.string(), v.unknown()) }),
         JSON.parse(run.stdout),
       );
+
       const created = readdirSync(run.home, { withFileTypes: true })
         .filter((entry) => entry.isDirectory() && existsSync(resolve(run.home, entry.name, 'agent.db')))
         .map((entry) => entry.name);
+
       expect(created).toHaveLength(1);
       // Exactly this payload: an extra field is how a mission would reach chat
       // as a first turn, and chat opens whatever `name` says.
       expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
 
       const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
+
       try {
         expect(db.query('SELECT COUNT(*) AS messages FROM messages').get()).toEqual({ messages: 0 });
         expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
@@ -969,11 +1018,13 @@ describe('CLI TUI layout', () => {
         console.log(JSON.stringify({ finalAction, afterFree }));
       `,
     });
+
     try {
       const observed = v.parse(v.object({
         finalAction: v.nullable(v.record(v.string(), v.unknown())),
         afterFree: v.array(v.string()),
       }), JSON.parse(run.stdout));
+
       // The exit itself has to have happened, or an empty list is a screen
       // that never finished rather than one that finished cleanly.
       expect(observed.finalAction).toEqual({ type: 'exit' });
@@ -985,12 +1036,14 @@ describe('CLI TUI layout', () => {
 
   test('home model and effort selections persist as global defaults', () => {
     const kinuHome = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
+
     try {
       writeFileSync(resolve(kinuHome, 'config.json'), JSON.stringify({
         model: 'openai/gpt-5.5',
         reasoningEffort: 'medium',
         providers: { openai: { apiKey: 'sk-test' } },
       }));
+
       const script = `
         import { readFileSync } from 'node:fs';
         import { createElement } from 'react';
@@ -1075,10 +1128,13 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
         console.log(JSON.stringify(defaultTier()));
       `;
+
       const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
       for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
         delete env[name];
       }
+
       const proc = Bun.spawnSync({
         cmd: [process.execPath, '-e', script],
         cwd: repoRoot,
@@ -1104,6 +1160,7 @@ describe('CLI TUI layout', () => {
 async function renderOverlayFrame(showOverlay: boolean) {
   const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
   const root = createRoot(renderer);
+
   try {
     root.render(
         <box flexDirection="column" style={{ width: '100%', height: '100%' }}>
@@ -1127,6 +1184,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
       </box>,
     );
     await renderSettled(renderOnce);
+
     return captureCharFrame();
   } finally {
     flushSync(() => { root.unmount(); });
@@ -1144,6 +1202,7 @@ async function renderSettled(renderOnce: () => Promise<void>) {
 function lineContaining(frame: string, text: string) {
   const line = frame.split('\n').findIndex((candidate) => candidate.includes(text));
   expect(line).toBeGreaterThanOrEqual(0);
+
   return line;
 }
 
@@ -1152,6 +1211,7 @@ function lineContaining(frame: string, text: string) {
 function topVisibleTranscriptLine(frame: string): number {
   const numbers = [...frame.matchAll(/line-(\d\d)/gu)].map(([, digits]) => Number(digits));
   expect(numbers.length).toBeGreaterThan(0);
+
   return Math.min(...numbers);
 }
 
@@ -1248,11 +1308,13 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
         }));
       `,
     });
+
     try {
       const observed = v.parse(v.object({
         readinessRow: v.boolean(),
         briefOnOneLine: v.boolean(),
       }), JSON.parse(full.stdout));
+
       expect(observed.readinessRow).toBe(false);
       expect(observed.briefOnOneLine).toBe(true);
     } finally {
@@ -1266,6 +1328,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
         console.log(JSON.stringify({ readinessRow: true }));
       `,
     });
+
     try {
       expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
     } finally {
@@ -1278,6 +1341,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
 
   test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
     const project = realpathSync(mkdtempSync(resolve(tmpdir(), 'kinu-home-project-')));
+
     const run = runHomeScreen({
       workspaces: ['shopbot'],
       config: {
@@ -1313,6 +1377,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
         console.log(JSON.stringify({ notice: noticeRow().replace(/\\s+/gu, ' ').trim() }));
       `,
     });
+
     try {
       const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
       // The row is clipped to the panel, so the contested NAME has to survive
@@ -1350,6 +1415,7 @@ function runHomeScreen(options: {
     providers: { openai: { apiKey: 'sk-test' } },
     ...options.config,
   }));
+
   for (const name of options.workspaces ?? []) {
     mkdirSync(resolve(home, name));
     // A REAL database carrying a title, because the navigator reads its label
@@ -1357,13 +1423,16 @@ function runHomeScreen(options: {
     // navigator says so ("Untitled workspace") rather than printing the
     // directory name — that name is the address `kinu chat <name>` takes.
     const db = new Database(resolve(home, name, 'agent.db'), { create: true });
+
     try {
       createCLIRuntime(db, { dbPath: db.filename, llm: null, hostRoot: null, agentName: name }).actor.config.setDisplayName(workspaceTitle(name));
     } finally {
       db.close();
     }
   }
+
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: home, KINU_SKIP_DAEMON: '1' };
+
   for (const name of INHERITED_CREDENTIALS) delete env[name];
 
   const proc = Bun.spawnSync({
@@ -1377,9 +1446,11 @@ function runHomeScreen(options: {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   // A driver that timed out reports what never arrived on stderr, and Bun still
   // exits 0 for a rejected top-level await, so stderr is what fails the test.
   expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+
   return { home, stdout: proc.stdout.toString() };
 }
 

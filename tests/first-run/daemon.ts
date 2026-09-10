@@ -92,6 +92,7 @@ export interface AttachMachineRequest {
  */
 export async function attachMachine(request: AttachMachineRequest): Promise<AttachedMachine> {
   const { account, name, home } = request;
+
   const registration = await infraBoundary(
     `POST ${account.origin}/api/cli/devices (${name})`,
     () => registerCloudDevice(account.origin, account.cliToken, name),
@@ -147,6 +148,7 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   // descriptor, and the fd needs no reader on this side to stay unblocked —
   // the kernel writes the daemon's log straight to disk.
   const logFd = openSync(logPath, 'a');
+
   const daemon = Bun.spawn({
     cmd: [process.execPath, DAEMON_ENTRY],
     cwd: home,
@@ -173,12 +175,14 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   };
 
   const arrived = await machineArrives(account, registration.deviceId);
+
   if (!arrived) {
     machine.stop();
     throw new Error(`the machine ${name} (${registration.deviceId}) never reported connected `
       + `within ${String(ARRIVAL_DEADLINE_MS)}ms — the daemon's own log: `
       + `${readDaemonLogTail(logPath)}`);
   }
+
   return machine;
 }
 
@@ -195,19 +199,23 @@ export async function detachMachine(
   account: DeviceAccount, machine: AttachedMachine,
 ): Promise<string | null> {
   machine.stop();
+
   try {
     const answer = await revokeDeviceOverUserRoute(account, machine.deviceId);
+
     if (answer.status !== 200) {
       return `DELETE /api/user/devices/${machine.deviceId} → ${String(answer.status)} ${answer.body}`;
     }
   } catch (error) {
     return `revoking ${machine.name}: ${String(error)}`;
   }
+
   try {
     rmSync(machine.home, { recursive: true, force: true });
   } catch (error) {
     return `removing ${machine.home}: ${String(error)}`;
   }
+
   return null;
 }
 
@@ -222,9 +230,12 @@ export { grantDeviceConsent };
 async function machineArrives(account: DeviceAccount, deviceId: string): Promise<boolean> {
   const deadline = Date.now() + ARRIVAL_DEADLINE_MS;
   const between = Math.floor(ARRIVAL_DEADLINE_MS / ARRIVAL_PROBES);
+
   for (;;) {
     const devices = await listCloudDevices(account.origin, account.cliToken);
+
     if (devices.some((device) => device.id === deviceId && device.connected)) return true;
+
     if (Date.now() >= deadline) return false;
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, between);
@@ -268,6 +279,7 @@ function stopDaemon(daemon: Subprocess): void {
 function readDaemonLogTail(path: string): string {
   try {
     const text = readFileSync(path, 'utf8');
+
     return text.trim().split('\n').slice(-8).join('\n') || '(the daemon said nothing)';
   } catch (cause) {
     // ABSENCE ONLY. A daemon that never started writing has no log at all;
@@ -275,6 +287,7 @@ function readDaemonLogTail(path: string): string {
     if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') {
       return '(no daemon log was written)';
     }
+
     return `the daemon log at ${path} could not be read: ${String(cause)}`;
   }
 }

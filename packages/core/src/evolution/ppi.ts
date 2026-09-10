@@ -155,11 +155,13 @@ function proportionVariance(events: number, n: number): number {
   const z2 = Z_95 * Z_95;
   const denominator = n + z2;
   const adjusted = (events + z2 / 2) / denominator;
+
   return (adjusted * (1 - adjusted)) / denominator;
 }
 
 function measured(value: number, se: number, n: number): MeasuredProportion {
   const halfWidth = Z_95 * se;
+
   return { mean: value, lo: Math.max(0, value - halfWidth), hi: Math.min(1, value + halfWidth), se, n };
 }
 
@@ -211,13 +213,17 @@ export type ClassifierAccuracyResult =
  */
 export function classifierAccuracy(strata: ReadonlyArray<PredictionStratum>): ClassifierAccuracyResult {
   const populated = strata.filter((s) => s.population > 0);
+
   if (populated.reduce((n, s) => n + s.population, 0) === 0) {
     return { accuracy: null, gap: { kind: 'no_population', strata: [] } };
   }
+
   if (populated.every((s) => s.labeled === 0)) {
     return { accuracy: null, gap: { kind: 'no_labels', strata: [] } };
   }
+
   const unlabeled = populated.filter((s) => s.labeled === 0).map((s) => s.key);
+
   if (unlabeled.length > 0) {
     return { accuracy: null, gap: { kind: 'unlabeled_strata', strata: unlabeled } };
   }
@@ -225,19 +231,23 @@ export function classifierAccuracy(strata: ReadonlyArray<PredictionStratum>): Cl
   const population = populated.reduce((n, s) => n + s.population, 0);
   const weight = (s: PredictionStratum): number => s.population / population;
   const goldMean = (s: PredictionStratum): number => s.events / s.labeled;
+
   const over = (want: boolean, pick: (s: PredictionStratum) => number): number =>
     populated.reduce((sum, s) => sum + (s.predictedEvent === want ? pick(s) : 0), 0);
 
   const a = over(true, (s) => weight(s) * goldMean(s));
   const c = over(false, (s) => weight(s) * (1 - goldMean(s)));
   const prevalence = a + over(false, (s) => weight(s) * goldMean(s));
+
   const noise = (want: boolean): number =>
     over(want, (s) => weight(s) ** 2 * proportionVariance(s.events, s.labeled));
 
   const labels = populated.reduce((n, s) => n + s.labeled, 0);
+
   const ratio = (numerator: number, scale: number, ownNoise: number, otherNoise: number): MeasuredProportion => {
     if (scale <= 0) return { mean: 0, lo: 0, hi: 1, se: Number.POSITIVE_INFINITY, n: 0 };
     const value = numerator / scale;
+
     return measured(value, Math.sqrt((1 - value) ** 2 * ownNoise + value ** 2 * otherNoise) / scale, labels);
   };
 
@@ -281,8 +291,10 @@ function splitOnPrediction(strata: ReadonlyArray<AccuracyStratum>): PredictionSt
     if (stratum.draws.length === 0) {
       return [{ key: stratum.key, predictedEvent: false, population: stratum.population, labeled: 0, events: 0 }];
     }
+
     return [true, false].flatMap((predictedEvent) => {
       const cell = stratum.draws.filter((draw) => draw.predictedEvent === predictedEvent);
+
       return cell.length === 0 ? [] : [{
         key: `${stratum.key}/${predictedEvent ? 'flagged' : 'clear'}`,
         predictedEvent,
@@ -343,22 +355,26 @@ export function resampledAccuracy(
   opts: { seed?: number; iterations?: number } = {},
 ): ClassifierAccuracyResult {
   const point = classifierAccuracy(splitOnPrediction(strata));
+
   if (point.accuracy === null) return point;
 
   const random = seededRandom(opts.seed ?? 1);
   const sensitivities: number[] = [];
   const specificities: number[] = [];
+
   for (let i = 0; i < (opts.iterations ?? ACCURACY_RESAMPLES); i++) {
     const draw = classifierAccuracy(splitOnPrediction(strata.map((stratum) => ({
       ...stratum,
       draws: stratum.draws.map(() => stratum.draws[Math.floor(random() * stratum.draws.length)]),
     }))));
+
     if (draw.accuracy === null) continue;
     sensitivities.push(draw.accuracy.sensitivity.mean);
     specificities.push(draw.accuracy.specificity.mean);
   }
 
   const n = strata.reduce((count, stratum) => count + stratum.draws.length, 0);
+
   return {
     accuracy: {
       sensitivity: resampled(point.accuracy.sensitivity, sensitivities, n),
@@ -385,10 +401,13 @@ export function resampledAccuracy(
 function resampled(closed: MeasuredProportion, samples: number[], n: number): MeasuredProportion {
   if (samples.length === 0) return { mean: closed.mean, lo: 0, hi: 1, se: Number.POSITIVE_INFINITY, n };
   const sorted = [...samples].sort((a, b) => a - b);
+
   const pick = (q: number): number =>
     sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+
   const mean = sorted.reduce((sum, s) => sum + s, 0) / sorted.length;
   const spread = Math.sqrt(sorted.reduce((sum, s) => sum + (s - mean) ** 2, 0) / sorted.length);
+
   return {
     mean: closed.mean,
     lo: Math.min(pick(0.025), closed.lo),
@@ -448,12 +467,14 @@ export function correctedRate(
   const q0 = accuracy.specificity.mean;
   const denominator = q1 + q0 - 1;
   const denominatorSe = Math.sqrt(accuracy.sensitivity.se ** 2 + accuracy.specificity.se ** 2);
+
   if (!(denominator > Z_95 * denominatorSe)) {
     return { rate: null, gap: { kind: 'uninformative_classifier', strata: [] } };
   }
 
   const raw = observed.events / observed.population;
   const estimate = Math.min(1, Math.max(0, (raw + q0 - 1) / denominator));
+
   const variance = (
     proportionVariance(observed.events, observed.population) +
     estimate ** 2 * accuracy.sensitivity.se ** 2 +
@@ -507,16 +528,22 @@ function kappaPoint(strata: ReadonlyArray<GoldStratum>, population: number): num
   const byA = new Map<string, number>();
   const byB = new Map<string, number>();
   let observed = 0;
+
   for (const stratum of strata) {
     const share = stratum.population / population / stratum.draws.length;
+
     for (const draw of stratum.draws) {
       byA.set(draw.a, (byA.get(draw.a) ?? 0) + share);
       byB.set(draw.b, (byB.get(draw.b) ?? 0) + share);
+
       if (draw.a === draw.b) observed += share;
     }
   }
+
   let expected = 0;
+
   for (const [label, share] of byA) expected += share * (byB.get(label) ?? 0);
+
   return expected >= 1 ? null : (observed - expected) / (1 - expected);
 }
 
@@ -547,24 +574,33 @@ export function designWeightedKappa(
 ): KappaEstimate | null {
   const drawn = strata.filter((s) => s.population > 0 && s.draws.length > 0);
   const population = drawn.reduce((n, s) => n + s.population, 0);
+
   if (population === 0) return null;
   const value = kappaPoint(drawn, population);
+
   if (value === null) return null;
 
   const iterations = opts.iterations ?? KAPPA_RESAMPLES;
   const random = seededRandom(opts.seed ?? 1);
   const samples: number[] = [];
+
   for (let i = 0; i < iterations; i++) {
     const resampled = drawn.map((s) => ({
       ...s,
       draws: s.draws.map(() => s.draws[Math.floor(random() * s.draws.length)]),
     }));
+
     const draw = kappaPoint(resampled, population);
+
     if (draw !== null) samples.push(draw);
   }
+
   samples.sort((a, b) => a - b);
+
   const pick = (q: number): number =>
     samples[Math.min(samples.length - 1, Math.max(0, Math.round(q * (samples.length - 1))))];
+
   const n = drawn.reduce((count, s) => count + s.draws.length, 0);
+
   return samples.length === 0 ? { value, lo: value, hi: value, n } : { value, lo: pick(0.025), hi: pick(0.975), n };
 }

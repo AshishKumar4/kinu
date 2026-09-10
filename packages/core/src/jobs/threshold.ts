@@ -95,6 +95,7 @@ export function invocationBackgroundPolicy(
   wakesAfterTurn: boolean,
 ): BackgroundPolicy {
   const base = BACKGROUND_POLICY[surface];
+
   return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
 }
 
@@ -137,13 +138,17 @@ export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
  */
 export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
+
   if (!text.startsWith('{')) return false;
   const parsed: unknown = tolerate(() => JSON.parse(text), 'malformed-input');
   const base = v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), parsed);
+
   if (!base.success) return false;
+
   if (base.output.background) {
     return v.safeParse(v.object({ jobId: v.string() }), parsed).success;
   }
+
   return true;
 }
 
@@ -173,9 +178,11 @@ export async function withBackgroundThreshold<T>(
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
   let timer: ReturnType<typeof setTimeout> | undefined;
+
   const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
     timer = setTimeout(() => resolve(TIMED_OUT), thresholdMs);
   });
+
   // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
   const settled = (async () => {
     try {
@@ -184,11 +191,14 @@ export async function withBackgroundThreshold<T>(
       return { error: cause };
     }
   })();
+
   const winner = await Promise.race([settled, timeout]);
+
   if (timer) clearTimeout(timer);
 
   if (winner !== TIMED_OUT) {
     if ('error' in winner) throw winner.error;
+
     return winner.value;
   }
 
@@ -196,11 +206,15 @@ export async function withBackgroundThreshold<T>(
   // admission decision, not an implicit timeout: no job owns this promise, so
   // preserve the foreground's controller and eventual settlement.
   const outcome = await deps.onThreshold(kind, promise);
+
   if (!outcome.detached) {
     const foreground = await settled;
+
     if ('error' in foreground) throw foreground.error;
+
     return foreground.value;
   }
+
   return {
     background: true,
     jobId: outcome.jobId,
@@ -232,6 +246,7 @@ export async function withSpawnDetach<T>(
   let announce!: () => void;
   const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
   const promise = exec(announce);
+
   // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
   const settled = (async () => {
     try {
@@ -240,19 +255,25 @@ export async function withSpawnDetach<T>(
       return { error: cause };
     }
   })();
+
   const winner = await Promise.race([settled, started]);
 
   if (winner !== SPAWNED) {
     if ('error' in winner) throw winner.error;
+
     return winner.value;
   }
 
   const outcome = await deps.onThreshold(kind, promise);
+
   if (!outcome.detached) {
     const foreground = await settled;
+
     if ('error' in foreground) throw foreground.error;
+
     return foreground.value;
   }
+
   return {
     background: true,
     jobId: outcome.jobId,
@@ -277,6 +298,7 @@ const SpawnStartedOptionsSchema = v.object({
 export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
   const parsed = v.safeParse(SpawnStartedOptionsSchema, toolOptions);
   const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
+
   return fn;
 }
 
@@ -303,6 +325,7 @@ const DeviceRequestOptionsSchema = v.object({
  *  so the claim stays the runner's. */
 export function readDeviceRequestChannel<T>(toolOptions: T): DeviceRequestChannel | undefined {
   const parsed = v.safeParse(DeviceRequestOptionsSchema, toolOptions);
+
   return parsed.success ? parsed.output[DEVICE_REQUEST_OPTION] : undefined;
 }
 
@@ -330,5 +353,6 @@ const ResumeRedriveOptionsSchema = v.object({
 /** Whether this tool call is a job re-drive. False for every other caller. */
 export function readResumeRedrive<T>(toolOptions: T): boolean {
   const parsed = v.safeParse(ResumeRedriveOptionsSchema, toolOptions);
+
   return parsed.success && parsed.output[RESUME_REDRIVE_OPTION] === true;
 }

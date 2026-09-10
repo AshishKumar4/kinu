@@ -32,6 +32,7 @@ import { orchestratorHarness } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 // Dynamic on purpose, exactly as tests/helpers/actor-harness.ts:24-27 does: the
 // real `agents` dist reaches `cloudflare:*`, so the SDK mock must be registered
 // before these modules evaluate, and a static import would hoist above it.
@@ -77,6 +78,7 @@ describe('the scaffold precondition moved to the turn, and is still reached', ()
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('this.orch.beginTurn('),
     );
+
     expect(beforeTurn).toContain('await this.ensureOwnedScaffold()');
   });
 

@@ -48,6 +48,7 @@ import {
   restoreWorkFromCounts,
   verifyRestoreBound,
 } from './bench-devbox-strategies';
+
 const tick = (
   arm: string, workload: string, wallMs: number,
   extra: Partial<TickRecord> = {},
@@ -211,6 +212,7 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
   let total = 5;
   let boot = 0;
   const real = globalThis.fetch;
+
   const answer = async (
     input: Parameters<typeof globalThis.fetch>[0],
     init?: Parameters<typeof globalThis.fetch>[1],
@@ -218,12 +220,15 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
     const url = new URL(String(input));
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
     asked.push(route);
+
     if (route === 'POST /wake') {
       wakes += 1;
       boot += 1;
       total += wakeOps;
+
       return new Response(JSON.stringify({ ok: true, ms: 12 }));
     }
+
     if (route === 'GET /state') {
       return new Response(JSON.stringify(wakes > 2
         ? { ok: true, state: { running: true, restoration: 'unattached', unready: 'the third wake refuses' } }
@@ -239,34 +244,44 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
             },
           }));
     }
+
     if (route === 'POST /stop') {
       total += stopOps;
+
       return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
         status: 202,
       });
     }
+
     if (route === 'POST /checkpoint') {
       return new Response(JSON.stringify({ ok: true, token: `token-${String(asked.length)}`, state: 'pending' }), {
         status: 202,
       });
     }
+
     if (route === 'GET /operation') {
       return new Response(JSON.stringify({
         ok: true, state: 'done', ms: 1_234, outcome: { kind: 'committed', bytes: 65_536, movedBytes: 32_768 },
       }));
     }
+
     if (route === 'POST /exec') {
       const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
       const command = posted.success ? posted.output.command ?? '' : '';
       const marker = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
+
       return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout: marker, stderr: '', ms: 3 }));
     }
+
     if (route === 'GET /ops') {
       return new Response(JSON.stringify({ calls: { put: total }, classA: total, classB: 0, classFree: 0, total }));
     }
+
     return new Response(JSON.stringify({ ok: true, ms: 1 }));
   };
+
   globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
   return { asked, restore: () => { globalThis.fetch = real; } };
 }
 
@@ -280,6 +295,7 @@ describe('the tree-size restore rows', () => {
     // must do the same.
     const fixture = rungRestoreFixture(10, 3);
     let arm: ArmResult;
+
     try {
       arm = await runArm(
         BENCH_FIXTURE,
@@ -290,6 +306,7 @@ describe('the tree-size restore rows', () => {
     } finally {
       fixture.restore();
     }
+
     const restores = decodeComplexityRows(arm.complexity).filter((row) => row.kind === 'restore');
     expect(restores.map((row) => row.treeBytes)).toEqual([65_536, 4_259_840]);
     expect(restores.map((row) => row.wakeOps?.total)).toEqual([3, 3]);
@@ -442,6 +459,7 @@ describe('the preregistered witness cells', () => {
         collapsedNamesDelta: true,
       },
     });
+
     expect(collapse?.observed).toBe(false);
     expect(collapse?.detail).toContain('and still names a delta');
   });
@@ -451,6 +469,7 @@ describe('the preregistered witness cells', () => {
       ...WITNESSED,
       deltaLayerCollapse: { ...WITNESSED.deltaLayerCollapse!, deltaBytes: 0, deltaLayerMounted: false },
     });
+
     expect(collapse?.observed).toBe(false);
     expect(collapse?.detail).toContain('delta 0B');
   });
@@ -460,6 +479,7 @@ describe('the preregistered witness cells', () => {
       ...WITNESSED,
       mutableDelta: { ...WITNESSED.mutableDelta!, etagAfter: 'e1' },
     });
+
     expect(mutable?.observed).toBe(false);
     expect(mutable?.detail).toContain('NOT rewritten');
   });
@@ -574,8 +594,10 @@ describe('restore and backup time versus tree size', () => {
     'loop budget ms': '8000',
     'deciding repetitions': '2',
   };
+
   const backupRow = (treeBytes: number): ComplexityRow =>
     ({ treeBytes, kind: 'backup-64k', ms: 120, outcome: 'committed' });
+
   const restoreRow = (treeBytes: number): ComplexityRow => ({
     treeBytes,
     kind: 'restore',
@@ -584,13 +606,18 @@ describe('restore and backup time versus tree size', () => {
     attachKind: 'attached',
     wakeOps: { calls: { get: 7 }, bytes: { payload: 90_112 } },
   });
+
   const measuredRows = (): ComplexityRow[] =>
     COMPLEXITY_TREE_BYTES.flatMap((treeBytes) => [backupRow(treeBytes), restoreRow(treeBytes)]);
+
   const complexityArm = (strategy: Strategy, complexity?: ComplexityRow[]): ArmResult => {
     const arm = measuredArm(strategy);
+
     if (complexity !== undefined) arm.complexity = complexity;
+
     return arm;
   };
+
   test('measured tree-size rows round-trip through the artifact and render', () => {
     // RED WHEN THE SECTION OMITS A MEASURED ROW: every number the driver took
     // is asserted in the rendered report, so a section that drops a rung fails
@@ -673,6 +700,7 @@ describe('operation totals', () => {
     const totals = totalsFor([
       tick('a', 'git', 100), tick('a', 'npm', 999_999),
     ], 'git');
+
     expect(totals.ticks).toBe(1);
     expect(totals.sumWallMs).toBe(100);
   });
@@ -693,10 +721,12 @@ describe('moved bytes are three-valued, and the third value is not zero', () => 
 
   test('the sqlite median excludes unanswerable ticks rather than zeroing them', () => {
     const db = 64 * 1024 * 1024;
+
     const finding = sqliteFinding([
       tick('a', 'sqlite', 90, { segment: 'sqlite-rewrite-1', bytesPut: db }),
       tick('a', 'sqlite', 90, { segment: 'sqlite-rewrite-2', bytesPut: null, movedReported: false }),
     ], db);
+
     expect(finding).toContain('100%');
     expect(finding).not.toContain('0.0 MiB');
   });
@@ -746,6 +776,7 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
   }) => {
     const deleted: string[] = [];
     const aborted: string[] = [];
+
     return {
       residue: {
         bucketExists: async (_bucket: string) => world.exists,
@@ -768,10 +799,12 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     const world = plane({
       exists: true, objects: ['a', 'b'], uploads: [{ key: 'c', uploadId: 'u1' }],
     });
+
     const probes = cleanupObservationProbes({
       wrangler: () => { throw new Error('the S3 plane answers; wrangler must not be asked'); },
       residue: world.residue,
     });
+
     expect(await probes.bucketState('bench')).toEqual({ absent: false, objects: 2, multipartResidue: 1 });
     // OBSERVED, not remediated: the verifier deleted and aborted nothing.
     expect(world.deleted).toEqual([]);
@@ -783,6 +816,7 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
       wrangler: () => { throw new Error('unasked'); },
       residue: plane({ exists: false, objects: [], uploads: [] }).residue,
     });
+
     expect(await probes.bucketState('bench')).toEqual({ absent: true, objects: 0, multipartResidue: 0 });
   });
 
@@ -793,6 +827,7 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
       wrangler: (args) => (args[0] === 'r2' ? 'name: bench\nobject_count: 0' : 'unexpected'),
       residue: null,
     });
+
     await expect(probes.bucketState('bench')).rejects.toThrow(/unmeasured count is not zero/);
   });
 
@@ -801,19 +836,24 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
       wrangler: () => `${WRANGLER_FAILED}: a bucket with this name does not exist`,
       residue: null,
     });
+
     expect(await probes.bucketState('bench')).toEqual({ absent: true, objects: 0, multipartResidue: 0 });
   });
 
   test('worker absence is probed by listing, and an unreadable account throws', async () => {
     const present = cleanupObservationProbes({ wrangler: () => 'Created: yesterday', residue: null });
     expect(await present.workerAbsent('w')).toBe(false);
+
     const absent = cleanupObservationProbes({
       wrangler: () => `${WRANGLER_FAILED}: workers.api.error.script_not_found [code: 10007]`, residue: null,
     });
+
     expect(await absent.workerAbsent('w')).toBe(true);
+
     const broken = cleanupObservationProbes({
       wrangler: () => `${WRANGLER_FAILED}: Authentication error`, residue: null,
     });
+
     await expect(broken.workerAbsent('w')).rejects.toThrow(/deployments list on w failed/);
   });
 
@@ -823,6 +863,7 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
       objects: ['boxes/one', 'boxes/two'],
       uploads: [{ key: 'boxes/three', uploadId: 'u9' }],
     });
+
     expect(await drainBucketResidue(world.residue, 'bench')).toEqual({ objects: 2, uploads: 1 });
     expect(await world.residue.listObjects('bench')).toEqual([]);
     expect(await world.residue.listUploads('bench')).toEqual([]);
@@ -833,18 +874,22 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     // records every mutation, and every wrangler command they issue is shown.
     const world = plane({ exists: true, objects: ['a'], uploads: [{ key: 'b', uploadId: 'u1' }] });
     const commands: string[] = [];
+
     const probes = cleanupObservationProbes({
       wrangler: (args) => {
         commands.push(args.join(' '));
+
         return `${WRANGLER_FAILED}: a bucket with this name does not exist`;
       },
       residue: world.residue,
     });
+
     // The probes really observed: an assertion over no calls proves nothing.
     expect(await probes.bucketState('bench')).toEqual({ absent: false, objects: 1, multipartResidue: 1 });
     expect(await probes.workerAbsent('w')).toBe(true);
     expect(world.deleted).toEqual([]);
     expect(world.aborted).toEqual([]);
+
     for (const command of commands) expect(command).not.toMatch(/delete|remove|--force/);
     // And the replay arm drains residue before retrying its delete. That order
     // lives in the recovery path whose wrangler calls are real subprocesses,
@@ -894,6 +939,7 @@ describe('the chain arm asks the store for what its record names', () => {
     // lost its record or a sweep that never ran.
     const absent = chainArchiveExpectations(CHAIN, false)
       .find((row) => row.key.endsWith('delta.sqsh'));
+
     expect(absent?.present).toBe(false);
     expect(absent?.name).toContain('no delta');
   });
@@ -910,6 +956,7 @@ describe('the chain arm asks the store for what its record names', () => {
     const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
     expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
     expect(source).toContain('found.exists !== true,');
+
     // And the chain branch no longer asks for a delta whatever the record says:
     // the only surviving unconditional delta head is the EXTRACTION branch's,
     // which is about a record that cannot have collapsed onto a fresh base.
@@ -917,6 +964,7 @@ describe('the chain arm asks the store for what its record names', () => {
       source.indexOf("if (mode === 'chain') {"),
       source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),
     );
+
     expect(chainBranch.length).toBeGreaterThan(200);
     // Comments stripped: the prose in that branch explains the defect by name,
     // and a guard that could be tripped by its own explanation guards nothing.
@@ -994,6 +1042,7 @@ describe('the counted restore (G5)', () => {
     const counted = countedRestoreWork({
       wakeKind: 'empty', wakeDetail: '', wakeOps: null, wakeMountLines: [],
     });
+
     expect(counted.work).toBeNull();
     expect(counted.missing).toHaveLength(1);
     expect(counted.missing[0]).toContain('the restore never ran');
@@ -1021,6 +1070,7 @@ describe('the counted restore (G5)', () => {
       'squashfuse /var/tmp/devbox/lower-base fuse.squashfuse ro 0 0',
       'squashfuse /var/tmp/devbox/lower-delta/abc123 fuse.squashfuse ro 0 0',
     ];
+
     const counted = countedRestoreWork({
       wakeKind: 'attached',
       wakeDetail: 'chain abc 4096B base+delta layered',
@@ -1028,14 +1078,17 @@ describe('the counted restore (G5)', () => {
       wakeMountLines: lines,
       wakeServedEntries: 12,
     });
+
     expect(counted.work).toEqual({
       serialRemoteOps: 7, totalRemoteOps: 7, metadataBytes: 0, payloadBytes: 65536, cpuSteps: 12, mounts: 4, replayUnits: 1,
     });
+
     // Without the byte tally or the served count the row refuses, field by field.
     const uncounted = countedRestoreWork({
       wakeKind: 'attached', wakeDetail: 'chain abc 4096B base',
       wakeOps: { calls: { get: 2 }, total: 2 }, wakeMountLines: lines.slice(0, 3), wakeServedEntries: null,
     });
+
     expect(uncounted.work).toBeNull();
     expect(uncounted.missing.map((reason) => reason.split(':')[0]).sort()).toEqual(['cpuSteps', 'metadataBytes/payloadBytes']);
   });
@@ -1046,6 +1099,7 @@ describe('the counted restore (G5)', () => {
       serialRemoteOps: 2, totalRemoteOps: 2, metadataBytes: 128, payloadBytes: 0,
       cpuSteps: 0, mounts: 2, replayUnits: 0,
     };
+
     expect(restoreWorkFromCounts(full)).toEqual(full);
     expect(restoreWorkFromCounts({ ...full, cpuSteps: null })).toBeNull();
     expect(restoreWorkFromCounts({
@@ -1059,16 +1113,20 @@ describe('the counted restore (G5)', () => {
       serialRemoteOps: 3, totalRemoteOps: 3, metadataBytes: 64, payloadBytes: 0,
       cpuSteps: 0, mounts, replayUnits: 0,
     });
+
     const lines = [
       's3fs /backups fuse.s3fs rw 0 0',
       'overlay /workspace overlay rw 0 0',
       'squashfuse /var/tmp/devbox/lower-base fuse.squashfuse ro 0 0',
       'squashfuse /var/tmp/devbox/lower-delta/abc123 fuse.squashfuse ro 0 0',
     ];
+
     expect(verifyRestoreBound(row(4), lines).verified).toBe(true);
+
     const tooMany = verifyRestoreBound(
       row(5), [...lines, 'squashfuse /var/tmp/devbox/lower-delta/def456 fuse.squashfuse ro 0 0'],
     );
+
     expect(tooMany.verified).toBe(false);
     expect(tooMany.reason).toContain('past the at-most-two-deep serve');
   });

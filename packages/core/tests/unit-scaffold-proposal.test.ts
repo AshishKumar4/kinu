@@ -47,11 +47,13 @@ describe('buildScaffoldProposalPrompt — documents the real sandbox contract', 
 
   test('leads with the behaviour→site handbook, indexed against the base scaffold', () => {
     expect(prompt.startsWith(renderScaffoldHandbook('async function* run(rt, task) {}'))).toBe(true);
+
     // …and it indexes the base being proposed against, not some other source.
     const withBridge = buildScaffoldProposalPrompt(
       'async function* run(rt, task) {\n  await host.llmStream({ system: "", messages: [] });\n}',
       'be terser',
     );
+
     expect(withBridge).toContain('run (generator, line 1) → host.llmStream()');
   });
 });
@@ -68,15 +70,18 @@ describe('a proposal written against the documented API', () => {
       'Session reflection: stream the LLM answer directly and journal each handled task to memory.',
       CONTRACT_PROPOSAL,
     );
+
     expect(mod.ok).toBe(true);
 
     // Shadow-eval smoke path: run the pending version exactly like auto-judge does.
     if (mod.version === undefined) throw new Error('expected pending scaffold version');
     const pendingCode = await readScaffoldVersion(rt, mod.version);
     expect(pendingCode).toBe(CONTRACT_PROPOSAL);
+
     if (!pendingCode) throw new Error('expected pending scaffold source');
 
     const events: ScaffoldEvent[] = [];
+
     const result = await runScaffold({
       rt,
       task: 'summarize the release notes',
@@ -104,6 +109,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
       'Return ONLY the JavaScript code': `Here is the revision:\n\n\`\`\`typescript\n${CONTRACT_PROPOSAL}\n\`\`\`\n\nDone.`,
     },
   });
+
   initScaffoldTables(rt.storage.execRaw);
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
@@ -114,6 +120,7 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
     source: 'session_reflection',
     status: 'corroborated',
   });
+
   const turns = [1, 2, 3].map((number) => ({
     userMessage: 'rotate the staging keys',
     assistantResponse: 'a response with enough substance to be graded on',
@@ -126,19 +133,23 @@ test('a prose-wrapped typescript fence stores only the scaffold source', async (
     sessionId: 'default',
     origin: 'user' as const,
   }));
+
   const window = {
     sessionId: 'test',
     turns,
     startedAt: Date.now() - 60_000,
     endedAt: Date.now(),
   };
+
   for (let index = 0; index < 3; index++) await engine.onSessionComplete(window);
 
   const pending = rt.storage.sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${rt.actor.actorId} AND status = 'pending'`;
+
   expect(pending).toHaveLength(1);
   const pendingVersion = pending[0]?.version;
+
   if (pendingVersion === undefined) throw new Error('expected one pending scaffold version');
   expect(await readScaffoldVersion(rt, pendingVersion)).toBe(CONTRACT_PROPOSAL);
 });

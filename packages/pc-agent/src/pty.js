@@ -79,6 +79,7 @@ function parseAxis(value, name) {
   if (!Number.isInteger(value) || value < 1 || value > MAX_AXIS) {
     throw new Error(`terminal ${name} must be a whole number from 1 to ${MAX_AXIS}`);
   }
+
   return value;
 }
 
@@ -86,13 +87,16 @@ function parseAxis(value, name) {
  *  `parseString`, kept here because index.js requires this file. */
 function parseText(value, expectation) {
   let text;
+
   try {
     text = String.prototype.valueOf.call(value);
   } catch (err) {
     if (err instanceof TypeError) throw new Error(expectation, { cause: err });
     throw err;
   }
+
   if (text !== value) throw new Error(expectation);
+
   return text;
 }
 
@@ -100,7 +104,9 @@ const SESSION_NAME_RULE = 'terminal session names are up to 64 letters, digits, 
 
 function parseSessionName(value) {
   const name = parseText(value, SESSION_NAME_RULE);
+
   if (!SESSION_NAME.test(name)) throw new Error(SESSION_NAME_RULE);
+
   return name;
 }
 
@@ -122,11 +128,14 @@ function parseSessionName(value) {
  */
 function sessionGroups(leader, platform = process.platform) {
   const groups = [leader];
+
   if (platform !== 'linux') return groups;
   const fs = require('node:fs');
+
   for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
     let stat;
+
     try {
       stat = fs.readFileSync(`/proc/${entry.name}/stat`, 'utf8');
     } catch (err) {
@@ -135,11 +144,15 @@ function sessionGroups(leader, platform = process.platform) {
       if (!err || (err.code !== 'ENOENT' && err.code !== 'ESRCH')) throw err;
       continue;
     }
+
     const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+
     if (Number(fields[3]) !== leader) continue;
     const group = Number(fields[2]);
+
     if (group > 0 && !groups.includes(group)) groups.push(group);
   }
+
   return groups;
 }
 
@@ -158,6 +171,7 @@ function createSessions(options = {}) {
     log = () => {},
     maxSessions = MAX_SESSIONS,
   } = options;
+
   const sessions = new Map();
 
   /**
@@ -170,19 +184,25 @@ function createSessions(options = {}) {
    */
   function open(request) {
     const name = parseSessionName(request.session);
+
     if (sessions.has(name)) throw new Error(`terminal ${name} is already open on this machine`);
+
     if (sessions.size >= maxSessions) {
       throw new Error(`this machine holds ${maxSessions} terminals already; close one before opening another`);
     }
+
     const cols = parseAxis(request.cols, 'width');
     const rows = parseAxis(request.rows, 'height');
+
     if (!Array.isArray(request.argv) || request.argv.length === 0) throw new Error('a terminal needs a program to run');
     const send = request.send;
+
     if (!(send instanceof Function)) throw new Error('a terminal needs a socket to report to');
 
     const record = { name, pid: 0, discardedBytes: 0, exited: false, terminal: undefined };
 
     let child;
+
     try {
       child = spawn(request.argv, {
         // OPTIONS, never a terminal built first: this is what makes the pty
@@ -218,11 +238,14 @@ function createSessions(options = {}) {
     } catch (err) {
       throw new Error('could not open a terminal on this machine', { cause: err });
     }
+
     const terminal = child.terminal;
+
     if (!terminal) {
       child.kill('SIGKILL');
       throw new Error('this runtime spawned no terminal for the session; Kinu needs a newer Bun');
     }
+
     record.terminal = terminal;
     record.pid = child.pid;
     sessions.set(name, record);
@@ -233,13 +256,16 @@ function createSessions(options = {}) {
       record.exited = true;
       sessions.delete(name);
       terminal.close();
+
       if (record.discardedBytes > 0) log('device.terminal_output_discarded', name, record.discardedBytes);
       send({ type: 'PTY_EXIT', session: name, exitCode: status });
     }
+
     /** @param {unknown} error */
     function reportExitFailure(error) {
       log('device.terminal_exit_unreadable', name, error);
     }
+
     child.exited.then(reportExit, reportExitFailure);
 
     return { pid: child.pid, cols, rows };
@@ -247,7 +273,9 @@ function createSessions(options = {}) {
 
   function held(name) {
     const record = sessions.get(parseSessionName(name));
+
     if (!record) throw new Error(`this machine holds no terminal called ${name}`);
+
     return record;
   }
 
@@ -258,6 +286,7 @@ function createSessions(options = {}) {
     const record = held(name);
     const bytes = Buffer.from(parseText(data, 'terminal input must be base64 text'), 'base64');
     record.terminal.write(bytes);
+
     return bytes.length;
   }
 
@@ -268,6 +297,7 @@ function createSessions(options = {}) {
     const width = parseAxis(cols, 'width');
     const height = parseAxis(rows, 'height');
     record.terminal.resize(width, height);
+
     return { cols: width, rows: height };
   }
 
@@ -290,6 +320,7 @@ function createSessions(options = {}) {
   function close(name) {
     const record = held(name);
     record.terminal.close();
+
     for (const group of sessionGroups(record.pid)) {
       try {
         process.kill(-group, 'SIGHUP');
@@ -299,20 +330,24 @@ function createSessions(options = {}) {
         if (!err || err.code !== 'ESRCH') throw new Error(`could not close terminal ${name}`, { cause: err });
       }
     }
+
     return { session: record.name };
   }
 
   /** Every terminal, because the socket that was watching them is gone. */
   function closeAll() {
     const closed = [];
+
     for (const name of sessions.keys()) {
       closed.push(name);
+
       try {
         close(name);
       } catch (err) {
         log('device.terminal_close_failed', name, err);
       }
     }
+
     return closed;
   }
 

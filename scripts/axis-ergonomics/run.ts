@@ -119,13 +119,17 @@ async function askOllama(model: string, system: string, user: string, json: bool
     stream: false,
     options: { temperature: 0, num_ctx: 16384, num_predict: 1600 },
   };
+
   if (json) body.format = 'json';
+
   const res = await fetch('http://127.0.0.1:11434/api/chat', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+
   if (!res.ok) throw new Error(`ollama ${model}: ${String(res.status)} ${await res.text()}`);
+
   return readOllamaReply(await res.text());
 }
 
@@ -149,7 +153,9 @@ interface ChatBody {
  * into a hang, and a hung arm reports nothing at all.
  */
 const RETRY_STATUS: readonly number[] = [408, 429, 500, 502, 503, 504];
+
 const MAX_ATTEMPTS = 10;
+
 const MAX_BACKOFF_MS = 60_000;
 
 const RetryAfterSchema = v.looseObject({
@@ -169,13 +175,16 @@ const RetryAfterSchema = v.looseObject({
  *  a provider that forgot the header. */
 function retryAfterMs(res: Response, body: string): number {
   const header = Number(res.headers.get('retry-after') ?? '');
+
   if (Number.isFinite(header) && header > 0) return header * 1000;
+
   try {
     return v.parse(RetryAfterSchema, JSON.parse(body)).error.metadata.retry_after_seconds * 1000;
   } catch (error) {
     // An unparseable error body simply names no wait; the caller falls back to
     // its own backoff. Reported so a systematically malformed provider shows up.
     process.stderr.write(`    (no retry-after in error body: ${error instanceof Error ? error.message : String(error)})\n`);
+
     return 0;
   }
 }
@@ -183,22 +192,26 @@ function retryAfterMs(res: Response, body: string): number {
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
+
   return promise;
 }
 
 function openRouterKey(): string {
   const fromEnv = process.env['OPENROUTER_API_KEY'];
+
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
   // The CLI's own resolved config is the same credential the rest of this
   // machine already uses; reading it here avoids asking for a second copy.
   const path = join(homedir(), '.kinu', 'config.json');
   const key = v.parse(KinuConfigSchema, JSON.parse(readFileSync(path, 'utf8'))).providers.openrouter.apiKey;
+
   if (key === '') {
     throw new Error(
       'no OpenRouter credential: set OPENROUTER_API_KEY, or sign in so '
       + `${path} carries providers.openrouter.apiKey. The local ollama arms still run without it.`,
     );
   }
+
   return key;
 }
 
@@ -210,9 +223,11 @@ async function askOpenRouter(model: string, system: string, user: string, json: 
     // A study of a surface should not also be sampling its own noise.
     temperature: 0,
   };
+
   if (json) body.response_format = { type: 'json_object' };
   let lastStatus = 0;
   let lastBody = '';
+
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -223,13 +238,16 @@ async function askOpenRouter(model: string, system: string, user: string, json: 
       },
       body: JSON.stringify(body),
     });
+
     if (res.ok) return readChatCompletion(await res.text());
     lastStatus = res.status;
     lastBody = await res.text();
+
     if (!RETRY_STATUS.some((s) => s === lastStatus)) break;
     const named = retryAfterMs(res, lastBody);
     await sleep(Math.min(named > 0 ? named : 2000 * 2 ** (attempt - 1), MAX_BACKOFF_MS));
   }
+
   throw new Error(`openrouter ${model}: ${String(lastStatus)} ${lastBody}`);
 }
 
@@ -287,6 +305,7 @@ function configureUser(c: Case): string {
 
 function correctUser(v: Validation): string {
   const errors = v.violations.map((x) => `- ${refusalText(x)}`).join('\n');
+
   return 'That call was refused.\n\n'
     + `{ "reason": "bad_input", "error": "${v.violations.map(refusalText).join(' ').replace(/"/g, "'")}" }\n\n`
     + `${errors}\n\n`
@@ -358,6 +377,7 @@ function set(value: string | null): string | undefined {
 
 function attemptOf(raw: string, remedyOrder: RemedyOrder): Attempt {
   const read = readAnswer(raw);
+
   const config: ProposedConfig = {
     preset: set(read.answer.preset),
     verify: set(read.answer.verify),
@@ -365,6 +385,7 @@ function attemptOf(raw: string, remedyOrder: RemedyOrder): Attempt {
     axes: read.answer.axes,
     models: read.answer.models,
   };
+
   return { raw, read, config, validation: validate(config, remedyOrder) };
 }
 
@@ -372,6 +393,7 @@ function attemptOf(raw: string, remedyOrder: RemedyOrder): Attempt {
  *  is opted into with --variants, never run by default: mixing it into the main
  *  arms would change the surface under test half way through. */
 const VARIANTS: readonly SurfaceVariant[] = ['bare', 'glossed'];
+
 const ALL_VARIANTS: readonly SurfaceVariant[] = ['bare', 'glossed', 'zoo'];
 
 async function runConfigure(
@@ -387,18 +409,22 @@ async function runConfigure(
     // answer. They never reach the bare/glossed arms.
     const all = variant === 'zoo' ? [...CORPUS, ...ZOO_EXTRA_CASES] : CORPUS;
     const cases = only.length === 0 ? all : all.filter((c) => only.some((id) => id === c.id));
+
     for (const c of cases) {
       const reply = await ask(spec, system, configureUser(c));
       const first = attemptOf(reply.text, remedyOrder);
       let corrected: Attempt | null = null;
+
       if (!first.validation.legal) {
         const second = await ask(
           spec,
           system,
           `${configureUser(c)}\n\nYou answered:\n${reply.text}\n\n${correctUser(first.validation)}`,
         );
+
         corrected = attemptOf(second.text, remedyOrder);
       }
+
       record({
         model: spec.id, variant, caseId: c.id, first, corrected,
         tokensIn: reply.tokensIn, tokensOut: reply.tokensOut,
@@ -416,6 +442,7 @@ export interface ForwardName {
   readonly axis: AxisName;
   readonly read: ForwardProbeRead;
 }
+
 export interface ReverseName {
   readonly model: string;
   readonly axis: AxisName;
@@ -427,6 +454,7 @@ export interface ReverseName {
   readonly confidence: string;
   readonly unreadable: string | null;
 }
+
 export interface NamingResult {
   readonly forward: readonly ForwardName[];
   readonly reverse: readonly ReverseName[];
@@ -436,11 +464,13 @@ async function runNaming(spec: ModelSpec): Promise<NamingResult> {
   const forward: ForwardName[] = [];
   const reverse: ReverseName[] = [];
   const bareSystem = 'You answer with a single JSON object and nothing else.';
+
   for (const axis of AXIS_NAMES) {
     const reply = await ask(spec, bareSystem, forwardNameUser(axis));
     forward.push({ model: spec.id, axis, read: readForwardProbe(reply.text) });
     process.stderr.write(`  ${spec.id} name-forward ${axis}\n`);
   }
+
   for (const probe of REVERSE_PROBES) {
     const reply = await ask(spec, bareSystem, reverseNameUser(probe.mechanism));
     const read = readReverseProbe(reply.text);
@@ -451,7 +481,9 @@ async function runNaming(spec: ModelSpec): Promise<NamingResult> {
       correct: pair === `${probe.axis}:${probe.value}`.toLowerCase(),
     });
   }
+
   process.stderr.write(`  ${spec.id} name-reverse ${String(REVERSE_PROBES.length)} probes\n`);
+
   return { forward, reverse };
 }
 
@@ -461,6 +493,7 @@ async function runNaming(spec: ModelSpec): Promise<NamingResult> {
  *  is the honest allowance, applied to all of them because an estimate is a
  *  CEILING or it is not worth printing. */
 const VISIBLE_OUT_TOK = 350;
+
 const REASONING_MULTIPLIER = 5;
 
 function dryRun(models: readonly ModelSpec[], variants: readonly SurfaceVariant[], skipNaming: boolean): void {
@@ -472,6 +505,7 @@ function dryRun(models: readonly ModelSpec[], variants: readonly SurfaceVariant[
   console.log(`naming probes: ${String(AXIS_NAMES.length)} forward + ${String(REVERSE_PROBES.length)} reverse = ${String(probes)} calls`);
   console.log(`prompt:        ~${String(promptTok)} tok (glossed surface)`);
   let total = 0;
+
   for (const m of models) {
     // Correction calls are bounded by the corpus and re-send the whole exchange,
     // so they are priced at 2x an ordinary configure call and assumed for HALF
@@ -487,35 +521,45 @@ function dryRun(models: readonly ModelSpec[], variants: readonly SurfaceVariant[
       + (m.via === 'ollama' ? '$0.00 (local, unmetered)' : `$${usd.toFixed(3)}`),
     );
   }
+
   console.log(`TOTAL METERED SPEND: $${total.toFixed(3)} (ceiling; measured spend is reported at the end of a real run)`);
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+
   const arg = (name: string): string | undefined => {
     const i = argv.indexOf(name);
+
     return i === -1 ? undefined : argv[i + 1];
   };
+
   const requested = (arg('--models') ?? 'gemma4:26b,gemma4:12b-it-qat,gpt-5-mini,gpt-4.1-mini').split(',');
   const known: readonly ModelSpec[] = Object.values(MODELS);
   const specs: ModelSpec[] = [];
+
   for (const id of requested) {
     const key = id.trim();
     const spec = known.find((m) => m.id === key);
+
     if (spec === undefined) {
       console.error(`REFUSED: unknown model '${key}'. Known: ${known.map((m) => m.id).join(', ')}`);
       process.exit(2);
     }
+
     specs.push(spec);
   }
 
   const variants: SurfaceVariant[] = [];
+
   for (const name of (arg('--variants') ?? VARIANTS.join(',')).split(',')) {
     const found = ALL_VARIANTS.find((x) => x === name.trim());
+
     if (found === undefined) {
       console.error(`REFUSED: unknown variant '${name.trim()}'. Known: ${ALL_VARIANTS.join(', ')}`);
       process.exit(2);
     }
+
     variants.push(found);
   }
 
@@ -526,19 +570,23 @@ async function main(): Promise<void> {
   // A case filter, so a follow-up arm testing ONE refusal does not re-buy the
   // other nineteen cases and re-sample answers already on disk.
   const only = (arg('--cases') ?? '').split(',').map((x) => x.trim()).filter((x) => x !== '');
+
   for (const id of only) {
     if (![...CORPUS, ...ZOO_EXTRA_CASES].some((c) => c.id === id)) {
       console.error(`REFUSED: unknown case '${id}'.`);
       process.exit(2);
     }
   }
+
   // The refusal's remedy ORDER is a variable under test, not a constant.
   const remedyOrder: RemedyOrder = argv.includes('--keep-first') ? 'keep-first' : 'drop-offered';
 
   dryRun(specs, variants, skipNaming);
+
   if (argv.includes('--dry-run')) return;
 
   const out = arg('--out');
+
   if (out === undefined) {
     console.error('REFUSED: --out <file> is required for a real run. A study whose results are '
       + 'only on a terminal cannot be re-read, and every claim it produces would be unciteable.');
@@ -552,6 +600,7 @@ async function main(): Promise<void> {
   // it got and the report scores exactly that.
   const configure: ConfigureResult[] = [];
   const naming: NamingResult[] = [];
+
   const flush = (): void => {
     writeFileSync(out, JSON.stringify({
       ranAt: new Date().toISOString(),
@@ -566,10 +615,12 @@ async function main(): Promise<void> {
       },
     }, null, 2));
   };
+
   const record = (r: ConfigureResult): void => { configure.push(r); flush(); };
 
   for (const spec of specs) {
     process.stderr.write(`\n[${spec.id}] configure\n`);
+
     try {
       await runConfigure(spec, variants, only, remedyOrder, record);
     } catch (error) {
@@ -578,15 +629,20 @@ async function main(): Promise<void> {
       process.stderr.write(`\n[${spec.id}] ARM INCOMPLETE after ${String(configure.filter((r) => r.model === spec.id).length)} cases: ${error instanceof Error ? error.message : String(error)}\n`);
       continue;
     }
+
     if (skipNaming) { flush(); continue; }
+
     process.stderr.write(`[${spec.id}] naming\n`);
+
     try {
       naming.push(await runNaming(spec));
     } catch (error) {
       process.stderr.write(`\n[${spec.id}] NAMING PROBES INCOMPLETE: ${error instanceof Error ? error.message : String(error)}\n`);
     }
+
     flush();
   }
+
   flush();
   console.log(`\nwrote ${out} — ${String(configure.length)} configure results, ${String(naming.length)} naming sets`);
 }

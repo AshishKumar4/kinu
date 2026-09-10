@@ -69,6 +69,7 @@ function row(stdout: string, over: Partial<TerminalPaneOutput> = {}): TerminalPa
 function editor(): LineTerminalState {
   const state = new LineTerminalState();
   state.reset();
+
   return state;
 }
 
@@ -82,6 +83,7 @@ function keepsReading(source: string): boolean {
   const term = new Recorder();
   const state = editor();
   const command = feedInput(term, state, source.replace(/\n/g, '\r'));
+
   return command === null && Bun.stripANSI(term.raw).endsWith('\r\n> ');
 }
 

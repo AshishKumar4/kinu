@@ -12,10 +12,13 @@ export interface MemoryVfs {
 export function createMemoryVfs(): MemoryVfs {
   const files = new Map<string, string>();
   const dirs = new Set<string>();
+
   const vfs: VFS & Pick<VfsNativeReads, 'readRange'> = {
     readFile: async (path) => {
       const content = files.get(path);
+
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
+
       return content;
     },
     /**
@@ -27,7 +30,9 @@ export function createMemoryVfs(): MemoryVfs {
      */
     readRange: async (path, offset, length) => {
       const content = files.get(path);
+
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
+
       return new TextEncoder().encode(content).subarray(offset, offset + length);
     },
     writeFile: async (path, data) => {
@@ -38,7 +43,9 @@ export function createMemoryVfs(): MemoryVfs {
       .map((f) => f.slice(path.length + 1)),
     stat: async (path) => {
       const content = files.get(path);
+
       if (content === undefined) return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
+
       return { size: content.length, mtimeMs: 0, isDir: false };
     },
     unlink: async (path) => { files.delete(path); },
@@ -48,5 +55,6 @@ export function createMemoryVfs(): MemoryVfs {
     },
     exists: async (path) => files.has(path) || dirs.has(path),
   };
+
   return { vfs, files };
 }

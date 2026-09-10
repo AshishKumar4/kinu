@@ -36,10 +36,13 @@ const render = (log: readonly ActivityLogEntry[]): string =>
 describe('the Activity log pane renders the rows the snapshot already carried', () => {
   test('every fetched row reaches the reader — event, detail and elapsed', () => {
     const html = render(LOG);
+
     for (const row of LOG) {
       expect(html).toContain(row.event);
+
       if (row.detail !== null) expect(html).toContain(row.detail);
     }
+
     expect(html).toContain('287 ms');
     expect(html).toContain('41602 ms');
   });

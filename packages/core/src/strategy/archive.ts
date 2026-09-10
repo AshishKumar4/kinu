@@ -119,9 +119,11 @@ export function archiveCellOf(
   key: string, quantities: Readonly<Record<string, number>> | undefined,
 ): ArchiveCell {
   const coordinate = quantities?.[key];
+
   if (coordinate === undefined || !Number.isFinite(coordinate)) {
     return { kind: 'unwitnessed', reported: quantities ? Object.keys(quantities).sort() : [] };
   }
+
   return { kind: 'cell', descriptor: `${key}=${String(coordinate)}` };
 }
 
@@ -158,8 +160,10 @@ export function noveltyDistance(left: string, right: string): number {
   const first = new Set(left.toLowerCase().match(TOKEN) ?? []);
   const second = new Set(right.toLowerCase().match(TOKEN) ?? []);
   let shared = 0;
+
   for (const token of first) if (second.has(token)) shared += 1;
   const union = first.size + second.size - shared;
+
   // Two artifacts with no tokens at all are the same artifact, not two novel ones.
   return union === 0 ? 0 : 1 - shared / union;
 }
@@ -234,18 +238,22 @@ export function admitToArchive(
   },
 ): ArchiveVerdict {
   const { write, novelty } = input;
+
   if (admitsPublication(input.publication, 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
 
   let nearest: { readonly occupant: ExplorationRecord; readonly distance: number } | null = null;
+
   for (const occupant of cellOccupants(sql, actor, {
     identity: write.identity, floor: write.floor, descriptor: write.descriptor,
   })) {
     if (occupant.artifact === write.artifact) continue;
     const distance = noveltyDistance(write.artifact, occupant.artifact);
+
     if (nearest === null || distance < nearest.distance) nearest = { occupant, distance };
   }
+
   if (nearest !== null && nearest.distance < novelty) {
     return {
       kind: 'refused',
@@ -255,5 +263,6 @@ export function admitToArchive(
       novelty,
     };
   }
+
   return recordExploration(sql, actor, { publication: input.publication, write });
 }

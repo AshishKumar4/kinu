@@ -37,11 +37,14 @@ export type PlatformGateway =
 
 export function resolvePlatformGateway(env: ProviderEnv): PlatformGateway {
   const target = parseGatewayTarget(env.AI_GATEWAY_URL);
+
   if ('reason' in target) return target;
   const binding = env.AI;
+
   if (!binding) {
     return { reason: 'Workers AI binding (env.AI) missing — add "ai": { "binding": "AI" } to wrangler.jsonc.' };
   }
+
   return { target, binding };
 }
 
@@ -53,6 +56,7 @@ export function createAIGatewayProvider(): ModelProvider {
     isAvailable: deps => !('reason' in resolvePlatformGateway(deps.env)),
     unavailableReason: (deps) => {
       const resolved = resolvePlatformGateway(deps.env);
+
       return 'reason' in resolved ? resolved.reason : undefined;
     },
     async listModels(deps): Promise<ModelInfo[]> {
@@ -60,6 +64,7 @@ export function createAIGatewayProvider(): ModelProvider {
         fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
         preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
       });
+
       return models.map((model) => ({
         ...model,
         id: `workers-ai/${model.id}`,
@@ -69,7 +74,9 @@ export function createAIGatewayProvider(): ModelProvider {
     },
     createModel(modelId, deps): LanguageModel {
       const resolved = resolvePlatformGateway(deps.env);
+
       if ('reason' in resolved) throw new Error(`ai-gateway unavailable: ${resolved.reason}`);
+
       return createOpenAICompatible({
         name: AI_GATEWAY_PROVIDER_ID,
         // Never fetched. The SDK builds `{baseURL}/chat/completions` and the

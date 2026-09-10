@@ -20,6 +20,7 @@ import type { NodeStatus, SearchNode } from '../types/mcts';
 
 export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchNode[] {
   actor.assertCurrent();
+
   return sql<SearchNode>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
@@ -51,6 +52,7 @@ export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): Sear
  */
 export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchNode[] {
   actor.assertCurrent();
+
   return sql<SearchNode>`
     SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
@@ -134,16 +136,19 @@ export function readSearchNodeDetail(
   sql: SqlExecutor, actor: ActorHandle, nodeId: string,
 ): SearchNodeDetail | null {
   actor.assertCurrent();
+
   const readNode = (id: string): DetailRow | undefined => sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
            task, observation, code_used, branch_agent_key, msg_id, created_at
     FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`[0];
 
   const node = readNode(nodeId);
+
   if (node === undefined) return null;
 
   const path: SearchNodeSummary[] = [];
   const seen = new Set<string>();
+
   for (let cursor: DetailRow | undefined = node; cursor !== undefined && !seen.has(cursor.id);) {
     seen.add(cursor.id);
     path.unshift(summarize(cursor));

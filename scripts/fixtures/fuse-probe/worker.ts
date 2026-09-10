@@ -40,15 +40,20 @@ import {
   parseProbeRequest,
 } from "./worker-contract";
 import type { ProbeRequest, RunIdentity } from "./worker-contract";
+
 export { Sandbox } from "@cloudflare/sandbox";
+
 export { ContainerProxy } from "@cloudflare/sandbox";
+
 export { FuseProbeBox };
+
 export { ImageIdentityError } from "./worker-contract";
 
 /** SHA-256 hex via WebCrypto. The bun-native sha256Hex in core.ts uses
  *  Bun.CryptoHasher, which does not exist on workerd where this file runs. */
 async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -69,10 +74,13 @@ class FuseProbeBox extends Sandbox<ProbeEnv> {
 
   async prepare(): Promise<RunIdentity> {
     const actualVersion = await this.containerVersion();
+
     if (actualVersion !== SANDBOX_IMAGE_VERSION) {
       throw new ImageIdentityError(SANDBOX_IMAGE, actualVersion);
     }
+
     const bunVersion = await this.bunVersion();
+
     return {
       configuredImage: SANDBOX_IMAGE,
       expectedVersion: SANDBOX_IMAGE_VERSION,
@@ -94,9 +102,11 @@ class FuseProbeBox extends Sandbox<ProbeEnv> {
   protected async bunVersion(): Promise<string> {
     const result = await this.exec("bun --version", { timeout: 30_000 });
     const version = result.stdout.trim();
+
     if (!result.success || version.length === 0) {
       throw new Error(`bun is not runnable in the container (exitCode ${result.exitCode}): ${result.stderr.slice(0, 200)}`);
     }
+
     return version;
   }
 
@@ -115,13 +125,17 @@ export default {
     if (!isAuthorized(env.FUSE_PROBE_TOKEN, request.headers.get("x-fuse-probe-token"))) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
+
     const pathname = new URL(request.url).pathname;
+
     if (request.method === 'GET' && pathname === '/health') {
       return Response.json({ ok: true });
     }
+
     // getSandbox returns the typed FuseProbeBox RPC surface.
     const sandbox = getSandbox(env.Sandbox, SANDBOX_ID, { normalizeId: true, transport: "rpc" });
     let command: ProbeRequest;
+
     try {
       command = parseProbeRequest(pathname, await request.json());
     } catch (error) {

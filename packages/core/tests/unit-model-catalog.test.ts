@@ -10,6 +10,7 @@ import {
 
 function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
+
   return {
     env: {},
     fetch: fetchFn,
@@ -27,8 +28,10 @@ function fetchStub(
 describe('provider model catalogs', () => {
   test('OpenAI model menu comes from models.dev when available', async () => {
     const provider = createOpenAIProvider();
+
     const fetchFn = fetchStub(async (input) => {
       expect(String(input)).toBe('https://models.dev/api.json');
+
       return Response.json({
         openai: {
           models: {
@@ -73,6 +76,7 @@ describe('provider model catalogs', () => {
 
   test('models.dev per-model prices reach ModelInfo, and half-priced entries do not', async () => {
     const provider = createOpenAIProvider();
+
     const fetchFn = fetchStub(async () => Response.json({
       openai: {
         models: {
@@ -95,6 +99,7 @@ describe('provider model catalogs', () => {
     const models = await provider.listModels(deps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
     }, fetchFn));
+
     const byId = new Map(models.map((m) => [m.id, m]));
 
     expect(byId.get('priced')?.cost).toEqual({ input: 5, output: 30, cacheRead: 1.25 });
@@ -106,9 +111,11 @@ describe('provider model catalogs', () => {
 
   test('Codex model menu uses the ChatGPT Codex model endpoint', async () => {
     const provider = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' });
+
     const fetchFn = fetchStub(async (input, init) => {
       expect(String(input)).toBe('https://chatgpt.test/backend-api/codex/models?client_version=1.0.0');
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer codex-token');
+
       return Response.json({
         models: [
           {

@@ -6,6 +6,7 @@ import {
 } from './scanner-bundle-gate';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const WIRED_BUNFIG = `[install.security]\nscanner = "./${SCANNER_BUNDLE}"\n`;
 
 describe('the committed scanner bundle', () => {

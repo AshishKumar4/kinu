@@ -13,7 +13,9 @@ import * as v from "valibot";
 import { BUILTIN_TOOLS, JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
+
 const AGENT_NAME = process.argv[3] ?? "e2e-test-agent";
+
 const TIMEOUT_MS = 30_000;
 
 const chatFrameSchema = v.object({
@@ -34,19 +36,23 @@ const rpcFrameSchema = v.object({
 });
 
 const agentStatusSchema = v.object({ name: v.string(), model: v.string() });
+
 const toolListSchema = v.object({
   builtIn: v.array(v.string()),
   crafted: v.array(JsonValueSchema),
 });
+
 const modelListSchema = v.object({
   current: v.string(),
   models: v.array(JsonValueSchema),
 });
+
 const memoryContentSchema = v.string();
 
 // ── helpers ──────────────────────────────────────────────────────
 
 let passCount = 0;
+
 let failCount = 0;
 
 function pass(name: string, detail?: string) {
@@ -93,16 +99,22 @@ function onFrame<Output>(
   const listener = (ev: MessageEvent) => {
     const raw = String(ev.data);
     let decoded: JsonValue;
+
     try {
       decoded = parseJsonValue(raw);
     } catch (error) {
       reject(new Error(`server sent a non-JSON frame: ${raw.slice(0, 200)}`, { cause: error }));
+
       return;
     }
+
     const parsed = v.safeParse(schema, decoded);
+
     if (parsed.success) handle(parsed.output);
   };
+
   ws.addEventListener("message", listener);
+
   return () => { ws.removeEventListener("message", listener); };
 }
 
@@ -144,11 +156,15 @@ function rpc<Output>(
       if (msg.type !== "rpc" || msg.id !== id) return;
       clearTimeout(timer);
       stop();
+
       if (!msg.success) {
         reject(new Error(msg.error ?? "RPC failed"));
+
         return;
       }
+
       const result = v.safeParse(outputSchema, msg.result);
+
       if (result.success) resolve(result.output);
       else reject(new Error(`RPC ${method} returned an unexpected result shape: ${result.issues.map((issue) => issue.message).join("; ")}`));
     });
@@ -175,11 +191,13 @@ function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bo
       // Collect streamed response chunks
       if (msg.type === "cf_agent_use_chat_response" && msg.id === reqId) {
         if (msg.body) bodies.push(msg.body);
+
         if (msg.done && !msg.error) {
           streamDone = true;
           // Give 2s for the cf_agent_chat_messages broadcast to arrive
           setTimeout(() => { if (streamDone) finish(); }, 2000);
         }
+
         if (msg.error) {
           clearTimeout(timer);
           stop();
@@ -218,6 +236,7 @@ async function testHttpGetMessages() {
     const resp = await fetch(httpUrl("/get-messages"), {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+
     if (resp.ok) {
       const data = v.parse(v.array(JsonValueSchema), await resp.json());
       pass("HTTP GET /get-messages", `status=${resp.status}, ${data.length} messages`);
@@ -232,6 +251,7 @@ async function testHttpGetMessages() {
 async function testRpcGetAgentStatus(ws: WebSocket) {
   try {
     const result = await rpc(ws, "getAgentStatus", agentStatusSchema);
+
     if (result.name.length > 0 && result.model.length > 0) {
       pass("RPC getAgentStatus", `name=${result.name}, model=${result.model}`);
     } else {
@@ -247,6 +267,7 @@ async function testRpcGetToolList(ws: WebSocket) {
     const result = await rpc(ws, "getToolList", toolListSchema);
     const expectedTools: readonly string[] = BUILTIN_TOOLS;
     const hasAll = expectedTools.every(t => result.builtIn.includes(t));
+
     if (hasAll && result.builtIn.length === expectedTools.length) {
       pass("RPC getToolList", `builtIn=[${result.builtIn.join(",")}], crafted=${result.crafted.length}`);
     } else {
@@ -287,6 +308,7 @@ async function testRpcGetExecutors(ws: WebSocket) {
 async function testRpcGetAvailableModels(ws: WebSocket) {
   try {
     const result = await rpc(ws, "getAvailableModels", modelListSchema);
+
     if (result.current.length > 0) {
       pass("RPC getAvailableModels", `current=${result.current}, ${result.models.length} models`);
     } else {
@@ -307,12 +329,15 @@ async function testChatStreaming(ws: WebSocket) {
     // (a) Response streams back (not empty)
     if (bodies.length === 0) {
       fail("Chat streams back", "zero body chunks received");
+
       return;
     }
+
     pass("Chat streams back", `${bodies.length} chunks`);
 
     // Check that the full response contains text
     const allBody = bodies.join("");
+
     if (allBody.length > 0) {
       pass("Chat response not empty", `${allBody.length} chars total`);
     } else {
@@ -331,6 +356,7 @@ async function testChatToolCalls(ws: WebSocket) {
       'Use the memory tool to save the exact content "e2e-test-marker-42". Then reply DONE.',
       60_000,
     );
+
     const allBody = bodies.join("");
 
     // (b) Tool calls appear in the response stream
@@ -359,12 +385,15 @@ let workspaceMarker = '';
 async function testWorkspaceReadFile(ws: WebSocket) {
   try {
     if (!workspaceMarker) throw new Error('write-file probe did not produce a marker');
+
     const { bodies } = await chat(
       ws,
       'Use the file tool to read test-e2e.txt, then reply with the exact file content.',
       60_000,
     );
+
     const allBody = bodies.join("");
+
     if (allBody.includes(workspaceMarker)) {
       pass("file.read", `read marker "${workspaceMarker}"`);
     } else {
@@ -378,13 +407,16 @@ async function testWorkspaceReadFile(ws: WebSocket) {
 async function testWorkspaceWriteFile(ws: WebSocket) {
   try {
     workspaceMarker = `e2e-${Date.now()}`;
+
     const { bodies } = await chat(
       ws,
       `Use the file tool to write the exact text "${workspaceMarker}" to test-e2e.txt, `
         + 'then read the file and reply with its content.',
       60_000,
     );
+
     const allBody = bodies.join("");
+
     if (allBody.includes(workspaceMarker)) {
       pass("file.write + file.read round-trip", `marker "${workspaceMarker}" found in response`);
     } else {
@@ -404,6 +436,7 @@ async function testMemorySave(ws: WebSocket) {
       60_000,
     );
     const memory = await rpc(ws, "getMemoryContent", memoryContentSchema);
+
     if (memory.includes(marker)) {
       pass("memory.save", `found marker "${marker}" in MEMORY.md`);
     } else {
@@ -441,6 +474,7 @@ async function main() {
   // §2 — WebSocket RPC
   console.log(`\n§2. WebSocket RPC`);
   let ws: WebSocket;
+
   try {
     ws = await connect();
     pass("WebSocket connect", `connected to ${wsUrl()}`);

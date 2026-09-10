@@ -66,6 +66,7 @@ function toolKind(name: string, args: JsonObject): ToolKind {
   if (name === 'file') {
     return args.action === 'read' ? 'read' : 'edit';
   }
+
   return TOOL_KINDS.get(name) ?? 'other';
 }
 
@@ -74,10 +75,13 @@ function toolKind(name: string, args: JsonObject): ToolKind {
 function toolTitle(name: string, args: JsonObject): string {
   const command = args.command;
   const parsedCommand = v.safeParse(v.string(), command);
+
   if (name === 'run' && parsedCommand.success) return parsedCommand.output;
   const action = args.action;
   const parsedAction = v.safeParse(v.string(), action);
+
   if (parsedAction.success) return `${name}: ${parsedAction.output}`;
+
   return name;
 }
 
@@ -95,6 +99,7 @@ function toolTitle(name: string, args: JsonObject): string {
  *  already spells "stop running these" without pretending to be per-command. */
 function permissionOptions(req: ShellApprovalRequest): PermissionOption[] {
   const rules = req.review.hits.filter((h) => h.decision === 'gate').map((h) => h.rule).join(', ');
+
   return [
     { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
     {
@@ -156,7 +161,9 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
   const requireSession = (sessionId: string): AcpSession => {
     const session = sessions.get(sessionId);
+
     if (!session) throw RequestError.resourceNotFound(sessionId);
+
     return session;
   };
 
@@ -252,8 +259,10 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           },
           options: permissionOptions(req),
         });
+
         // 'cancelled' — the turn is going away; deny so the tool stops here.
         if (outcome.outcome.outcome !== 'selected') return 'deny';
+
         return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? 'deny';
       });
 
@@ -262,6 +271,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
     .onRequest(AGENT_METHODS.session_load, async (ctx) => {
       const session = requireSession(ctx.params.sessionId);
+
       // The client asked to see the conversation: replay it as the same chunk
       // updates a live turn would have produced.
       for (const message of await session.client.history()) {
@@ -277,6 +287,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           });
         }
       }
+
       return {};
     })
 
@@ -285,10 +296,13 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       session.beginTurn();
 
       const pendingNotifications: Promise<void>[] = [];
+
       const unsubscribe = session.client.subscribe((event) => {
         const update = toUpdate(event);
+
         if (update) pendingNotifications.push(notify(ctx.client, session.id, update));
       });
+
       try {
         await session.client.send(
           toAgentPrompt(ctx.params.prompt),
@@ -298,6 +312,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         unsubscribe();
         await Promise.all(pendingNotifications);
       }
+
       // stop() resolves the turn early, so a cancelled turn still lands here —
       // the flag is what distinguishes it from a natural finish.
       return { stopReason: (session.wasCancelled ? 'cancelled' : 'end_turn') satisfies StopReason };
@@ -305,6 +320,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
     .onNotification(AGENT_METHODS.session_cancel, (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
+
       if (!session) return;
       session.markCancelled();
       session.client.stop();
@@ -312,9 +328,11 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
     .onRequest(AGENT_METHODS.session_close, async (ctx) => {
       const session = sessions.get(ctx.params.sessionId);
+
       if (!session) return {};
       sessions.delete(session.id);
       await session.close();
+
       return {};
     });
 }

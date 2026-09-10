@@ -114,6 +114,7 @@ interface CLIRuntimeOptions {
   /** Shadow-git checkpoints kept per working directory (the one retention knob). */
   checkpointKeep?: number;
 }
+
 export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
 
 /**
@@ -231,10 +232,13 @@ export interface CLIRuntime extends AgentRuntime {
 export type LocalDb = Database;
 
 type WorkspaceSql = Parameters<typeof createWorkspaceFilesystem>[0]['sql'];
+
 type WorkspaceTransactions = Parameters<typeof createWorkspaceFilesystem>[0]['transactions'];
+
 interface NimbusSqlRow {
   [column: string]: string | number | bigint | null | ArrayBuffer | ArrayBufferView;
 }
+
 interface LocalSqlRow {
   [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
 }
@@ -246,6 +250,7 @@ const sqlBindingSchema = v.union([
 
 function bunSqlBinding(input: { value: unknown }): SQLQueryBindings {
   const value = v.parse(sqlBindingSchema, input.value);
+
   return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 }
 
@@ -258,6 +263,7 @@ export function makeSql(db: Database): SqlExecutor {
     // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
     // native type); bun:sqlite only binds TypedArrays, so coerce.
     const bound = values.map((value) => bunSqlBinding({ value }));
+
     // `all()` for EVERY statement, not only the ones opening with a read verb.
     // A Durable Object's `storage.sql` returns whatever rows a statement
     // produces, and `UPDATE … RETURNING` is a write that produces them — so
@@ -268,6 +274,7 @@ export function makeSql(db: Database): SqlExecutor {
     // rows; DDL and plain writes simply have none.
     return db.prepare<T, SQLQueryBindings[]>(query).all(...bound);
   };
+
   return sql;
 }
 
@@ -284,10 +291,13 @@ export function nimbusSql(db: Database): WorkspaceSql {
   const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
     const bound = bindings.map((value) => bunSqlBinding({ value }));
     const stmt = db.prepare<NimbusSqlRow, SQLQueryBindings[]>(query);
+
     if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
     stmt.run(...bound);
+
     return [];
   };
+
   return { exec };
 }
 
@@ -330,18 +340,22 @@ export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
     // Eager also matches the seam it stands in for: `storage.sql.exec` runs the
     // statement and hands back a cursor over its rows.
     const rows = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query).all(...bound).map(toSqlRow);
+
     return { toArray: () => rows };
   };
+
   return { exec };
 }
 
 function toSqlRow(row: LocalSqlRow) {
   const output: Record<string, SqlValue> = {};
+
   for (const [column, value] of Object.entries(row)) {
     output[column] = value instanceof Uint8Array
       ? new Uint8Array(value).buffer
       : value;
   }
+
   return output;
 }
 
@@ -362,6 +376,7 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
       const raw = await tolerateAsync(() => vfs.readFile(path, { encoding: 'utf8' }), 'enoent');
+
       if (raw === undefined) return;
       await store.indexFile(path, raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw);
     },
@@ -407,6 +422,7 @@ export function createCLIRuntime(
   let actor: ActorHandle;
   let agentId: string;
   let agentName: string;
+
   if (config.facet !== undefined) {
     if (!config.actorBinding) throw new KinuError('missing', 'A local facet requires its root-issued actor binding.');
     initActorStateSchema(makeWorkspaceSchemaSql(db));
@@ -416,6 +432,7 @@ export function createCLIRuntime(
   } else {
     execRaw(WORKSPACE_IDENTITY_DDL);
     const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
+
     if (existing) {
       agentId = existing.id;
       agentName = existing.name;
@@ -426,6 +443,7 @@ export function createCLIRuntime(
       initWorkspaceActorTable(execRaw);
       new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
     }
+
     actor = openLocalRootActor(db, sql);
   }
 
@@ -434,6 +452,7 @@ export function createCLIRuntime(
   // Every actor in a workspace mints the same fiber names, so an unscoped sweep
   // here would report — and a recovery would resume — a sibling's lane.
   const orphans = detectOrphanedFibers(sql, actor);
+
   if (orphans.length > 0) {
     diagnostics.failure(
       'fiber.orphans_detected',
@@ -477,6 +496,7 @@ export function createCLIRuntime(
   // registry costs a construction and a runtime that never resolves a profile
   // never needs one.
   let specResolver: LocalModelResolver | null = null;
+
   const profilePlane: LocalProfileModelPlane = {
     normalizeSpec: (spec) => {
       specResolver ??= createLocalModelResolver({
@@ -484,6 +504,7 @@ export function createCLIRuntime(
         credentials: config.providerCredentials,
         codexAuthStore: config.codexAuthStore,
       });
+
       return specResolver.normalizeSpecSync(spec);
     },
     // Nothing beyond the configured model, which the snapshot folds in itself.
@@ -491,12 +512,15 @@ export function createCLIRuntime(
     // it did not look up — and a session that CAN list refines it.
     listModels: () => Promise.resolve({ models: [], failures: [] }),
   };
+
   const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
+
   // THE installation. Every local runtime is born here, so every local runtime
   // routes — a session-less one included. Without this line `kinu evolve`
   // spends a whole search against lanes that throw for want of a resolver.
   let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
     () => profiles.resolvePreTurn();
+
   /**
    * The profile a routed lane runs against. A turn's own resolution wins; with
    * no turn open the live resolver supplies one and it is installed, so the
@@ -506,13 +530,17 @@ export function createCLIRuntime(
    */
   const ensureProfile = async (): Promise<ResolvedTurnProfile> => {
     if (turnProfile) return turnProfile;
+
     if (!profileResolver) {
       throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
     }
+
     const resolved = await profileResolver();
     turnProfile ??= resolved;
+
     return turnProfile;
   };
+
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
     credentials: config.providerCredentials,
@@ -520,16 +548,21 @@ export function createCLIRuntime(
     spec: resolution.model,
     spend: { source: resolution.source, report, operations },
   });
+
   const modelForRoute = (resolution: ModelRouteResolution): LLM =>
     modelRouteFactory(resolution);
+
   const llm: LLM = {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       const resolution = resolveModelRoute('reflection', await ensureProfile());
+
       if (!resolution) throw new Error('reflection cannot use the fixed platform model route');
+
       return modelForRoute(resolution).complete(prompt);
     },
   };
+
   const modelLanes = {
     turnProfile: () => turnProfile,
     llm: modelForRoute,
@@ -546,16 +579,19 @@ export function createCLIRuntime(
   // own doc comment. Null tells it there is no file rather than letting it
   // point a second OS process at a handle nothing outside this one can open.
   const rootDbPath = config.dbPath === ':memory:' ? null : config.dbPath;
+
   const { spawn: spawnBranch, abort: abortBranch } = createBranchSpawner(rootDbPath, {
     parent: actor, llm: config.llm,
     providerCredentials: config.providerCredentials,
     codexConfigPath: config.codexConfigPath,
   });
+
   // The agent's own state stays in its SQLite-backed filesystem: SOUL.md, the
   // scaffold, memory, transcripts. What binds to a physical directory is the
   // WORKSPACE plane — the files and the shell a turn works in — and that is
   // what makes two agents in one directory peers rather than strangers.
   const workspaceSql = nimbusSql(db);
+
   const workspace = createWorkspaceFilesystem({
     sql: workspaceSql,
     transactions: localTransactions(db),
@@ -563,6 +599,7 @@ export function createCLIRuntime(
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);
+
   const agentStateVfs = workspace.vfs;
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const cwd = config.cwd ? resolvePath(config.cwd) : null;
@@ -577,12 +614,14 @@ export function createCLIRuntime(
   const craftStore = adaptCraftStore(craftStoreImpl);
   let approvalChannel: RequestShellApproval | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
+
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => agentConfig.getShellApprovalGrants()
       .some((candidate) => candidate.rule === grant.rule && candidate.executor === grant.executor),
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
   };
+
   // Bound to a directory, the workspace runtime IS the host shell there, and
   // any command may mutate the tree, so it snapshots first. The in-SQLite
   // shell touches no host file and names no host directory, so checkpointing
@@ -595,12 +634,15 @@ export function createCLIRuntime(
     ),
     approvalPolicy,
   );
+
   const shell: Shell = facetShell
     ? facetShell(config.facet)
     : withApprovalGatedShell(workspace.shell, approvalPolicy);
+
   const executionRouter = new DefaultExecutionRouter(approvalPolicy);
   const stores = createAgentStores(() => sql, () => actor, (write) => db.transaction(write)());
   let childContext: ChildContextResolver | null = null;
+
   const agentVfs = withMountTable(fileVfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
     // `/context` — this actor's own working history, read live off the two
@@ -615,7 +657,9 @@ export function createCLIRuntime(
       },
     }),
   ]);
+
   const limits = hostResourceLimits();
+
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs: agentVfs,
     memory,
@@ -625,10 +669,12 @@ export function createCLIRuntime(
     ledger: () => turnFileLedgerProvider?.(),
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
+
   if (limits) inlineOptions.resourceLimits = limits;
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   const hostRoot = config.hostRoot === undefined ? cwd ?? process.cwd() : config.hostRoot;
+
   // Held, because a node's router registers this SAME provider: the host
   // filesystem is the host filesystem whoever asks, and a second construction
   // would be a second set of checkpoints over one directory.
@@ -640,6 +686,7 @@ export function createCLIRuntime(
       checkpoints,
       limits,
     );
+
   if (laptop) executionRouter.register(laptop);
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
@@ -677,6 +724,7 @@ export function createCLIRuntime(
     },
     ensureProfile,
   });
+
   // A swarm node's private home is a uid-confined directory INSIDE the plane it
   // writes to: the privileged view and the uid it is chown'ed to are both rows
   // in this database, so the home outlives the activation that made it. A
@@ -689,9 +737,11 @@ export function createCLIRuntime(
   } else {
     runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
   }
+
   runtime.nodeRuntime = localNodeRuntime({
     workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
   });
+
   return runtime;
 }
 
@@ -713,12 +763,15 @@ export function createCLIRuntime(
  */
 export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
   requireLocalActorWorkspace(workspace.actor, actor.actor);
+
   if (workspace.cwd && actor.cwd === workspace.cwd) {
     return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
   }
+
   if (!workspace.nodeHome || !workspace.nodeRuntime) throw new KinuError('missing', 'The workspace has no actor file-plane owner.');
   const home = await facetHomeProvisioner(workspace.nodeHome(), () => requireLocalActorWorkspace(workspace.actor, actor.actor))(facet);
   const plane = await workspace.nodeRuntime(home, actor.actor, actor);
+
   return Object.assign(actor, {
     storage: { ...actor.storage, vfs: plane.storage.vfs }, memory: workspace.memory, craftStore: workspace.craftStore,
     executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
@@ -745,6 +798,7 @@ export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLI
  */
 function facetScratchRoot(cwd: string, facet: string): string {
   agentHome(facet);
+
   return join(cwd, '.kinu', 'facets', facet);
 }
 
@@ -753,6 +807,7 @@ function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
   const home = facetScratchRoot(cwd, facet);
   const tmp = join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
+
   return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
@@ -796,20 +851,26 @@ export async function buildLocalActorRuntime(
   // The host's handle needs this root's scope before anything reads local
   // identity through it — same scope, same reference, validated again here.
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
+
   if (binding.kind === 'head' && swarmSeat === true) {
     if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
+
     return await parent.nodeRuntime(
       { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
       bound.handle, parent, writeObserver,
     );
   }
+
   if (binding.kind === 'head') {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
       parentRuntime: parent, actorBinding: binding, actor: bound.handle,
     };
+
     if (writeObserver) opts.writeObserver = writeObserver;
+
     return await buildCLIHeadRuntime(opts);
   }
+
   throw new KinuError('denied', `A ${binding.kind} actor's runtime is not built by this workspace's own session.`);
 }
 
@@ -863,6 +924,7 @@ async function buildCLIHeadRuntime(
 ): Promise<AgentRuntime> {
   const { parentRuntime: parent } = opts;
   const sql = parent.storage.sql;
+
   if (opts.actorBinding.kind !== 'head') throw new KinuError('denied', 'The head runtime requires a registered head actor.');
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
@@ -870,6 +932,7 @@ async function buildCLIHeadRuntime(
 
   const agentStateVfs = parent.agentStateVfs ?? parent.storage.vfs;
   const cwdPlane = parent.cwd ? createCwdPlaneVFS(parent.cwd, parent.checkpoints) : null;
+
   // The observer watches whichever plane the head's writes actually land on, so
   // the split can name the files this head changed. With a shared directory
   // that is this plane; without one it is the `parent` executor's surface below.
@@ -882,23 +945,30 @@ async function buildCLIHeadRuntime(
   // scratch as HOME and TMPDIR, rather than an in-SQLite shell that cannot see
   // the files it is reading.
   const parentShell = parent.shell;
+
   if (!parentShell) throw new KinuError('missing', 'The forked workspace has no shell for its head to run in.');
+
   const shell = parent.cwd && parent.facetShell
     ? parent.facetShell(physicalName)
     : parentShell;
+
   const executionRouter = new DefaultExecutionRouter();
+
   const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
     vfs, memory: parent.memory, craftStore: parent.craftStore, shell, sql,
     toolchain: workspaceToolchainCapabilities(WORKSPACE_RUNTIMES),
   };
+
   executionRouter.register(createInlineExecutor(inlineOptions));
 
   // The parent workspace, over the parent runtime in this same process — the
   // same interface the cloud head satisfies with Durable Object RPC.
   const parentVfs = parent.storage.vfs;
   const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
+
   const fail = <T>(input: { path: string; error: unknown }): ParentRpcResult<T> => {
     const parsed = v.safeParse(v.object({ code: v.optional(v.string()) }), input.error);
+
     return {
       ok: false,
       error: {
@@ -908,27 +978,37 @@ async function buildCLIHeadRuntime(
       },
     };
   };
+
   const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
     try { return ok(await fn()); } catch (error) { return fail<T>({ path, error }); }
   };
+
   const parentHandle: ParentWorkspaceHandle = {
     read: (path) => attempt(path, async () => {
       const content = await parentVfs.readFile(path);
+
       return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
     }),
     write: (input: ParentRpcWrite) => attempt(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
       else await parentVfs.mkdir(input.path, { recursive: input.recursive });
+
       return null;
     }),
     list: (path) => attempt(path, () => parentVfs.readdir(path)),
     stat: (path) => attempt(path, () => parentVfs.stat(path)),
-    delete: (path) => attempt(path, async () => { await parentVfs.unlink(path); return null; }),
+    delete: (path) => attempt(path, async () => {
+      await parentVfs.unlink(path);
+
+      return null;
+    }),
     exec: (command) => attempt('', async () => {
       if (!parent.shell) throw new Error('the parent workspace has no shell');
+
       return parent.shell.exec(command);
     }),
   };
+
   const parentFiles = createParentWorkspaceVfs(parentHandle);
   executionRouter.register(createParentExecutor({
     handle: parentHandle,
@@ -939,7 +1019,9 @@ async function buildCLIHeadRuntime(
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
   // reach the machine at the parent's cwd. This is the fork's real execution.
   const laptop = parent.executionRouter?.getProvider('laptop');
+
   if (laptop) executionRouter.register(laptop);
+
   // The head's plane carries the same mount table as its parent's — the
   // inherited `laptop` provider is what /pc resolves to here, and `/context`
   // is THIS head's own working history rather than the fork parent's.
@@ -949,6 +1031,7 @@ async function buildCLIHeadRuntime(
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),
   ]);
+
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
@@ -966,19 +1049,25 @@ async function buildCLIHeadRuntime(
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
     executionRouter, shell,
   };
+
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;
   const parentProfile = parent.turnProfile;
   const parentModelForRoute = parent.modelForRoute;
+
   if (parentProfile && parentModelForRoute) {
     runtimeOptions.modelLanes = {
       turnProfile: parentProfile,
       llm: parentModelForRoute,
     };
   }
+
   const runtime = buildRuntime(runtimeOptions);
+
   if (parent.cwd) return runtime;
+
   if (!parent.nodeHome || !parent.nodeRuntime) throw new KinuError('missing', 'The head has no canonical workspace file-plane owner.');
   const home = await facetHomeProvisioner(parent.nodeHome(), () => requireLocalActorWorkspace(parent.actor, actor))(physicalName);
+
   return parent.nodeRuntime(home, actor, runtime, opts.writeObserver);
 }
 
@@ -987,10 +1076,12 @@ async function buildCLIHeadRuntime(
  *  that in microseconds, so this is generous for the command and short enough
  *  that an orphaned grandchild's inherited pipe never becomes our problem. */
 const EXITED_COMMAND_DRAIN_MS = 250;
+
 const shellOptionsSchema = v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 });
+
 const abortContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
 export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
@@ -1002,22 +1093,27 @@ export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.en
         const stdin = stdinText.success ? stdinText.output : options.success ? options.output.stdin : undefined;
         const signal = options.success ? options.output.signal : undefined;
         let settled = false;
+
         const child = spawn('/bin/sh', ['-lc', command], {
           cwd,
           stdio: ['pipe', 'pipe', 'pipe'],
           env,
           detached: true,
         });
+
         let stdout = '';
         let stderr = '';
+
         const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
           if (settled) return;
           settled = true;
           signal?.removeEventListener('abort', onAbort);
           resolve(result);
         };
+
         const onAbort = () => {
           const pid = child.pid;
+
           if (!pid) return;
           tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
           setTimeout(() => {
@@ -1026,6 +1122,7 @@ export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.en
             }
           }, 1500).unref();
         };
+
         if (signal?.aborted) onAbort();
         else signal?.addEventListener('abort', onAbort, { once: true });
         child.stdout.on('data', (d) => { stdout += d.toString(); });
@@ -1059,6 +1156,7 @@ export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.en
             settle(code, signalName);
           }, EXITED_COMMAND_DRAIN_MS).unref();
         });
+
         if (stdin) child.stdin.end(stdin);
         else child.stdin.end();
       });
@@ -1072,6 +1170,7 @@ function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints, cwd: 
   return {
     async exec(command, stdinOrOptions) {
       await checkpoints.ensureCheckpoint(cwd, 'shell exec');
+
       return shell.exec(command, stdinOrOptions);
     },
   };
@@ -1081,6 +1180,7 @@ function createLocalLaptopExecutor(
   cwd: string, shell: Shell, checkpoints: FileCheckpoints, resourceLimits: ResourceLimits | null,
 ): ExecutorProvider {
   const toHostPath = (path: string) => resolvePath(cwd, path || '.');
+
   const provider: ExecutorProvider = {
     name: 'laptop',
     kind: 'laptop',
@@ -1109,6 +1209,7 @@ function createLocalLaptopExecutor(
         execute: async (command, context) => {
           const signal = readAbortSignal({ context });
           const result = await shell.exec(coerceText({ value: command }), signal ? { signal } : undefined);
+
           return commandResult(result);
         },
       },
@@ -1124,6 +1225,7 @@ function createLocalLaptopExecutor(
           await checkpoints.ensureCheckpoint(checkpoints.workdirForPath(p), 'file write');
           await fs.mkdir(resolvePath(p, '..'), { recursive: true });
           await fs.writeFile(p, text, 'utf-8');
+
           return `Written ${text.length} bytes to ${p}`;
         },
       },
@@ -1131,6 +1233,7 @@ function createLocalLaptopExecutor(
         description: 'List local directory entries as {name,type}.',
         execute: async (path = '.') => {
           const entries = await fs.readdir(toHostPath(coercePath({ value: path })), { withFileTypes: true });
+
           return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
         },
       },
@@ -1142,6 +1245,7 @@ function createLocalLaptopExecutor(
   listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
 };`,
   };
+
   return resourceLimits ? { ...provider, resourceLimits } : provider;
 }
 
@@ -1155,5 +1259,6 @@ function coercePath(input: { value: unknown }): string {
 
 function readAbortSignal(input: { context: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(abortContextSchema, input.context);
+
   return parsed.success ? parsed.output.signal : undefined;
 }

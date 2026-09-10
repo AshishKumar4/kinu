@@ -136,9 +136,11 @@ function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
 async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string }> {
   const raw = await judge.complete(buildReplayJudgePrompt(row, fresh));
   const parsed = v.safeParse(ReplayJudgeSchema, extractJsonObject(raw));
+
   if (!parsed.success || !Number.isFinite(parsed.output.score)) {
     throw new Error('replay judge returned no numeric score');
   }
+
   return {
     score: Math.min(1, Math.max(0, parsed.output.score)),
     note: parsed.output.note ?? '',
@@ -152,26 +154,33 @@ async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Prom
  */
 export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEvalSummary | null> {
   const size = Math.max(1, Math.floor(opts.sampleSize ?? DEFAULT_REPLAY_SAMPLE_SIZE));
+
   // Balanced sample, newest first: regressions guard (accepted) + the
   // failures the system should have learned from (corrected/frustrated).
   const negatives = listTurnOutcomes(opts.sql, opts.actor, {
     limit: Math.ceil(size / 2), outcomes: NEGATIVE_TURN_OUTCOMES,
   });
+
   const accepted = listTurnOutcomes(opts.sql, opts.actor, {
     limit: size - negatives.length, outcomes: ['accepted'],
   });
+
   const sample = [...negatives, ...accepted];
+
   if (sample.length === 0) return null;
 
   const results: ReplayInstanceResult[] = [];
+
   for (const row of sample) {
     let fresh: string;
+
     try {
       fresh = await opts.runTask(row.userMessage);
     } catch (err) {
       results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${renderThrownChain({ cause: err })}` });
       continue;
     }
+
     try {
       const verdict = await judgeReplay(opts.judge, row, fresh);
       results.push({ outcomeId: row.id, outcome: row.outcome, ...verdict });
@@ -181,6 +190,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
   }
 
   const interval = scoreInterval(results.map((r) => r.score));
+
   const summary: ReplayEvalSummary = {
     id: `rpl-${nanoid()}`,
     ranAt: opts.now ?? nowMs(),
@@ -203,12 +213,14 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
        ${summary.negativeCount}, ${summary.meanScore}, ${summary.loss},
        ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
        ${interval.lo}, ${interval.hi})`;
+
   return summary;
 }
 
 /** The persisted loss curve, newest first — what the UI could chart. */
 export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50): ReplayEvalSummary[] {
   actor.assertCurrent();
+
   const rows = sql<{
     id: string; ran_at: number; sample_size: number; accepted_n: number;
     negative_n: number; mean_score: number; loss: number;
@@ -216,15 +228,18 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
     score_lo: number | null; score_hi: number | null;
   }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
       ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
+
   return rows.map((r) => {
     // Malformed details are the one tolerable corruption here: the summary
     // numbers live in the row's own columns, so the point on the curve stands.
     const details = tolerate(() => parseJsonValue(r.details), 'malformed-input');
     const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), details);
+
     // Pre-interval rows carry no bounds; mean and n determine them exactly.
     const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
       ? { mean: r.mean_score, lo: r.score_lo, hi: r.score_hi, n: r.sample_size }
       : wilsonInterval(r.mean_score * r.sample_size, r.sample_size);
+
     return {
       id: r.id, ranAt: r.ran_at, sampleSize: r.sample_size,
       acceptedCount: r.accepted_n, negativeCount: r.negative_n,

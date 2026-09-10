@@ -5,5 +5,6 @@ export const WORKSPACE_ROOT = '/home/user';
 export function workspacePath(path: string): string {
   if (path.startsWith('/')) return path;
   const clean = path.replace(/^\.\//, '');
+
   return clean === '' || clean === '.' ? WORKSPACE_ROOT : `${WORKSPACE_ROOT}/${clean}`;
 }

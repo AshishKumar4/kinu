@@ -71,12 +71,15 @@ function chatStore(db: Database) {
   // actor-scoped, so the copied derivation writes the same workspace main the
   // registry and the read use. A row written without it is a row no read finds.
   const actor = openWorkspaceMainActor(sql);
+
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
       const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`;
+
       const present = sql<{ id: string }>`SELECT id FROM assistant_messages
         WHERE actor_id = ${actor.actorId} AND id = ${id}`;
+
       if (present.length === 0) {
         void sql`
           INSERT INTO assistant_messages (actor_id, id, session_id, role, content)
@@ -85,11 +88,13 @@ function chatStore(db: Database) {
           })})
         `;
       }
+
       return { status: 'queued' };
     },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   return { host, sql };
 }
 
@@ -100,6 +105,7 @@ function activation(db: Database) {
   const sql = makeSql(db);
   const { host } = chatStore(db);
   const fiber: Schedule['fiber'] = async (_name, fn) => fn({ stash: () => {}, snapshot: null });
+
   const runner = new BackgroundJobRunner({
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
@@ -109,6 +115,7 @@ function activation(db: Database) {
     eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
     scheduleDrain: () => {},
   });
+
   return { runner, sql };
 }
 
@@ -129,6 +136,7 @@ function evictedWorkspace() {
     id: JOB, kind: 'agents', workMode: 'build', now,
     label: 'fork: design the generation algorithm',
   });
+
   // The paged read is actor-scoped even where the pane is the authority, so the
   // fixture hands back the actor its rows belong to.
   return { db: ws.db, store, now, actor };
@@ -192,10 +200,12 @@ describe('a settled background job announces itself once, and not as the owner',
     const history = getChatHistoryPage(makeSql(ws.db), ws.actor).items;
     expect(history).toHaveLength(1);
     expect(history[0]!.role).toBe('system');
+
     // The stored row is untouched: the model still reads its turn input as the
     // user message it has to be. Only the claim about authorship changed.
     const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM assistant_messages
       WHERE actor_id = ${ws.actor.actorId}`;
+
     expect(stored[0]!.role).toBe('user');
   });
 
@@ -217,6 +227,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const pivots = getChatHistoryPage(makeSql(ws.db), ws.actor).items
       .filter((row) => row.role === 'user')
       .map((row) => row.content);
+
     expect(pivots).toEqual(['find me a domain']);
   });
 
@@ -224,9 +235,11 @@ describe('a settled background job announces itself once, and not as the owner',
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
     const signals = new SignalDelivery(host);
+
     for (let start = 0; start < 6; start++) {
       await signals.deliver({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
     }
+
     // Six rows, byte-identical content, distinct ids — the shape measured on
     // stone-ash-71f2. Nothing about the seam prevents this; the producer naming
     // its fact is what does.
@@ -259,6 +272,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const ws = evictedWorkspace();
     ws.store.settle(JOB, 0, '"done"', ws.now + 1_000);
     const sql = makeSql(ws.db);
+
     // A host that pre-empts: the wake goes undelivered, so compensate publishes
     // the breadcrumb whose trigger_id must be the same identity the queued turn
     // would have used — one fact, one name, both rails.
@@ -268,7 +282,9 @@ describe('a settled background job announces itself once, and not as the owner',
       turnInFlight: () => false,
       setTimer: () => {},
     };
+
     const fiber: Schedule['fiber'] = async (_name, fn) => fn({ stash: () => {}, snapshot: null });
+
     const runner = new BackgroundJobRunner({
       store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
       fiber,
@@ -276,6 +292,7 @@ describe('a settled background job announces itself once, and not as the owner',
       eventLog: new EventLog(makeSqlExec(ws.db), openWorkspaceMainActor(sql)),
       scheduleDrain: () => {},
     });
+
     await runner.wake(JOB);
     await runner.wake(JOB);
 

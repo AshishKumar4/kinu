@@ -62,17 +62,24 @@ export function inspectSubordinateStorage(
 ): SubordinateInspectionResult {
   const input = v.parse(SubordinateInspectionRequestSchema, request);
   const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
+
   if (!tableExists(access.sql, 'workspace_identity')) return missing();
+
   const rows = access.sql<{ name: string; owner_user_id: string | null }>`
     SELECT name, owner_user_id FROM workspace_identity`;
+
   if (rows.length !== 1) return missing();
   const identity = v.parse(OwnerRowSchema, rows[0]);
+
   if (identity.name !== authority.workspace || identity.owner_user_id !== authority.owner) return missing();
   let target = access.actor;
+
   for (const name of input.path) {
     const child = access.directory.resolveChild(target, name);
+
     if (!child) return missing();
     target = child;
   }
+
   return readSubordinateInspection(access.sql, target, access.raw, input);
 }

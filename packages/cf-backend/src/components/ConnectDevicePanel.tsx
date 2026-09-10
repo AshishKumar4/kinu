@@ -70,6 +70,7 @@ function arrivedDevice(
   baseline: ReadonlySet<string> | null,
 ): UserDevice | null {
   if (baseline === null) return null;
+
   return devices.find((device) => !baseline.has(device.id) && device.connected) ?? null;
 }
 
@@ -93,6 +94,7 @@ export class DeviceConnectFlow {
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
+
     return () => { this.#listeners.delete(listener); };
   };
 
@@ -106,6 +108,7 @@ export class DeviceConnectFlow {
     if (this.#state.kind !== "ready" && this.#state.kind !== "failed") return;
     this.#baseline = known === null ? null : new Set(known.map((device) => device.id));
     this.#publish({ kind: "registering" });
+
     try {
       const { installCommand } = await this.#deps.register(label);
       this.#publish({ kind: "handed", command: installCommand, confirmable: this.#baseline !== null });
@@ -118,6 +121,7 @@ export class DeviceConnectFlow {
   readonly observe = (devices: readonly UserDevice[]): void => {
     if (this.#state.kind !== "handed") return;
     const arrived = arrivedDevice(devices, this.#baseline);
+
     if (arrived === null) return;
     this.#publish({ kind: "connected", device: arrived });
     this.#deps.onConnected(arrived);
@@ -125,6 +129,7 @@ export class DeviceConnectFlow {
 
   #publish(state: ConnectState): void {
     this.#state = state;
+
     for (const listener of this.#listeners) listener();
   }
 }
@@ -246,12 +251,14 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
 export function ConnectDeviceDialog({ onClose }: { onClose: () => void }) {
   const { resource, reload } = useDeviceRoster();
   const devices = resource.status === "ready" ? resource.value : resource.status === "error" ? resource.last : null;
+
   const [flow] = useState(() => new DeviceConnectFlow({
     register: registerDevice,
     // The roster is what the surfaces behind this dialog read too, so there is
     // nothing to hand back: closing is the whole reaction.
     onConnected: onClose,
   }));
+
   return (
     <Modal title="Connect a machine" onClose={onClose} icon={<PlugIcon size={16} className="p-accent" />} maxWidthClass="max-w-lg">
       {resource.status === "error" && (

@@ -61,6 +61,7 @@ export function appendHeadDelta(
   delta: string,
 ): ReadonlyMap<string, HeadDelta> {
   const held = previous.get(headId) ?? NOTHING;
+
   return new Map(previous).set(headId, kind === "reasoning"
     ? { text: held.text, reasoning: held.reasoning + delta }
     : { text: held.text + delta, reasoning: held.reasoning });
@@ -76,6 +77,7 @@ export function retireHeadDelta(
   if (!previous.has(headId)) return previous;
   const next = new Map(previous);
   next.delete(headId);
+
   return next;
 }
 
@@ -97,7 +99,9 @@ export function retireHeadDelta(
  */
 export function stepAsMessage(step: HeadStep, index: number, headId: string): UIMessage {
   const parts: UIMessage["parts"] = [];
+
   if (step.reasoning) parts.push({ type: "reasoning", text: step.reasoning, state: "done" });
+
   if (step.text) parts.push({ type: "text", text: step.text, state: "done" });
   step.toolCalls.forEach((call: HeadStepToolCall, callIndex) => {
     const toolCallId = `${headId}-s${index}-t${callIndex}`;
@@ -105,6 +109,7 @@ export function stepAsMessage(step: HeadStep, index: number, headId: string): UI
       ? { type: "dynamic-tool", toolName: call.name, toolCallId, state: "input-available", input: call.input }
       : { type: "dynamic-tool", toolName: call.name, toolCallId, state: "output-available", input: call.input, output: call.output });
   });
+
   return { id: `${headId}-s${index}`, role: "assistant", parts };
 }
 
@@ -124,9 +129,12 @@ export function stepAsMessage(step: HeadStep, index: number, headId: string): UI
 export function deltaAsMessage(delta: HeadDelta | undefined, headId: string): UIMessage | null {
   if (delta === undefined || (delta.text === "" && delta.reasoning === "")) return null;
   const parts: UIMessage["parts"] = [];
+
   if (delta.reasoning) {
     parts.push({ type: "reasoning", text: delta.reasoning, state: delta.text ? "done" : "streaming" });
   }
+
   if (delta.text) parts.push({ type: "text", text: delta.text, state: "streaming" });
+
   return { id: `${headId}-live`, role: "assistant", parts };
 }

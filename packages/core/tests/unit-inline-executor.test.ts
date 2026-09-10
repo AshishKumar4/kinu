@@ -25,12 +25,19 @@ const ToolSummarySchema = v.object({
   description: v.string(),
   qualityScore: v.number(),
 });
+
 const ToolCreatedSchema = v.object({ ok: v.boolean(), name: v.string(), action: v.string() });
+
 const ToolNamedSchema = v.object({ ok: v.boolean(), name: v.string() });
+
 const ToolActionSchema = v.object({ ok: v.boolean(), action: v.string() });
+
 const ToolOkSchema = v.object({ ok: v.boolean() });
+
 const FileSuccessSchema = v.object({ ok: v.boolean() });
+
 const ErrorResultSchema = v.object({ error: v.string() });
+
 const VfsMessageSchema = v.object({ message: v.string(), code: v.string() });
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: InlineExecutorDeps['slate']) {
@@ -41,7 +48,9 @@ function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: Inlin
     shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
     sql: rt.storage.sql,
   };
+
   if (slate !== undefined) deps.slate = slate;
+
   return createInlineExecutor(deps);
 }
 
@@ -74,15 +83,18 @@ describe('workspace provider (InlineExecutor)', () => {
 
   test('listTools reads a tool with no quality row as the neutral prior', async () => {
     const { rt } = createTestRuntime();
+
     const ghost: CraftedTool = {
       name: 'ghost', description: 'no row yet', params: null,
       code: 'async () => 1', scope: 'local', createdAt: 0, updatedAt: 0,
     };
+
     const exec = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: { ...rt.craftStore, list: () => [ghost] },
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
     });
+
     expect(v.parse(v.array(ToolSummarySchema), await exec.tools.listTools.execute())).toEqual([
       { name: 'ghost', description: 'no row yet', qualityScore: CRAFT_NEUTRAL_PRIOR },
     ]);
@@ -105,6 +117,7 @@ describe('workspace provider (InlineExecutor)', () => {
 
     // Verify in CraftStore — exact name preserved
     const stored = rt.craftStore.get('multiplyNumbers');
+
     if (!stored) throw new Error('created tool was not stored');
     expect(stored.name).toBe('multiplyNumbers');
   });
@@ -148,6 +161,7 @@ describe('workspace provider (InlineExecutor)', () => {
       'Say hi',
       'async () => "hello"',
     ));
+
     expect(first.action).toBe('created');
     expect(rt.craftStore.list().length).toBe(1);
 
@@ -157,11 +171,13 @@ describe('workspace provider (InlineExecutor)', () => {
       'Say hi v2',
       'async () => "hello v2"',
     ));
+
     expect(second.action).toBe('updated');
     expect(rt.craftStore.list().length).toBe(1);
 
     // The stored code reflects the latest version
     const stored = rt.craftStore.get('greet');
+
     if (!stored) throw new Error('updated tool was not stored');
     expect(stored.description).toBe('Say hi v2');
     expect(stored.code).toBe('async () => "hello v2"');
@@ -184,6 +200,7 @@ describe('workspace provider (InlineExecutor)', () => {
   test('createTool refuses a name that shadows a builtin or MCP tool', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
+
     for (const name of ['run', 'mcp_github_get']) {
       const result = await exec.tools.createTool.execute(name, 'shadow', 'async () => 1');
       expect(result).toMatchObject({ ok: false, reason: 'bad_input', error: expect.stringContaining(name) });
@@ -206,19 +223,23 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   function buildPlane() {
     const { rt } = createTestRuntime();
     const dirs: string[] = [];
+
     const sandbox = {
       files: new Map<string, string>(),
       dirs,
     };
+
     // The workspace's own filesystem. The container is a separate environment
     // reached through `sandbox.*` in its own paths, so it is deliberately NOT
     // addressable from here.
     const vfs = rt.storage.vfs;
+
     const exec = createInlineExecutor({
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
     });
+
     return { vfs, exec, sandbox };
   }
 
@@ -279,9 +300,11 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const { rt } = createTestRuntime();
     await rt.storage.vfs.writeFile('blind.md', 'original');
     const exec = buildExec(rt);
+
     const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('blind.md', [
       { old_text: 'original', new_text: 'changed' },
     ]));
+
     expect(result.error).toContain('has not been read here yet');
     expect(await rt.storage.vfs.readFile('blind.md', { encoding: 'utf8' })).toBe('original');
   });
@@ -291,9 +314,11 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     await rt.storage.vfs.writeFile('notes.md', 'Hello world');
     const exec = buildExec(rt);
     await exec.tools.readFile.execute('notes.md');
+
     const result = v.parse(FileSuccessSchema, await exec.tools.editFile.execute('notes.md', [
       { old_text: 'world', new_text: 'kinu' },
     ]));
+
     expect(result.ok).toBe(true);
     expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('Hello kinu');
   });
@@ -302,9 +327,11 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
     await exec.tools.writeFile.execute('fresh.md', 'v1 content');
+
     const result = v.parse(FileSuccessSchema, await exec.tools.editFile.execute('fresh.md', [
       { old_text: 'v1', new_text: 'v2' },
     ]));
+
     expect(result.ok).toBe(true);
     expect(await rt.storage.vfs.readFile('fresh.md', { encoding: 'utf8' })).toBe('v2 content');
   });
@@ -313,9 +340,11 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
     await exec.tools.writeFile.execute('dup.md', 'foo\nfoo\n');
+
     const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('dup.md', [
       { old_text: 'foo', new_text: 'bar' },
     ]));
+
     // The refusal names the anchor, its count and the file. That wording lets
     // the model widen the anchor on retry.
     expect(result.error).toContain('appears 2 times in dup.md');
@@ -327,21 +356,25 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     const { rt } = createTestRuntime();
     await rt.storage.vfs.writeFile('shared.md', 'shared content');
     const ledger = new TurnFileLedger();
+
     const exec = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
       sql: rt.storage.sql,
       ledger: () => ledger,
     });
+
     // Read via workspace.*...
     await exec.tools.readFile.execute('shared.md');
     // ...then edit via the NATIVE `file` tool, over the SAME shared ledger.
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
+
     const result = v.parse(FileSuccessSchema, await execute({
       action: 'edit', path: 'shared.md',
       edits: [{ old_text: 'shared', new_text: 'REPLACED' }],
     }));
+
     expect(result.ok).toBe(true);
     expect(await rt.storage.vfs.readFile('shared.md', { encoding: 'utf8' })).toBe('REPLACED content');
   });
@@ -394,6 +427,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
     const vfs = rt.storage.vfs;
+
     return createInlineExecutor({
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
@@ -404,6 +438,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
   test('readdir of a container path explains what workspace.* is and where to go instead', async () => {
     const exec = buildPlane();
     let raised: unknown;
+
     try { await exec.tools.readdir.execute('/app'); } catch (err) { raised = err; }
 
     const err = v.parse(VfsMessageSchema, raised);
@@ -420,6 +455,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
   test('a missing file anywhere gets the same correction', async () => {
     const exec = buildPlane();
     let raised: unknown;
+
     try { await exec.tools.readFile.execute('app/gblock.txt'); } catch (err) { raised = err; }
 
     const err = v.parse(VfsMessageSchema, raised);
@@ -436,13 +472,17 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
 
   test('a non-VFS failure is not dressed up as an addressing problem', async () => {
     const { rt } = createTestRuntime();
+
     const exec = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => { throw new Error('shell is not available'); } },
       sql: rt.storage.sql,
     });
+
     let raised: unknown;
+
     try { await exec.tools.exec.execute('ls'); } catch (err) { raised = err; }
+
     if (!(raised instanceof Error)) throw new Error('shell failure did not throw an Error');
     expect(raised.message).toBe('shell is not available');
   });
@@ -457,6 +497,7 @@ describe('workspace.createTool — the tool is born scorable', () => {
 
     const row = rt.storage.sql<{ score: number; uses: number }>`
       SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
+
     if (!row) throw new Error('created tool did not receive a score row');
     expect(row.score).toBe(CRAFT_NEUTRAL_PRIOR);
     expect(row.uses).toBe(0);
@@ -472,6 +513,7 @@ describe('workspace.createTool — the tool is born scorable', () => {
 
     const row = rt.storage.sql<{ score: number; uses: number }>`
       SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
+
     if (!row) throw new Error('recrafted tool lost its score row');
     expect(row.score).toBe(0.88);
     expect(row.uses).toBe(7);
@@ -484,6 +526,7 @@ describe('workspace.createTool — the tool is born scorable', () => {
     const res = v.parse(ToolOkSchema, await exec.tools.createTool.execute(
       'sneaky', 'bypass', 'async () => sql`DELETE FROM scaffold_versions`',
     ));
+
     expect(res.ok).toBe(false);
     expect(rt.craftStore.get('sneaky')).toBeUndefined();
     expect(rt.craftStore.get('sneaky')).toBeUndefined();

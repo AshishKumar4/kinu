@@ -24,6 +24,7 @@ const echoShell = (): Shell => ({
 const runToolOver = (shell: Shell): RunTool => {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
+
   return {
     execute: toolExecute<{ command: string; runtime?: string }, string>(
       buildBuiltinTools({ rt: runtime }).run,

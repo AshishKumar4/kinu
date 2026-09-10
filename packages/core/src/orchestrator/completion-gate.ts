@@ -85,8 +85,10 @@ export async function observeCompletionState(deps: {
   vfs?: VFS;
 }): Promise<string | null> {
   const blocks: string[] = [];
+
   for (const command of COMPLETION_PROBE_COMMANDS) {
     let outcome: ExecOutcome;
+
     try {
       outcome = await deps.exec(command);
     } catch (error) {
@@ -97,10 +99,13 @@ export async function observeCompletionState(deps: {
       });
       continue;
     }
+
     if (command.startsWith('git ') && (outcome.exitCode ?? 0) !== 0) continue;
     blocks.push(`$ ${command}\n${formatExecResult(outcome).trim()}`);
   }
+
   if (blocks.length === 0) return null;
+
   return clampToolResult(blocks.join('\n\n'), {
     maxChars: COMPLETION_OBSERVATION_MAX_CHARS,
     vfs: deps.vfs,
@@ -208,6 +213,7 @@ export class CompletionGate {
   take(): CompletionGateRecord | null {
     const record = this.record;
     this.record = null;
+
     return record;
   }
 }

@@ -21,6 +21,7 @@ export type ModelStreamPart =
   Awaited<ReturnType<MockLanguageModelV3['doStream']>>['stream'] extends ReadableStream<infer Part>
     ? Part
     : never;
+
 /**
  * What ONE scripted step answers with, and what its script receives.
  *
@@ -31,6 +32,7 @@ export type ModelStreamPart =
  * against this fixes both.
  */
 export type ScriptedTurnResult = Awaited<ReturnType<MockLanguageModelV3['doGenerate']>>;
+
 export type ScriptedTurnOptions = Parameters<MockLanguageModelV3['doGenerate']>[0];
 
 /**
@@ -66,6 +68,7 @@ export function scriptedTurnModel(config: {
   doGenerate: (options: ScriptedTurnOptions) => PromiseLike<ScriptedTurnResult> | ScriptedTurnResult;
 }): MockLanguageModelV3 {
   const { doGenerate } = config;
+
   return new MockLanguageModelV3({
     provider: config.provider ?? 'fake',
     modelId: config.modelId ?? 'fake-model',
@@ -78,8 +81,10 @@ export function scriptedTurnModel(config: {
       const result = await doGenerate(options);
       const parts: ModelStreamPart[] = [{ type: 'stream-start', warnings: result.warnings }];
       let part = 0;
+
       for (const item of result.content) {
         const id = `p${String(part++)}`;
+
         if (item.type === 'text') {
           parts.push({ type: 'text-start', id });
           parts.push({ type: 'text-delta', id, delta: item.text });
@@ -92,7 +97,9 @@ export function scriptedTurnModel(config: {
           parts.push(item);
         }
       }
+
       parts.push({ type: 'finish', finishReason: result.finishReason, usage: result.usage });
+
       return { stream: convertArrayToReadableStream(parts) };
     },
   });

@@ -28,12 +28,14 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 
 mockAgentsSdk();
+
 // `actions.ts` imports `getAgentByName` from `agents`, which reaches
 // `cloudflare:email` at module load, so it is imported after the mock is
 // registered — the same ordering `unit-agents-codemode.test.ts` documents.
 const { ControlActionSchema, describeAction } = await import('../src/control-plane/actions');
 
 const SECRET = 'control-plane-test-secret-0123456789';
+
 const ENV = { CREDENTIAL_ENCRYPTION_KEY: SECRET, CONTROL_PLANE_ADMINS: 'ops@kinu.run, second@kinu.run' };
 
 /** A signed-in browser identity. `authTime` is `now` by default, so a test that
@@ -79,6 +81,7 @@ function freshStore(): StoreUnderTest {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
   store.initControlPlaneSchema(sql);
+
   return { sql, close: () => db.close() };
 }
 
@@ -86,6 +89,7 @@ describe('who may reach the control plane', () => {
   test('an ordinary signed-in user is refused, and the refusal is a 404', () => {
     const answer = authorizeAdmin(ENV, identity({ email: 'someone@example.com' }), { mutating: false });
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('not_admin');
     // Not 403: a 403 confirms the path exists, and whether this deployment has an
@@ -103,7 +107,9 @@ describe('who may reach the control plane', () => {
       identity({ email: 'eval-service@kinu.run', provider: 'dev' }),
       { mutating: false },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('dev_identity');
   });
@@ -113,6 +119,7 @@ describe('who may reach the control plane', () => {
     // the admin plane is in no CLI scope.
     const answer = authorizeAdmin(ENV, identity({ cliScopes: [] }), { mutating: false });
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('token_identity');
   });
@@ -121,7 +128,9 @@ describe('who may reach the control plane', () => {
     const answer = authorizeAdmin(
       { ...ENV, CONTROL_PLANE_ADMINS: '' }, identity(), { mutating: false },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('no_admins_configured');
   });
@@ -135,7 +144,9 @@ describe('who may reach the control plane', () => {
     const answer = authorizeAdmin(
       { CONTROL_PLANE_ADMINS: 'ops@kinu.run' }, identity(), { mutating: false },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('unconfigured');
     expect(adminDenialStatus(answer.denial)).toBe(503);
@@ -146,6 +157,7 @@ describe('who may reach the control plane', () => {
 
     const read = authorizeAdmin(ENV, stale, { mutating: false });
     expect(read.ok).toBe(true);
+
     // Authorized to READ, and carrying the fact that it may not write — which is
     // what lets the route audit an attempted mutation instead of dropping it.
     if (!read.ok) throw new Error('unreachable');
@@ -153,6 +165,7 @@ describe('who may reach the control plane', () => {
 
     const write = authorizeAdmin(ENV, stale, { mutating: true });
     expect(write.ok).toBe(false);
+
     if (write.ok) throw new Error('unreachable');
     expect(write.denial).toBe('stale_auth');
     // 403 here, not 404: the caller IS a known operator and the remedy is to sign
@@ -163,6 +176,7 @@ describe('who may reach the control plane', () => {
   test('a sign-in inside the window may mutate', () => {
     const answer = authorizeAdmin(ENV, identity({ authTime: Date.now() - 60_000 }), { mutating: true });
     expect(answer.ok).toBe(true);
+
     if (!answer.ok) throw new Error('unreachable');
     expect(answer.admin.fresh).toBe(true);
   });
@@ -189,6 +203,7 @@ describe('capability attenuation', () => {
 
   test('the admin caller holds both grades', async () => {
     const authorization = authorizeAdmin(ENV, identity(), { mutating: true });
+
     if (!authorization.ok) throw new Error('the fixture operator should be authorized');
     const caller = await adminCaller(ENV, authorization.admin);
     expect(await requireControl(ENV, caller, 'users.read')).toBe('admin');
@@ -304,9 +319,11 @@ describe('the index', () => {
   });
   test('reconciling against the registry tombstones what the registry no longer has', () => {
     const { sql, close } = freshStore();
+
     for (const name of ['keep', 'drop']) {
       store.observeWorkspace(sql, { userId: 'u1', name, displayName: name, at: 1_000 });
     }
+
     const outcome = store.replaceUserWorkspaces(sql, 'u1', [
       { name: 'keep', displayName: 'Keep', createdAt: 500, lastVisited: 7_000 },
     ], 9_000);
@@ -351,6 +368,7 @@ describe('paging', () => {
   test('250 accounts are all reachable, past the 200-row page ceiling', () => {
     const { sql, close } = freshStore();
     const total = 250;
+
     for (let i = 0; i < total; i += 1) {
       // Descending last-seen so the walk order is deterministic and the ids are
       // NOT in the same order as the sort key — a cursor that accidentally paged
@@ -361,17 +379,22 @@ describe('paging', () => {
     const seen: string[] = [];
     let cursor: { after: string } | undefined;
     let pages = 0;
+
     for (;;) {
       // Built in statements: an absent cursor means "start at the beginning",
       // and a spread producing `cursor: undefined` would read as a present
       // cursor the store then refuses.
       const request: PageRequest = { limit: 200 };
+
       if (cursor !== undefined) request.cursor = cursor;
       const page: Page<store.ControlUserRow> = store.listUsers(sql, request);
       pages += 1;
+
       for (const row of page.items) seen.push(row.userId);
+
       if (page.status === 'end') break;
       cursor = page.next;
+
       if (pages > 10) throw new Error('the walk did not terminate');
     }
 
@@ -383,9 +406,11 @@ describe('paging', () => {
 
   test('a request for more than the ceiling is clamped, not honoured', () => {
     const { sql, close } = freshStore();
+
     for (let i = 0; i < 250; i += 1) {
       store.observeUser(sql, { userId: `u${String(i).padStart(4, '0')}`, email: `u${String(i)}@x`, at: 1_000_000 - i });
     }
+
     const page = store.listUsers(sql, { limit: 10_000 });
     expect(page.items.length).toBe(store.CONTROL_PAGE_MAX);
     expect(page.status).toBe('more');
@@ -397,13 +422,17 @@ describe('paging', () => {
     // one millisecond, and a boundary landing inside that tie is the paging defect
     // hardest to notice after the fact.
     const { sql, close } = freshStore();
+
     for (let i = 0; i < 5; i += 1) {
       store.observeUser(sql, { userId: `same${String(i)}`, email: `s${String(i)}@x`, at: 4_000 });
     }
+
     const first = store.listUsers(sql, { limit: 2 });
     expect(first.status).toBe('more');
+
     if (first.status !== 'more') throw new Error('unreachable');
     const second = store.listUsers(sql, { limit: 2, cursor: first.next });
+
     // A third page only when the second reported one. `EMPTY_PAGE` is a real
     // `Page`, not an ad-hoc object, so the spread below reads one shape.
     const third: Page<store.ControlUserRow> = second.status === 'more'
@@ -418,9 +447,11 @@ describe('paging', () => {
 
   test('`end` is reported about a query that ran off the end, not a full page', () => {
     const { sql, close } = freshStore();
+
     for (let i = 0; i < 4; i += 1) {
       store.observeUser(sql, { userId: `u${String(i)}`, email: `u${String(i)}@x`, at: 1_000 - i });
     }
+
     // Exactly as many rows as the limit. Comparing `rows.length` to `limit` would
     // report `more` here and hand out a cursor onto nothing.
     expect(store.listUsers(sql, { limit: 4 }).status).toBe('end');
@@ -441,6 +472,7 @@ describe('paging', () => {
     // The audit ids are the store's, so the walk is asserted against the rows it
     // wrote rather than against names this test chose.
     const auditIds: string[] = [];
+
     for (let i = 0; i < 5; i += 1) {
       store.recordFeedback(sql, {
         id: `f${String(i)}`, createdAt: 1_000 + i, userId: 'u1', email: 'a@x',
@@ -453,6 +485,7 @@ describe('paging', () => {
         outcome: 'ok', detail: 'cancelled',
       }, 1_000 + i).id);
     }
+
     const feedback = store.listFeedback(sql, { limit: 2 });
     expect(feedback.status).toBe('more');
     expect(feedback.items.map((row) => row.id)).toEqual(['f4', 'f3']);
@@ -496,10 +529,12 @@ describe('feedback rows', () => {
 
   test('a resubmitted id does not duplicate the report', () => {
     const { sql, close } = freshStore();
+
     const row = {
       id: 'f3', createdAt: 1_000, userId: 'u1', email: 'a@x', note: 'once',
       route: '/', workspace: null, objectKey: null, contentType: null, bytes: null, userAgent: null,
     };
+
     store.recordFeedback(sql, row);
     store.recordFeedback(sql, { ...row, note: 'twice' });
     const rows = store.listFeedback(sql).items;
@@ -527,11 +562,13 @@ describe('the audit log', () => {
     // through `now`, which is a parameter of the append and not a field of the
     // draft — nothing an operator request carries can date a row.
     const { sql, close } = freshStore();
+
     const draft = {
       actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'jobs_clear', targetKind: 'workspace', target: `${'a'.repeat(32)}/alpha`,
       outcome: 'ok', detail: 'cleared',
     } as const;
+
     const first = store.appendAudit(sql, draft, 1_000);
     const second = store.appendAudit(sql, draft, 2_000);
     expect(first.id).not.toBe(second.id);
@@ -545,11 +582,13 @@ describe('the audit log', () => {
     // record before the mutation runs, so an action taken while the log could
     // not be finished is findable afterwards instead of invisible.
     const { sql, close } = freshStore();
+
     const intent = store.appendAudit(sql, {
       actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'job_cancel', targetKind: 'job', target: `${'a'.repeat(32)}/alpha/j-7`,
       outcome: 'pending', detail: 'in flight',
     }, 3_000);
+
     expect(intent.outcome).toBe('pending');
     expect(intent.at).toBe(3_000);
     expect(store.listPendingAudit(sql).map((row) => row.id)).toEqual([intent.id]);
@@ -559,14 +598,17 @@ describe('the audit log', () => {
 
   test('a settlement fills the outcome and cannot touch what the attempt said', () => {
     const { sql, close } = freshStore();
+
     const intent = store.appendAudit(sql, {
       actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'job_cancel', targetKind: 'job', target: `${'a'.repeat(32)}/alpha/j-7`,
       outcome: 'pending', detail: 'in flight',
     }, 3_000);
+
     const settled = store.settleAudit(
       sql, { id: intent.id, outcome: 'ok', detail: 'cancelled j-7' },
     );
+
     expect(settled).toMatchObject({
       id: intent.id, at: 3_000, actorEmail: 'ops@kinu.run', operation: 'job_cancel',
       target: `${'a'.repeat(32)}/alpha/j-7`, outcome: 'ok', detail: 'cancelled j-7',
@@ -579,11 +621,13 @@ describe('the audit log', () => {
     // A replayed or duplicated settlement must be a no-op, not a way to edit
     // history. `null` says so rather than returning the row it did not write.
     const { sql, close } = freshStore();
+
     const intent = store.appendAudit(sql, {
       actorEmail: 'ops@kinu.run', actorUserId: 'u1',
       operation: 'jobs_clear', targetKind: 'workspace', target: `${'a'.repeat(32)}/alpha`,
       outcome: 'pending', detail: 'in flight',
     }, 3_000);
+
     store.settleAudit(sql, { id: intent.id, outcome: 'denied', detail: 'nothing to clear' });
     expect(store.settleAudit(sql, { id: intent.id, outcome: 'ok', detail: 'rewritten' }))
       .toBe(null);
@@ -722,6 +766,7 @@ describe('the admin action surface', () => {
       const parsed = v.safeParse(ControlActionSchema, {
         action: 'approvals.decide', userId: OWNER, workspace: 'alpha', ids: ['x'], decision,
       });
+
       expect(parsed.success).toBe(true);
     }
   });

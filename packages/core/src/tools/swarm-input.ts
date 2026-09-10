@@ -41,6 +41,7 @@ import type { Objective } from '../strategy/objective';
 import type { SwarmConfig, SwarmNodeAssignment } from '../strategy/swarm';
 
 const DirectionSchema = v.picklist(['minimise', 'maximise'] as const);
+
 const ScaleSchema = v.picklist(['linear', 'log'] as const);
 
 /** A verifier as DATA. `kind` is checked against the registry at dispatch rather than
@@ -234,21 +235,31 @@ const SwarmConfigWireSchema = v.strictObject({
  */
 function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<SwarmConfig> {
   const config: Partial<SwarmConfig> = {};
+
   if (wire.unit !== undefined) Object.assign(config, { unit: wire.unit });
+
   if (wire.context !== undefined) Object.assign(config, { context: wire.context });
+
   if (wire.expand !== undefined) Object.assign(config, { expand: wire.expand });
+
   if (wire.score !== undefined) Object.assign(config, { score: wire.score });
+
   if (wire.advance !== undefined) Object.assign(config, { advance: wire.advance });
+
   if (wire.carry !== undefined) Object.assign(config, { carry: wire.carry });
+
   if (wire.exploration_weight !== undefined) {
     Object.assign(config, { explorationWeight: wire.exploration_weight });
   }
+
   if (wire.prune_threshold !== undefined) {
     Object.assign(config, { pruneThreshold: wire.prune_threshold });
   }
+
   if (wire.min_visits_for_prune !== undefined) {
     Object.assign(config, { minVisitsForPrune: wire.min_visits_for_prune });
   }
+
   return config;
 }
 

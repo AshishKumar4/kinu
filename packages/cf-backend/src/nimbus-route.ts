@@ -48,6 +48,7 @@ import { reoriginateRequest } from './lib/http';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
 
 const HKDF_SALT = 'kinu.workspace-preview.salt';
+
 const HKDF_INFO = 'kinu.workspace-preview.v4';
 
 /** Signing keys, cached by secret. The derivation is deterministic over
@@ -57,9 +58,11 @@ const signingKeys = new Map<string, Promise<CryptoKey>>();
 
 function signingKey(secret: string): Promise<CryptoKey> {
   let pending = signingKeys.get(secret);
+
   if (!pending) {
     pending = (async () => {
       const material = await crypto.subtle.importKey('raw', utf8(secret), 'HKDF', false, ['deriveKey']);
+
       return crypto.subtle.deriveKey(
         { name: 'HKDF', hash: 'SHA-256', salt: utf8(HKDF_SALT), info: utf8(HKDF_INFO) },
         material,
@@ -70,6 +73,7 @@ function signingKey(secret: string): Promise<CryptoKey> {
     })();
     signingKeys.set(secret, pending);
   }
+
   return pending;
 }
 
@@ -88,11 +92,14 @@ interface WorkspacePreviewHost {
 
 function previewSecrets(env: Env): string[] {
   const current = env.CREDENTIAL_ENCRYPTION_KEY?.trim();
+
   if (!current) return [];
+
   const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+
   return [current, ...retired];
 }
 
@@ -117,6 +124,7 @@ async function previewToken(secret: string, workspace: string, port: number, han
     await signingKey(secret),
     utf8(`kinu:workspace-preview:v4:${workspace}:${port}:${handle}`),
   );
+
   return base32(new Uint8Array(digest)).slice(0, 15);
 }
 
@@ -127,16 +135,20 @@ function base32(bytes: Uint8Array): string {
   let bits = 0;
   let buffer = 0;
   let encoded = '';
+
   for (const byte of bytes) {
     buffer = (buffer << 8) | byte;
     bits += 8;
+
     while (bits >= 5) {
       bits -= 5;
       encoded += BASE32[(buffer >>> bits) & 31];
       buffer &= (1 << bits) - 1;
     }
   }
+
   if (bits > 0) encoded += BASE32[(buffer << (5 - bits)) & 31];
+
   return encoded;
 }
 
@@ -161,21 +173,28 @@ export async function nimbusPreviewUrl(
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     return { unavailable: `${String(port)} is not a TCP port` };
   }
+
   if (!/^[a-f0-9]{24}$/.test(capability)) {
     return { unavailable: 'the port registry handed out a capability this deployment cannot sign' };
   }
+
   const suffix = previewHostSuffix(env);
+
   if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
   const secret = previewSecrets(env)[0];
+
   if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
   const refusal = workspaceAddressRefusal(workspaceName);
+
   if (refusal !== null) return { unavailable: refusal };
   const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
   const token = await previewToken(secret, workspaceName, port, handle);
   const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
+
   // The name passed the label grammar above, so the label fits by the budget
   // that grammar was cut to; a null here is a fault in that arithmetic.
   if (host === null) throw new Error(`the preview label for "${workspaceName}" did not fit a hostname`);
+
   return { url: `https://${host}/` };
 }
 
@@ -188,33 +207,41 @@ export async function nimbusPreviewUrl(
  */
 export async function handleNimbusPreviewHostRequest(request: Request, env: Env): Promise<Response | null> {
   const suffix = previewHostSuffix(env);
+
   if (!suffix) return null;
   const url = new URL(request.url);
   const suffixWithDot = `.${suffix}`;
+
   if (!url.hostname.endsWith(suffixWithDot)) return null;
   const label = url.hostname.slice(0, -suffixWithDot.length);
   const preview = parseWorkspacePreviewLabel(label);
+
   if (!preview) return null;
   const { port, workspace, token, handle } = preview;
   const secrets = previewSecrets(env);
+
   if (secrets.length === 0) {
     return new Response('Preview authentication is unavailable.', {
       status: 503,
       headers: { 'cache-control': 'no-store' },
     });
   }
+
   const expected = await Promise.all(
     secrets.map((secret) => previewToken(secret, workspace, port, handle)),
   );
+
   if (!expected.some((candidate) => timingSafeEqual(token, candidate))) {
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
+
   const stub: WorkspacePreviewHost = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(workspace),
   );
+
   // One construction policy, shared with container egress: `request.body` is
   // handed over unwrapped so a fixed-length upload stays fixed-length across the
   // hop. The headers are the SANITIZED set.
@@ -225,10 +252,12 @@ export async function handleNimbusPreviewHostRequest(request: Request, env: Env)
   if (headers.get('upgrade')?.toLowerCase() === 'websocket') {
     const target = new URL(request.url);
     target.pathname = `${WORKSPACE_PREVIEW_PATH}/${port}/${handle}${url.pathname}`;
+
     return await stub.fetch(reoriginateRequest(request, target.toString(), {
       headers, redirect: request.redirect,
     }));
   }
+
   return await stub.routeWorkspacePreview(
     port,
     handle,

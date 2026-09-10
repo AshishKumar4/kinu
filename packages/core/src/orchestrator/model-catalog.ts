@@ -46,10 +46,12 @@ export class ModelCatalogSession {
    *  never block. */
   info(): ModelInfo | null {
     const spec = this.deps.effectiveSpec();
+
     if (this.cached?.spec !== spec) {
       this.cached = { spec, info: null };
       this.cached.lookup = this.armLookup(spec);
     }
+
     return this.cached.info;
   }
 
@@ -82,6 +84,7 @@ export class ModelCatalogSession {
     // Only the provider segment is read here (it selects the transport
     // ceiling), and a bare or pre-claim spec simply has none.
     const [provider] = this.deps.effectiveSpec().trim().split('/');
+
     return acceptedMediaForModel({
       provider,
       catalogInputModalities: info?.inputModalities,
@@ -91,6 +94,7 @@ export class ModelCatalogSession {
   private async armLookup(spec: string): Promise<void> {
     try {
       const info = await this.deps.lookup(spec);
+
       if (info && this.cached?.spec === spec) this.cached.info = info;
     } catch (cause) {
       // Nothing to propagate to: reads never block, while the cache retains this

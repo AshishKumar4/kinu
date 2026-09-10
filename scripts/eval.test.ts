@@ -67,15 +67,18 @@ describe('parseArgs', () => {
 
 describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
   const runtime = createTestRuntime().rt;
+
   const model = new MockLanguageModelV3({
     doGenerate: async () => { throw new Error('stub strategy must not call the model'); },
   });
+
   const buildContext = (c: EvalCase): StrategyContext => ({
     task: c.task,
     mode: 'build',
     rt: runtime,
     model,
   });
+
   const judge: JudgeFn = async (c) => ({
     winner: c.id === 'q1' ? 'b' : 'tie',
     scoreA: 0.6,
@@ -93,6 +96,7 @@ describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
       threshold: 0.5,
       meta: { modelA: 'm', modelB: 'm', corpus: 'seed.jsonl' },
     });
+
     expect(report.summary.total).toBe(2);
     expect(report.aggregateScore).toBeCloseTo((0.9 + 0.6) / 2, 5);
     expect(report.cases.map((c) => c.caseId)).toEqual(['q1', 'q2']);
@@ -110,6 +114,7 @@ describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
       threshold: 0.95,
       meta: {},
     });
+
     expect(gate.pass).toBe(false);
     expect(gate.reason).toContain('regression');
   });
@@ -132,6 +137,7 @@ describe('seed corpus', () => {
     const { runnable, excluded } = partitionRunnable(parseCorpus(readFileSync(path, 'utf8')));
     expect(excluded.map((c) => c.id).sort()).toEqual(['multi-001', 'multi-002', 'tool-001', 'tool-002']);
     expect(runnable.length).toBeGreaterThan(0);
+
     for (const c of runnable) {
       expect(c.tags ?? []).not.toContain('tool-use');
       expect(c.tags ?? []).not.toContain('multi-step');
@@ -160,6 +166,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
     suite: 'Behaviour Evals', calls: 42, callsWithoutUsage: 0,
     usage: { input: 13_415_180, output: 401_195 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
   };
+
   /** The regression, as a line: a suite that drove episodes and accounted for
    *  nothing. Before the meter had `episodesUnmeasured` this line was
    *  indistinguishable from a suite that legitimately never ran. */
@@ -200,6 +207,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
     const out = renderSpend([{
       suite: 'Delegation Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }]);
+
     expect(out).toContain('0 model call(s)');
     // Nothing ran, nothing is missing, and the report must not cry hole.
     expect(out).not.toContain('NOT A TOTAL');
@@ -210,6 +218,7 @@ describe('eval-tier cost report — a zero says which kind of zero it is', () =>
       suite: 'E2E Lifecycle', calls: 5, callsWithoutUsage: 2,
       usage: { input: 100, output: 10 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }]);
+
     expect(out).toContain('2 call(s) the provider reported no usage for');
     // A known under-count is not a hole: the calls were seen and counted, only
     // their tokens were not. Conflating the two would make the loud label routine.
@@ -261,6 +270,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
       { suite: 'E2E Lifecycle', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0 },
       { suite: 'Deep Evolution', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0 },
     ], true);
+
     expect(verdict.kind).toBe('unproven');
     expect(renderLiveness(verdict)).toContain('UNPROVEN');
     expect(renderLiveness(verdict)).toContain('0 model calls');
@@ -290,6 +300,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
       measured,
       { suite: 'First-run · files-outside-tree', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 1 },
     ], true);
+
     expect(verdict.kind).toBe('proven');
     expect(renderSpend([
       { suite: 'First-run · files-outside-tree', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 1 },
@@ -301,6 +312,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
       measured,
       { suite: 'Behaviour Evals', calls: 0, callsWithoutUsage: 0, usage: {}, episodesUnmeasured: 20, episodesWithoutModel: 0 },
     ], true);
+
     expect(verdict.kind).toBe('unproven');
     // Named as its own defect rather than borrowing the zero-call sentence: this
     // run DID reach a model, it just cannot bound what that cost.
@@ -312,6 +324,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
     const verdict = livenessVerdict([{
       suite: 'Live Smoke', calls: 2, callsWithoutUsage: 2, usage: {}, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }], true);
+
     expect(verdict.kind).toBe('unproven');
     expect(renderLiveness(verdict)).toContain('NOT ONE reported token usage');
   });
@@ -325,6 +338,7 @@ describe('eval-tier liveness — a resolved target that called nothing FAILS', (
       suite: 'Live Smoke', calls: 6, callsWithoutUsage: 2,
       usage: { input: 73_766, output: 470 }, episodesUnmeasured: 0, episodesWithoutModel: 0,
     }], true);
+
     expect(verdict.kind).toBe('proven');
   });
 });

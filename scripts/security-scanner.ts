@@ -100,6 +100,7 @@ export interface BunScanner {
 /* ── The feed ───────────────────────────────────────────────────────────── */
 
 export const SEVERITIES = ['low', 'moderate', 'high', 'critical'] as const;
+
 export type Severity = (typeof SEVERITIES)[number];
 
 const AdvisorySchema = v.object({
@@ -145,6 +146,7 @@ export type AdvisoryScan =
  *  syscall-level reason worth reading. */
 function causeChain(error: Error): string {
   const cause = error.cause instanceof Error ? ` <- ${error.cause.name}: ${error.cause.message}` : '';
+
   return `${error.name}: ${error.message}${cause}`;
 }
 
@@ -159,18 +161,23 @@ export async function queryAdvisories(
   endpoint: string = ADVISORY_ENDPOINT,
 ): Promise<AdvisoryScan> {
   const installed = new Map<string, Set<string>>();
+
   for (const pkg of packages) {
     const versions = installed.get(pkg.name) ?? new Set<string>();
     versions.add(pkg.version);
     installed.set(pkg.name, versions);
   }
+
   const scanned = packages.length;
+
   if (scanned === 0) return { status: 'reported', scanned, exposures: [] };
 
   const body: Record<string, string[]> = {};
+
   for (const [name, versions] of installed) body[name] = [...versions];
 
   let response: Response;
+
   try {
     response = await fetch(endpoint, {
       method: 'POST',
@@ -186,6 +193,7 @@ export async function queryAdvisories(
       error: error instanceof Error ? causeChain(error) : String(error),
     };
   }
+
   if (!response.ok) {
     return {
       status: 'unreachable',
@@ -196,6 +204,7 @@ export async function queryAdvisories(
   }
 
   let payload: unknown;
+
   try {
     payload = await response.json();
   } catch (error) {
@@ -206,7 +215,9 @@ export async function queryAdvisories(
       error: error instanceof Error ? causeChain(error) : String(error),
     };
   }
+
   const parsed = v.safeParse(BulkSchema, payload);
+
   if (!parsed.success) {
     return {
       status: 'unreachable',
@@ -217,9 +228,12 @@ export async function queryAdvisories(
   }
 
   const exposures: Exposure[] = [];
+
   for (const [pkg, advisories] of Object.entries(parsed.output)) {
     const versions = installed.get(pkg);
+
     if (versions === undefined) continue;
+
     for (const advisory of advisories) {
       for (const version of versions) {
         if (!Bun.semver.satisfies(version, advisory.vulnerable_versions)) continue;
@@ -235,7 +249,9 @@ export async function queryAdvisories(
       }
     }
   }
+
   exposures.sort((a, b) => a.pkg.localeCompare(b.pkg) || a.id - b.id || a.version.localeCompare(b.version));
+
   return { status: 'reported', scanned, exposures };
 }
 
@@ -358,6 +374,7 @@ export function unreviewedExposures(
 ): readonly Exposure[] {
   return exposures.filter((exposure) => {
     const entry = reviewed[exposure.pkg];
+
     return entry === undefined || !entry.ids.includes(exposure.id);
   });
 }
@@ -384,6 +401,7 @@ export function advisoriesFor(scan: AdvisoryScan): BunAdvisory[] {
         + 'unchecked.',
     }];
   }
+
   // critical/high stop even an interactive install; the rest cancel every
   // automated one and let a developer decide in a terminal.
   return unreviewedExposures(scan.exposures).map((exposure) => ({
@@ -401,9 +419,11 @@ export const scanner: BunScanner = {
   version: '1',
   async scan({ packages }) {
     const scan = await queryAdvisories(packages);
+
     if ((process.env[REPORT_ENV] ?? '').trim().length > 0) {
       console.log(REPORT_SENTINEL + JSON.stringify(scan));
     }
+
     return advisoriesFor(scan);
   },
 };

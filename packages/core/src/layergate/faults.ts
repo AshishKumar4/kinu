@@ -37,6 +37,7 @@ export interface Fault<S = PipelineSubjects> {
 
 /** The faulted layer must lose at least this many percentage points. */
 export const LOCALIZATION_OWN_MIN_PP = 25;
+
 /** Every other layer must move less than this. */
 export const LOCALIZATION_OTHER_MAX_PP = 5;
 
@@ -61,6 +62,7 @@ class UndedupedLedger extends DynamicContextLedger {
   }
   override weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
     this.appended += 1;
+
     return [...history, { role: 'user', content: JSON.stringify(state) }];
   }
   override reset(): void {
@@ -77,7 +79,9 @@ class DriftingStepInjections<E extends { readonly message: ModelMessage }> exten
   }
   override drain(ctx: PrepareStepContext, incoming: ReadonlyArray<E>): ModelMessage[] | undefined {
     for (const entry of incoming) this.own.push({ ...entry, index: ctx.messages.length });
+
     if (this.own.length === 0) return undefined;
+
     return [...ctx.messages, ...this.own.map((entry) => entry.message)];
   }
   override replayInto(responseMessages: ReadonlyArray<ModelMessage>): ModelMessage[] {
@@ -98,6 +102,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       ...s,
       compilePromptSurface: (opts) => {
         const surface = s.compilePromptSurface(opts);
+
         return { ...surface, selectableExecutors: surface.executors };
       },
       buildSystemPromptSync: (opts) =>
@@ -130,6 +135,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       cacheableSystem: (system) => system,
       resolvePromptCacheStrategy: (providerId, modelId) => {
         const strategy = s.resolvePromptCacheStrategy(providerId, modelId);
+
         return strategy.kind === 'openai-compat' ? { ...strategy, markers: false } : strategy;
       },
     }),
@@ -144,8 +150,10 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       contextWindowForModel: () => 128_000,
       clampToolResult: async (text, opts = {}) => {
         const maxChars = opts.maxChars ?? 40_000;
+
         if (text.length <= maxChars) return text;
         const headLen = Math.floor(maxChars * 0.5);
+
         return `${text.slice(0, headLen)}\n\n[output truncated]\n\n${text.slice(-(maxChars - headLen))}`;
       },
     }),
@@ -216,6 +224,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       ...s,
       reviewCommand: (command, executor) => {
         const result = s.reviewCommand(command, executor);
+
         return result.decision === 'deny' ? { ...result, decision: 'gate' } : result;
       },
       formatApproval: (result) => (result.decision === 'allow' ? '' : `Approval review: ${result.decision}`),
@@ -276,18 +285,22 @@ export const FAULTS: readonly Fault[] = Object.freeze([
       ...s,
       readFileSlice: (content, opts) => {
         const slice = s.readFileSlice(content, opts);
+
         return { ...slice, output: slice.output.replace(/\n\n\[[^\]]*\]$/, '') };
       },
       applyFileEdits: (original, edits, path) => {
         const first = edits[0];
+
         if (first && original.indexOf(first.oldText) !== original.lastIndexOf(first.oldText)) {
           const at = original.indexOf(first.oldText);
+
           return {
             ok: true,
             content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
             applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
           };
         }
+
         return s.applyFileEdits(original, edits, path);
       },
     }),
@@ -326,18 +339,23 @@ async function runFaults<S>(
   const clean = await observePipeline(subjects, layers);
   const reference = Object.fromEntries(clean);
   const impacts: FaultImpact[] = [];
+
   for (const fault of faults) {
     const report = scoreAgainstBaseline(await observePipeline(fault.inject(subjects), layers), reference, layers);
     const dropPp: Record<string, number | null> = {};
     let ownDropPp = 0;
     let maxOtherDropPp = 0;
+
     for (const score of report.layers) {
       const drop = score.conformance === null ? null : (1 - score.conformance) * 100;
       dropPp[score.layer] = drop;
+
       if (drop === null) continue;
+
       if (score.layer === fault.layer) ownDropPp = drop;
       else maxOtherDropPp = Math.max(maxOtherDropPp, drop);
     }
+
     impacts.push({
       fault: fault.id,
       layer: fault.layer,
@@ -347,6 +365,7 @@ async function runFaults<S>(
       localized: ownDropPp >= LOCALIZATION_OWN_MIN_PP && maxOtherDropPp < LOCALIZATION_OTHER_MAX_PP,
     });
   }
+
   return impacts;
 }
 
@@ -360,11 +379,13 @@ export function runFaultMatrix<S>(
   ...input: [subjects: PipelineSubjects] | [subjects: S, faults: readonly Fault<S>[], layers: readonly Layer<S>[]]
 ): Promise<FaultImpact[]> {
   if (input.length === 1) return runFaults(input[0], FAULTS, LAYERS);
+
   return runFaults(input[0], input[1], input[2]);
 }
 
 export function renderFaultMatrix(impacts: readonly FaultImpact[]): string {
   const width = Math.max(...impacts.map((i) => i.fault.length));
+
   return [
     `Fault matrix (own ≥ ${LOCALIZATION_OWN_MIN_PP}pp, every other layer < ${LOCALIZATION_OTHER_MAX_PP}pp)`,
     ...impacts.map((impact) => {
@@ -372,6 +393,7 @@ export function renderFaultMatrix(impacts: readonly FaultImpact[]): string {
         .filter((entry): entry is [string, number] =>
           entry[0] !== impact.layer && entry[1] !== null && entry[1] > 0)
         .map(([layer, drop]) => `${layer} ${drop.toFixed(1)}pp`);
+
       return `  ${impact.fault.padEnd(width)}  own ${impact.ownDropPp.toFixed(1).padStart(5)}pp  ` +
         `other ${impact.maxOtherDropPp.toFixed(1).padStart(5)}pp  ` +
         `${impact.localized ? 'LOCALIZED' : 'LEAKED'}${leaks.length ? ` [${leaks.join(', ')}]` : ''}`;

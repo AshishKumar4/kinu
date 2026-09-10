@@ -21,12 +21,15 @@ const storedCodexCredentialSchema = v.object({
   expiresAt: v.optional(v.number()),
   metadata: v.optional(JsonObjectSchema),
 });
+
 type StoredCodexCredential = v.InferOutput<typeof storedCodexCredentialSchema>;
+
 const kinuConfigSchema = v.objectWithRest({
   providers: v.optional(v.objectWithRest({
     codex: v.optional(storedCodexCredentialSchema),
   }, JsonValueSchema)),
 }, JsonValueSchema);
+
 type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 
 export interface LocalCodexAuthStore {
@@ -43,12 +46,15 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
 
     async getAuth(authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
       const credential = readCredential(configPath);
+
       if (!credential?.accessToken) return null;
+
       if (!credential.refreshToken || !needsRefresh(credential, authOpts)) {
         return { headers: codexCredentialToHeaders(credential) };
       }
 
       const refreshed = await refreshUnderLock(configPath, credential, opts.fetch);
+
       return { headers: codexCredentialToHeaders(refreshed) };
     },
 
@@ -80,12 +86,16 @@ async function refreshUnderLock(
 ): Promise<OAuthCredential> {
   return withConfigLockAsync(configPath, async () => {
     const latest = readCredential(configPath);
+
     if (latest?.accessToken && latest.accessToken !== original.accessToken && !needsRefresh(latest)) {
       return latest;
     }
+
     const refreshToken = latest?.refreshToken ?? original.refreshToken;
+
     if (!refreshToken) throw new Error('Codex session expired. Run: kinu setup');
     const refreshed = await createCodexOAuthClient(fetchFn).refresh(refreshToken);
+
     const credential: OAuthCredential = {
       kind: 'oauth',
       accessToken: refreshed.accessToken,
@@ -93,6 +103,7 @@ async function refreshUnderLock(
       expiresAt: refreshed.expiresAt,
       metadata: latest?.metadata ?? original.metadata,
     };
+
     const config = readConfig(configPath);
     writeConfig(configPath, {
       ...config,
@@ -101,22 +112,27 @@ async function refreshUnderLock(
         codex: credentialToConfig(credential),
       },
     });
+
     return credential;
   });
 }
 
 function needsRefresh(credential: OAuthCredential, opts?: { forceRefresh?: boolean }): boolean {
   if (opts?.forceRefresh) return true;
+
   // One lead, two places it can be read from: the stored `expiresAt` and the JWT's
   // own `exp`. These were 5*60_000 and 300 — the same window written twice in
   // different units, which is how they come to disagree.
   if (credential.expiresAt && Date.now() + CODEX_REFRESH_LEAD_SEC * 1_000 >= credential.expiresAt) return true;
+
   return codexAccessTokenExpiring(credential.accessToken);
 }
 
 function readCredential(configPath: string): OAuthCredential | null {
   const codex = readConfig(configPath).providers?.codex;
+
   if (!codex?.accessToken) return null;
+
   return {
     kind: 'oauth',
     accessToken: codex.accessToken,
@@ -142,7 +158,9 @@ function credentialToConfig(credential: OAuthCredential): StoredCodexCredential 
  */
 function readConfig(configPath: string): KinuConfigFile {
   const raw = tolerate(() => readFileSync(configPath, 'utf-8'), 'enoent');
+
   if (raw === undefined) return {};
+
   return v.parse(kinuConfigSchema, JSON.parse(raw));
 }
 

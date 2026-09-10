@@ -77,6 +77,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const MODULES = join(REPO_ROOT, 'node_modules');
 
 /** What this gate does NOT cover, printed on the GREEN path. A blind spot
@@ -136,14 +137,17 @@ export function patchedDependencies(root: string = REPO_ROOT): readonly PatchedD
     ManifestSchema,
     JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')),
   );
+
   return Object.entries(manifest.patchedDependencies ?? {}).map(([spec, patch]) => {
     const at = spec.lastIndexOf('@');
+
     if (at <= 0) {
       throw new Error(
         `patch-parity: patchedDependencies key ${spec} carries no @version — bun keys this map `
         + 'by name@version and the cache entry cannot be located without one',
       );
     }
+
     return { pkg: spec.slice(0, at), version: spec.slice(at + 1), patch };
   });
 }
@@ -173,12 +177,14 @@ class RefusedError extends Error {
 export function bunCacheDir(cwd: string = REPO_ROOT): string {
   const proc = Bun.spawnSync(['bun', 'pm', 'cache'], { cwd, stdout: 'pipe', stderr: 'pipe' });
   const dir = proc.stdout.toString().trim();
+
   if (proc.exitCode !== 0 || dir === '') {
     throw new RefusedError(
       'cache_unreachable',
       `bun pm cache failed (exit ${String(proc.exitCode)}): ${proc.stderr.toString().trim()}`,
     );
   }
+
   return dir;
 }
 
@@ -196,10 +202,13 @@ export function pristineTree(cache: string, pkg: string, version: string): strin
   const parent = scoped ? join(cache, pkg.slice(0, slash)) : cache;
   const base = scoped ? pkg.slice(slash + 1) : pkg;
   const prefix = `${base}@${version}@@@`;
+
   const found = existsSync(parent)
     ? readdirSync(parent).filter((e) => e.startsWith(prefix) && !e.includes('_patch_hash='))
     : [];
+
   const entry = found[0];
+
   if (found.length !== 1 || entry === undefined) {
     throw new RefusedError(
       'pristine_missing',
@@ -208,6 +217,7 @@ export function pristineTree(cache: string, pkg: string, version: string): strin
       + 'without touching the network.',
     );
   }
+
   return join(parent, entry);
 }
 
@@ -236,6 +246,7 @@ export interface PatchedFile {
 export function parsePatch(text: string): readonly PatchedFile[] {
   const files: PatchedFile[] = [];
   const sections = text.split(/^(?=diff --git )/m).filter((s) => s.startsWith('diff --git '));
+
   for (const section of sections) {
     const lines = section.split('\n');
     const end = lines.findIndex((l) => l.startsWith('@@ '));
@@ -249,8 +260,10 @@ export function parsePatch(text: string): readonly PatchedFile[] {
         + 'shape rather than letting the section pass unchecked.',
       );
     }
+
     const minus = header.find((l) => l.startsWith('--- '));
     const plus = header.find((l) => l.startsWith('+++ '));
+
     if (minus === undefined || plus === undefined) {
       throw new RefusedError(
         'unmodelled_patch',
@@ -258,20 +271,26 @@ export function parsePatch(text: string): readonly PatchedFile[] {
         + 'This gate compares content and would report it as matching.',
       );
     }
+
     const side = (line: string, prefix: string): string | undefined => {
       const raw = line.slice(4).split('\t')[0] ?? '';
+
       if (raw === '/dev/null') return undefined;
+
       if (raw.startsWith('"')) {
         throw new RefusedError(
           'unmodelled_patch',
           `${headline.trim()} names a quoted path (${raw}); this gate does not unquote them.`,
         );
       }
+
       return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
     };
+
     const index = header.find((l) => l.startsWith('index '));
     const blobs = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/.exec(index ?? '');
     const from = side(minus, 'a/');
+
     if (from !== undefined && blobs === null) {
       throw new RefusedError(
         'unmodelled_patch',
@@ -280,8 +299,10 @@ export function parsePatch(text: string): readonly PatchedFile[] {
         + 'the wrong one.',
       );
     }
+
     files.push({ from, to: side(plus, 'b/'), preBlob: blobs?.[1] });
   }
+
   return files;
 }
 
@@ -289,18 +310,21 @@ export function parsePatch(text: string): readonly PatchedFile[] {
  *  was. One spawn per package rather than per file. */
 function blobHashes(root: string, paths: readonly string[]): readonly string[] {
   if (paths.length === 0) return [];
+
   const proc = Bun.spawnSync(['git', 'hash-object', '--', ...paths], {
     cwd: root,
     env: gitEnv(),
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   if (proc.exitCode !== 0) {
     throw new RefusedError(
       'pristine_mismatch',
       `git hash-object failed over the pristine tree: ${proc.stderr.toString().trim()}`,
     );
   }
+
   return proc.stdout.toString().trim().split('\n');
 }
 
@@ -332,8 +356,10 @@ function diffSummary(expected: string, installed: string): string {
     ['git', 'diff', '--no-index', '--numstat', '--', expected, installed],
     { env: gitEnv(), stdout: 'pipe', stderr: 'pipe' },
   ).stdout.toString().trim().split('\t');
+
   const added = numstat[0] ?? '?';
   const removed = numstat[1] ?? '?';
+
   return `+${added}/-${removed} lines against the patch's result `
     + `(${String(statSync(expected).size)} -> ${String(statSync(installed).size)} bytes)`;
 }
@@ -344,6 +370,7 @@ function diffSample(expected: string, installed: string, limit: number): readonl
     ['git', 'diff', '--no-index', '-U0', '--', expected, installed],
     { env: gitEnv(), stdout: 'pipe', stderr: 'pipe' },
   ).stdout.toString().split('\n');
+
   return out
     .filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---'))
     .slice(0, limit);
@@ -351,6 +378,7 @@ function diffSample(expected: string, installed: string, limit: number): readonl
 
 function sameBytes(left: string, right: string): boolean {
   if (!readFileSync(left).equals(readFileSync(right))) return false;
+
   // The only mode bit git records. A patch whose sole change to a file is the
   // executable bit would otherwise compare as matching.
   return (statSync(left).mode & 0o111) === (statSync(right).mode & 0o111);
@@ -371,9 +399,11 @@ export function checkPackage(
 ): PackageReport {
   const base = { pkg: entry.pkg, version: entry.version, patch: entry.patch };
   let work: string | undefined;
+
   try {
     const pristine = pristineTree(cache, entry.pkg, entry.version);
     const installed = join(modules, entry.pkg);
+
     if (!existsSync(installed)) {
       throw new RefusedError(
         'not_installed',
@@ -381,7 +411,9 @@ export function checkPackage(
         + 'Run `bun install`.',
       );
     }
+
     const files = parsePatch(readFileSync(join(root, entry.patch), 'utf8'));
+
     if (files.length === 0) {
       throw new RefusedError(
         'unmodelled_patch',
@@ -392,10 +424,13 @@ export function checkPackage(
 
     const preImages = files.map((f) => f.from).filter((p) => p !== undefined);
     const hashes = blobHashes(pristine, preImages);
+
     const mismatched = preImages.filter((path, i) => {
       const declared = files.find((f) => f.from === path)?.preBlob ?? '';
+
       return (hashes[i] ?? '').slice(0, declared.length) !== declared;
     });
+
     if (mismatched.length > 0) {
       throw new RefusedError(
         'pristine_mismatch',
@@ -408,12 +443,14 @@ export function checkPackage(
     }
 
     work = scratchDir('patch-parity');
+
     for (const file of files) {
       if (file.from === undefined) continue;
       const target = join(work, file.from);
       mkdirSync(dirname(target), { recursive: true });
       copyFileSync(join(pristine, file.from), target);
     }
+
     // `gitEnv()` because this runs at the commit tier, where a hook has exported
     // GIT_DIR and GIT_WORK_TREE — both of which outrank `cwd`, and either of
     // which would point `git apply` at the developer's checkout instead of the
@@ -424,6 +461,7 @@ export function checkPackage(
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     if (apply.exitCode !== 0) {
       throw new RefusedError(
         'apply_failed',
@@ -434,9 +472,11 @@ export function checkPackage(
 
     const findings: FileVerdict[] = [];
     let matching = 0;
+
     for (const file of files) {
       if (file.to === undefined) {
         const stale = join(installed, file.from ?? '');
+
         if (existsSync(stale)) {
           findings.push({
             path: file.from ?? '',
@@ -446,11 +486,14 @@ export function checkPackage(
           });
           continue;
         }
+
         matching += 1;
         continue;
       }
+
       const expected = join(work, file.to);
       const actual = join(installed, file.to);
+
       if (!existsSync(actual)) {
         findings.push({
           path: file.to,
@@ -460,14 +503,18 @@ export function checkPackage(
         });
         continue;
       }
+
       if (sameBytes(expected, actual)) {
         matching += 1;
         continue;
       }
+
       const pristineFile = file.from === undefined ? undefined : join(pristine, file.from);
+
       const unpatched = pristineFile !== undefined
         && existsSync(pristineFile)
         && sameBytes(pristineFile, actual);
+
       findings.push({
         path: file.to,
         state: unpatched ? 'unpatched' : 'differ',
@@ -477,11 +524,13 @@ export function checkPackage(
         sample: unpatched ? [] : diffSample(expected, actual, 6),
       });
     }
+
     return { ...base, refusal: undefined, compared: files.length, matching, findings };
   } catch (error) {
     const refusal: Refusal = error instanceof RefusedError
       ? { reason: error.reason, error: error.message }
       : { reason: 'unmodelled_patch', error: error instanceof Error ? error.message : String(error) };
+
     return { ...base, refusal, compared: 0, matching: 0, findings: [] };
   } finally {
     if (work !== undefined) rmSync(work, { recursive: true, force: true });
@@ -493,19 +542,23 @@ export function judgePatchParity(
   root: string = REPO_ROOT,
 ): readonly PackageReport[] {
   const cache = bunCacheDir(root);
+
   return patchedDependencies(root).map((entry) => checkPackage(entry, cache, modules, root));
 }
 
 function main(): void {
   const reports = judgePatchParity();
+
   const measured = assertMeasured('patch-parity', [
     ['patched dependencies', reports.length],
     ['files governed', reports.reduce((n, r) => n + r.compared, 0)],
   ]);
 
   let failed = false;
+
   for (const report of reports) {
     const spec = `${report.pkg}@${report.version}`;
+
     if (report.refusal !== undefined) {
       failed = true;
       console.error(`::error::patch-parity: ${spec} — ${report.refusal.reason}`);
@@ -519,12 +572,15 @@ function main(): void {
       }));
       continue;
     }
+
     if (report.findings.length === 0) {
       console.log(`  ${spec.padEnd(24)} ${String(report.matching)}/${String(report.compared)} match`);
       continue;
     }
+
     failed = true;
     console.error(`::error::patch-parity: ${spec} — ${String(report.findings.length)} file(s) drifted`);
+
     for (const verdict of report.findings) {
       console.error(finding({
         at: `${spec}  ${verdict.path}`,
@@ -543,11 +599,14 @@ function main(): void {
             + 'tree an in-place write corrupted is served again for the same patch. Remove '
             + `\`$(bun pm cache)/${report.pkg}@${report.version}@@@*_patch_hash=*\` and reinstall.`,
       }));
+
       if (verdict.sample.length > 0) {
         console.error('    sample:');
+
         for (const line of verdict.sample) console.error(`      ${line}`);
       }
     }
+
     console.error(
       `  ${spec}: ${String(report.matching)}/${String(report.compared)} match, `
       + `${String(report.findings.length)} drifted`,
@@ -558,8 +617,10 @@ function main(): void {
     console.error('\npatch-parity: FAILED — the committed patches do not describe node_modules.');
     process.exit(1);
   }
+
   console.log(`patch-parity: ok — ${measured}`);
   console.log('patch-parity blind spots:');
+
   for (const spot of BLIND_SPOTS) console.log(`  - ${spot}`);
 }
 

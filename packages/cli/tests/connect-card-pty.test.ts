@@ -24,6 +24,7 @@ const entry = resolve(import.meta.dir, 'fixtures/pty-connect-card.tsx');
 describe('the connect card on a real terminal', () => {
   test('keys go to the card until it leaves, then Enter sends from the composer', () => {
     const draft = 'draft after the card';
+
     const run = runTuiInPty(entry, {
       steps: [
         { wait: 'not now', timeout: 15 },
@@ -39,6 +40,7 @@ describe('the connect card on a real terminal', () => {
         { wait: 'agent prose reply', timeout: 5 },
       ],
     });
+
     expect(run.waits.map((wait) => [wait.until, wait.text, wait.met])).toEqual([
       ['shown', 'not now', true],
       ['gone', 'not now', true],
@@ -55,6 +57,7 @@ describe('the connect card on a real terminal', () => {
       cols: 80,
       steps: [{ wait: 'not now', timeout: 15 }],
     });
+
     expect(run.screen).toContain('Linking registers this machine as');
     expect(run.screen.replace(/[│\s]/gu, '')).toContain(defaultDeviceName().replace(/\s/gu, ''));
     expect(run.screen).toContain('A workspace you approve runs commands here in a');
@@ -65,6 +68,7 @@ describe('the connect card on a real terminal', () => {
   test('centers the connect card in the wide chat lane', () => {
     const run = runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
     const border = run.screen.split('\n').find((line) => line.includes('╭─Let this agent use this PC?'));
+
     if (border === undefined) throw new Error('connect card did not paint');
     expect(border.indexOf('╭')).toBe(60);
     expect(border.lastIndexOf('╮')).toBe(127);

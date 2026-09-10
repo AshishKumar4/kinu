@@ -95,6 +95,7 @@ function cliRuntime(label: string): CLIRuntime {
   const database = new Database(scratchPath(label, 'agent.db'));
   databases.push(database);
   initWorkspaceSchema(makeWorkspaceSchemaSql(database));
+
   return createCLIRuntime(database, {
     dbPath: database.filename,
     llm: DUMMY_LLM,
@@ -110,11 +111,14 @@ function cliRuntime(label: string): CLIRuntime {
  *  quietly passed nothing would report the shared plane and assert it. */
 function nodeHomeWiring(rt: CLIRuntime) {
   const nodeHome = rt.nodeHome;
+
   if (!nodeHome) throw new Error('createCLIRuntime must supply a node home host');
+
   return {
     nodeHome,
     provisionNodeHome: () => async (node: { readonly nodeId: string; readonly rootId: string; readonly depth: number }) => {
       const actor = registerLocalNode(rt.actor, node);
+
       return facetHomeProvisioner(nodeHome())(headAgentName(actor.storageKey));
     },
   };
@@ -142,11 +146,13 @@ async function captureEvents(run: () => Promise<void>): Promise<string[]> {
   const original = console.error;
   const lines: string[] = [];
   console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+
   try {
     await run();
   } finally {
     console.error = original;
   }
+
   return lines;
 }
 
@@ -171,6 +177,7 @@ interface SettledNode {
  *  would throw with nothing worth swallowing. */
 function settledNodes(lines: string[]): SettledNode[] {
   const prefix = `{"event":"${SETTLED_EVENT}"`;
+
   return lines
     .filter((line) => line.startsWith(prefix))
     .map((line) => v.parse(SettledLine, JSON.parse(line)).fields);
@@ -181,17 +188,21 @@ async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
   const tool = createAgentsTool({ mode: 'build', swarm });
   const execute = toolExecute<AgentsToolInput, JsonValue>(tool);
   let outcome: JsonValue = null;
+
   const lines = await captureEvents(async () => {
     outcome = await execute({
       action: 'swarm', preset: 'ideate', task: 'name three ways to speed up the parser',
     });
   });
+
   // A refusal comes back as a normal result, so an unnoticed one would look like
   // a run that settled no nodes. Named here, where the reason is still readable.
   const refused = v.safeParse(SwarmRefusal, outcome);
+
   if (refused.success) {
     throw new Error(`the swarm refused: ${refused.output.reason} — ${refused.output.error}`);
   }
+
   return settledNodes(lines);
 }
 
@@ -203,14 +214,18 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const first = createCLIRuntime(database, config);
     const provision = nodeHomeWiring(first).provisionNodeHome();
     const home = await provision({ nodeId: 'reset', rootId: 'reset', depth: 1 });
+
     if (home.isolation !== 'private-home' || !first.nodeRuntime) throw new Error('node plane missing');
     const before = await first.nodeRuntime(home, registerLocalNode(first.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), first);
+
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
     await first.storage.vfs.writeFile('/home/user/shared', 'shared');
     const second = createCLIRuntime(database, config);
+
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
     const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
+
     if (!after.shell) throw new Error('reset node shell missing');
     expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
@@ -242,10 +257,12 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     // could not see would be the second tree this design exists to refuse.
     const homes = await rt.storage.vfs.readdir('/home');
     const owned = settled.map(({ node }) => nodeHomeName(rt, node));
+
     for (const home of owned) {
       expect(homes).toContain(home);
       expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ isDir: true });
     }
+
     // NOT the node ids: a home named for one would move with a rename, and
     // every id below is absent from `/home` precisely because the storage keys
     // above are what own it.
@@ -256,6 +273,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     // proves the allocation is a durable row rather than closure state.
     const { sql } = await nodeHome();
     const uids = new Set(owned.map((home) => agentIdentity(sql, home).uid));
+
     for (const uid of uids) expect(uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
     // One uid each: two nodes sharing a uid is two nodes sharing a home.
     expect(uids.size).toBe(IDEATE_BRANCHES);

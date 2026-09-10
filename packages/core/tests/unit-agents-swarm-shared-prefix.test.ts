@@ -30,6 +30,7 @@ import {
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 
 const MARKER = 'COMPACTED-PREFIX-MARKER';
+
 /** The bulk rides a comment INSIDE the measured code block, so one scripted
  *  answer is simultaneously over the compaction threshold (a bare prose answer
  *  is not measurable, and an unmeasured node is taken out of selection) and
@@ -69,6 +70,7 @@ function capturingModel(prompts: TurnPrompt[]) {
     modelId: 'fake-shared-prefix',
     doGenerate: (options) => {
       prompts.push(options.prompt);
+
       return {
         content: [{ type: 'text', text: `\`\`\`javascript\n// ${BULK}\n${REFERENCE}\`\`\`` }],
         finishReason: { unified: 'stop' as const, raw: undefined },
@@ -98,7 +100,9 @@ function swarmDeps(
 
 function agentsTool(deps: AgentsToolDeps) {
   const entry = createAgentsTool(deps);
+
   if (!entry) throw new Error('Expected agents tool to be created');
+
   return { ...entry, execute: toolExecute<AgentsToolInput, object>(entry) };
 }
 
@@ -136,6 +140,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
+
     const tool = agentsTool({
       mode: 'build',
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
@@ -154,10 +159,13 @@ describe('compactShared wiring through runSwarmAction', () => {
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const compacted: ReadonlyArray<ModelMessage>[] = [];
+
     const compactShared = async (messages: readonly ModelMessage[]) => {
       compacted.push(messages);
+
       return [{ role: 'user' as const, content: MARKER }];
     };
+
     const tool = agentsTool({
       mode: 'build',
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
@@ -189,10 +197,13 @@ describe('compactShared wiring through runSwarmAction', () => {
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     let compactions = 0;
+
     const compactShared = async () => {
       compactions += 1;
+
       return [{ role: 'user' as const, content: MARKER }];
     };
+
     const tool = agentsTool({
       mode: 'build',
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
@@ -207,11 +218,14 @@ describe('compactShared wiring through runSwarmAction', () => {
     // turn present in neither.
     expect(compactions).toBe(1);
     expect(prompts.length).toBe(4);
+
     const inheritedPrefix = (prompt: TurnPrompt) =>
       JSON.stringify([...prompt].filter((m) => m.role === 'user' && JSON.stringify(m.content).includes(MARKER)));
+
     expect(inheritedPrefix(prompts[2]).length).toBeGreaterThan(0);
     expect(inheritedPrefix(prompts[2])).toBe(inheritedPrefix(prompts[3]));
     const siblings = [prompts[2], prompts[3]];
+
     for (const sibling of siblings) {
       expect([...sibling].some((m) => m.role === 'assistant' && JSON.stringify(m.content).includes(BULK.slice(0, 64)))).toBe(false);
     }

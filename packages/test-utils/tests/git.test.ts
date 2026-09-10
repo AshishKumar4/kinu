@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { git, gitEnv, initRepo } from '../src/git';
 
 const scratch: string[] = [];
+
 afterEach(() => {
   for (const directory of scratch.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -14,6 +15,7 @@ const repo = (): string => {
   const directory = mkdtempSync(join(tmpdir(), 'kinu-git-fixture-'));
   scratch.push(directory);
   initRepo(directory);
+
   return directory;
 };
 
@@ -27,8 +29,10 @@ describe('the git test fixture', () => {
     const saved = { dir: process.env.GIT_DIR, work: process.env.GIT_WORK_TREE };
     process.env.GIT_DIR = join(elsewhere, '.git');
     process.env.GIT_WORK_TREE = elsewhere;
+
     try { return run(); } finally {
       if (saved.dir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved.dir;
+
       if (saved.work === undefined) delete process.env.GIT_WORK_TREE;
       else process.env.GIT_WORK_TREE = saved.work;
     }
@@ -56,6 +60,7 @@ describe('the git test fixture', () => {
   test('gitEnv drops every GIT_ variable, not a list of known ones', () => {
     process.env.GIT_INDEX_FILE = '/tmp/nope';
     process.env.GIT_OBJECT_DIRECTORY = '/tmp/nope';
+
     try {
       const env = gitEnv();
       expect(Object.keys(env).filter((key) => key.startsWith('GIT_')))

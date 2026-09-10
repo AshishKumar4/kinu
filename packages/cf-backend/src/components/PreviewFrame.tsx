@@ -40,6 +40,7 @@ export function PreviewFrame({ url, label }: {
       </div>
     );
   }
+
   return (
     <div className="h-full flex flex-col">
       <PreviewChrome url={url} />

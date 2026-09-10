@@ -152,12 +152,14 @@ describe('workerSession — the deployment behind a worker-proxy target', () => 
     // workerSession is the inverse of cloudProxyBaseURL. The route both name
     // is one constant, so moving it cannot strand this direction.
     const origin = 'https://staging.example';
+
     const session = workerSession({
       name: 'workers-ai',
       baseURL: cloudProxyBaseURL(origin),
       headers: { Authorization: 'Bearer token-1' },
       model: 'model-1',
     });
+
     expect(session.origin).toBe(origin);
     expect(session.token).toBe('token-1');
   });

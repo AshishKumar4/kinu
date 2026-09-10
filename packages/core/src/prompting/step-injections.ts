@@ -38,16 +38,20 @@ export class StepInjections<E extends { readonly message: ModelMessage }> {
    */
   drain(ctx: PrepareStepContext, incoming: ReadonlyArray<E>): ModelMessage[] | undefined {
     if (ctx.stepNumber === 0) this.baseLength = ctx.messages.length;
+
     for (const entry of incoming) {
       this.entries.push({ ...entry, index: ctx.messages.length });
     }
+
     if (this.entries.length === 0) return undefined;
     const next = [...ctx.messages];
     let offset = 0;
+
     for (const entry of this.entries) {
       next.splice(entry.index + offset, 0, entry.message);
       offset += 1;
     }
+
     return next;
   }
 
@@ -60,11 +64,13 @@ export class StepInjections<E extends { readonly message: ModelMessage }> {
   replayInto(responseMessages: ReadonlyArray<ModelMessage>): ModelMessage[] {
     const merged = [...responseMessages];
     let spliced = 0;
+
     for (const entry of this.entries) {
       const at = Math.max(0, Math.min(merged.length, entry.index - this.baseLength + spliced));
       merged.splice(at, 0, entry.message);
       spliced += 1;
     }
+
     return merged;
   }
 

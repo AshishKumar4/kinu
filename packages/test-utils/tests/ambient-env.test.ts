@@ -34,9 +34,11 @@ function envAfterPreload(env: Record<string, string>) {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   if (proc.exitCode !== 0) {
     throw new Error(`preload failed (${String(proc.exitCode)}): ${proc.stderr.toString()}`);
   }
+
   return v.parse(ChildEnvSchema, JSON.parse(proc.stdout.toString()));
 }
 
@@ -52,9 +54,11 @@ describe('the rule', () => {
     // both halves so a flatten that silently dropped the arrays would fail.
     expect(AMBIENT_CREDENTIAL_ENV).toContain(LIVE_MODEL_ENV.origin);
     expect(AMBIENT_CREDENTIAL_ENV).toContain(LIVE_MODEL_ENV.token);
+
     for (const names of [LIVE_MODEL_ENV.gatewayURL, LIVE_MODEL_ENV.gatewayAuth, LIVE_MODEL_ENV.model]) {
       for (const name of names) expect(AMBIENT_CREDENTIAL_ENV).toContain(name);
     }
+
     // Enumerated, not counted: a bare length cannot say which name arrived or
     // left, and this set is the contract two runners depend on.
     expect([...AMBIENT_CREDENTIAL_ENV].sort()).toEqual([
@@ -92,6 +96,7 @@ describe('the wiring', () => {
     // The whole point, proven by running the preload rather than by reading it.
     // Without the strip this returns the two values it was given.
     const env = envAfterPreload(SIGNED_IN_SHELL);
+
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
     // And the isolation it already had is still in place, so this case cannot
     // pass by having broken the throwaway home instead.

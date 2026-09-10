@@ -54,6 +54,7 @@ describe('an import its own manifest never declares', () => {
       ['packages/cli-backend/tests/workspace-resolution.test.ts',
         `import { build } from '@kinu.run/test-utils';\nimport * as v from 'valibot';\n`],
     ]);
+
     // `valibot` resolves here only because the ROOT declares it and the linker
     // is hoisted — which is the finding, not the exemption.
     expect(edgesIn(sources)).toEqual([
@@ -66,6 +67,7 @@ describe('an import its own manifest never declares', () => {
     const sources = new Map([
       ['packages/cli-backend/src/a.ts', `import * as v from 'valibot';\n`],
     ]);
+
     for (const field of [
       'dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies',
     ]) {
@@ -94,6 +96,7 @@ describe('an import its own manifest never declares', () => {
       ['packages/cli-backend/src/b.ts', `import * as v from 'valibot';\n`],
       ['packages/cli-backend/tests/c.test.ts', `export { x } from 'valibot';\n`],
     ]);
+
     const found = census(packagesOf(), sources).edges;
     expect(found).toHaveLength(1);
     expect(found[0]?.importers).toEqual([
@@ -112,6 +115,7 @@ describe('the workspace scope', () => {
       ['scripts/probe.ts', `import { build } from '@kinu.run/test-utils';\n`],
       ['tests/evals/harness.ts', `import { x } from '@kinu.run/cli-backend';\n`],
     ]);
+
     expect(edgesIn(sources)).toEqual([]);
   });
 
@@ -119,6 +123,7 @@ describe('the workspace scope', () => {
     const sources = new Map([
       ['packages/cli-backend/src/a.ts', `import { build } from '@kinu.run/test-utils';\n`],
     ]);
+
     expect(edgesIn(sources))
       .toEqual(['packages/cli-backend/package.json imports @kinu.run/test-utils']);
   });
@@ -127,6 +132,7 @@ describe('the workspace scope', () => {
     const sources = new Map([
       ['packages/cli-backend/src/a.ts', `import { x } from '@kinu.run/cli-backend/env';\n`],
     ]);
+
     expect(edgesIn(sources)).toEqual([]);
   });
 
@@ -167,9 +173,11 @@ describe('specifiers that never reach node_modules', () => {
       // A comment, because tsconfig is JSONC and one of these took eight tests down.
       "compilerOptions": { "paths": { "@/*": ["./src/*"] } }
     }`]]);
+
     const sources = new Map([
       ['packages/cli-backend/src/a.ts', `import { x } from '@/lib';\nimport { y } from '@scope/real';\n`],
     ]);
+
     expect(edgesIn(sources, WORKSPACE, tsconfigs))
       .toEqual(['packages/cli-backend/package.json imports @scope/real']);
   });
@@ -199,6 +207,7 @@ describe('the denominator', () => {
       ['packages/cli-backend/src/a.ts',
         `import { readFileSync } from 'node:fs';\nimport './local';\nimport * as v from 'valibot';\n`],
     ]);
+
     const found = census(packagesOf(), sources);
     expect(found.specifiers).toBe(3);
     expect(found.examined).toBe(1);

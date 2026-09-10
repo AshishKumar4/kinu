@@ -47,6 +47,7 @@ import type { ForkNode, Rpc } from "@/lib/protocol";
 interface OlderPageLoad {
   promise: Promise<void> | null;
 }
+
 /* ── the frame ───────────────────────────────────────────────────── */
 /**
  * ONE dot vocabulary for a branch, wherever a branch is drawn — this panel's
@@ -73,9 +74,13 @@ interface OlderPageLoad {
  */
 export function statusDot(status: string): string {
   if (status === "running") return "p-dot-accent";
+
   if (status === "budget_exceeded") return "p-dot-warning";
+
   if (status === "completed" || status === "terminal") return "p-dot-success";
+
   if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
+
   return "p-dot-neutral";
 }
 
@@ -94,6 +99,7 @@ const TASK_CLAMP = 240;
 function TaskHeader({ task }: { task: string }) {
   const [expanded, setExpanded] = useState(false);
   const long = task.length > TASK_CLAMP;
+
   return (
     <div className="shrink-0 border-b p-border px-4 py-2.5 p-recessed">
       <div className="flex items-start gap-2">
@@ -138,6 +144,7 @@ function SearchPath({ view, onSelect }: {
         // which for an MCTS search is always — falls back to its depth rather
         // than printing the literal `root`.
         const label = cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
+
         return (
           <span key={crumb.id} className="flex items-center gap-1 shrink-0">
             {index > 0 && <span className="p-text-3 text-[10px]">/</span>}
@@ -221,6 +228,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
         hint="This branch made one proposal. The search scored it against its siblings." />
     );
   }
+
   if (view.status === "running") {
     return (
       <div className="flex items-center gap-2 py-8 justify-center text-[12px] p-text-2">
@@ -231,6 +239,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
       </div>
     );
   }
+
   return (
     <EmptyState icon={<BrainIcon size={24} />} title="This branch recorded no steps"
       hint={view.errorMessage
@@ -275,14 +284,17 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   // any parent update.
   const olderSteps = older?.steps;
   const viewSteps = view.steps.items;
+
   const allSteps = useMemo(
     () => (olderSteps ? [...olderSteps, ...viewSteps] : viewSteps),
     [olderSteps, viewSteps],
   );
+
   const messages = useMemo(
     () => allSteps.map((step, index) => stepAsMessage(step, index, view.nodeId)),
     [allSteps, view.nodeId],
   );
+
   // Only a RUNNING head is writing anything; a settled view's leftover delta is
   // by definition already in the trace above.
   const arriving = useMemo(
@@ -434,7 +446,9 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
       : rpc<NodeTranscriptView | null>("getNodeTranscript", [runId, nodeId]),
     [rpc, runId, nodeId],
   );
+
   const subject = `${runId}:${nodeId}`;
+
   /**
    * A clock UNDER the push, not instead of it.
    *
@@ -448,6 +462,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
       (view === null ? running : view.status === "running") ? TRANSCRIPT_FALLBACK_MS : null,
     [running],
   );
+
   // The type is stated rather than inferred: `null` is a VALUE this read can
   // answer with (neither store holds the node), so it belongs inside the
   // resource's type — and the revalidate below reads that same null.
@@ -458,6 +473,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   useEffect(() => {
     const previous = seen.current;
     seen.current = { subject, tick };
+
     // A new subject already loads — it IS the resource identity. Only a tick
     // that moved under the SAME subject is news, and re-loading rather than
     // re-keying is what keeps the visible trace on screen while it refreshes.
@@ -474,6 +490,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const [walk, setWalk] = useState<{ steps: HeadStep[]; hasMore: boolean; below: SeekCursor | null; loading: boolean; error: string | null }>(
     () => ({ steps: [], hasMore: false, below: null, loading: false, error: null }),
   );
+
   useEffect(() => { setWalk({ steps: [], hasMore: false, below: null, loading: false, error: null }); }, [subject]);
 
   const view = lastValue(resource);
@@ -494,9 +511,11 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const journalled = useRef({ subject, steps: -1 });
   useEffect(() => {
     const steps = view?.stepCount ?? -1;
+
     if (steps < 0 || nodeId === null) return;
     const before = journalled.current;
     journalled.current = { subject, steps };
+
     if (before.subject === subject && steps > before.steps) headDeltas.retire(nodeId);
   }, [subject, nodeId, view?.stepCount, headDeltas]);
 
@@ -507,8 +526,10 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   const walkRef = useRef(subject);
   walkRef.current = subject;
   const inFlight = useRef<OlderPageLoad | null>(null);
+
   const loadOlder = useCallback(() => {
     const at = walkRef.current;
+
     if (inFlight.current !== null || below === null) return;
     setWalk((prev) => ({ ...prev, loading: true, error: null }));
     const owner: OlderPageLoad = { promise: null };
@@ -519,11 +540,15 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
       try {
         try {
           const next = await rpc<NodeTranscriptView | null>('getNodeTranscript', [runId, nodeId, { cursor: below }]);
+
           if (walkRef.current !== at) return; // the reader moved on; the page is nobody's
+
           if (!next) {
             setWalk((prev) => ({ ...prev, loading: false, error: 'This trace could not be read.' }));
+
             return;
           }
+
           setWalk((prev) => ({
             steps: [...next.steps.items, ...prev.steps],
             hasMore: next.steps.status === 'more',
@@ -538,6 +563,7 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
           // this subject also shows it.
           diagnostics.event('transcript.older_page_abandoned',
             { subject: at, error: renderThrownChain({ cause }) });
+
           if (walkRef.current === at) {
             setWalk((prev) => ({ ...prev, loading: false, error: renderThrownChain({ cause }) }));
           }
@@ -591,9 +617,11 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
   // the transcript's fallback clock.
   const drawnRoot = runId === null ? undefined : trees.get(runId);
   const drawn = drawnRoot && nodeId !== null ? findForkNode(drawnRoot, nodeId) : null;
+
   const { view, resource, reload, older, loadOlder, pending } = useNodeTranscript({
     runId, nodeId, rpc, headActivity, headDeltas, running: drawn?.status === "running",
   });
+
   const drawnLabel = cleanNodeLabel(drawn?.action, nodeId ?? "this branch");
 
   if (selection === null) {

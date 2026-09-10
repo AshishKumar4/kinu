@@ -134,9 +134,11 @@ export function formatApprovalGrant(grant: ApprovalGrant): string {
  *  value that cannot be parsed must never widen what runs. */
 export function parseApprovalGrant(raw: string): ApprovalGrant | null {
   const at = raw.indexOf('@');
+
   if (at <= 0 || at === raw.length - 1) return null;
   const rule = raw.slice(0, at).trim();
   const executor = raw.slice(at + 1).trim();
+
   return rule && executor ? { rule, executor } : null;
 }
 
@@ -402,6 +404,7 @@ const INLINE_INTERPRETERS: ReadonlySet<string> = new Set([
 ]);
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
 /** Outside quotes, each of these ends a simple command, so the next word is a
  *  program name again. `&&` and `||` fall out of `&` and `|`. */
 const COMMAND_BREAKS = new Set([';', '&', '|', '(', ')', '{', '}', '\n', '`']);
@@ -441,30 +444,43 @@ function scanCommand(command: string): CommandScan {
 
   const endWord = () => {
     if (word.length === 0) return;
+
     if (atCommandStart && !ENV_ASSIGNMENT.test(word)) {
       const base = word.slice(word.lastIndexOf('/') + 1);
       invoked.add(base);
+
       if (!COMMAND_PREFIXES.has(base)) atCommandStart = false;
     }
+
     word = '';
   };
 
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
+
     if (quote !== null) {
       if (ch === quote) { quote = null; unquoted += ' '; }
       else word += ch;
       continue;
     }
+
     if (ch === '"' || ch === "'") { quote = ch; continue; }
+
     if (ch === '\\') { i++; continue; }
+
     unquoted += ch;
+
     if (ch === ' ' || ch === '\t') { endWord(); continue; }
+
     if (COMMAND_BREAKS.has(ch)) { endWord(); atCommandStart = true; continue; }
+
     if (ch === '$' && command[i + 1] === '(') { endWord(); atCommandStart = true; i++; continue; }
+
     word += ch;
   }
+
   endWord();
+
   return { invoked, unquoted };
 }
 
@@ -478,12 +494,15 @@ function scanCommand(command: string): CommandScan {
 export function reviewCommand(command: string, executor: string): ApprovalResult {
   const { invoked, unquoted } = scanCommand(command);
   let opaque = false;
+
   for (const binary of invoked) {
     if (INLINE_INTERPRETERS.has(binary)) { opaque = true; break; }
   }
+
   const agentsOwn = AGENT_OWN_EXECUTORS.has(executor);
 
   const hits: ApprovalRuleHit[] = [];
+
   for (const r of RULES) {
     // A rule that names no binary describes the shape of the whole line — a
     // fork bomb, a pipe into a shell, a metadata address that can sit in any
@@ -492,13 +511,16 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
     // before this file knew what a command position was.
     if (r.binaries && !opaque) {
       if (!r.binaries.some((b) => invoked.has(b))) continue;
+
       if (!r.pattern.test(unquoted)) continue;
     } else if (!r.pattern.test(command)) continue;
+
     // Local harm on the agent's own machine is the agent's own business.
     // 'deny' is exempt: it means never, and never does not have exceptions.
     if (agentsOwn && r.harm === 'local' && r.decision !== 'deny') continue;
     hits.push({ decision: r.decision, rule: r.name, explanation: r.why });
   }
+
   return { decision: dominant(hits), hits };
 }
 
@@ -509,6 +531,7 @@ export function reviewCommand(command: string, executor: string): ApprovalResult
 export function formatApproval(result: ApprovalResult): string {
   if (result.decision === 'allow') return '';
   const lines = result.hits.map((h) => `• ${h.rule} (${h.decision}): ${h.explanation}`);
+
   return [`Approval review: ${result.decision}`, ...lines].join('\n');
 }
 
@@ -641,9 +664,11 @@ export interface DeferredApprovalChannel {
  *  Deny is never grantable — it is not a question. */
 function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, executor: string): ApprovalResult {
   if (review.decision !== 'gate' || !policy.granted) return review;
+
   const hits = review.hits.filter(
     (h) => h.decision !== 'gate' || !policy.granted?.({ rule: h.rule, executor }),
   );
+
   return hits.length === review.hits.length ? review : { decision: dominant(hits), hits };
 }
 
@@ -699,11 +724,14 @@ export function gateExec<R>(
   return async (...args) => {
     const [command, ...rest] = args;
     const cmd = String(command);
+
     const decision = await decideApproval(
       { command: cmd, executor }, reviewCommand(cmd, executor), policy,
     );
+
     if (!decision.run) return denyResult(decision.error);
     const result = await execute(cmd, ...rest);
+
     if (decision.spent) {
       const code = refusalCode?.(result) ?? null;
       policy.deferrals?.settle(
@@ -711,6 +739,7 @@ export function gateExec<R>(
         code !== null && CODE_WORK_DID_NOT_START[code] ? 'did-not-run' : 'spent',
       );
     }
+
     return result;
   };
 }
@@ -758,9 +787,11 @@ async function decideApproval(
   /** The grant a park replayed, if one was. Held across the ladder because the
    *  spend happens mid-decision and is reported at the end. */
   let spent: ApprovalSpend | undefined;
+
   if (review.decision === 'deny') {
     return refuse('denied', `${APPROVAL_DENIED} — ${formatApproval(review)}`);
   }
+
   if (review.decision === 'gate') {
     if (mode === 'allow_all') {
       diagnostics.failure(
@@ -774,6 +805,7 @@ async function decideApproval(
       const outcome = mode === 'strict' && policy.requestApproval
         ? await policy.requestApproval({ command: cmd, executor, review })
         : null;
+
       if (outcome === null) {
         // Nobody decided. Under 'strict' that is an ABSENCE, not a refusal:
         // if a deferral queue is wired, the action is parked on the owner
@@ -787,7 +819,9 @@ async function decideApproval(
         const parked = mode === 'strict'
           ? policy.deferrals?.park({ command: cmd, executor, review })
           : undefined;
+
         if (parked && !parked.run) return refuse(parked.reason, parked.message);
+
         if (!parked) {
           // 'deny_all' is an answer the owner already gave; 'strict' with no
           // queue and no channel is an absence. Saying "nobody to ask" under
@@ -796,6 +830,7 @@ async function decideApproval(
             ? refuse('denied', `NOT RUN — refused by standing policy (deny_all) — ${formatApproval(review)}`)
             : refuse('unavailable', `NOT RUN — needs owner approval, nobody to ask — ${formatApproval(review)}`);
         }
+
         // parked.run — the owner approved this command while the agent was
         // away and the grant has just been spent; fall through to execute,
         // carrying the spend out so the caller can close it.
@@ -808,16 +843,19 @@ async function decideApproval(
       }
     }
   }
+
   if (review.decision === 'warn') {
     if (mode === 'deny_all') {
       return refuse('denied', `${APPROVAL_DENIED} (deny_all mode) — ${formatApproval(review)}`);
     }
+
     diagnostics.failure(
       'approval.warn_unenforced',
       new KinuError('unsupported', 'a warn-level review is not put to the owner; the command ran'),
       { executor, rules: review.hits.map((h) => h.rule).join(',') },
     );
   }
+
   return spent === undefined ? { run: true } : { run: true, spent };
 }
 
@@ -836,6 +874,7 @@ export function grantsAreSubset(
   parent: readonly ApprovalGrant[],
 ): boolean {
   const held = new Set(parent.map(formatApprovalGrant));
+
   return child.every((g) => held.has(formatApprovalGrant(g)));
 }
 
@@ -861,8 +900,10 @@ export function resolveInheritedGrants(source: {
   readonly own: readonly ApprovalGrant[] | null;
 }): ApprovalGrant[] {
   const root = [...source.root];
+
   if (source.own === null || source.own.length === 0) return root;
   const held = new Set(root.map(formatApprovalGrant));
+
   return source.own.filter((g) => held.has(formatApprovalGrant(g)));
 }
 
@@ -896,6 +937,7 @@ export function createInheritedApprovalPolicy(
 ): ShellApprovalPolicy {
   let mode: ShellApprovalMode = 'strict';
   let grants: readonly ApprovalGrant[] = [];
+
   return {
     async resolve() {
       const root = await source.fetchRoot();

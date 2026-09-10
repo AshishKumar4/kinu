@@ -20,7 +20,9 @@ const LandingWorkspaceFrame = lazy(() => import('./LandingWorkspaceFrame'));
  *  where the frame renders its settled state with no playback to restart. */
 function LandingMovieReplay(): ReactElement | null {
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
   if (reduced) return null;
+
   return (
     <div className="px-1 pt-3">
       <button

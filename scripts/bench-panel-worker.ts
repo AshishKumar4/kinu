@@ -70,6 +70,7 @@ function analystProfile() {
       deep: { model: ANALYST_SPEC, reasoningEffort: 'low' as const },
     },
   };
+
   return resolveTurnProfile({
     envelope: {
       authority: { kind: 'account', accountId: 'bench' },
@@ -87,24 +88,29 @@ function analystProfile() {
 
 async function main(): Promise<void> {
   const input = parsePanelWorkerInput(await Bun.stdin.text());
+
   const proxy = createBenchInferenceProxy({
     upstreamBaseURL: input.analyst.baseURL,
     additionalUpstreamBaseURLs: input.panel.map((config) => config.baseURL),
     maxTokens: input.maxTokens,
   });
+
   const throughProxy = (config: LLMProviderConfig): LLMProviderConfig => ({
     ...config,
     baseURL: proxy.baseURLFor(config.baseURL),
   });
+
   const analyst = throughProxy(input.analyst);
   const panel = input.panel.map(throughProxy);
 
   const fresh = !existsSync(input.dbPath);
+
   if (fresh) mkdirSync(dirname(input.dbPath), { recursive: true });
   const db = new Database(input.dbPath);
   // SAFETY: The CLI backend owns this bun:sqlite adapter boundary; the same Database instance is its production input.
   const backendDb = db as never;
   db.exec('PRAGMA journal_mode = WAL');
+
   if (fresh) {
     await createWorkspace(backendDb, {
       name: input.workspaceName, purpose: input.purpose, llm: analyst,
@@ -113,6 +119,7 @@ async function main(): Promise<void> {
     // tables for the panel arms' starting point.
     const sql = makeSql(db);
     const execRaw = (ddl: string): void => { db.exec(ddl); };
+
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftedToolsTables(sql);
@@ -134,6 +141,7 @@ async function main(): Promise<void> {
   // Bound to the runtime's own actor: the journal is actor-private, and the
   // head runtime below writes each head's steps through the same owner.
   const journal = new HeadJournal(makeSql(db), rt.actor);
+
   // Every panel member is a HEAD, and a head is its own actor of this workspace
   // — its own claim ledger, loop pointer and row set. Local head hosting is
   // session-bound (`LocalAgentSession.hostHead`), so the bench holds ONE
@@ -143,6 +151,7 @@ async function main(): Promise<void> {
   const seating = new LocalAgentSession({
     rt, db, model: benchChatModel(analyst), onEvent: () => {}, noAutoEvolve: true, oneShot: true,
   });
+
   const headRuntime = createCLIHeadRuntime({
     // The observer is FORWARDED, never invented: `runLocalHead` owns the head's
     // capture and hands it down, which is what makes `HeadReport.fileChanges`
@@ -153,7 +162,9 @@ async function main(): Promise<void> {
     parentRuntime: rt,
     resolveModel: (spec: string) => {
       const cfg = byIndex.get(spec);
+
       if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);
+
       return benchChatModel(cfg);
     },
     // The analyst synthesises the panel, through the same routed policy both
@@ -163,6 +174,7 @@ async function main(): Promise<void> {
       if (route.model !== ANALYST_SPEC) {
         throw new Error(`panel worker: the merge route resolved "${route.model}", not the analyst`);
       }
+
       return { model: benchChatModel(analyst) };
     },
     // No provider options: this bench addresses explicit base URLs rather than
@@ -185,6 +197,7 @@ async function main(): Promise<void> {
 
   let error: string | undefined;
   let merge: MergeResult | null = null;
+
   try {
     merge = await new HeadController(headRuntime, journal).run({
       parentHeadId: null,
@@ -211,6 +224,7 @@ async function main(): Promise<void> {
   }
 
   const usage = proxy.usage();
+
   if (usage.unmeteredResponses > 0) {
     const usageError = `${usage.unmeteredResponses} successful inference response(s) omitted token usage`;
     error = error ? `${error}; ${usageError}` : usageError;
@@ -229,6 +243,7 @@ async function main(): Promise<void> {
     grounded: merge?.grounded ?? false,
     blindSpots: merge ? [...merge.blindSpots] : [],
   };
+
   if (error) out.error = error;
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
@@ -244,6 +259,7 @@ try {
     headScores: [], grounded: false, blindSpots: [],
     error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
+
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
 }

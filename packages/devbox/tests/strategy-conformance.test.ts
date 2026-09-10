@@ -79,6 +79,7 @@ function expectCommitted(outcome: CheckpointOutcome, what: string): void {
  */
 async function expectOneGeneration(arm: ConformanceArm, what: string): Promise<void> {
   const served = canonical(await tree(arm));
+
   if (served === canonical(OLD) || served === canonical(MERGED)) return;
   throw new Error(
     `${arm.name} served neither generation after ${what}: ${served}`
@@ -101,6 +102,7 @@ function canonical(rows: Record<string, string | undefined>): string {
 async function tree(arm: ConformanceArm) {
   const paths = await arm.workspace.paths();
   const rows = await Promise.all(paths.map(async (path) => [path, await arm.workspace.read(path)] as const));
+
   return Object.fromEntries(rows);
 }
 
@@ -108,6 +110,7 @@ async function tree(arm: ConformanceArm) {
 async function attach(arm: ConformanceArm) {
   const outcome = await arm.storage().attach();
   expect(ATTACH_OUTCOME_KINDS).toContain(outcome.kind);
+
   return outcome;
 }
 
@@ -121,6 +124,7 @@ async function attach(arm: ConformanceArm) {
  */
 async function wake(arm: ConformanceArm) {
   arm.replaceContainer();
+
   try {
     return await arm.storage().attach();
   } catch (first) {
@@ -143,6 +147,7 @@ async function wake(arm: ConformanceArm) {
 async function thrownBy(run: () => Promise<void>): Promise<Error | null> {
   try {
     await run();
+
     return null;
   } catch (error) {
     // KEPT, NEVER SWALLOWED: every caller below asserts on what came back, and
@@ -157,13 +162,17 @@ async function commit(
   content: Record<string, string>,
 ): Promise<CheckpointOutcome> {
   for (const [path, text] of Object.entries(content)) await arm.workspace.write(path, text);
+
   return await arm.storage().checkpoint('quiesce');
 }
 
 const OLD = { 'notes.txt': 'generation one', 'src.txt': 'export const one = 1;' };
+
 const NEW = { 'notes.txt': 'generation two', 'extra.txt': 'added by the second commit' };
+
 /** What the tree holds once both generations have been written. */
 const MERGED = { ...OLD, ...NEW };
+
 const THIRD = { 'third.txt': 'written by the third generation' };
 
 // SAFETY: `CONFORMANCE_ARMS` declares `Record<DevboxStrategyName, () =>
@@ -213,6 +222,7 @@ for (const [name, open] of armEntries) {
       // hangs and gets its timeout raised.
       const arm = open();
       await attach(arm);
+
       for (const [path, text] of Object.entries(OLD)) await arm.workspace.write(path, text);
       arm.deaths.limit(arm.publishSeam, 1);
 
@@ -236,6 +246,7 @@ for (const [name, open] of armEntries) {
       const arm = open();
       await attach(arm);
       const seen: Record<string, string> = {};
+
       for (const generation of [OLD, NEW, THIRD]) {
         expectCommitted(await commit(arm, generation), `generation ${JSON.stringify(generation)}`);
         Object.assign(seen, generation);
@@ -251,6 +262,7 @@ for (const [name, open] of armEntries) {
       const arm = open();
       await attach(arm);
       await commit(arm, OLD);
+
       // A seam nothing reaches would make its crash case pass by never
       // crashing, so the seam list is asserted against the code that names it.
       for (const seam of arm.commitSeams) expect(arm.deaths.reached).toContain(seam);
@@ -263,6 +275,7 @@ for (const [name, open] of armEntries) {
         expectCommitted(await commit(arm, OLD), 'the commit before the death');
 
         arm.dieAt(seam);
+
         // The commit may report its failure as a value or throw it: both are
         // ordinary for an interrupted operation, and neither is what this case
         // is about. What it may never do is claim to have committed.
@@ -270,6 +283,7 @@ for (const [name, open] of armEntries) {
           const outcome = await commit(arm, NEW);
           expect(outcome.kind).not.toBe('committed');
         });
+
         if (interrupted !== null) expect(interrupted).toBeInstanceOf(Error);
         expect(arm.deaths.reached).toContain(seam);
         expect(arm.deaths.armed).toBe(null);
@@ -293,6 +307,7 @@ for (const [name, open] of armEntries) {
       const placement = await arm.controlPlane();
       const prefixes = arm.payloadPrefixes();
       expect(prefixes.length).toBeGreaterThan(0);
+
       for (const key of placement.objectKeys) {
         for (const prefix of prefixes) {
           // THE DEFECT, AS ONE LINE. An envelope under the prefix the
@@ -300,6 +315,7 @@ for (const [name, open] of armEntries) {
           expect(key.startsWith(prefix)).toBe(false);
         }
       }
+
       // A committed box names a head somewhere. A strategy whose head is the
       // prefix itself says that; none of them may answer `null` here.
       expect(placement.head).not.toBe(null);
@@ -312,10 +328,12 @@ for (const [name, open] of armEntries) {
       const before = await arm.controlPlane();
 
       let wiped = 0;
+
       for (const prefix of arm.payloadPrefixes()) wiped += arm.durable.deletePrefix(prefix);
       expect(wiped).toBeGreaterThan(0);
 
       const after = await arm.controlPlane();
+
       if (before.objectKeys.length === 0 && before.rows.length === 0) {
         // NO CONTROL PLANE AT ALL is a real design: where the object store IS
         // the filesystem, the payload subtree is the box and wiping it wipes
@@ -326,21 +344,26 @@ for (const [name, open] of armEntries) {
         const woken = await wake(arm);
         expect(woken.detail).toContain('0 objects');
         expect(await tree(arm)).toEqual({});
+
         return;
       }
+
       // The head is still named, and it is the same head: the control plane
       // does not live in the subtree the container owns.
       expect(after.head).toBe(before.head);
+
       for (const key of before.objectKeys) expect(arm.durable.head(key)).not.toBe(null);
 
       arm.replaceContainer();
       const refusal = await thrownBy(async () => { await arm.storage().attach(); });
+
       if (refusal === null) return;
       expect(refusal).toBeInstanceOf(Error);
       // A refusal after payload loss must be about PAYLOAD. Naming a control
       // object instead would mean the control plane went with the mount, which
       // is the first defect class.
       const message = describeThrown({ cause: refusal });
+
       for (const key of before.objectKeys) {
         expect(message).not.toContain(key.split('/').pop() ?? key);
       }
@@ -351,6 +374,7 @@ for (const [name, open] of armEntries) {
     test('a corrupted committed payload object is refused by name, and discard recovers', async () => {
       const arm = open();
       await attach(arm);
+
       // A TICK, DELIBERATELY. A tick is the commit that leaves a strategy's
       // pending state where its OWN read path still has to verify it; a quiesce
       // folds that away into a materialized tree the mount serves unverified.
@@ -374,6 +398,7 @@ for (const [name, open] of armEntries) {
       // corruption anywhere else surfaces at the first read that needs
       // those bytes, which a full-tree read forces without picking a path.
       let refusal = await thrownBy(async () => { await arm.storage().attach(); });
+
       if (refusal === null) refusal = await thrownBy(async () => { await tree(arm); });
       expect(refusal).toBeInstanceOf(Error);
       // NAMED. A refusal that cannot say which object is unsound is a refusal
@@ -429,8 +454,10 @@ for (const [name, open] of armEntries) {
       for (const step of ['detach', 'discard'] as const) {
         const storage = arm.storage();
         const run = step === 'detach' ? storage.detach : storage.discard;
+
         if (run === undefined) continue;
         const thrown = await thrownBy(async () => { await run.call(storage); });
+
         if (thrown === null) continue;
         // CLASSIFIED means an Error a caller can report as an incident. A
         // TypeError is a property read on something that is no longer there,
@@ -448,11 +475,13 @@ for (const [name, open] of armEntries) {
       await commit(arm, OLD);
       arm.stopContainer();
       let outcome: CheckpointOutcome | { kind: 'threw'; reason: string };
+
       try {
         outcome = await arm.storage().checkpoint('quiesce');
       } catch (error) {
         outcome = { kind: 'threw', reason: describeThrown({ cause: error }) };
       }
+
       expect(outcome.kind).not.toBe('committed');
       expect(outcome.reason ?? '').not.toBe('');
     });
@@ -517,11 +546,14 @@ async function expectTreeExact(arm: ConformanceArm, expected: readonly NodeEntry
   const refused = refusedProperties(arm);
   const served = await arm.workspace.snapshot();
   const mismatches = compareTrees(expected, served, refused);
+
   if (mismatches.length > 0) {
     throw new Error(`${arm.name} ${what}: ${mismatches.length} mismatches: ${describeMismatches(mismatches).slice(0, 600)}`);
   }
+
   const want = canonicalTreeBytes(expected, refused);
   const have = canonicalTreeBytes(served, refused);
+
   if (Buffer.compare(want, have) !== 0) throw new Error(`${arm.name} ${what}: canonical manifest bytes differ`);
 }
 
@@ -540,6 +572,7 @@ async function commitTree(arm: ConformanceArm, entries: readonly NodeEntry[], wh
   await arm.workspace.plant(entries);
   expectCommitted(await arm.storage().checkpoint('quiesce'), what);
 }
+
 /** One measured tree size in cell 6.21: wall ms beside the counted work rows.
  *  Times are recorded, never asserted; the assertion reads only the counts. */
 interface ComplexitySample {
@@ -574,22 +607,29 @@ const CELLS: readonly Cell[] = [
       await arm.storage().attach();
       const baselineMounts = arm.disk().mountCalls - before;
       const problems: string[] = [];
+
       for (const seam of arm.attachSeams) {
         arm.replaceContainer();
         arm.dieAt(seam);
         const reset = await thrownBy(async () => { await arm.storage().attach(); });
+
         if (reset === null) {
           problems.push(`${seam}: never reached, the reset had nothing to interrupt`);
           continue;
         }
+
         arm.resetIsolate();
         const woken = await arm.storage().attach();
+
         if (woken.kind === 'empty') problems.push(`${seam}: the second isolate answered empty`);
         const mismatches = compareTrees(fixture, await arm.workspace.snapshot(), refusedProperties(arm));
+
         if (mismatches.length > 0) problems.push(`${seam}: ${describeMismatches(mismatches).slice(0, 200)}`);
         const mounts = arm.disk().mountCalls;
+
         if (mounts !== baselineMounts) problems.push(`${seam}: ${mounts} mounts across both isolates, an uninterrupted wake makes ${baselineMounts}`);
       }
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -600,6 +640,7 @@ const CELLS: readonly Cell[] = [
       await attach(arm);
       expectCommitted(await commit(arm, OLD), 'the commit before the race');
       const old = { storage: arm.storage(), workspace: arm.workspace };
+
       for (const [path, text] of Object.entries(NEW)) await old.workspace.write(path, text);
       const hold = arm.holdFinalize();
       const late = old.storage.checkpoint('quiesce');
@@ -613,8 +654,11 @@ const CELLS: readonly Cell[] = [
       const heads = await arm.committedHeads();
       const served = canonical(await tree(arm));
       const problems: string[] = [];
+
       if (outcome.kind === 'committed') problems.push('the late finalize reported committed');
+
       if (heads.length !== 1) problems.push(`${heads.length} heads`);
+
       // THE WINNER IS MEASURED, NEVER ASSUMED: the tree the new boot served
       // after its own commit. A new boot may legitimately adopt a COMPLETE
       // unreferenced delta the old boot left (the crash-window rule cell 6.4
@@ -624,9 +668,12 @@ const CELLS: readonly Cell[] = [
       // own commit must be in that tree, or the race lost a committed write.
       if (!served.includes(JSON.stringify(Object.entries(THIRD)[0]![1]))) problems.push(`the new boot's commit is absent from the tree it served: ${served}`);
       const afterWake = await wake(arm);
+
       if (afterWake.kind !== 'attached') problems.push(`wake answered ${afterWake.kind}`);
       const wokenTree = canonical(await tree(arm));
+
       if (wokenTree !== served) problems.push(`the wake served ${wokenTree}, the new boot served ${served}`);
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -647,6 +694,7 @@ const CELLS: readonly Cell[] = [
     title: 'counted bounds, and the same k against n and 10n',
     async run(arm) {
       const P = 32 * 1024 * 1024;
+
       const run = async (files: number) => {
         const fresh = CONFORMANCE_ARMS[arm.name]();
         await attach(fresh);
@@ -657,19 +705,26 @@ const CELLS: readonly Cell[] = [
         expectCommitted(await fresh.storage().checkpoint('quiesce'), 'the k commit');
         const puts = fresh.durable.ops.filter((op) => op.op === 'put').length - putsBefore;
         const work = fresh.work();
+
         if (work.publish.objectsPut !== puts) throw new Error(`PublishWork.objectsPut says ${work.publish.objectsPut}, the store saw ${puts} puts`);
         await wake(fresh);
+
         return { seal: work.seal, publish: work.publish, restore: fresh.work().restore };
       };
+
       const small = await run(200);
       const large = await run(2000);
       const problems: string[] = [];
       const kBytes = 4096;
       const c = 16 * 1024;
+
       if (small.seal.bytesStaged > 2 * kBytes + 4 * c) problems.push(`bytesStaged ${small.seal.bytesStaged} > 2k + 4c for k=4 KiB`);
+
       if (small.seal.nodesRewritten > 1 * (1 + 2)) problems.push(`nodesRewritten ${small.seal.nodesRewritten} > p(d+2) = 3`);
+
       if (small.publish.objectsPut > Math.ceil(kBytes / P) + 2) problems.push(`objectsPut ${small.publish.objectsPut} > ceil(k/P)+2 = 3`);
       const ratio = (a: number, b: number): boolean => a === b || Math.abs(a - b) / Math.max(a, b, 1) <= 0.1;
+
       for (const [name, a, b] of [
         ['seal.bytesStaged', small.seal.bytesStaged, large.seal.bytesStaged],
         ['seal.bytesChunked', small.seal.bytesChunked, large.seal.bytesChunked],
@@ -680,6 +735,7 @@ const CELLS: readonly Cell[] = [
       ] as const) {
         if (!ratio(a, b)) problems.push(`${name}: n gives ${a}, 10n gives ${b}`);
       }
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -693,6 +749,7 @@ const CELLS: readonly Cell[] = [
         await attach(fresh);
         await commitTree(fresh, fixture, `the ${files}-file commit`);
         const woken = await wake(fresh);
+
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
         await expectTreeExact(fresh, fixture, `${files} files after the wake`);
         const restore = fresh.work().restore;
@@ -702,10 +759,13 @@ const CELLS: readonly Cell[] = [
         // and this is that re-read, at both tree sizes.
         fresh.evictCleanBytes?.();
         await expectTreeExact(fresh, fixture, `${files} files after eviction and re-read`);
+
         return restore;
       };
+
       const small = await restoreOf(1_000);
       const large = await restoreOf(100_000);
+
       if (large.totalRemoteOps !== small.totalRemoteOps) {
         throw new Error(`RestoreWork.totalRemoteOps is ${large.totalRemoteOps} for 1e5 files and ${small.totalRemoteOps} for 1e3`);
       }
@@ -722,12 +782,16 @@ const CELLS: readonly Cell[] = [
       await commitTree(arm, fixture, 'the 1 GiB commit');
       const problems: string[] = [];
       const first = arm.work();
+
       if (first.seal.bytesChunked > 2 * data) problems.push(`commit chunked ${first.seal.bytesChunked} bytes for ${data} data bytes`);
+
       if (first.publish.bytesPut > 2 * data) problems.push(`commit put ${first.publish.bytesPut} bytes for ${data} data bytes`);
       const woken = await wake(arm);
+
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
       await expectTreeExact(arm, fixture, 'after the wake');
       const restore = arm.work().restore;
+
       if (restore.totalRemoteOps > 3) problems.push(`wake made ${restore.totalRemoteOps} remote ops; O(1) is 3`);
       // EVICT, RE-READ, BYTES IDENTICAL — on the 1 GiB sparse file and the
       // 64 MiB dense one, the pair this cell exists to bound.
@@ -738,8 +802,11 @@ const CELLS: readonly Cell[] = [
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 64 KiB in-place commit');
       const second = arm.work();
       const c = 16 * 1024;
+
       if (second.seal.bytesChunked > patch.byteLength + 8 * c) problems.push(`the 64 KiB write chunked ${second.seal.bytesChunked} bytes`);
+
       if (second.publish.bytesPut > 4 * (patch.byteLength + 8 * c)) problems.push(`the 64 KiB write put ${second.publish.bytesPut} bytes`);
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -754,7 +821,9 @@ const CELLS: readonly Cell[] = [
       await commitTree(arm, fixture, 'the database commit');
       const pages = 64;
       const dirty = new Set<number>();
+
       while (dirty.size < pages) dirty.add(seed.below(db.byteLength / 4096));
+
       for (const page of dirty) await arm.workspace.pwrite('app.db', page * 4096, seed.fill(new Uint8Array(4096)));
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the page-write commit');
       const c = 16 * 1024;
@@ -764,6 +833,7 @@ const CELLS: readonly Cell[] = [
       const woken = await wake(arm);
       expect(woken.kind).toBe('attached');
       await expectTreeExact(arm, expected, 'after the wake');
+
       if (put > bound) throw new Error(`bytesPut ${put} > 4 × ${pages} dirty pages × ${c} = ${bound}`);
     },
   },
@@ -786,18 +856,24 @@ const CELLS: readonly Cell[] = [
       const outcomeA = await settledCheckpoint(raceA);
       const heads = await arm.committedHeads();
       const problems: string[] = [];
+
       if (heads.length !== 1) problems.push(`${heads.length} heads`);
       const committed = [outcomeA.kind === 'committed' ? 'A' : null, outcomeB.kind === 'committed' ? 'B' : null].filter((x) => x !== null);
+
       if (committed.length !== 1) problems.push(`${committed.length} boots reported committed (${committed.join(',')})`);
       const winnerIsB = outcomeB.kind === 'committed';
       const loser: ArmBoot = winnerIsB ? arm : second;
+
       if (loser.failures.length === 0) problems.push('the loser recorded no failure');
       const served = await tree(arm);
       arm.replaceContainer();
       await arm.storage().attach();
       const after = await tree(arm);
+
       if (after['a.txt'] !== undefined && after['b.txt'] !== undefined) problems.push(`both dirty sets were merged: ${canonical(after)}`);
+
       if (winnerIsB ? after['b.txt'] === undefined : after['a.txt'] === undefined) problems.push(`the winner's file is absent: ${canonical(after)} (pre-wake ${canonical(served)})`);
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -811,8 +887,10 @@ const CELLS: readonly Cell[] = [
       disk.quotaBytes = disk.usedBytes + 24 * 1024;
       const acknowledged = new Map(Object.entries(OLD));
       let refusal: Error | null = null;
+
       for (let index = 0; index < 64 && refusal === null; index += 1) {
         const text = `fill ${index} `.repeat(200);
+
         try {
           await arm.workspace.write(`fill-${index}.txt`, text);
           acknowledged.set(`fill-${index}.txt`, text);
@@ -820,18 +898,27 @@ const CELLS: readonly Cell[] = [
           refusal = error instanceof Error ? error : new Error(String(error));
         }
       }
+
       const problems: string[] = [];
+
       if (refusal === null) problems.push('the quota never refused a write');
       else if (!(refusal instanceof DiskFull) || !refusal.message.includes('ENOSPC')) problems.push(`the refusal was not ENOSPC: ${refusal.message}`);
+
       if (canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('the tree differs from the acknowledged writes');
       const outcome = await arm.storage().checkpoint('quiesce');
+
       if (outcome.kind === 'committed' && canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push('a commit under quota changed the tree');
+
       if (outcome.kind === 'failed') problems.push(`the checkpoint under quota failed: ${outcome.reason}`);
       const freed = arm.evictCleanBytes?.() ?? 0;
+
       if (freed === 0) problems.push('nothing evicted clean bytes to make room');
       const woken = await wake(arm);
+
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
+
       if (canonical(await tree(arm)) !== canonical(Object.fromEntries(acknowledged))) problems.push(`the wake served ${canonical(await tree(arm)).slice(0, 200)}`);
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -840,13 +927,17 @@ const CELLS: readonly Cell[] = [
     title: 'GC never deletes a reachable object',
     async run(arm) {
       await attach(arm);
+
       for (const generation of [OLD, NEW, THIRD]) {
         expectCommitted(await commit(arm, generation), `generation ${JSON.stringify(generation)}`);
+
         for (const declared of await arm.declaredPayload()) {
           if (arm.durable.head(declared.key) === null) throw new Error(`the head reaches ${declared.key} and the store lost it`);
         }
       }
+
       const reachable = new Set((await arm.declaredPayload()).map((declared) => declared.key));
+
       for (const write of arm.durable.writes) {
         if (write.startsWith('delete:') && reachable.has(write.slice('delete:'.length))) {
           throw new Error(`${write} names a key the head still reaches`);
@@ -863,6 +954,7 @@ const CELLS: readonly Cell[] = [
       // 120 s per-test budget on every arm. Measured 2026-09-05.
       const probe = 'x'.repeat(64 * 1024);
       const rows: ComplexitySample[] = [];
+
       for (const files of [100, 1_000, 10_000]) {
         const fresh = CONFORMANCE_ARMS[arm.name]();
         const fixture = generatedTree({ seed: 41, files, bytesPerFile: 4096 });
@@ -871,6 +963,7 @@ const CELLS: readonly Cell[] = [
         const fullStart = performance.now();
         expectCommitted(await fresh.storage().checkpoint('quiesce'), `the ${files}-file full backup`);
         const full = fresh.work().publish;
+
         const row: ComplexitySample = {
           files,
           bytes: files * 4096,
@@ -883,6 +976,7 @@ const CELLS: readonly Cell[] = [
           restoreOps: 0,
           restorePayloadBytes: 0,
         };
+
         await fresh.workspace.write('probe-64k.bin', probe);
         const backupStart = performance.now();
         expectCommitted(await fresh.storage().checkpoint('quiesce'), `the 64 KiB backup at ${files} files`);
@@ -892,6 +986,7 @@ const CELLS: readonly Cell[] = [
         const restoreStart = performance.now();
         const woken = await wake(fresh);
         row.restoreMs = performance.now() - restoreStart;
+
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
         const restore = fresh.work().restore;
         row.restoreOps = restore.totalRemoteOps;
@@ -900,20 +995,25 @@ const CELLS: readonly Cell[] = [
         rows.push(row);
         complexitySamples.set(arm.name, [...rows]);
       }
+
       // THE ONLY ASSERTION: the deterministic shape, never the wall clock. A
       // 64 KiB backup and a restore cost the same counted work at 1,000 files
       // and at 10,000 — the same ratio rule cell 6.12 uses.
       const middle = rows[1]!;
       const large = rows[2]!;
       const problems: string[] = [];
+
       if (large.restoreOps !== middle.restoreOps) {
         problems.push(`restore.totalRemoteOps is ${large.restoreOps} for 10,000 files and ${middle.restoreOps} for 1,000`);
       }
+
       const putSmall = Math.min(large.backup64kBytesPut, middle.backup64kBytesPut);
       const putLarge = Math.max(large.backup64kBytesPut, middle.backup64kBytesPut);
+
       if (putSmall !== putLarge && (putLarge - putSmall) / Math.max(putLarge, 1) > 0.1) {
         problems.push(`64 KiB backup bytesPut is ${large.backup64kBytesPut} for 10,000 files and ${middle.backup64kBytesPut} for 1,000`);
       }
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -943,12 +1043,16 @@ const CELLS: readonly Cell[] = [
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 64 KiB overwrite commit');
       const publish = arm.work().publish;
       const problems: string[] = [];
+
       if (publish.bytesPut > C3_BOUND) problems.push(`the 64 KiB overwrite put ${publish.bytesPut} bytes against the ${C3_BOUND} bound`);
+
       if (publish.objectsPut > 3) problems.push(`the 64 KiB overwrite put ${publish.objectsPut} objects against the ceiling of 3`);
       const expected = await arm.workspace.snapshot();
       const woken = await wake(arm);
+
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
       await expectTreeExact(arm, expected, 'after the wake');
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -962,18 +1066,24 @@ const CELLS: readonly Cell[] = [
       // rather than near the tree.
       await attach(arm);
       await commitTree(arm, generatedTree({ seed: 63, files: 200, bytesPerFile: 4096 }), 'the 200-file base commit');
+
       for (let index = 0; index < 50; index += 1) {
         await arm.workspace.write(`d000/d${String(Math.floor(index / 64)).padStart(3, '0')}/f${String(index).padStart(6, '0')}.bin`, `rewritten ${index} `.repeat(200));
       }
+
       expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 50-file overwrite commit');
       const publish = arm.work().publish;
       const problems: string[] = [];
+
       if (publish.objectsPut !== 1) problems.push(`50 changed files put ${publish.objectsPut} objects, the floor is 1`);
+
       if (publish.bytesPut > 512 * 1024) problems.push(`50 changed files put ${publish.bytesPut} bytes against the 524,288 bound`);
       const expected = await arm.workspace.snapshot();
       const woken = await wake(arm);
+
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
       await expectTreeExact(arm, expected, 'after the wake');
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -990,6 +1100,7 @@ const CELLS: readonly Cell[] = [
       // would separate either number.
       const published = new Map<number, number>();
       const read = new Map<number, number>();
+
       for (const files of [1_000, 5_000]) {
         const fresh = CONFORMANCE_ARMS[arm.name]();
         await attach(fresh);
@@ -1001,22 +1112,29 @@ const CELLS: readonly Cell[] = [
         const deltaKeys = new Set((await fresh.declaredPayload()).filter((object) => object.names.includes('delta')).map((object) => object.key));
         const window = fresh.durable.ops.length;
         const woken = await wake(fresh);
+
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
         await expectTreeExact(fresh, expected, `${files} files after the wake`);
         read.set(files, fresh.durable.ops.slice(window)
           .filter((op) => op.op === 'get' && deltaKeys.has(op.key))
           .reduce((sum, op) => sum + op.bytes, 0));
       }
+
       const problems: string[] = [];
+
       for (const [name, rows] of [['one-file delta', published], ['wake read of the delta', read]] as const) {
         const small = rows.get(1_000);
         const large = rows.get(5_000);
+
         if (small === undefined || large === undefined) throw new Error(`a tree size left no ${name} measurement`);
+
         if (small === 0 || large === 0) problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: a wake that reads no delta served nothing`);
+
         if (small !== large && Math.abs(large - small) / Math.max(large, small, 1) > 0.1) {
           problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: it grows with the tree`);
         }
       }
+
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
@@ -1025,13 +1143,17 @@ const CELLS: readonly Cell[] = [
 async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
   try {
     await cell.run(arm);
+
     return { kind: 'pass' };
   } catch (error) {
     if (error instanceof ArmRefused) {
       const declared = arm.refusedCells[error.cell]?.reason;
+
       if (declared === error.reason && error.cell === cell.id) return { kind: 'refused', reason: error.reason };
+
       return { kind: 'fail', reason: `refused ${error.cell} without a matching declaration: ${error.reason}` };
     }
+
     return { kind: 'fail', reason: describeThrown({ cause: error }).slice(0, 700) };
   }
 }
@@ -1043,30 +1165,40 @@ for (const [name, open] of armEntries) {
     for (const cell of CELLS) {
       const known = KNOWN_RED.find((row) => row.arm === name && row.cell === cell.id);
       const declaredRefusal = open().refusedCells[cell.id];
+
       const label = declaredRefusal !== undefined
         ? `${cell.id} ${cell.title} [refused: ${declaredRefusal.reason.slice(0, 60)}]`
         : known !== undefined
           ? `${cell.id} ${cell.title} [bug list since ${known.since}]`
           : `${cell.id} ${cell.title}`;
+
       test(label, async () => {
         const arm = open();
+
         const outcome = declaredRefusal !== undefined && cell.id !== '6.14'
           ? { kind: 'refused' as const, reason: declaredRefusal.reason }
           : await runCell(cell, arm);
+
         let row = matrix.get(cell.id);
+
         if (row === undefined) {
           row = new Map();
           matrix.set(cell.id, row);
         }
+
         row.set(name, outcome);
+
         if (outcome.kind === 'refused') {
           if (known !== undefined) throw new Error(`the bug list names ${name} ${cell.id} as red, and the arm refuses it: remove the row`);
+
           return;
         }
+
         if (outcome.kind === 'fail') {
           if (known !== undefined) return;
           throw new Error(`${name} ${cell.id} is red and the bug list does not name it: ${outcome.reason}`);
         }
+
         if (known !== undefined) {
           throw new Error(`the bug list names ${name} ${cell.id} as red since ${known.since}, and it passed: record the win by removing the row`);
         }
@@ -1077,6 +1209,7 @@ for (const [name, open] of armEntries) {
 
 test('every bug-list row names a live arm and a live cell', () => {
   const cells = new Set(CELLS.map((cell) => cell.id));
+
   for (const row of KNOWN_RED) {
     expect(parseDevboxStrategyName(row.arm)).toBe(row.arm);
     expect(cells.has(row.cell)).toBe(true);
@@ -1097,16 +1230,20 @@ function blankWakeArm(): ConformanceArm {
   Object.defineProperty(broken, 'storage', {
     value: () => {
       const raw = arm.storage();
+
       return {
         ...raw,
         attach: async () => {
           const outcome = await raw.attach();
+
           for (const path of await arm.workspace.paths()) await arm.workspace.remove(path);
+
           return outcome;
         },
       };
     },
   });
+
   return broken;
 }
 
@@ -1115,6 +1252,7 @@ function blankWakeArm(): ConformanceArm {
 async function runCellOn(cell: Cell, broken: ConformanceArm): Promise<Outcome> {
   const open = CONFORMANCE_ARMS[broken.name];
   Object.defineProperty(CONFORMANCE_ARMS, broken.name, { value: () => broken, configurable: true });
+
   try {
     return await runCell(cell, broken);
   } finally {
@@ -1146,7 +1284,9 @@ describe('red direction — every new cell fails against a deliberately broken a
     Object.defineProperty(broken, 'declaredPayload', {
       value: async () => {
         const declared = await arm.declaredPayload();
+
         if (declared.length > 0) arm.durable.delete(declared[0]!.key);
+
         return declared;
       },
     });
@@ -1185,9 +1325,11 @@ describe('red direction — every new cell fails against a deliberately broken a
     Object.defineProperty(broken, 'evictCleanBytes', {
       value: () => {
         const freed = arm.evictCleanBytes?.() ?? 0;
+
         for (const prefix of arm.payloadPrefixes()) {
           for (const key of arm.durable.list(prefix)) arm.durable.corrupt(key, 'flip');
         }
+
         return freed;
       },
     });
@@ -1202,39 +1344,53 @@ afterAll(() => {
   const lines: string[] = [];
   lines.push('', 'smart-container bar — per-arm matrix (design § 6)', '');
   lines.push(`${'cell'.padEnd(8)}${arms.map((name) => name.padEnd(width)).join('')}`);
+
   for (const cell of EXISTING_CELLS) {
     lines.push(`${cell.id.padEnd(8)}${arms.map(() => 'existing'.padEnd(width)).join('')}  ${cell.title}`);
   }
+
   const legend: string[] = [];
+
   for (const cell of CELLS) {
     const row = matrix.get(cell.id);
     lines.push(`${cell.id.padEnd(8)}${arms.map((name) => {
       const outcome = row?.get(name);
+
       if (outcome === undefined) return 'not run'.padEnd(width);
+
       if (outcome.kind === 'pass') return 'pass'.padEnd(width);
+
       if (outcome.kind === 'refused') {
         legend.push(`${cell.id} ${name}: refused — ${outcome.reason}`);
+
         return 'refused'.padEnd(width);
       }
+
       legend.push(`${cell.id} ${name}: RED — ${outcome.reason}`);
+
       return 'RED'.padEnd(width);
     }).join('')}  ${cell.title}`);
   }
+
   lines.push(`${'6.19'.padEnd(8)}${arms.map(() => 'harness'.padEnd(width)).join('')}  stop then wake on the same instance: the devbox-harness suites`);
   lines.push('', ...legend, '');
   // Cell 6.21 leaves numbers, not just a verdict: one table per arm beside
   // the matrix, with the measured sizes in the header. Measured 2026-09-05.
   lines.push('6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB', '');
+
   for (const name of arms) {
     lines.push(`arm ${name}: files | tree bytes | full backup ms | 64 KiB backup ms | 64 KiB backup bytesPut | restore ms | restore ops | restore payload bytes`);
+
     for (const row of complexitySamples.get(name) ?? []) {
       lines.push(
         `arm ${name}: ${row.files} | ${row.bytes} | ${row.fullBackupMs.toFixed(1)} | ${row.backup64kMs.toFixed(1)} `
         + `| ${row.backup64kBytesPut} | ${row.restoreMs.toFixed(1)} | ${row.restoreOps} | ${row.restorePayloadBytes}`,
       );
     }
+
     lines.push('');
   }
+
   console.log(lines.join('\n'));
 });
 

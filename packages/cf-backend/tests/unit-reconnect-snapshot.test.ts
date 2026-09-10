@@ -39,7 +39,9 @@ import {
 } from './helpers/actor-harness';
 
 const STEER = 'also check staging';
+
 const BRANCH_ID = 'branch-n018';
+
 /** The redirect a branch head answers. The RUN carries `BRANCH_RATIONALE` and
  *  the head carries this, which is why the chip's label below is the former. */
 const BRANCH_TASK = 'try the coupon path';
@@ -89,14 +91,17 @@ async function workspaceWithQueuedWork(
   seeded.agent.harnessBeginTurn('turn-n018');
   seeded.agent.declareTurnInFlight(true);
   expect(await seeded.agent.steerTurn(STEER)).toEqual({ landed: 'mid-turn' });
+
   const clock = spawnedAt === undefined
     ? null
     : vi.spyOn(Date, 'now').mockImplementation(() => spawnedAt);
+
   try {
     await seeded.agent.harnessSpawnBranchHead(BRANCH_ID, BRANCH_TASK, null);
   } finally {
     clock?.mockRestore();
   }
+
   return seeded;
 }
 
@@ -105,6 +110,7 @@ async function workspaceWithQueuedWork(
  *  context `streamText` passes it, so the transition is production's. */
 async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> {
   const messages: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
+
   const context: PrepareStepContext = {
     stepNumber: 1,
     messages,
@@ -112,11 +118,13 @@ async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> 
     model: new MockLanguageModelV3(),
     experimental_context: undefined,
   };
+
   // `addMessages` is Think's append-without-a-turn API and needs a live Session,
   // which the harness has none of. The drain's durable half — the DELETE — runs
   // either way, and that is the half a reconnect reads.
   Reflect.set(agent, 'addMessages', async () => { await Promise.resolve(); });
   const prepared = agent.beforeStep(context);
+
   if (prepared instanceof Promise) await prepared;
 }
 

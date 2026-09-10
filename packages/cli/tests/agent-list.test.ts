@@ -7,7 +7,9 @@ import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type Liste
 import * as v from 'valibot';
 
 import { createCLIRuntime } from '@kinu.run/cli-backend';
+
 const tempDirs: string[] = [];
+
 const repoRoot = resolve(__dirname, '../../..');
 
 afterEach(() => {
@@ -67,6 +69,7 @@ describe('CLI cloud agent registry sync', () => {
       }],
       [],
     );
+
     expect(reconciled).toEqual([{
       name: 'placed',
       label: 'Untitled workspace',
@@ -122,6 +125,7 @@ describe('CLI cloud agent registry sync', () => {
       const config = JSON.parse(readFileSync('${join(home, 'config.json')}', 'utf8'));
       console.log(JSON.stringify({ result, config }));
     `;
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
@@ -131,6 +135,7 @@ describe('CLI cloud agent registry sync', () => {
     });
 
     expect(proc.exitCode).toBe(0);
+
     const parsed = v.parse(v.object({
       result: v.object({
         agents: v.array(v.object({ name: v.string(), mode: v.string(), label: v.string() })),
@@ -141,6 +146,7 @@ describe('CLI cloud agent registry sync', () => {
         aliases: v.optional(v.record(v.string(), v.string())),
       }),
     }), JSON.parse(proc.stdout.toString()));
+
     expect(parsed.config.agents.stale).toBeUndefined();
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });
@@ -190,6 +196,7 @@ describe('CLI cloud agent registry sync', () => {
         placed: listLocalRefsAllProjects(),
       }));
     `;
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
@@ -199,6 +206,7 @@ describe('CLI cloud agent registry sync', () => {
     });
 
     expect(proc.exitCode).toBe(0);
+
     const parsed = v.parse(v.object({
       result: v.object({
         agents: v.array(v.looseObject({ name: v.string(), mode: v.string() })),
@@ -244,6 +252,7 @@ describe('CLI cloud agent registry sync', () => {
 
 describe('virtual workspace grouping', () => {
   const ROOT = '/repo/shop';
+
   const row = (over: Partial<ListedAgent> & Pick<ListedAgent, 'name' | 'mode'>): ListedAgent => ({
     label: over.name,
     ...over,
@@ -258,6 +267,7 @@ describe('virtual workspace grouping', () => {
       row({ name: 'jarvis', mode: 'cloud', cloudName: 'jarvis' }),
       row({ name: 'faraway', mode: 'local', cwd: '/elsewhere/repo', workspaceId: 'other' }),
     ], ROOT);
+
     expect(grouped.workspaces.map((group) => `${group.cwd}:${group.workspaceId}:${group.agents.map((agent) => agent.name).join('+')}`)).toEqual([
       `${ROOT}:shop:lead+fixer`,
       `${ROOT}:docs:writer`,
@@ -284,13 +294,16 @@ describe('the sidebar roster for one directory', () => {
     const otherDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-other-')));
     tempDirs.push(home, projectDir, otherDir);
     const stamp = '2026-06-08T00:00:00.000Z';
+
     const localRef = (name: string, cwd?: string, workspaceId?: string) => ({
       name, mode: 'local', localName: name, cwd, workspaceId, createdAt: stamp, updatedAt: stamp,
     });
+
     for (const name of ['lead', 'fixer', 'writer', 'faraway', 'oldbot', 'audit', 'stray']) {
       mkdirSync(join(home, name));
       writeFileSync(join(home, name, 'agent.db'), '');
     }
+
     // oldbot's title lives in its own workspace database — the one label
     // source for a local agent. The other fixtures carry no title row, so
     // they list under their directory names.
@@ -316,6 +329,7 @@ describe('the sidebar roster for one directory', () => {
       const agents = listSidebarAgents(${JSON.stringify(projectDir)});
       console.log(JSON.stringify({ root, agents, grouped: groupAgentWorkspaces(agents, root) }));
     `;
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
@@ -323,7 +337,9 @@ describe('the sidebar roster for one directory', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+
     const RowSchema = v.object({
       name: v.string(),
       label: v.string(),
@@ -333,6 +349,7 @@ describe('the sidebar roster for one directory', () => {
       cwd: v.optional(v.string()),
       workspaceId: v.optional(v.string()),
     });
+
     const parsed = v.parse(v.object({
       root: v.string(),
       agents: v.array(RowSchema),
@@ -370,15 +387,19 @@ describe('the local roster is one function', () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-roster-home-'));
     const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-roster-proj-')));
     tempDirs.push(home, projectDir);
+
     for (const name of ['alpha', 'beta', 'gamma']) {
       mkdirSync(join(home, name));
       writeFileSync(join(home, name, 'agent.db'), '');
     }
+
     const stamp = '2026-06-08T00:00:00.000Z';
+
     const placed = (name: string) => ({
       name, mode: 'local', localName: name, cwd: projectDir, workspaceId: 'shop',
       createdAt: stamp, updatedAt: stamp,
     });
+
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       agents: { alpha: placed('alpha'), beta: placed('beta') },
       aliases: {},
@@ -398,6 +419,7 @@ describe('the local roster is one function', () => {
       await transcriptsCommand(undefined, {});
       process.stdout.write(JSON.stringify({ listed, transcripted: lines }) + '\\n');
     `;
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
@@ -405,11 +427,14 @@ describe('the local roster is one function', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     expect(proc.exitCode).toBe(0);
+
     const parsed = v.parse(v.object({
       listed: v.array(v.string()),
       transcripted: v.array(v.string()),
     }), JSON.parse(proc.stdout.toString()));
+
     const names = (lines: string[]) => ['alpha', 'beta', 'gamma'].filter((name) => lines.some((line) => line.includes(name)));
     expect(names(parsed.listed)).toEqual(['alpha', 'beta', 'gamma']);
     expect(names(parsed.transcripted)).toEqual(names(parsed.listed));

@@ -37,6 +37,7 @@ import {
 function fakeBucket() {
   const objects = new Map<string, { bytes: Uint8Array; version: string }>();
   let versions = 0;
+
   const handle: R2Bucket = Object.create({
     put: async (key: string, body: Uint8Array): Promise<void> => {
       versions += 1;
@@ -44,11 +45,14 @@ function fakeBucket() {
     },
     get: async (key: string) => {
       const found = objects.get(key);
+
       if (found === undefined) return null;
       const bytes = found.bytes;
+
       return {
         async arrayBuffer() {
           const copy = bytes.slice();
+
           return copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength);
         },
       };
@@ -62,6 +66,7 @@ function fakeBucket() {
       const all = [...objects.keys()].filter((key) => key.startsWith(prefix)).sort();
       const page = all.slice(start, start + (options.limit ?? 100));
       const next = start + page.length;
+
       return {
         objects: page.map((key) => ({ key })),
         truncated: next < all.length,
@@ -69,6 +74,7 @@ function fakeBucket() {
       };
     },
   });
+
   return { handle, objects };
 }
 
@@ -80,6 +86,7 @@ function fakeBucket() {
  */
 function fakeStorage() {
   const rows = new Map<string, StoredValue>();
+
   const handle: DurableObjectStorage = Object.create({
     get: async (key: string): Promise<StoredValue | undefined> => rows.get(key),
     put: async (key: string, value: StoredValue): Promise<void> => {
@@ -96,6 +103,7 @@ function fakeStorage() {
       },
     }),
   });
+
   return { handle, rows };
 }
 
@@ -105,6 +113,7 @@ async function runCells(
 ) {
   const bucket = fakeBucket();
   const storage = fakeStorage();
+
   const observation = await runBenchSecurityCells({
     strategy: 'snapshot-chain',
     boxPrefix: 'boxes/test-box-id/',
@@ -114,6 +123,7 @@ async function runCells(
     fixtureSecret: secret,
     envValues,
   });
+
   return { observation, bucket, storage };
 }
 
@@ -136,11 +146,14 @@ describe('F7 stale writer discrimination', () => {
     await storage.handle.put('row', { rev: 7 });
     const observed = (await storage.handle.get<{ rev: number }>('row'))?.rev ?? null;
     await storage.handle.put('row', { rev: 8 });
+
     const attempt = storage.handle.transaction(async (txn) => {
       const stored = ((await txn.get<{ rev: number }>('row'))?.rev) ?? null;
+
       if (stored !== observed) throw new ChainRecordAdvanced(observed, stored);
       await txn.put('row', { rev: 9 });
     });
+
     await expect(attempt).rejects.toBeInstanceOf(ChainRecordAdvanced);
     expect((await storage.handle.get<{ rev: number }>('row'))?.rev).toBe(8);
   });
@@ -150,6 +163,7 @@ describe('F7 stale writer discrimination', () => {
     await storage.handle.put('row', { rev: 7 });
     await storage.handle.transaction(async (txn) => {
       const stored = ((await txn.get<{ rev: number }>('row'))?.rev) ?? null;
+
       if (stored !== 7) throw new ChainRecordAdvanced(7, stored);
       await txn.put('row', { rev: 8 });
     });
@@ -163,6 +177,7 @@ describe('F10 hostile metadata discrimination', () => {
       expect(isChainId(hostile)).toBe(false);
       expect(() => baseObjectKey('boxes/unit-test/backups', hostile)).toThrow();
     }
+
     expect(isChainId('123e4567-e89b-12d3-a456-426614174000')).toBe(true);
   });
 
@@ -180,6 +195,7 @@ describe('live cells over fakes', () => {
     expect(observation.strategy).toBe('snapshot-chain');
     expect(observation.completed).toBe(true);
     expect(observation.cells.map((cell) => cell.id)).toEqual(['F7', 'F10', 'F11', 'F12']);
+
     for (const cell of observation.cells) expect(cell.status).toBe('refused');
     expect(observation.staleWriterAccepted).toBe(false);
     expect(observation.hostileMetadataAccepted).toBe(false);
@@ -196,17 +212,21 @@ describe('live cells over fakes', () => {
 
   test('F12 names the surface without echoing the live secret', async () => {
     const secret = 'live-fixture-secret-abcdef';
+
     const { observation } = await runCells(
       secret,
       [{ name: 'ALLOW_EXTRACTION', value: `prefix-${secret}-suffix` }],
     );
+
     const f12 = observation.cells.find((cell) => cell.id === 'F12');
+
     if (f12 === undefined) throw new Error('the F12 cell is missing from a completed observation');
     expect(f12.status).toBe('accepted');
     expect(observation.completed).toBe(false);
     expect(observation.credentialLeaks.length).toBeGreaterThan(0);
     const serialized = JSON.stringify(observation);
     expect(serialized).not.toContain(secret);
+
     for (const leak of observation.credentialLeaks) expect(leak).not.toContain(secret);
   });
 });

@@ -76,9 +76,11 @@ export function reportGate(input: {
 }): (candidate: string) => Promise<string | null> {
   const { ctx, verifier } = input;
   let lane: Promise<unknown> = Promise.resolve();
+
   return (candidate: string): Promise<string | null> => {
     const measured = lane.then(async (): Promise<string | null> => {
       let measurement: Measurement;
+
       try {
         // The WRITE is inside the try beside the measurement, so this function has one
         // failure story rather than two: everything between placing the candidate and
@@ -91,18 +93,22 @@ export function reportGate(input: {
         return `the verifier could not run over what you reported: `
           + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`;
       }
+
       if (measurement.kind === 'unmeasurable') {
         return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
           + 'Fix the answer and report again — a report the instrument cannot read is a '
           + 'candidate the search cannot score.';
       }
+
       return null;
     });
+
     // The lane advances on the MEASUREMENT rather than on the caller, so a node that is
     // cancelled between the two cannot leave the next one measuring its file. No catch
     // is needed and none is written: the function above returns the instrument's
     // failures as text, so this promise does not reject.
     lane = measured;
+
     return measured;
   };
 }
@@ -127,6 +133,7 @@ export async function measureChild(input: {
   const { ctx, verifier, witnessVerifier, measured, baseline } = input;
   await ctx.vfs.writeFile(verifier.artifact, input.artifact);
   let measurement: Measurement;
+
   try {
     measurement = await verifier.verify(ctx);
   } catch (error) {
@@ -135,11 +142,14 @@ export async function measureChild(input: {
       error: renderThrownChain({ cause: error }),
     };
   }
+
   let witnessFound: boolean | null = null;
+
   if (measured.witness !== null) {
     if (witnessVerifier === null) {
       return { kind: 'instrument-faulted', error: 'witness verifier was not resolved' };
     }
+
     try {
       await ctx.vfs.writeFile(witnessVerifier.artifact, input.artifact);
       const witness = await witnessVerifier.verify(ctx);
@@ -151,9 +161,11 @@ export async function measureChild(input: {
       };
     }
   }
+
   if (measurement.kind === 'unmeasurable') {
     return { kind: 'unmeasurable', detail: measurement.detail, witnessFound };
   }
+
   if (measured.floor && breaches(measured.floor, measured.direction, measurement.value)) {
     return {
       kind: 'sealed',
@@ -170,6 +182,7 @@ export async function measureChild(input: {
       witnessFound,
     };
   }
+
   return {
     kind: 'scored',
     measurement,
@@ -180,6 +193,7 @@ export async function measureChild(input: {
     witnessFound,
   };
 }
+
 /** Measure each declared Pareto coordinate without synthesising an aggregate. */
 export async function measureParetoChild(input: {
   readonly pareto: PreparedParetoMeasurement;
@@ -187,32 +201,41 @@ export async function measureParetoChild(input: {
 }): Promise<ChildOutcome> {
   const evidence: Record<string, number> = {};
   const details: string[] = [];
+
   for (const instrument of input.pareto.instruments) {
     try {
       await input.pareto.ctx.vfs.writeFile(instrument.verifier.artifact, input.artifact);
       const measurement = await instrument.verifier.verify(input.pareto.ctx);
+
       if (measurement.kind === 'unmeasurable') {
         return { kind: 'unmeasurable', detail: measurement.detail };
       }
+
       for (const axisId of instrument.axisIds) {
         const value = instrument.perInstance
           ? measurement.perInstance?.[axisId]
           : measurement.measured?.[axisId] ?? measurement.value;
+
         if (value === undefined) {
           return {
             kind: 'unmeasurable',
             detail: `Pareto instrument omitted declared axis "${axisId}".`,
           };
         }
+
         evidence[axisId] = value;
       }
+
       details.push(measurement.detail);
     } catch (error) {
       return { kind: 'instrument-faulted', error: renderThrownChain({ cause: error }) };
     }
   }
+
   const checked = validateParetoEvidence(input.pareto.axes, evidence);
+
   if ('reason' in checked) return { kind: 'unmeasurable', detail: checked.reason };
+
   return {
     kind: 'pareto',
     axes: input.pareto.axes,
@@ -279,6 +302,7 @@ export async function judgeChild(input: {
   readonly siblingsProducedCode: boolean;
 }): Promise<ChildOutcome> {
   const { rt } = input;
+
   const options = {
     task: input.task,
     trajectory: input.answer,
@@ -296,7 +320,9 @@ export async function judgeChild(input: {
     // floor admitted. See {@link judgeCallPool}.
     maxLLMCalls: judgeCallPool(input.samples),
   };
+
   let evaluation: BranchEvaluation;
+
   try {
     // A cross-model judge where the runtime holds one, and the explorer where it does
     // not — the documented fallback, spelled as an ABSENT KEY rather than an explicit
@@ -310,6 +336,7 @@ export async function judgeChild(input: {
       error: renderThrownChain({ cause: error }),
     };
   }
+
   if (evaluation.judgeSamplesAttempted > 0
     && evaluation.judgeSamplesUsed < input.minEnsemble) {
     // THE DROPPED-SAMPLE DOOR. The calls were asked for and some of them answered with
@@ -326,6 +353,7 @@ export async function judgeChild(input: {
         + 'is dropped, so ask for more than the floor where the provider is being rate-limited.',
     };
   }
+
   if (evaluation.judgeSamplesAttempted > 0
     && evaluation.judgeSamplesAttempted < input.samples) {
     // UNREACHABLE BY CONSTRUCTION, and stated anyway. The pool above is sized so the
@@ -342,6 +370,7 @@ export async function judgeChild(input: {
         + `${String(judgeCallPool(input.samples))} calls for exactly this reason.`,
     };
   }
+
   return {
     kind: 'judged',
     score: evaluation.score,
@@ -394,7 +423,9 @@ export async function scoreExpansion(input: {
     judgeSamples, resolved, rt, mode, languages, sql, rootId, candidates, spentBy,
     nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
   } = input;
+
   let { publication, best, bestValue } = state;
+
   const outcome = expansion.incomplete !== null
     ? { kind: 'incomplete' as const, detail: expansion.incomplete.detail }
     : pareto !== null
@@ -416,17 +447,22 @@ export async function scoreExpansion(input: {
             ),
           })
           : null;
+
   if (outcome?.kind === 'instrument-faulted') {
     searchLedger.fail(rootId, ledgerEpoch, Date.now());
+
     return unavailable(`the ${pareto !== null || measures ? 'verifier' : 'judge'} faulted while scoring `
       + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
   }
+
   const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
     ? outcome.measurement
     : null;
+
   const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
     ? outcome.score
     : null;
+
   const candidate: SwarmCandidate = {
     id: expansion.id,
     artifact: expansion.artifact,
@@ -441,6 +477,7 @@ export async function scoreExpansion(input: {
       ? outcome.witnessFound ?? null
       : null,
   };
+
   candidates.push(candidate);
   recordSwarmNode(sql, rt.actor, {
     rootId,
@@ -472,12 +509,14 @@ export async function scoreExpansion(input: {
     compacted: null,
     aggregated: expansion.aggregated,
   });
+
   if (expansion.proposalError) {
     log.event('swarm.proposal_unreadable', {
       preset: resolved.preset, node: expansion.id, depth: expansion.depth,
       error: expansion.proposalError,
     });
   }
+
   if (outcome?.kind === 'sealed') {
     publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
     log.event('exploration.floor_breach', {
@@ -489,10 +528,12 @@ export async function scoreExpansion(input: {
       hypotheses: outcome.breach.hypotheses.join(','),
     });
   }
+
   if (outcome?.kind === 'judged' && outcome.ensemble > 0) {
     state.ensembles.push(outcome.ensemble);
     searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
   }
+
   if (score !== null) {
     backpropagate(sql, rt.actor, expansion.id, score);
   } else if (outcome && outcome.kind !== 'pareto') {
@@ -500,15 +541,19 @@ export async function scoreExpansion(input: {
     void sql`UPDATE search_nodes SET status = ${status}
       WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
   }
+
   const rank = outcome?.kind === 'scored'
     ? outcome.measurement.value
     : outcome?.kind === 'judged' ? outcome.score : null;
+
   if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
     best = candidate;
     bestValue = rank;
   }
+
   state.publication = publication;
   state.best = best;
   state.bestValue = bestValue;
+
   return null;
 }

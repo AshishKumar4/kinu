@@ -32,6 +32,7 @@ export function TakesChip({ set, onPick }: {
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
 }) {
   const [open, setOpen] = useState(false);
+
   return (
     <>
       <button
@@ -72,7 +73,9 @@ function TakesComparison({ set, onPick, onClose }: {
       if (e.key === "ArrowLeft") step(-1);
       else if (e.key === "ArrowRight") step(1);
     };
+
     document.addEventListener("keydown", onKey);
+
     return () => document.removeEventListener("keydown", onKey);
   }, [step]);
 
@@ -80,8 +83,10 @@ function TakesComparison({ set, onPick, onClose }: {
     if (busy || isCurrent) return;
     setBusy(true);
     setErr(null);
+
     try {
       const result = await onPick(set.id, candidate.nodeId);
+
       if (result.continuationQueued) {
         setNotice("Saved. The agent continues with this take.");
       } else {
@@ -195,6 +200,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
   const [open, setOpen] = useState(false);
   const task = run.task.length > 80 ? `${run.task.slice(0, 80)}…` : run.task;
   const headId = branchHeadId(run.branchId);
+
   const { view, resource, reload, pending } = useNodeTranscript({
     runId: open ? run.branchId : null,
     nodeId: open ? headId : null,
@@ -208,6 +214,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
     // whatever step had landed when the frame went missing.
     running: run.status === "running",
   });
+
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
       <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
