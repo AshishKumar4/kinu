@@ -4161,7 +4161,10 @@ const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
  * One producer per absence rule the Cost block claims, because the failure this
  * frame exists to catch is a zero standing in for a silence:
  *   agent    — Workers AI: measured, priced, and the only row reporting neurons
- *   judge    — Anthropic: measured and priced, and reports NO neurons at all
+ *   judge    — Anthropic: measured and priced, reports NO neurons at all, and
+ *              is the ONE provider that reports a 1h cache-retention split, so
+ *              18 of its calls are priced at the 5m rate and its dollars are a
+ *              floor for a second, different reason from `fast`'s
  *   fast     — 44 calls carried no catalog rate, so its dollars are a floor
  *   head     — 2 calls reported nothing, so its tokens AND dollars are floors
  *   mcts     — measured with no rate anywhere: dollars absent, never $0
@@ -4172,25 +4175,34 @@ const AGENT_TOKENS_METERED: Usage = { ...AGENT_TOKENS, neurons: 2_639_183 };
 const ACTIVITY_PRODUCERS: ProducerSpend[] = [
   {
     source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS_METERED,
-    usd: 11.98, unpricedCalls: 0,
+    usd: 11.98, unpricedCalls: 0, floorPricedCalls: 0,
   },
   {
     source: "judge", calls: 62, callsWithoutUsage: 0,
-    usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 }, usd: 3.41, unpricedCalls: 0,
+    usage: {
+      input: 1_284_400, output: 96_120, cacheRead: 812_000,
+      cacheWrite: 96_400, cacheWrite1h: 71_200,
+    },
+    usd: 3.41, unpricedCalls: 0, floorPricedCalls: 18,
   },
   {
     source: "fast", calls: 210, callsWithoutUsage: 0,
-    usage: { input: 402_118, output: 18_440, neurons: 50_467 }, usd: 0.0142, unpricedCalls: 44,
+    usage: { input: 402_118, output: 18_440, neurons: 50_467 },
+    usd: 0.0142, unpricedCalls: 44, floorPricedCalls: 0,
   },
   {
     source: "head", calls: 12, callsWithoutUsage: 2,
-    usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0,
+    usage: { input: 288_004, output: 31_902 }, usd: 0.86, unpricedCalls: 0, floorPricedCalls: 0,
   },
   {
     source: "mcts", calls: 28, callsWithoutUsage: 0,
-    usage: { input: 96_210, output: 12_004, neurons: 12_986 }, unpricedCalls: 28,
+    usage: { input: 96_210, output: 12_004, neurons: 12_986 },
+    unpricedCalls: 28, floorPricedCalls: 0,
   },
-  { source: "platform", calls: 91, callsWithoutUsage: 91, usage: {}, unpricedCalls: 0 },
+  {
+    source: "platform", calls: 91, callsWithoutUsage: 91, usage: {},
+    unpricedCalls: 0, floorPricedCalls: 0,
+  },
 ];
 
 /** Every producer measuring and pricing everything, over a window that reached
@@ -4200,15 +4212,16 @@ const ACTIVITY_PRODUCERS: ProducerSpend[] = [
 const CLEAN_PRODUCERS: ProducerSpend[] = [
   {
     source: "agent", calls: 344, callsWithoutUsage: 0, usage: AGENT_TOKENS,
-    usd: 11.98, unpricedCalls: 0,
+    usd: 11.98, unpricedCalls: 0, floorPricedCalls: 0,
   },
   {
     source: "judge", calls: 62, callsWithoutUsage: 0,
-    usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 }, usd: 3.41, unpricedCalls: 0,
+    usage: { input: 1_284_400, output: 96_120, cacheRead: 812_000 },
+    usd: 3.41, unpricedCalls: 0, floorPricedCalls: 0,
   },
   {
     source: "fast", calls: 210, callsWithoutUsage: 0,
-    usage: { input: 402_118, output: 18_440 }, usd: 0.42, unpricedCalls: 0,
+    usage: { input: 402_118, output: 18_440 }, usd: 0.42, unpricedCalls: 0, floorPricedCalls: 0,
   },
 ];
 
@@ -4307,10 +4320,14 @@ const ACTIVITY_SNAPSHOT: ActivitySnapshot = {
   spend: {
     producers: ACTIVITY_PRODUCERS,
     total: {
-      calls: 747, callsWithoutUsage: 93, unpricedCalls: 72, usd: 16.2642,
+      calls: 747, callsWithoutUsage: 93, unpricedCalls: 72, floorPricedCalls: 18,
+      usd: 16.2642,
       usage: {
         input: 23_551_044, output: 671_350, cacheRead: 19_754_006, reasoning: 41_220,
         neurons: 2_702_636,
+        // Only `judge` writes cache here, and it is also the only producer whose
+        // provider reports the retention split, so these are its numbers alone.
+        cacheWrite: 96_400, cacheWrite1h: 71_200,
       },
     },
     coverage: {
@@ -4332,7 +4349,7 @@ const ACTIVITY_CLEAN: ActivitySnapshot = {
   spend: {
     producers: CLEAN_PRODUCERS,
     total: {
-      calls: 616, callsWithoutUsage: 0, unpricedCalls: 0, usd: 15.81,
+      calls: 616, callsWithoutUsage: 0, unpricedCalls: 0, floorPricedCalls: 0, usd: 15.81,
       usage: {
         input: 23_166_830, output: 627_444, cacheRead: 19_754_006, reasoning: 41_220,
       },
@@ -4357,7 +4374,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   },
   spend: {
     producers: [],
-    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0 },
+    total: { calls: 0, callsWithoutUsage: 0, usage: {}, unpricedCalls: 0, floorPricedCalls: 0 },
     coverage: { calls: 0, measured: 0, reported: null, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
