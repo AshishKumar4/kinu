@@ -1822,12 +1822,21 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
 
 /**
  * Fields this hire cannot act on, refused naming the field that does the job.
+ *
+ * `strictObject` spans the action's whole field union and the codemode
+ * namespace has no schema at all, so neither the parse nor the JSON-Schema
+ * `oneOf` stops a field belonging to the OTHER variant. Both directions drop
+ * silently without this, which is the accepted-and-ignored defect the surface
+ * exists to refuse: a knob that never reached the run was never applied.
+ *
  * WITHOUT `role` the hire hands the workstream to an agent that exists, so
- * `mission`, `tier` and `lifetime` belong to the CREATE variant only — an
- * agent that exists was briefed at its birth and already runs at its own tier
- * for its own lifetime. WITH `role` at `lifetime:"task"` the hire runs at its
- * role's tier, so `tier` is refused there too. One whole-input boundary both
- * arms call, so the variant tables above and the dispatch below cannot drift.
+ * `mission`, `tier` and `lifetime` are the create variant's — that agent was
+ * briefed at its birth and already runs at its own tier for its own lifetime.
+ * WITH `role` the hire creates, so `deliverable` and `topic` are the existing
+ * agent's (its brief is `mission`, and it has no inbound topic), and at
+ * `lifetime:"task"` the helper runs at its role's tier so `tier` goes too.
+ * One whole-input boundary both arms call, so the variant tables above and the
+ * dispatch below cannot drift.
  */
 function assertHireVariant(input: AgentsToolInput): void {
   if (!input.role) {
@@ -1841,6 +1850,12 @@ function assertHireVariant(input: AgentsToolInput): void {
       return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
     }
     return;
+  }
+  if (input.deliverable !== undefined) {
+    return badInput('field "deliverable" is not available on a hire that creates an agent — say what the result should be in `mission`');
+  }
+  if (input.topic !== undefined) {
+    return badInput('field "topic" is not available on a hire that creates an agent — it labels a message to an agent that already exists');
   }
   if (input.lifetime === 'task' && input.tier !== undefined) {
     return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
@@ -2013,6 +2028,7 @@ export async function dispatchAgentsAction(
           return badInput('field "message" is not available for a hire that creates an agent — its brief is `mission`');
         }
         if (!input.mission) return badInput('hire requires role and mission');
+        assertHireVariant(input);
         // `agent`, here, is the NAME to create under rather than a target.
         // The role is a catalog id here. It is validated and spawn-checked, then carried
         // onto the subordinate's durable identity with its tier override.
@@ -2035,7 +2051,6 @@ export async function dispatchAgentsAction(
             throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
               + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
           }
-          assertHireVariant(input);
           const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
           if ('error' in delegatedTask) return badInput(delegatedTask.error);
           const request: TemporaryRunRequest = {

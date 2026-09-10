@@ -654,6 +654,20 @@ describe('agents tool — subordinate actions', () => {
     expect(calls).toEqual([]);
   });
 
+  // The same boundary from the other side. `deliverable` and `topic` are the
+  // existing agent's — a helper being created has its brief in `mission` and no
+  // inbound topic — and both dropped silently while only the no-role direction
+  // was guarded.
+  test('a hire that creates refuses the existing-agent fields by name', async () => {
+    const { deps, calls } = makeTeam();
+    const t = agentsTool({ team: deps, profile: () => testProfile() });
+    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', deliverable: 'a note' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "deliverable" is not available on a hire that creates an agent — say what the result should be in `mission`' });
+    await expect(t.execute({ action: 'hire', role: 'researcher', mission: 'Map it', topic: 'auth' }))
+      .rejects.toMatchObject({ code: 'bad_input', message: 'field "topic" is not available on a hire that creates an agent — it labels a message to an agent that already exists' });
+    expect(calls).toEqual([]);
+  });
+
   // The sender used to be told a fixed sentence and nothing else: no id to
   // correlate the eventual report with, and no way to know whether the
   // subordinate was mid-work. Both are things admission already knew.
