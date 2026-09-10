@@ -98,8 +98,8 @@ import {
   isTestScaffold, isTextSource, trackedFiles,
 } from './sources';
 import {
-  declarationOf, declaredBindings, declaredName, exportedLocalNames, importedNames,
-  isReExport, parse, type SyntaxNode,
+  declarationOf, declaredBindings, declaredName, exportedLocalNames, identifierCalleeName,
+  importedNames, isReExport, moduleSpecifiers, parse, stringArguments, walk, type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -326,11 +326,16 @@ export function typedRuntime(name: string): string | undefined {
  * The distinction is the census's whole accuracy. `packages/core/src/usage.ts:126`
  * says `workers-ai-provider` is installed and NOT used for chat inference; a
  * name-mention sweep reads that sentence as a use and the declaration survives
- * forever behind its own documentation. So a `.ts` counts an import form —
- * including one that names the installed path, which is how cf-backend's suites
- * reach `node_modules/@nimbus-sh/worker/dist/session/rpc.js`, a package that
- * publishes no subpath for it — or a SPAWN of the package's installed binary,
- * which is the only reference `knip` has: `scripts/dead-code.ts` runs
+ * forever behind its own documentation. So a `.ts` counts what its MODULE GRAPH
+ * names — `import … from`, `export … from`, `import(…)`, and a `require(…)`
+ * call, which `packages/pc-agent` needs because it is CommonJS — never a string
+ * that happens to spell an import: on 2026-09-10 a text match held `react` and
+ * `commander` alive at the root on a comment in this file and a synthetic source
+ * inside a wired-gate fixture. An import that names the installed path counts,
+ * which is how cf-backend's suites reach
+ * `node_modules/@nimbus-sh/worker/dist/session/rpc.js`, a package that publishes
+ * no subpath for it. A SPAWN of the package's installed binary counts, which is
+ * the only reference `knip` has: `scripts/dead-code.ts` runs
  * `node_modules/.bin/knip` and imports nothing. A `.json` counts a quoted value
  * (a plugin named in `.oxlintrc.json`, a binding in `wrangler.jsonc`), a `.sh`
  * or a workflow counts a command word (`bunx puppeteer browsers install chrome`
@@ -345,9 +350,8 @@ export function referencesPackage(file: string, text: string, forms: ReferenceFo
   const commands = forms.commands.map(escaped);
   const spawnsBinary = commands.some((c) => new RegExp(`node_modules/\\.bin/${c}\\b`).test(text));
   if (isParseable(file)) {
-    return spawnsBinary || specifiers.some((n) => new RegExp(
-      `(?:from|import|require)\\s*\\(?\\s*['"\`](?:[^'"\`]*node_modules/)?${n}${subpath}['"\`]`,
-    ).test(text));
+    const names = specifiers.map((n) => new RegExp(`^(?:[^'"\`]*node_modules/)?${n}${subpath}$`));
+    return spawnsBinary || namedModules(file, text).some((m) => names.some((re) => re.test(m)));
   }
   if (isStylesheet(file)) {
     return specifiers.some((n) => new RegExp(`@[a-z]+\\s+['"]${n}${subpath}['"]`).test(text));
@@ -359,6 +363,17 @@ export function referencesPackage(file: string, text: string, forms: ReferenceFo
       || commands.some((c) => new RegExp(`(?:^|[\\s;&|("'])${c}(?:[\\s;&|)"']|$)`, 'm').test(text));
   }
   return false;
+}
+
+/** The module graph's own edges out of one file: every static and dynamic
+ *  import specifier, plus the literal argument of each `require(…)` call. */
+function namedModules(file: string, text: string): readonly string[] {
+  const tree = parse(file, text).root;
+  const out = [...moduleSpecifiers(tree)];
+  walk(tree, (node) => {
+    if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
+  });
+  return out;
 }
 
 /**

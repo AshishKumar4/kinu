@@ -522,7 +522,7 @@ describe('dependency advisory gate', () => {
  */
 describe('agents action/field gate', () => {
   const REGISTRY = 'packages/core/src/tools/registry.ts';
-  const TOOL = 'packages/core/src/tools/agents-tool.ts';
+  const TOOL = 'packages/core/src/delegation/agents-tool.ts';
   const LIMITS = 'packages/core/src/mission-limits.ts';
 
   interface Miniature {

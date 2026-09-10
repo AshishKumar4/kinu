@@ -409,7 +409,7 @@ same slots the same way because the slot is durable. The list needs no relation
 to the width: a list of one names every node, and a list longer than the wave is
 truncated by the modulo rather than refused. A fan-in's vertex is one child of
 one, so it runs the first spec. Each spec resolves through the one resolver a
-delegation's tier already uses (`AgentsForkDeps.resolveModel`), an unresolvable
+delegation's tier already uses (`AgentsSwarmDeps.resolveModel`), an unresolvable
 spec is refused as `bad_input` naming it before any node runs, and the list is
 mutually exclusive with `tier` (run-level routing). Omitted, every node runs the
 one model the call resolved to. That is the unchanged default. The spec list is
