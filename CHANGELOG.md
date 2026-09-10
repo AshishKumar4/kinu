@@ -610,6 +610,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Creating a workspace from the home screen no longer risks a segfault as it
+  opens.** Finishing the home screen unmounts its React tree synchronously
+  before the terminal renderer releases its native state. It used to render an
+  empty box instead, which left the screen mounted with the "Creating..." state
+  update still queued; when that update committed after the release, it wrote
+  the cursor position through a freed native pointer — `panic(main thread):
+  Segmentation fault`, in roughly one create in ten. Measured 5 in 30 before,
+  0 in 45 after, in the CLI suite's subprocess driver; the same path serves a
+  person creating a workspace.
 - **The landing header carries actions, not a table of contents.** The five
   in-page section jumps are gone; the logo, the repository link, the theme
   toggle and sign-in remain. The sections themselves are unchanged.
