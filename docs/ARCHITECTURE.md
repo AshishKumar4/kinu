@@ -121,7 +121,7 @@ never the actor's `think`/`team`/`peers` tools, so recursion stays bounded by
 construction (`maxDepth` per spawn, refusing once exhausted).
 
 Actor addresses keep the two families apart inside one roster
-(`core/src/state/actor-key.ts`). A subordinate's storage key is its roster
+(`core/src/identity/actor-key.ts`). A subordinate's storage key is its roster
 slug. A head, node or branch is registered under an `exp:`-prefixed key
 (`explorationActorKey`), which a slug cannot carry, so a hire and a generated
 worker id never collide. Journals and handles keep the plain id.

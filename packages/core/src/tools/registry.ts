@@ -378,7 +378,7 @@ export interface BuiltinToolSpec {
 
 /** Every action the `agents` tool can expose. Which ones a given actor
  *  actually gets is decided by the deps its backend wires — see
- *  agentsActionsFor in tools/agents-tool.ts. */
+ *  agentsActionsFor in delegation/agents-tool.ts. */
 export const AGENTS_TOOL_ACTIONS = [
   'swarm', 'hire', 'msg', 'list', 'dismiss',
 ] as const;
@@ -744,7 +744,7 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
  *     `workspace.*`, `tools.<other>` and the namespaces below interchangeably.
  *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
  *     native tool, projected into the sandbox over its own dispatcher
- *     (tools/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
+ *     (delegation/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
  *     report-codemode.ts), gated to the same deps/actions the native tool
  *     is. `agents.*` is what makes a crafted tool able to BE a workflow:
  *     plain control flow over delegated steps.

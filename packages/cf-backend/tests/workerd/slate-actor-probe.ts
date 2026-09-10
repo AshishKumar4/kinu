@@ -10,7 +10,7 @@
  * through `subAgent`. After the cutover (`f9c0b3847`) there is one sealed
  * workspace object — `OrchestratorAgent`, sealed with `ORCHESTRATOR_RPC_SURFACE`
  * — and a subordinate, a head, a node and a branch are logical actors in its
- * directory (`core/state/actor-key.ts` still names the two families), not
+ * directory (`core/identity/actor-key.ts` still names the two families), not
  * classes. A hosted actor holds no slate read model of its own
  * (`actor-agent.ts` refuses those hops with its own reason), so the only thing
  * that answers the native binding RPC is the sealed root, and that is what
