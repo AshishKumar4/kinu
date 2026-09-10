@@ -228,10 +228,19 @@ export function executionVerdictOutcome(verdict: ExecutionVerdict): TurnOutcome 
  * decides what later turns are offered. So a proxy may price the turn and feed
  * its own health band, and it may not teach the workspace a workflow.
  *
+ * CATEGORICAL WHERE NOBODY GRADES, and stated rather than softened. The
+ * classifier runs only on a follow-up, and `explicit`/`take_pick` are user
+ * acts, so a headless turn — `kinu exec`, a reactor, a job wake — has exactly
+ * one available source and it is this one. Discovery there is therefore OFF,
+ * not merely rarer, and it stays off until a source exists that grades the
+ * WORK: no member of {@link TURN_OUTCOME_SOURCES} does today. Minting a
+ * workflow from "it ran" is the failure this prevents, and an absent lesson
+ * costs less than a confident wrong one.
+ *
  * Execution stays symmetric everywhere it is honest: the ledger row, the
- * quality band and the negative reflection all still read it. This is the one
- * consumer that needs a source distinction, which is why the distinction lives
- * here rather than in the verdict.
+ * quality band and the negative reflection all still read it. The source test
+ * is {@link isUserVerdictSource} — the same question the effective-verdict
+ * precedence asks — rather than a second spelling of it here.
  */
 export function promotesProcedure(graded: {
   readonly outcome: TurnOutcome | null;
@@ -239,7 +248,7 @@ export function promotesProcedure(graded: {
   /** How many tool calls the turn made. Nothing to generalise from zero. */
   readonly toolCalls: number;
 }): boolean {
-  return graded.outcome === 'accepted' && graded.source !== 'execution' && graded.toolCalls > 0;
+  return graded.outcome === 'accepted' && isUserVerdictSource(graded.source) && graded.toolCalls > 0;
 }
 
 // ── The classifier (one cheap LLM call per non-trivial turn) ─────
