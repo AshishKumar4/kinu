@@ -26,17 +26,13 @@
 // vacuously. `--privileged --device /dev/fuse` is what a FUSE mount inside a
 // container needs, which is the same reason the deployed container has it.
 import { spawnSync } from 'node:child_process';
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract');
-/** PER PROCESS, because a docker tag is machine-global state and two suites do
- *  run at once here — a lane's `bun test packages/devbox/` beside a deploy
- *  tier's. Sharing one tag means one run's build retags the image the other
- *  run's container is about to start from. Docker caches layers by content
- *  rather than by tag, so the apt and gcc steps are still reused and a re-run
- *  costs the COPY and the two compiles. */
-const IMAGE = `kinu-workspace-mount-contract:${String(process.pid)}`;
+/** One tag, rebuilt per run: docker layer-caches the apt and gcc steps, so a
+ *  re-run costs the COPY and the two compiles. */
+const IMAGE = 'kinu-workspace-mount-contract:test';
 
 function dockerUsable(): boolean {
   const version = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
@@ -97,14 +93,4 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
     // says the shipped one has it.
     expect(verdicts).toEqual({ mmap: 'ENODEV', wal: 'SQLITE_IOERR_SHMMAP' });
   }, 300_000);
-
-  // The tag this process minted, released with it. The image LAYERS stay in the
-  // cache — that is what keeps a re-run cheap — and only the name goes, so a
-  // machine running this suite for weeks does not accumulate one tag per run.
-  afterAll(() => {
-    const removed = spawnSync('docker', ['rmi', '-f', IMAGE], { encoding: 'utf8', timeout: 60_000 });
-    if (removed.status !== 0) {
-      throw new Error(`the fixture tag ${IMAGE} could not be released: ${removed.stderr.trim() || 'docker printed nothing'}`);
-    }
-  });
 });
