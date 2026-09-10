@@ -405,17 +405,17 @@ export function deltaHashCandidates(probe: readonly DeltaProbeEntry[]): string[]
  */
 export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   const files: DeltaManifest['files'] = [];
+  const dirs: DeltaManifest['dirs'] = [];
   const deleted: string[] = [];
   const treplace: string[] = [];
   const links: string[][] = [];
   const chunks = new Map<string, { path: string; block: number }>();
-  const dirAttrs = new Map<string, { mode: number; uid: number; gid: number }>();
   const linkGroups = new Map<number, string[]>();
   const hashIndex = new Map(input.hashFiles.map((path, index) => [path, index]));
 
   for (const entry of input.probe) {
     if (entry.type === 'd') {
-      dirAttrs.set(entry.path, { mode: entry.mode, uid: entry.uid, gid: entry.gid });
+      dirs.push({ p: entry.path, mode: entry.mode, uid: entry.uid, gid: entry.gid });
       continue;
     }
     if (entry.type === 'c' && input.whiteouts.has(entry.path)) {
@@ -482,25 +482,17 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   for (const group of linkGroups.values()) {
     if (group.length > 1) links.push([...group].sort());
   }
-  // Paths whose kind crossed the dir/non-dir boundary: the old shape is
-  // removed before the new one is planted.
-  const upperKind = new Map(input.probe.map((row) => [row.path, row.type] as const));
-  for (const [path, fact] of input.baseFacts) {
-    if (fact !== null && fact.kind !== 'dir' && upperKind.get(path) === 'd') treplace.push(path);
-  }
+  // A file over a base DIRECTORY: the directory is removed through the merged
+  // view before the file is planted, because only a whiteout hides its
+  // children. A directory over a base file needs nothing: an upper directory
+  // shadows a lower non-directory.
   for (const file of files) {
     const fact = input.baseFacts.get(file.p);
     if (fact !== undefined && fact !== null && fact.kind === 'dir') treplace.push(file.p);
   }
-  // Ancestor directories of carried files, with probed attributes. An
-  // ancestor is always probed, so the default is the shape, not a fallback.
-  const needed = new Map<string, { mode: number; uid: number; gid: number }>();
-  for (const file of files) {
-    for (const dir of ancestorDirs(file.p)) {
-      if (!needed.has(dir)) needed.set(dir, dirAttrs.get(dir) ?? { mode: 0o755, uid: 0, gid: 0 });
-    }
-  }
-  const dirs = [...needed].sort(([a], [b]) => (a < b ? -1 : 1)).map(([p, attrs]) => ({ p, ...attrs }));
+  // EVERY upper directory travels with its attributes: an empty directory, or
+  // one whose mode alone changed, is a change the base does not hold.
+  dirs.sort((a, b) => (a.p < b.p ? -1 : 1));
   files.sort((a, b) => (a.p < b.p ? -1 : 1));
   deleted.sort();
   treplace.sort();
@@ -528,19 +520,7 @@ export interface DeltaStageLayout {
 export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): string[] {
   const treeDir = `${layout.pkgDir}/${DELTA_TREE_DIR}`;
   const chunkDir = `${layout.pkgDir}/${DELTA_CHUNK_DIR}`;
-  const ops = ['# devbox-stage-v1', `mkdir -p ${shellPath(treeDir)} ${shellPath(chunkDir)}`];
-  const ancestors = new Set<string>();
-  for (const file of plan.manifest.files) for (const dir of ancestorDirs(file.p)) ancestors.add(dir);
-  for (const dir of plan.manifest.dirs) for (const parent of ancestorDirs(dir.p)) ancestors.add(parent);
-  if (ancestors.size > 0) {
-    ops.push(`mkdir -p ${[...ancestors].sort().map((dir) => shellPath(`${treeDir}/${dir}`)).join(' ')}`);
-  }
-  for (const dir of plan.manifest.dirs) {
-    ops.push(
-      `chown ${dir.uid}:${dir.gid} ${shellPath(`${treeDir}/${dir.p}`)}`,
-      `chmod ${dir.mode.toString(8)} ${shellPath(`${treeDir}/${dir.p}`)}`,
-    );
-  }
+  const ops = ['# devbox-stage-v1', `mkdir -p ${shellPath(treeDir)} ${shellPath(chunkDir)}`, ...directoryOps(plan.manifest, treeDir)];
   const linkFirst = new Map<string, string>();
   for (const group of plan.manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
   for (const file of plan.manifest.files) {
@@ -573,6 +553,20 @@ export interface DeltaMaterializeOps {
   readonly post: readonly string[];
 }
 
+/** The directories a manifest carries, created under `root` with their
+ *  attributes, plus every ancestor a carried file needs. */
+function directoryOps(manifest: DeltaManifest, root: string): string[] {
+  const wanted = new Set<string>();
+  for (const file of manifest.files) for (const dir of ancestorDirs(file.p)) wanted.add(dir);
+  for (const dir of manifest.dirs) wanted.add(dir.p);
+  const ops: string[] = [];
+  if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].sort().map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
+  for (const dir of manifest.dirs) {
+    ops.push(`chown ${dir.uid}:${dir.gid} ${shellPath(`${root}/${dir.p}`)}`, `chmod ${dir.mode.toString(8)} ${shellPath(`${root}/${dir.p}`)}`);
+  }
+  return ops;
+}
+
 /**
  * Serve a manifest back as container operations. A chunked file is the base
  * copied whole plus its overrides written over it — never a block for an
@@ -582,22 +576,10 @@ export interface DeltaMaterializeOps {
  * a whiteout.
  */
 export function buildDeltaMaterializeOps(manifest: DeltaManifest, layout: DeltaMaterializeLayout): DeltaMaterializeOps {
-  const pre = ['# devbox-materialize-v1'];
+  const pre = ['# devbox-materialize-v1', ...directoryOps(manifest, layout.upperDir)];
   const post = ['# devbox-materialize-v1-post'];
   const sideTree = `${layout.sideDir}/${DELTA_TREE_DIR}`;
   const sideChunks = `${layout.sideDir}/${DELTA_CHUNK_DIR}`;
-  const ancestors = new Set<string>();
-  for (const file of manifest.files) for (const dir of ancestorDirs(file.p)) ancestors.add(dir);
-  for (const dir of manifest.dirs) for (const parent of ancestorDirs(dir.p)) ancestors.add(parent);
-  if (ancestors.size > 0) {
-    pre.push(`mkdir -p ${[...ancestors].sort().map((dir) => shellPath(`${layout.upperDir}/${dir}`)).join(' ')}`);
-  }
-  for (const dir of manifest.dirs) {
-    pre.push(
-      `chown ${dir.uid}:${dir.gid} ${shellPath(`${layout.upperDir}/${dir.p}`)}`,
-      `chmod ${dir.mode.toString(8)} ${shellPath(`${layout.upperDir}/${dir.p}`)}`,
-    );
-  }
   const replaced = new Set(manifest.treplace);
   const linkFirst = new Map<string, string>();
   for (const group of manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
