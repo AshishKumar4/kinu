@@ -895,7 +895,7 @@ describe('turn-pipeline correctness wiring', () => {
     // is how one identical user Stop seals 'aborted' on this backend and 'error'
     // on the CLI. The error text still has to REACH the classifier — that is
     // what this pins — and which arm keeps it is core's rule, behaviourally
-    // covered by unit-three-kinds-one-contract's abort arm.
+    // covered above by the aborted-turn evidence case in this file.
     //
     // The classification is hoisted to a local, because the fleet analytics row
     // beside this seal reads it too; the spread is what carries it in.
