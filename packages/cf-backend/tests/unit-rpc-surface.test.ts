@@ -174,13 +174,30 @@ const declaredMembers = declaredClassMembers(
   readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8'),
 );
 
+/** Public because the SDK base declares them public and calls them in
+ *  process — `Agent` wires `createMcpOAuthProvider` into its manager's
+ *  `createAuthProvider` (`agents/dist/src-5W6JNKVb.js:823`) — so the override
+ *  cannot be narrowed to `protected`. Not on the surface: the seal shadows
+ *  each, and the test below holds it to that rather than exempting it. */
+const SDK_HOOK_OVERRIDES = ['createMcpOAuthProvider'];
+
 describe('the UserDO RPC surface cannot drift from the class', () => {
   test('every public member is on the surface', () => {
     const missing = declaredMembers
       .filter((m) => !isInternalMember(m))
       .map((m) => m.name)
-      .filter((name) => !USER_DO_RPC_SURFACE.includes(name));
+      .filter((name) => !USER_DO_RPC_SURFACE.includes(name) && !SDK_HOOK_OVERRIDES.includes(name));
     expect(missing.sort()).toEqual([]);
+  });
+
+  test('a base-declared hook override is public in TypeScript and sealed over RPC', async () => {
+    const harness = createTestUserDO();
+    for (const name of SDK_HOOK_OVERRIDES) {
+      expect(declaredMembers.some((m) => m.name === name && !isInternalMember(m))).toBe(true);
+      await expect(callOverRpc(harness.userDO, name, ['https://kinu.example/callback']))
+        .rejects.toThrow(`The RPC receiver does not implement the method "${name}".`);
+    }
+    harness.close();
   });
 
   test('no internal member is on the surface', () => {
@@ -249,11 +266,11 @@ const SEALED_CLASSES = [
 
 /** The inherited members that make an unsealed Durable Object a liability: the
  *  SDK's query runner over the receiver's own storage, its storage-wiping
- *  teardown, its state writer, and the two universal method bridges that would
- *  re-open every name this module closes. */
+ *  teardown, its state writer, and the universal method bridges (and their
+ *  in-process worker) that would re-open every name this module closes. */
 const MUST_STAY_DENIED = [
   'sql', 'destroy', 'setState', 'stash',
-  '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeStubMethod',
+  '_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath', '_cf_invokeStubMethod',
 ];
 
 describe('every Durable Object that holds something worth stealing is sealed', () => {
@@ -423,6 +440,81 @@ describe('the agent surfaces cannot drift from their classes', () => {
       .map((m) => m.name)
       .filter((name) => shared.includes(name));
     expect(redeclared).toEqual([]);
+  });
+});
+
+// ── The SDK's half, derived from the installed artifact ─────────────────────
+// The facet protocol and the stub entry point are the SDK's to rename, and
+// the seal is fail-closed, so a rename lands as "does not implement the
+// method" inside the SDK's own bookkeeping — a facet schedule, a root alarm
+// owner, every `getAgentByName`. Both lists are therefore held to the
+// installed `agents/dist` rather than to memory: the same reading the module
+// header describes, performed here on every run.
+
+const AGENTS_DIST = join(import.meta.dir, '..', '..', '..', 'node_modules', 'agents', 'dist');
+
+/** Every non-map JavaScript file under `agents/dist`, read once. */
+function installedAgentsSources(): string[] {
+  return readdirSync(AGENTS_DIST, { recursive: true, encoding: 'utf8' })
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => readFileSync(join(AGENTS_DIST, file), 'utf8'));
+}
+
+/** The `_cf_` names the SDK invokes on a receiver other than `this`. A
+ *  receiver is `this` when the expression before `._cf_` ends in the `this`
+ *  token, or is an identifier the same file declares as `const x = this`. */
+function crossStubFacetNames(sources: readonly string[]): string[] {
+  const names = new Set<string>();
+  for (const src of sources) {
+    const selfAliases = new Set([...src.matchAll(/\bconst (\w+) = this;/g)].map((m) => m[1]));
+    for (const line of src.split('\n')) {
+      for (const match of line.matchAll(/\.(_cf_\w+)\s*\(/g)) {
+        const name = match[1];
+        if (name === undefined || match.index === undefined) continue;
+        const receiver = line.slice(0, match.index).trim();
+        const token = receiver.slice(receiver.search(/[\w$)\]]+$/));
+        if (/(^|[^\w$])this$/.test(receiver) || selfAliases.has(token)) continue;
+        names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+/** Takes a method NAME and calls it on the receiver: listing one re-opens
+ *  everything the seal closes, so each stays off the surface on purpose. */
+const UNIVERSAL_BRIDGES = ['_cf_invokeSubAgent', '_cf_invokeSubAgentPath', '_cf_invokeAgentPath'];
+/** Invoked over a stub only by `McpAgent`'s serve path; no Kinu class is one. */
+const MCP_AGENT_ONLY = ['_cf_scheduleDestroy'];
+
+describe('the SDK half of the surface is derived from the installed agents package', () => {
+  const sources = installedAgentsSources();
+
+  test('the facet surface is exactly the cross-stub protocol, minus the bridges', () => {
+    const derived = crossStubFacetNames(sources)
+      .filter((name) => !UNIVERSAL_BRIDGES.includes(name) && !MCP_AGENT_ONLY.includes(name));
+    // The scan must SEE the protocol: a dist layout it no longer parses would
+    // otherwise derive an empty list and hold the surface to nothing.
+    expect(derived.length).toBeGreaterThan(10);
+    expect(AGENTS_FACET_RPC_SURFACE).toEqual(derived);
+  });
+
+  test('the bridges and the McpAgent-only name are still what the SDK calls over a stub', () => {
+    // The exclusions above are claims about the SDK; a release that drops one
+    // makes the exclusion dead, and one that adds a fifth bridge must be read.
+    const all = crossStubFacetNames(sources);
+    for (const name of [...UNIVERSAL_BRIDGES, ...MCP_AGENT_ONLY]) expect(all).toContain(name);
+  });
+
+  test('the platform surface carries the one name getAgentByName calls on the stub', () => {
+    const routing = readFileSync(join(AGENTS_DIST, 'agent-routing.js'), 'utf8');
+    const body = routing.match(/async function getAgentByName\([\s\S]*?\n}/)?.[0];
+    if (!body) throw new Error('getAgentByName is not declared in agents/dist/agent-routing.js');
+    const calledOnStub = [...body.matchAll(/\b\w*[sS]tub\.(\w+)\(/g)]
+      .map((match) => match[1])
+      .filter((name): name is string => name !== undefined);
+    expect(calledOnStub.length).toBeGreaterThan(0);
+    expect(calledOnStub.filter((name) => !PLATFORM_RPC_SURFACE.includes(name))).toEqual([]);
   });
 });
 

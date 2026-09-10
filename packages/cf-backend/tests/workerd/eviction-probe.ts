@@ -28,7 +28,7 @@
  * Until the witness answers, nothing has touched the probe since the reset.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { Think } from '@cloudflare/think';
+import { Think, type ChatRecoveryConfig } from '@cloudflare/think';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { jsonSchema, tool, type LanguageModel, type ToolSet } from 'ai';
 
@@ -70,7 +70,7 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
 
   /** The two settings `ActorAgent` declares, declared identically here so this
    *  probe measures the shipped configuration. */
-  override chatRecovery = true;
+  override chatRecovery: ChatRecoveryConfig = true;
   override chatStreamStallTimeoutMs = 0;
 
   private _model: LanguageModel | null = null;

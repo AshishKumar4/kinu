@@ -669,6 +669,7 @@ export {
   type ToolCallEffect,
 } from './tools/tool-call-summary';
 export { ToolOutcomeSchema, failedToolOutcome, type ToolOutcome } from './tools/outcome';
+export { repairToolCall } from './tools/repair-tool-call';
 export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
 export {
   clampToolResult,

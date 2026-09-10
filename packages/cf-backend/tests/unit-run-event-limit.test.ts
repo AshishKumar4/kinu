@@ -38,7 +38,6 @@ function runEventsEnv() {
     recorder.emit('run-1', { type: 'error', message: `event ${i}` });
   }
   const stub = {
-    async setName() {},
     async getRunEventsWire(runId: string, opts?: RunEventQuery) {
       return JSON.stringify(getRunEvents(recorder, runId, opts));
     },

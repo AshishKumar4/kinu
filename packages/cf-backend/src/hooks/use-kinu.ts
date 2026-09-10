@@ -945,9 +945,10 @@ export function useKinu(target?: string | KinuActorAddress) {
     connectionError,
   } = useAgentChat({
     agent,
-    // Throttle UI updates during high-frequency token deltas (50ms ≈ 20fps).
-    // The chat library forwards this option to @ai-sdk's useChat.
-    experimental_throttle: 50,
+    // Coalesce chat state updates during high-frequency token deltas (50ms ≈
+    // 20fps). The SDK's own default since cloudflare/agents#2058; stated so a
+    // default change upstream cannot move this pane's render rate.
+    throttle: 50,
   });
 
   /**

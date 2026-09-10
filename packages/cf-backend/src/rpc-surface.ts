@@ -14,8 +14,11 @@
  *   2. SUPERCLASS methods are reachable too — the walk does not stop at the
  *      most-derived class. `Agent.sql` from the agents SDK is a tagged-template
  *      query runner over `ctx.storage.sql`, so a single inherited method hands
- *      any stub-holder arbitrary SQL against the receiver's storage. `Agent` +
- *      `Server` alone contribute 267 reachable names; `Think` adds 245 more.
+ *      any stub-holder arbitrary SQL against the receiver's storage. Measured
+ *      2026-09-10 under workerd on `agents@0.22.0` (chain `OrchestratorAgent →
+ *      ActorAgent → Think → Agent → DurableObject`): `Agent` alone contributes
+ *      289 reachable names — `DurableObject` adds none of its own — and
+ *      `Think` adds 372 more.
  *   3. OWN INSTANCE properties are NOT reachable. workerd rejects them with
  *      `The RPC receiver does not implement the method "x".`, exactly as it
  *      rejects a name that does not exist — including when the own property
@@ -62,21 +65,26 @@ import type { UserDO } from './user/user-do';
  * The names the Workers runtime and the two SDKs dispatch on a stub, which
  * therefore have to stay reachable on every sealed class.
  *
- *   • `fetch` — the agents/partyserver transport. Every browser and CLI
+ *   • `fetch` — the agents lifecycle transport. Every browser and CLI
  *     WebSocket, and every HTTP call to `/agents/*`, arrives this way.
- *   • `setName` — `getServerByName` calls it on the stub before returning it,
- *     so denying it breaks every `getAgentByName`.
- *   • `_initAndFetch` — partyserver's combined entry point. It is exactly
- *     `setName` followed by `fetch`, both already reachable, so listing it
- *     costs nothing it did not already have.
+ *   • `__unsafe_ensureInitialized` — what `getAgentByName` calls on the stub
+ *     before returning it (`agents/dist/agent-routing.js`, the one stub call
+ *     it makes), so denying it breaks every `getAgentByName`. It replaced
+ *     PartyServer's `setName` + `_initAndFetch` when cloudflare/agents#2133
+ *     vendored the lifecycle and re-parented `Agent` onto `DurableObject`; a
+ *     seal that still listed those two and not this one refused every
+ *     `getAgentByName` with "does not implement the method" under real
+ *     workerd.
  *   • `alarm` / `webSocket*` — handlers the runtime itself invokes on the
  *     instance. Denying them would risk the DO's own lifecycle for no gain:
- *     their arguments (a live WebSocket) cannot cross an RPC boundary.
+ *     their arguments (a live WebSocket) cannot cross an RPC boundary. Since
+ *     #2133 the lifecycle installs the three `webSocket*` handlers as OWN
+ *     properties of any host that does not declare them, which is already
+ *     unreachable; `UserDO` declares its own, so the names stay listed.
  */
 const PLATFORM_RPC_SURFACE: readonly string[] = [
   'fetch',
-  'setName',
-  '_initAndFetch',
+  '__unsafe_ensureInitialized',
   'alarm',
   'webSocketMessage',
   'webSocketClose',
@@ -92,33 +100,39 @@ const PLATFORM_RPC_SURFACE: readonly string[] = [
  * bridging. Only the agent family needs them; `UserDO` neither is a facet nor
  * spawns one.
  *
- * Derived by reading `agents/dist/index.js` for `_cf_` calls whose receiver is
- * not `this`, so it is the SDK's actual cross-stub surface and not a prefix
- * rule. Three universal bridges are deliberately absent —
- * `_cf_invokeSubAgent`, `_cf_invokeSubAgentPath` and `_cf_invokeStubMethod`
- * take a method NAME and call it on the receiver, which would re-open
- * everything this module closes. They are only used by `getSubAgentByName` and
- * by `parentAgent()` from a facet nested two deep; Kinu uses neither.
+ * Derived by reading the installed `agents/dist` for `_cf_` calls whose
+ * receiver is not `this` — `unit-rpc-surface.test.ts` performs the same
+ * derivation against `node_modules` and holds this list to it, so an SDK bump
+ * that renames one goes red there rather than at runtime. Three universal
+ * bridges are deliberately absent — `_cf_invokeSubAgent`,
+ * `_cf_invokeSubAgentPath` and `_cf_invokeAgentPath` take a method NAME and
+ * call it on the receiver, which would re-open everything this module closes.
+ * They are only used by `getSubAgentByName`, by `parentAgent()` from a facet
+ * nested two deep and by workflow origins; Kinu uses none. (Their in-process
+ * worker `_cf_invokeStubMethod` is only ever called on `this`, and stays
+ * sealed with everything else unlisted.) `_cf_scheduleDestroy` is absent for a
+ * narrower reason: its one stub call is `McpAgent`'s serve path, and no Kinu
+ * class is an `McpAgent`.
+ *
+ * `agents@0.22.0` (cloudflare/agents#1897) replaced the six `_cf_*ForFacet`
+ * schedule methods and `_cf_dispatchScheduledCallback` with the one
+ * `_cf_routeLifecycle` capability aperture; the rest of the protocol is
+ * unchanged.
  */
 const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_acquireFacetKeepAlive',
   '_cf_broadcastToSubAgent',
-  '_cf_cancelScheduleForFacet',
   '_cf_checkRunFibersForFacet',
   '_cf_cleanupFacetPrefix',
   '_cf_closeSubAgentConnection',
   '_cf_destroyDescendantFacet',
-  '_cf_dispatchScheduledCallback',
-  '_cf_getScheduleForFacet',
   '_cf_handleSubAgentWebSocketClose',
   '_cf_handleSubAgentWebSocketConnect',
   '_cf_handleSubAgentWebSocketMessage',
   '_cf_initAsFacet',
-  '_cf_listSchedulesForFacet',
   '_cf_registerFacetRun',
   '_cf_releaseFacetKeepAlive',
-  '_cf_scheduleEveryForFacet',
-  '_cf_scheduleForFacet',
+  '_cf_routeLifecycle',
   '_cf_sendToSubAgentConnection',
   '_cf_setSubAgentConnectionState',
   '_cf_subAgentConnectionMetas',

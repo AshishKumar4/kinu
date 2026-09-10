@@ -370,21 +370,29 @@ describe('the SDK server rows are derived from the config table', () => {
     h.close();
   });
 
-  test('an activation dials nothing through the SDK’s own manager', async () => {
-    // The defect: `Agent`'s base constructor builds a SECOND MCPClientManager
-    // over the same `cf_agents_mcp_servers` rows, and the SDK init chain calls
-    // `restoreConnectionsFromStorage` on it unconditionally on every
-    // activation. That manager holds none of this plane's credential closures,
-    // so a UserDO waking up opened an anonymous connection to every MCP
-    // endpoint the user had configured — whether or not anyone touched MCP.
+  test('an activation dials nothing through the SDK’s own start path', async () => {
+    // The defect: the SDK's lifecycle calls `restoreConnectionsFromStorage` on
+    // its manager unconditionally at every activation, before this plane has
+    // registered a single credential closure — so a UserDO waking up opened an
+    // anonymous connection to every MCP endpoint the user had configured,
+    // whether or not anyone touched MCP. Since agents@0.22.0 that manager is
+    // the ONLY one (a capability reaches storage through its lifecycle alone),
+    // so the plane runs on it and what is retired is the start-path CALL.
     const h = harness();
-    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    seedSdkMcpServer('srv1');
     const before = recordedMcpLifecycle().restored;
 
-    await inheritedMcpManager(h.userDO).restoreConnectionsFromStorage('test-user-do');
+    await inheritedMcpManager(h.userDO).restoreConnectionsFromStorage('UserDO');
 
     expect(recordedMcpLifecycle().restored).toBe(before);
     expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual([]);
+
+    // The same manager's restore still runs where the credentials are —
+    // hydration, after the credentialed transport is registered — which is
+    // what makes the retirement a deferral, not a loss.
+    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer mcp-secret' } });
+    expect(recordedMcpLifecycle().restored).toBe(before + 1);
+    expect(Object.keys(inheritedMcpManager(h.userDO).mcpConnections)).toEqual(['srv1']);
     h.close();
   });
 });
