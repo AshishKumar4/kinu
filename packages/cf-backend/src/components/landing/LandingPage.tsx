@@ -32,14 +32,14 @@ function PlatformSection({ install }: { install: string }): ReactElement {
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · Where agents work</RuleLabel>
       <SectionTitle>Run your agents in the cloud, <Accent>or on your own machine.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">Same agent either way. You choose when you create it: hosted on Kinu, or local on your own machine.</p>
+      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">Same agent either way. You pick hosted on Kinu or local on your own machine when you create it.</p>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
         <article className="flex min-w-0 flex-col p-6 sm:p-8">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud agents</span>
           <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the laptop.<br />The agent keeps working.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Hosted on Cloudflare, so the agent keeps working with your device off. It can start its own work on a schedule, or when a webhook arrives.</p>
           <ul className="mb-6 space-y-3 text-sm leading-[1.65] p-text-2">
-            <li>A push or an issue wakes it, and you read what it did when you get back.</li>
+            <li>Each workspace gets its own webhook URL. Point something at it and the agent starts when the event lands.</li>
             <li>Ask for a Linux container when a job needs one, with a preview URL you can open.</li>
           </ul>
           <div className="mb-8 rounded-xl border p-border p-recessed p-4">
