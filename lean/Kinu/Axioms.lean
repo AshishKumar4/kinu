@@ -459,5 +459,8 @@ import Kinu
 #print axioms Kinu.Exploration.Rebase.removing_the_comparison_applies_the_stale_verdict
 #print axioms Kinu.Exploration.Rebase.an_absent_path_is_not_an_empty_one
 #print axioms Kinu.Exploration.Rebase.the_base_key_ignores_untouched_paths
-#print axioms Kinu.Exploration.Rebase.the_rebase_stops_at_the_stale_member
+#print axioms Kinu.Exploration.Rebase.the_stale_member_is_refused
+#print axioms Kinu.Exploration.Rebase.the_rebase_skips_the_refused_member
+#print axioms Kinu.Exploration.Rebase.the_skipped_member_leaves_no_write_for_the_tail
+#print axioms Kinu.Exploration.Rebase.a_member_assuming_the_skipped_write_is_refused
 #print axioms Kinu.Exploration.Rebase.re_verification_lets_the_whole_rebase_land
