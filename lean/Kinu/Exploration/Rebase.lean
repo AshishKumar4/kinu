@@ -204,8 +204,11 @@ structure Step where
   base : Origin
   deriving Repr, Inhabited
 
-/-- The rebase: gate, apply, move on; stop at the first refusal, which is what
-    `mergeBack` does with `stoppedAt`. -/
+/-- The rebase: gate, apply, move on; a refusal is recorded and the member skipped,
+    which is what `mergeBack` does under `sequential-rebase`
+    (`merge-back.ts:651-660`): the skipped member joins neither `applied` nor the
+    rebase frontier, so the tail is gated against the origin as it stood without the
+    refused writes. -/
 def rebase (rv : Option Reverifier) : Origin → List Member → List Step
   | _, [] => []
   | o, m :: ms =>
@@ -213,7 +216,8 @@ def rebase (rv : Option Reverifier) : Origin → List Member → List Step
     | .applied =>
         { member := m, outcome := .applied, base := o } ::
           rebase rv (applyDiff o m.diff) ms
-    | .refused c => [{ member := m, outcome := .refused c, base := o }]
+    | .refused c =>
+        { member := m, outcome := .refused c, base := o } :: rebase rv o ms
 
 /-- **Over a whole sequential rebase, every member that landed was verified against
     the origin as it stood when its own turn came** — not against the origin the settle
@@ -234,10 +238,9 @@ theorem rebase_applies_only_bound_verdicts (rv : Option Reverifier) :
       · exact ih (applyDiff o m.diff) s hs happ
     | refused c =>
       rw [rebase, hg] at hs
-      have hse : s = { member := m, outcome := .refused c, base := o } := by
-        simpa using hs
-      rw [hse] at happ
-      exact absurd happ (by simp)
+      rcases List.mem_cons.mp hs with rfl | hs
+      · exact absurd happ (by simp)
+      · exact ih o s hs happ
 
 /-! ## The member digest cannot see a moved base, and the base digest can -/
 
@@ -286,7 +289,11 @@ theorem the_base_key_moves_when_a_touched_path_moves (d : Diff) (o : Origin) (f 
 
 def shared : String := "a.ts"
 
-def initial : Origin := [(shared, "A0")]
+/-- A path the stale pair never touches, for the member that is independent of the
+    refused one. -/
+def independent : String := "b.ts"
+
+def initial : Origin := [(shared, "A0"), (independent, "B0")]
 
 def first : Member :=
   { diff := { nodeId := "n1", files := [{ path := shared, base := "A0", after := "A1" }] },
@@ -297,6 +304,13 @@ def second : Member :=
   { diff := { nodeId := "n2", files := [{ path := shared, base := "A0", after := "A1" }] },
     verdict := { memberKey := ("n2", [(shared, "A0", "A1")]),
                  baseKey := [(shared, some "A0")], clean := true } }
+
+/-- A third member on the independent path, bound to the initial base: clean, and
+    sharing nothing with the refused member. -/
+def third : Member :=
+  { diff := { nodeId := "n3", files := [{ path := independent, base := "B0", after := "B1" }] },
+    verdict := { memberKey := ("n3", [(independent, "B0", "B1")]),
+                 baseKey := [(independent, some "B0")], clean := true } }
 
 /-- Both verdicts are bound to the base the settle started from, so both would apply
     against it: the second member's refusal below is caused by the rebase and not by a
@@ -390,11 +404,79 @@ theorem the_base_key_ignores_untouched_paths :
     baseKey second.diff (writeAt initial "other.ts" "X") = baseKey second.diff initial := by
   decide
 
-/-- And the whole rebase, end to end: the first member lands, the second is refused as
-    stale with nothing wired, and the settle stops there. -/
-theorem the_rebase_stops_at_the_stale_member :
+/-- And the whole rebase, end to end: the first member lands and the second is refused
+    as stale with nothing wired. The refused member is LAST here, so this outcome list
+    is the same whether the loop stops or skips — it records the refusal but cannot
+    distinguish the two loop shapes; the next theorem can. -/
+theorem the_stale_member_is_refused :
     (rebase none initial [first, second]).map (fun s => s.outcome)
       = [.applied, .refused .verdictStale] := by decide
+
+/-- **A refusal skips the member instead of stopping the settle.** The third member is
+    clean and shares no path with the refused one, so it lands despite the earlier
+    refusal: `[.applied, .refused .verdictStale, .applied]`. Under the old
+    stop-at-refusal loop the list would end at the refusal, so this outcome list is
+    what distinguishes skip from stop — which the two-member fixture above cannot. The
+    Lean mirror of the `sequential-rebase` skip red proof in
+    `mutation-merge-back.test.ts`. -/
+theorem the_rebase_skips_the_refused_member :
+    (rebase none initial [first, second, third]).map (fun s => s.outcome)
+      = [.applied, .refused .verdictStale, .applied] := by decide
+
+/-- **The skipped member leaves no write for the tail.** The third step is gated
+    against the origin with only the first member's write — the refused member joins
+    neither `applied` nor the rebase frontier (`merge-back.ts:651-657`). This is the
+    mechanism the safety half below rests on: whatever the refused member would have
+    written is absent from every base a later member is checked against. -/
+theorem the_skipped_member_leaves_no_write_for_the_tail :
+    (rebase none initial [first, second, third]).map (fun s => s.base)
+      = [initial, applyDiff initial first.diff, applyDiff initial first.diff] := by decide
+
+/-- A second story with a write worth assuming: the blocked member's write differs
+    from what landed, so a member whose verdict assumes it can be told apart from one
+    that assumes the live base. -/
+def solo : String := "c.ts"
+
+def soloInitial : Origin := [(solo, "C0")]
+
+def soloFirst : Member :=
+  { diff := { nodeId := "w1", files := [{ path := solo, base := "C0", after := "C1" }] },
+    verdict := { memberKey := ("w1", [(solo, "C0", "C1")]),
+                 baseKey := [(solo, some "C0")], clean := true } }
+
+def soloBlocked : Member :=
+  { diff := { nodeId := "w2", files := [{ path := solo, base := "C0", after := "C2" }] },
+    verdict := { memberKey := ("w2", [(solo, "C0", "C2")]),
+                 baseKey := [(solo, some "C0")], clean := true } }
+
+/-- A member whose verdict is bound to a base containing the skipped write. -/
+def soloDependent : Member :=
+  { diff := { nodeId := "w3", files := [{ path := solo, base := "C2", after := "C3" }] },
+    verdict := { memberKey := ("w3", [(solo, "C2", "C3")]),
+                 baseKey := [(solo, some "C2")], clean := true } }
+
+/-- **A member that depends on the skipped write must not land.** After the first
+    member lands and the second is refused, the origin holds `"C1"` — the refused
+    `"C2"` was never written — so the dependent, whose verdict is bound to a base
+    containing `"C2"`, is refused as stale with nothing wired. And the second conjunct
+    says the refusal is ABOUT that missing write: had `"C2"` landed, the same verdict
+    applies.
+
+    WHAT IS MODELLED, and what is not. This is the assumed-base half of the shipped
+    safety story: rule 4 forces re-verification of any member whose verdict no longer
+    matches the live base, and with nothing wired the fail-closed refusal lands here.
+    The model folds the shipped rule 6 (`base-drift`) into the same stale cause, so no
+    theorem here names it separately. The OTHER half — a declared dependency edge
+    refused by name (rule 1, `dependency-unsettled`) — is not modelled at all:
+    `Member` carries no dependency edges, and ordering over declared edges is
+    `FanIn`'s subject, not this module's. Naming that boundary is deliberate: this
+    theorem is the whole of what `Rebase` can say about depending on a skipped
+    member. -/
+theorem a_member_assuming_the_skipped_write_is_refused :
+    (rebase none soloInitial [soloFirst, soloBlocked, soloDependent]).map (fun s => s.outcome)
+      = [.applied, .refused .verdictStale, .refused .verdictStale]
+    ∧ gate none (writeAt soloInitial solo "C2") soloDependent = .applied := by
+  refine ⟨by decide, by decide⟩
 
 /-- With re-verification wired over the registry, both land. -/
 theorem re_verification_lets_the_whole_rebase_land :
