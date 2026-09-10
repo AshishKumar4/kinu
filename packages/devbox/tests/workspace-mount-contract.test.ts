@@ -30,12 +30,15 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract');
-/** PER PROCESS, because a docker tag is machine-global state and two suites do
- *  run at once here — a lane's `bun test packages/devbox/` beside a deploy
- *  tier's. Sharing one tag means one run's build retags the image the other
- *  run's container is about to start from. Docker caches layers by content
- *  rather than by tag, so the apt and gcc steps are still reused and a re-run
- *  costs the COPY and the two compiles. */
+/** PER PROCESS, because the tag is machine-global while the fixture is not.
+ *  `FIXTURE_DIR` is `import.meta.dir`-relative, so every worktree carries its
+ *  own copy of the probe sources, and every agent here works in a worktree by
+ *  mandate. One shared tag therefore means a lane's build of ITS fixture is
+ *  what this tree's container starts from — the same cross-writer shape as the
+ *  one shared `node_modules`, which cost a false red on a deploy gate today.
+ *  Docker caches layers by content rather than by tag, so identical sources
+ *  still reuse the apt and gcc steps and a re-run costs the COPY and the two
+ *  compiles. */
 const IMAGE = `kinu-workspace-mount-contract:${String(process.pid)}`;
 
 function dockerUsable(): boolean {
