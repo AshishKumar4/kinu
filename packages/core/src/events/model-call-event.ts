@@ -62,8 +62,8 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
     ? opts.pricing
     : null;
   if (rate) {
-    const usd = priceCall(report.usage, rate);
-    if (usd !== undefined) event.usd = usd;
+    const price = priceCall(report.usage, rate);
+    if (price !== undefined) event.usd = price.usd;
   }
   return event;
 }

@@ -100,7 +100,7 @@ function priceProjection(totalCalls: number, model: CostModel | undefined) {
     const priced = priceCall(projected, pricing);
     if (priced !== undefined) {
       return {
-        estimatedUSD: priced,
+        estimatedUSD: priced.usd,
         basis: { source: 'catalog', model: model.spec, rates: pricing } satisfies CostBasis,
       };
     }
