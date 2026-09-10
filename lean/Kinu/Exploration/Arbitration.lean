@@ -22,7 +22,7 @@
   selection rather than a spawn.
 
   -- THE FIFTH ARM'S AXIS. The trigger is `Context.fresh`, and that spelling is
-  the contract's: `SWARM_CONTEXTS` is `fork | fresh` (`strategy/swarm.ts`), and
+  the contract's: `SWARM_CONTEXTS` is `inherit | fresh` (`strategy/swarm.ts`), and
   `check-traceability.mjs` mirrors this inductive against it. `fresh` names one
   thing only — what a child STARTS FROM — and this arm reads it. Nothing decides
   separately what a sibling is SHOWN: a second axis over that would put two
@@ -54,7 +54,7 @@ namespace Kinu.Exploration.Arbitration
 
 open Kinu.Exploration.Settle
 
-/-- What a child STARTS FROM: `fork` inherits the parent's conversation verbatim,
+/-- What a child STARTS FROM: `inherit` takes the parent's conversation verbatim,
     `fresh` starts from what the parent REPORTED (`SWARM_CONTEXTS`, `swarm.ts:74`,
     and *Inherited context*). Two values, because the inherited conversation is the only
     difference between them.
@@ -64,7 +64,7 @@ open Kinu.Exploration.Settle
     whereas `Config` models the axis TUPLE — enrolling `context` there changes every
     `Config` literal in the corpus without changing one statement in this file. -/
 inductive Context where
-  | fork | fresh
+  | inherit | fresh
   deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- The resource caps a proposal is arbitrated against. `depth` and `branches` are
@@ -91,16 +91,16 @@ structure Proposal where
   branches : Nat
   /-- The depth of the proposing node. -/
   atDepth : Nat
-  /-- Whether ANY of the proposed branches asks to `fork` its parent's context
+  /-- Whether ANY of the proposed branches asks to `inherit` its parent's context
       (*Inherited context*).
 
       One `Bool` rather than a list of `Context`: the TypeScript arbiter reduces the
       branch list to exactly this bit before it compares anything — it filters the
-      branches asking for `fork` and tests that the result is non-empty, keeping the
+      branches asking for `inherit` and tests that the result is non-empty, keeping the
       count for the refusal's prose and not for the decision — so the acceptance
       region is a function of the bit alone, and a list would add structure no
       theorem below quantifies over. -/
-  forks : Bool
+  inherits : Bool
   deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- Why a proposal was refused. Every refusal names the policy and the state that
@@ -131,7 +131,7 @@ def arbitrate (c : Caps) (ctx : Context) (adv : Advance) (p : Proposal) : Verdic
   else if p.branches < 2 ∨ 4 < p.branches then .refused .widthOutOfRange
   else if c.maxDepth ≤ p.atDepth then .refused .depthExhausted
   else if c.remainingBudget < p.branches then .refused .budgetExhausted
-  else if ctx = .fresh ∧ p.forks = true then .refused .contextConflict
+  else if ctx = .fresh ∧ p.inherits = true then .refused .contextConflict
   else .accepted p.branches
 
 /-! ## S8 — a proposal cannot exceed the arbiter
@@ -150,7 +150,7 @@ theorem accepted_iff (c : Caps) (ctx : Context) (adv : Advance) (p : Proposal)
         ∧ ¬(p.branches < 2 ∨ 4 < p.branches)
         ∧ ¬(c.maxDepth ≤ p.atDepth)
         ∧ ¬(c.remainingBudget < p.branches)
-        ∧ ¬(ctx = .fresh ∧ p.forks = true)
+        ∧ ¬(ctx = .fresh ∧ p.inherits = true)
         ∧ n = p.branches) := by
   unfold arbitrate
   by_cases h1 : adv = .archive ∨ adv = .none
@@ -161,7 +161,7 @@ theorem accepted_iff (c : Caps) (ctx : Context) (adv : Advance) (p : Proposal)
       · simp [h1, h2, h3]
       · by_cases h4 : c.remainingBudget < p.branches
         · simp [h1, h2, h3, h4]
-        · by_cases h5 : ctx = .fresh ∧ p.forks = true
+        · by_cases h5 : ctx = .fresh ∧ p.inherits = true
           · simp [h1, h2, h3, h4, h5]
           · simp only [h1, h2, h3, h4, h5, if_false, Verdict.accepted.injEq,
               not_false_eq_true, true_and, and_true]
@@ -194,11 +194,11 @@ theorem accepted_width_in_range (c : Caps) (ctx : Context) (adv : Advance)
 
 /-- **A node may narrow, never widen** (*The six axes*). A branch's `context` is
     validated AGAINST the search's own, so a run resolved `context:'fresh'` refuses
-    a proposal in which any branch asks to `fork` rather than quietly honouring one
+    a proposal in which any branch asks to `inherit` rather than quietly honouring one
     of two conflicting policies. Same shape as the mission-budget rule that an inner
     cap can only ever be tighter than the outer one. -/
 theorem accepted_respects_context (c : Caps) (adv : Advance) (p : Proposal)
-    (n : Nat) (h : arbitrate c .fresh adv p = .accepted n) : p.forks = false := by
+    (n : Nat) (h : arbitrate c .fresh adv p = .accepted n) : p.inherits = false := by
   obtain ⟨-, -, -, -, hctx, -⟩ := (accepted_iff c .fresh adv p n).mp h
   simpa using hctx
 
@@ -241,30 +241,30 @@ theorem every_proposal_gets_a_verdict (c : Caps) (ctx : Context) (adv : Advance)
   everything, which would make the proposal API useless rather than safe. -/
 
 theorem a_legal_proposal_is_accepted :
-    arbitrate { maxDepth := 5, remainingBudget := 10 } .fork .uct
-      { branches := 3, atDepth := 1, forks := true } = .accepted 3 := by
+    arbitrate { maxDepth := 5, remainingBudget := 10 } .inherit .uct
+      { branches := 3, atDepth := 1, inherits := true } = .accepted 3 := by
   decide
 
 /-- And the refusals discriminate: each of the five reasons is reachable, so none
     is a reason the arbiter can never give. -/
 theorem every_refusal_is_reachable :
-    arbitrate { maxDepth := 5, remainingBudget := 10 } .fork .archive
-        { branches := 3, atDepth := 1, forks := false } = .refused .doesNotExpandAtNode
-    ∧ arbitrate { maxDepth := 5, remainingBudget := 10 } .fork .uct
-        { branches := 9, atDepth := 1, forks := false } = .refused .widthOutOfRange
-    ∧ arbitrate { maxDepth := 1, remainingBudget := 10 } .fork .uct
-        { branches := 3, atDepth := 1, forks := false } = .refused .depthExhausted
-    ∧ arbitrate { maxDepth := 5, remainingBudget := 1 } .fork .uct
-        { branches := 3, atDepth := 1, forks := false } = .refused .budgetExhausted
+    arbitrate { maxDepth := 5, remainingBudget := 10 } .inherit .archive
+        { branches := 3, atDepth := 1, inherits := false } = .refused .doesNotExpandAtNode
+    ∧ arbitrate { maxDepth := 5, remainingBudget := 10 } .inherit .uct
+        { branches := 9, atDepth := 1, inherits := false } = .refused .widthOutOfRange
+    ∧ arbitrate { maxDepth := 1, remainingBudget := 10 } .inherit .uct
+        { branches := 3, atDepth := 1, inherits := false } = .refused .depthExhausted
+    ∧ arbitrate { maxDepth := 5, remainingBudget := 1 } .inherit .uct
+        { branches := 3, atDepth := 1, inherits := false } = .refused .budgetExhausted
     ∧ arbitrate { maxDepth := 5, remainingBudget := 10 } .fresh .uct
-        { branches := 3, atDepth := 1, forks := true } = .refused .contextConflict := by
+        { branches := 3, atDepth := 1, inherits := true } = .refused .contextConflict := by
   refine ⟨by decide, by decide, by decide, by decide, by decide⟩
 
 /-- The adversarial case, concretely: a node asking for 400 children at depth 99
     against a cap of 5 gets a reason, not children. -/
 theorem an_adversarial_proposal_is_refused :
-    arbitrate { maxDepth := 5, remainingBudget := 10 } .fork .uct
-      { branches := 400, atDepth := 99, forks := true } = .refused .widthOutOfRange := by
+    arbitrate { maxDepth := 5, remainingBudget := 10 } .inherit .uct
+      { branches := 400, atDepth := 99, inherits := true } = .refused .widthOutOfRange := by
   decide
 
 end Kinu.Exploration.Arbitration
