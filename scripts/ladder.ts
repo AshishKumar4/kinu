@@ -442,6 +442,48 @@ export const LADDER: readonly Gate[] = [
       + '`await import(name)` over a variable is invisible to it.',
   },
   {
+    run: 'bun run gate:undeclared-imports',
+    // COMMIT, beside `gate:dead-code`, which holds the same boundary from the
+    // other side. The push premise does not apply and the commit one does: an
+    // undeclared import cannot appear BETWEEN a commit and the push that
+    // follows it, but it does not have to — a lane adds the import in its own
+    // worktree, `bun run check` and `bun run test` both pass because the
+    // hoisted linker resolves it against the root `node_modules`, the lane
+    // yields, and the integrator merges. There is no push in between, so the
+    // violation travels to the integrator as an artifact. That is the exact
+    // premise falsified for `gate:wired` and `gate:dead-code` on 2026-09-10,
+    // and it is falsified harder here: those two at least go red in the lane's
+    // own tree once it runs them, whereas an undeclared edge is INVISIBLE to
+    // every suite by construction — resolution succeeds.
+    tier: 'commit',
+    // Three readings 2026-09-10 on the 24-thread box under load 40 (five lanes
+    // building concurrently): 5.31/5.49/6.29s, interleaved with
+    // `gate:reachability` (declared 2.27, measured 6.27/7.92/8.09) and
+    // `gate:duplication` (declared 1.7, measured 5.54/5.35/6.46) so the load is
+    // common to all three. Scaling the median 5.49s by each neighbour's own
+    // ratio gives 1.57s and 1.68s; 2s is declared — the larger, rounded up,
+    // because a budget must never be made stricter by a reading nobody can
+    // reproduce on the reference box.
+    seconds: 2,
+    catches: 'a package that IMPORTS what its own manifest never declares, resolving only '
+      + 'through `bunfig.toml`\'s hoisted linker. Measured at 8af794001: `packages/cli-backend` '
+      + 'imported `@kinu.run/test-utils` from 32 test files — the `workspace-resolution.test.ts` '
+      + 'AGENTS.md mandates among them — behind a manifest with NO `devDependencies` at all, and '
+      + 'a human reading a lock diff is what found it. `gate:dead-code`\'s dependency census '
+      + 'walks declarations and is structurally unable to see this: an undeclared edge is not a '
+      + 'declaration. The edge lives exactly as long as the hoist does, `scripts/deploy.sh` '
+      + 'installs `--frozen-lockfile` so what ships is whatever the lock carries for reasons no '
+      + 'manifest states, and an empty `devDependencies` reads to every tool as a package with '
+      + 'no test dependencies. 54 such edges were locked on the tree that introduced this gate, '
+      + '`packages/devbox` -> `@kinu.run/test-utils` among them: the same defect as 8af794001, '
+      + 'live in a second package.',
+    blind: 'a specifier no import FORM carries — `await import(name)` over a variable, a '
+      + '`require()` in the CommonJS daemon, a CSS `@import`, a binary a manifest script spawns, '
+      + 'and an ambient `@types/…` the compiler loads by `types`. Also version RANGES: a '
+      + 'declaration is judged present, never correct. It prints all four on the GREEN path with '
+      + 'the count of locked edges still outstanding.',
+  },
+  {
     run: 'bun run gate:wired',
     // COMMIT, moved from push 2026-09-10 beside `gate:dead-code` and for the
     // same falsified premise: "nothing can become unwired between a commit and
@@ -618,7 +660,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and

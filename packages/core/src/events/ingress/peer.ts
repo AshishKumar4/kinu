@@ -46,6 +46,7 @@ import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
 } from '../../tools/agents-tool';
+import { countMsgReceived } from '../../tools/msg-counters';
 import type { SqlExec, VFS } from '../../types/primitives';
 import type { WorkMode } from '../../prompting/surface';
 import {
@@ -131,12 +132,22 @@ export async function receivePeerMessage(
     ? true   // same-owner peers don't need an explicit grant beyond ownership
     : await deps.hasGrant(msg.sender_agent_name, msg.sender_user_id);
 
+  const serialized = JSON.stringify(msg.body);
+  const counted = (admitted: boolean): void => countMsgReceived({
+    from: msg.sender_agent_name,
+    topic: msg.topic,
+    messageId: msg.sender_event_id,
+    chars: serialized.length,
+    admitted,
+  });
+
   if (!same_owner && !receiver_grant_present) {
+    counted(false);
     return { admitted: false, reason: 'no grant from receiver for cross-owner sender' };
   }
 
   // Spilled after the grant check so a refused message never writes a file.
-  const bodyPath = await spillEventContent(deps.vfs, JSON.stringify(msg.body));
+  const bodyPath = await spillEventContent(deps.vfs, serialized);
 
   const payload: PeerAgentPayload = {
     from_agent_name: msg.sender_agent_name,
@@ -160,9 +171,11 @@ export async function receivePeerMessage(
       },
       now,
     });
+    counted(admitted);
     if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
     return { admitted, event_id: id };
   } catch (err) {
+    counted(false);
     return { admitted: false, reason: renderThrownChain({ cause: err }) };
   }
 }

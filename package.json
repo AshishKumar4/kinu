@@ -32,6 +32,7 @@
     "layergate": "bun run scripts/layergate.ts",
     "layergate:lock": "bun run scripts/layergate.ts --lock",
     "gate:dead-code": "bun scripts/dead-code.ts",
+    "gate:undeclared-imports": "bun scripts/undeclared-imports.ts",
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:complexity": "bun scripts/complexity.ts",
     "gate:wired": "bun scripts/wired.ts",
