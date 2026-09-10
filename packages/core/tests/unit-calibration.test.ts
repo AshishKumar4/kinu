@@ -228,12 +228,11 @@ describe('the labeling file', () => {
 
   test('round-trips every verdict key', () => {
     const many = Array.from({ length: 5 }, (_, i) => ({ ...items[0], outcomeId: `outc-${i}` }));
+    let verdicts = 0;
     const filled = renderLabelingFile(many)
       .split('\n')
-      .reduce<{ lines: string[]; n: number }>((acc, line) => {
-        if (line !== 'verdict:') return { ...acc, lines: [...acc.lines, line] };
-        return { lines: [...acc.lines, `verdict: ${['a', 'c', 'f', 'b', '?'][acc.n]}`], n: acc.n + 1 };
-      }, { lines: [], n: 0 }).lines.join('\n');
+      .map((line) => (line === 'verdict:' ? `verdict: ${['a', 'c', 'f', 'b', '?'][verdicts++]}` : line))
+      .join('\n');
 
     const parsed = parseLabelingFile(filled);
     expect(parsed.errors).toEqual([]);

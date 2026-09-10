@@ -1,9 +1,9 @@
 {
   "$comment": "Pinned upstream snapshot of the vendored anti-slop Oxlint plugin. Upstream is private:true and publishes no npm package, so vendoring is the only integration path and this file is the substitute for a version range. Refresh with: ANTI_SLOP_UPSTREAM=<checkout> node --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts --update",
   "repository": "https://github.com/dmmulroy/anti-slop",
-  "commit": "446268e5d15baa968eaec669ff65358d36ae6259",
-  "commitDate": "2026-08-14",
-  "commitSubject": "Ignore agent tooling when installing anti-slop",
+  "commit": "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b",
+  "commitDate": "2026-09-10",
+  "commitSubject": "Merge pull request #36 from K-Mistele/contrib/effect-tag-match-rules",
   "upstreamSourceRoot": "skills/install-anti-slop/assets/anti-slop",
   "upstreamTestRoot": "src/rules",
   "$kinuComment": "Rules authored here, not vendored: they encode Kinu policy and have no upstream counterpart. Named explicitly rather than inferred from `kinuOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `kinuRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in kinuRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as kinuOnly because every file in this directory must be declared.",
@@ -22,7 +22,9 @@
     "require-runtime-import-extension"
   ],
   "kinuRuleGates": {
-    "no-vacuous-type-predicate.gate.test.ts": ["no-vacuous-type-predicate"],
+    "no-vacuous-type-predicate.gate.test.ts": [
+      "no-vacuous-type-predicate"
+    ],
     "import-extension.gate.test.ts": [
       "require-runtime-import-extension"
     ],
@@ -50,9 +52,6 @@
     ]
   },
   "vendored": {
-    "no-vacuous-type-predicate.gate.test.ts": { "kinuOnly": true },
-    "rules/no-vacuous-type-predicate.ts": { "kinuOnly": true },
-    "rules/no-vacuous-type-predicate.test.ts": { "kinuOnly": true },
     "drift.test.ts": {
       "kinuOnly": true
     },
@@ -63,9 +62,9 @@
       "kinuOnly": true
     },
     "index.ts": {
-      "upstream": "d72d7e9f8c8f2c9557f7f8dec613b4235a2e15c9d7f43b8c8fc18688ae1f814f",
-      "local": "9ac62b00ecc5bad9875bce44a92aa6bee3b4d6806ddbcb4c2de18ce6422cefaa",
-      "reason": "Registers the Kinu-local rules declared in kinuRules, including no-vacuous-type-predicate, beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
+      "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
+      "local": "e86bcc2d77db622d44aedc3f440c2c8337c2de36e859fe2c7d91809d0af6b52e",
+      "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
       "kinuOnly": true
@@ -76,7 +75,16 @@
     "no-copy-rpc-stub.gate.test.ts": {
       "kinuOnly": true
     },
+    "no-elapsed-deadline.gate.test.ts": {
+      "kinuOnly": true
+    },
     "no-swallow.gate.test.ts": {
+      "kinuOnly": true
+    },
+    "no-untyped-console.gate.test.ts": {
+      "kinuOnly": true
+    },
+    "no-vacuous-type-predicate.gate.test.ts": {
       "kinuOnly": true
     },
     "no-wait-until.gate.test.ts": {
@@ -91,20 +99,11 @@
     "rules/no-ambient-git-in-tests.test.ts": {
       "kinuOnly": true
     },
-    "rules/no-elapsed-work-deadline.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-elapsed-work-deadline.ts": {
-      "kinuOnly": true
-    },
-    "no-elapsed-deadline.gate.test.ts": {
-      "kinuOnly": true
-    },
     "rules/no-ambient-git-in-tests.ts": {
       "kinuOnly": true
     },
     "rules/no-chained-type-assertions.test.ts": {
-      "kinuOnly": true
+      "upstream": "53d18a7bde98b2d9c093cce3f4fc45b10b385cf5723202ed6a32ba877cc928bf"
     },
     "rules/no-chained-type-assertions.ts": {
       "upstream": "72f8e981520f94adac0ffbdab8f8e84e5f2a4595f14e4a6471be917a85a20a15"
@@ -127,6 +126,12 @@
     "rules/no-ddl-in-catch.ts": {
       "kinuOnly": true
     },
+    "rules/no-elapsed-work-deadline.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-elapsed-work-deadline.ts": {
+      "kinuOnly": true
+    },
     "rules/no-empty-catch.test.ts": {
       "kinuOnly": true
     },
@@ -134,22 +139,28 @@
       "kinuOnly": true
     },
     "rules/no-known-value-widening.test.ts": {
-      "upstream": "76a329551293d02f53b7390c8bf9cf35c32d6860ffc154c539a3ebd972da78da"
+      "upstream": "f5efe3d7c08e90f81683e7b74091c335c9f8453c61c31aa0cfa7aede5ed2b7af"
     },
     "rules/no-known-value-widening.ts": {
-      "upstream": "d631f9cb6a3629d1d9227a4568c66eb2e8e2b938a57cbec34b6b25fcb31bf62e"
+      "upstream": "321944d20912acc93f65f4b84075916202adfda6b8eaa839d96f0d8b8ec1463b"
     },
     "rules/no-module-mocking.test.ts": {
       "upstream": "060aefb314e17ffb371046e6fe162d38d9cb35a055645d0c42deceb0379e9250"
     },
     "rules/no-module-mocking.ts": {
-      "upstream": "90cfc166a28e78544a934e4a000811330c1ea6d33d90cb309b1bed27e51e79f3"
+      "upstream": "e29ba7d9ba4a5aed971002840bf434beef93393f60a589e55b72c203dde4c8db"
     },
     "rules/no-object-parameters.test.ts": {
-      "upstream": "d5764eb703e6d1e6f940b3935593790122febcf5b240b99ca9bc8abf3805e95f"
+      "upstream": "a8cc610dc2be00c8b00e99c69005c3be7ff0bd248a5d9793d88c4feab2c0e0d5"
     },
     "rules/no-object-parameters.ts": {
-      "upstream": "3d750130cf7520e7541cb758ebed0dfa603a0e482061a60ac3a12fe8821a4469"
+      "upstream": "2056e99dcb228604d9b2534952045e8ebf9f90af54add67d07a1211657d32941"
+    },
+    "rules/no-reduce-accumulator-copy.test.ts": {
+      "upstream": "5570fe8512bb71dbd5b446454297ec9e234fb1cb06ded87590593a37c4cccccf"
+    },
+    "rules/no-reduce-accumulator-copy.ts": {
+      "upstream": "dce4b08ee7ac4bbedfe743f6fa4a3d423cde50b37691130b899cc4573c05d2ae"
     },
     "rules/no-reflect-apply.test.ts": {
       "upstream": "33a3f9860703103c28209087afb86eb1a5039cd31187bfb41281c91d94532fe8"
@@ -167,12 +178,14 @@
       "kinuOnly": true
     },
     "rules/no-runtime-typeof.test.ts": {
-      "upstream": "d30878a27737afebe6f3653cd9de98b0f84c8651cc8a7abcd40874b613eec264"
+      "upstream": "5f74cbf5b61746001a69bb0fcefd54e61b42e5ce50afe5619397e2f16f3f636e",
+      "local": "b97023cc9ecd7f0fc696155f29d9749b9d8f3cf62a55167b1a2ee2b3848263f4",
+      "reason": "Upstream's suite lists `typeof x === \"undefined\"` existence probes as valid (commit f2a8e0b); the local rule rejects every typeof, so those four cases are invalid here."
     },
     "rules/no-runtime-typeof.ts": {
-      "upstream": "eed63d5667763ddbc48a6b83662e446f100c444cddefc3d066ac0015670590b8",
-      "local": "7e52fdc34155f6cfb1b73b47c6df5664da029fa01df41627fb7f8f828a5e0e2a",
-      "reason": "Adds the objectInstanceof check with scope-aware resolution of the global Object binding. `x instanceof Object` is the same evasion as typeof and upstream has never rejected it at any commit. Upstream's allowInTypeGuards option is vendored as-is and .oxlintrc.json does not set it, so no typeof exception is active."
+      "upstream": "c3ff29662f9f5a0cbad527b200aadd486cbe63ee0d9bbf10c409ce9c39ec678c",
+      "local": "75e3568c97ae74df04fb3d89efc12548d4bd5481ff52a051aac036aacd1995b2",
+      "reason": "Adds the objectInstanceof check with scope-aware resolution of the global Object binding (via the shared resolveVariable): `x instanceof Object` is the same evasion as typeof and upstream has never rejected it at any commit. Declines upstream's isExistenceProbe carve-out (commit f2a8e0b), which accepts `typeof x === \"undefined\"`: a binding whose presence is unknown is boundary input, and `globalThis.x === undefined` probes it without a typeof. Upstream's allowInTypeGuards option is vendored as-is and .oxlintrc.json does not set it, so no typeof exception is active."
     },
     "rules/no-sentinel-catch.test.ts": {
       "kinuOnly": true
@@ -180,46 +193,68 @@
     "rules/no-sentinel-catch.ts": {
       "kinuOnly": true
     },
+    "rules/no-shape-in-symbol-names.test.ts": {
+      "upstream": "08caeb868927ca7f748209ab8db5226594e9cc662f312d4640917d8480fc6d22",
+      "local": "66bd2902e37929b886b2bad21db00ed22a1ed4dddfc2520293f57fbd99e3feb3",
+      "reason": "Upstream's suite lists `schema.shape.id` (a non-computed member of an external value) as valid; the local rule rejects it, so those cases sit in `invalid` here alongside the case-insensitive substring cases that pin the ban against being narrowed to a lexical word (30 hidden violations, 2026-08-17)."
+    },
+    "rules/no-shape-in-symbol-names.ts": {
+      "upstream": "4e5edcb5ed083de77970a2e4f64e4b2090ba6c4588e9fc6bcb1f01900ae905b7",
+      "local": "54aebfebb25c1f8f2ce181f8f82fd05413a0a63f7cdac52e9d570ea1cd284510",
+      "reason": "Declines upstream's isBorrowedMemberName carve-out (commit f2a8e0b), which stops reporting `owner.shape` when the identifier is a non-computed member of another value. A member named shape is still a symbol named shape, whoever owns the object; the tree carries none, so the ban stays total. Bytes are upstream's pre-f2a8e0b rule."
+    },
     "rules/no-unaccounted-catch.test.ts": {
       "kinuOnly": true
     },
     "rules/no-unaccounted-catch.ts": {
       "kinuOnly": true
     },
-    "rules/no-shape-in-symbol-names.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-shape-in-symbol-names.ts": {
-      "upstream": "54aebfebb25c1f8f2ce181f8f82fd05413a0a63f7cdac52e9d570ea1cd284510"
-    },
     "rules/no-unknown-parameters.test.ts": {
-      "kinuOnly": true
+      "upstream": "6d6b7bdc9531792ca08092969aa79f205a315f3d94609fa01b0d782d8cf66ffe",
+      "local": "1315f0c2cf79df270abb3b8238b94e3c6c7ff43ba52ac405716c30498002e4f7",
+      "reason": "Upstream's suite lists `cause: unknown` and type-predicate subjects (`value: unknown): value is string`) as valid; the local rule rejects both, so those cases are invalid here, and alias-resolution cases (scoped, generic, chained aliases to unknown) pin what the local rule adds over upstream's literal-union match."
     },
     "rules/no-unknown-parameters.ts": {
-      "upstream": "ab5cd31a9a464dd12e4e930298fcd773c1c1badfaf66619915d5435b5d57db61",
-      "local": "63ff1a3358680f271575a6f7396ccc66bda99122b1bbc4f6c3001e490c65dc7b",
-      "reason": "Resolves type aliases, unions and parenthesised types to unknown instead of matching only a literal unknown annotation, and grants no exemption to a parameter named `cause`. Upstream's two carve-outs both let unparsed boundary input through unflagged."
+      "upstream": "81df45f83b1bca1bbf0bbc36e9211e10cad1aa2bb0ab604840ed9f1b94eaa2e5",
+      "local": "41a2612329aec6d21f4ca2761d1c5fdb4cadb24a1bb1db7fa11afce9f2818203",
+      "reason": "Resolves aliases through upstream's shared type-alias environment (scoped, generic and chained aliases to unknown) and grants no exemption: upstream exempts a parameter named `cause` and, since commit 63d6966, the subject of a type predicate. Both carve-outs let unparsed boundary input through unflagged. Upstream's union/parenthesis handling (containsUnknownType) is subsumed by the alias resolution here."
     },
     "rules/no-unknown-returns.test.ts": {
-      "upstream": "bee5b77fe4f797fcc86d4704997bbf621f6e3909306717ef0e629c2ac692b159"
+      "upstream": "ce7b53e8c77d29aed36ce373ea15559a1bccccfd87a692a84823b6eff4c5c8e5"
     },
     "rules/no-unknown-returns.ts": {
-      "upstream": "fca7a61334b902ec76736b6d8ad5b95a84a0d4366dcc7ae1bc44492523052f3b"
+      "upstream": "67f3ac72d9f98ce29426e70be1e0c359599d94b5799f1130b7ec4cc34129f26b"
     },
     "rules/no-unknown-type-aliases.local.test.ts": {
       "kinuOnly": true
     },
     "rules/no-unknown-type-aliases.test.ts": {
-      "upstream": "f8802e00e5f99b656880d8401e2145d78d6e3e1c252d8a6be36f8963d5b886c3"
+      "upstream": "71a423652a1cac4b01540f091698b93ebfb61ac9f3496f8c67fc90f24f764e14"
     },
     "rules/no-unknown-type-aliases.ts": {
-      "upstream": "59df2bcc6fdc892e67650c64662c2ac03d0396c2dcce9c272891c94ba5a4c041"
+      "upstream": "e34000ccdd5c496fadb1418e29b44a1df970ebc9075e89ef2412f7029ec4c15b"
     },
     "rules/no-unsafe-dictionary-type.test.ts": {
-      "upstream": "a46fc25490f9fe787cca2b6f75f0111d2fc598dd033c1774f2a5941d56aeb713"
+      "upstream": "daa8de751069d2c9d8b8cd6463d43fab8ea0af97426fa7f4ed3a3d0ba5443eb8",
+      "local": "67ba5806b23eba2d18f13957f154e2817ee5a24216cf520379bd3a69bc5336fa",
+      "reason": "Upstream's suite lists four type-parameter-constraint dictionaries as valid; the local rule rejects them, so those cases are invalid here."
     },
     "rules/no-unsafe-dictionary-type.ts": {
-      "upstream": "bec8e540e05a749e06474b1c7bd93879747b3330f0b9c87fd1a3ffe959ace075"
+      "upstream": "6ff0b3aafe00bc42300080c514ddbee54a45508d5781cab2fb78156a19756a71",
+      "local": "0e94f8feccec858508842166046ecb66a89b153f0f1e66ef64ede490e27945c1",
+      "reason": "Declines upstream's isInsideTypeParameterConstraint carve-out (commit 63d6966), which accepts `<T extends Record<string, unknown>>`. The constraint is the contract every caller of the generic is held to, so a dictionary there is the same unparsed-shape claim as one on a parameter. Everything else (scoped and generic alias resolution via visibleTypeAlias) is upstream's."
+    },
+    "rules/no-untyped-console.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-untyped-console.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-vacuous-type-predicate.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-vacuous-type-predicate.ts": {
+      "kinuOnly": true
     },
     "rules/no-wait-until-in-durable-object.test.ts": {
       "kinuOnly": true
@@ -249,15 +284,21 @@
       "kinuOnly": true
     },
     "rules/require-safety-comment-for-type-assertion.test.ts": {
-      "upstream": "0fbe9f3337315e137670467b90873e53a82394b027669d74a926aab7e4069f43"
+      "upstream": "a5af1dd8116a4ebe2b4b283d2294b658c3d2a31acc847d48375dd55654a4269e"
     },
     "rules/require-safety-comment-for-type-assertion.ts": {
-      "upstream": "78bad368fcc137f0ed9d6f21626baed5c980fe3ea6d093c93ac4ed9858b9a309",
-      "local": "e6369ef9320881ec35e3ada96326927010bd70f2d8957b0d57a901803166275d",
-      "reason": "Adds unverifiableAssertion (a comment cannot establish a caller-selected generic, recover evidence from `any`, or validate raw JSON.parse output) and insufficientSafetyComment (a SAFETY note must name concrete evidence). Upstream accepts the mere presence of the comment."
+      "upstream": "c8ed9f50f1c6e3592b77165dd8847d187ee9b0ef955d50f8099498d3139aa27c",
+      "local": "259235f127f63291acc81ad2b9f2119b64c5528e7f3f0bfb28b200b8b55d9637",
+      "reason": "Adds unverifiableAssertion (a comment cannot establish a caller-selected generic, recover evidence from `any`, or validate raw JSON.parse output) and insufficientSafetyComment (a SAFETY note must name concrete evidence: three words and an evidence verb, where upstream since 63d6966 requires only a non-empty justification). Upstream's markers option and export-declaration comment attachment (f2a8e0b) are vendored as-is; .oxlintrc.json sets no markers."
+    },
+    "shared/array-method.ts": {
+      "upstream": "e360557253c56ab7c256623f3338415743e5027e9d999f801fb79d98240d217b"
     },
     "shared/dictionary-types.ts": {
-      "upstream": "a57b964ab55a39396c8922f400b0912e3479cb9d28de716a4a536abcf7283966"
+      "upstream": "0f319a2d2cb34c7b3902fb78301c91e1a750bd663c754e73d669f31dc5026525"
+    },
+    "shared/function-parameters.ts": {
+      "upstream": "ad80a650ea14847736ab9ee4c872dc89cc7d527bf60e7de20112bcb8f679545c"
     },
     "shared/lexical-type-parameters.ts": {
       "upstream": "1ae0aa3ec245f1dc43c4bbbd8be1e2e4230e5dc389d1ca4e8de8f51b62ceff29"
@@ -266,18 +307,15 @@
       "kinuOnly": true
     },
     "shared/reflect-method.ts": {
-      "upstream": "318f56b17d9063134860fe4c51c2e22cb0a55e7f421a0ff4ccedb5a9e9c2b2d9"
+      "upstream": "d1b7bd13ca714bf20bec15e835ed0526316b7274e06bd9a582cf623c09ac1d40"
+    },
+    "shared/scope.ts": {
+      "upstream": "e38d41eeada854dbd02285e84e065d10e69460695e06e53fbe8662c963ae7eb4"
+    },
+    "shared/type-alias-resolution.ts": {
+      "upstream": "5520e97b177f0093af2943808ac63cef0f6c03fedd197a36137c66209d78a8e0"
     },
     "tsconfig.json": {
-      "kinuOnly": true
-    },
-    "no-untyped-console.gate.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-untyped-console.ts": {
-      "kinuOnly": true
-    },
-    "rules/no-untyped-console.test.ts": {
       "kinuOnly": true
     },
     "type-aware.gate.test.ts": {
@@ -286,5 +324,6 @@
     "typescript-escapes.gate.test.ts": {
       "kinuOnly": true
     }
-  }
+  },
+  "$notVendored": "Upstream files deliberately outside the vendored set, so their absence is policy rather than drift. (1) `src/effect/` (five opt-in Effect rules and shared/tagged-values.ts): Kinu imports `effect` in no file, so every one of those rules would register and fire on nothing; a rule that measures an empty set proves nothing and would inflate the rule count the ladder reports. Vendor them the day an `effect` import lands. (2) `src/rules/no-array-filter-map.ts` (+ suite): rejected on measurement, not taste. It fired 152 times on this tree (2026-09-10, oxlint 1.78.0), and both replacements its message prescribes are slower on both engines this tree runs on. Measured with a throwaway microbenchmark over {id, active} rows, half kept, n=8/64/1024/65536: `.values().filter().map().toArray()` ran 6.7x/7.7x/8.7x/2.0x the cost of `.filter().map()` on Node 22 (V8, the workerd engine) and 9.5x/6.5x/6.1x/4.4x on Bun 1.4 (JSC); `flatMap(x => keep ? [x] : [])` ran 3.4x/4.4x/4.9x/1.2x on V8 and 2.0x/3.4x/3.8x/3.1x on JSC. The iterator form also does not typecheck under this tree's ES2022 libs. Only a hand-written push loop is faster (0.5x-0.8x), which the rule does not propose and which would trade 152 declarative sites, nearly all over fixture, config and JSX lists of a few dozen elements, for loops. Re-measure before adopting. (3) `src/rules/require-readable-spacing-cli.test.ts`: spawns `pnpm exec oxlint`, and this tree has no pnpm; the rule is proven through the real oxlint binary here by live-tree.gate.test.ts over every governed file and its fixes by rules/require-readable-spacing.test.ts. `src/shared/lexical-type-parameters.ts` IS still vendored: upstream keeps it beneath shared/type-alias-resolution.ts."
 }
