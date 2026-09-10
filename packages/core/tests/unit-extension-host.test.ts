@@ -475,6 +475,42 @@ describe('ExtensionHost', () => {
     expect(await failing.runTransformContext({ ...ctx, messages: [...ctx.messages] })).toBeUndefined();
   });
 
+  test('a hook that never settles stops holding the turn once the turn is cancelled', async () => {
+    // The race is in the TEST too: without the host's own abort race, both
+    // awaits below would hang, and a hang reads as a slow suite rather than a
+    // failure. 200ms is far above a settled promise and far below any hook.
+    const settledOrHung = (p: Promise<ModelMessage[] | undefined>): Promise<'settled' | 'rejected' | 'hung'> =>
+      Promise.race([
+        p.then(() => 'settled' as const, () => 'rejected' as const),
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 200)),
+      ]);
+    const never = (): Promise<never> => new Promise(() => undefined);
+    const host = new ExtensionHost()
+      .register({ name: 'stuck-prepare', prepareStep: never })
+      .register({ name: 'stuck-transform', transformContext: never });
+    const controller = new AbortController();
+    const prepare = Promise.resolve(host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal }));
+    const transform = host.runTransformContext({
+      sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
+    });
+    controller.abort(new Error('user stopped the turn'));
+    for (const pending of [prepare, transform]) {
+      expect(await settledOrHung(pending)).toBe('rejected');
+      await expect(pending).rejects.toBeInstanceOf(KinuError);
+      await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    }
+  });
+
+  test('a hook that does I/O receives the signal the turn was given', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const host = new ExtensionHost().register({
+      name: 'io', prepareStep: ({ abortSignal }) => { seen = abortSignal; return undefined; },
+    });
+    await host.runPrepareStep({ stepNumber: 0, messages: [], abortSignal: controller.signal });
+    expect(seen).toBe(controller.signal);
+  });
+
   test('runPrepareStep chains outputs and reports no-change as undefined', async () => {
     const base: ModelMessage[] = [{ role: 'user', content: 'a' }];
     const appendB: KinuExtension = {

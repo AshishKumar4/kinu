@@ -6119,6 +6119,7 @@ export abstract class ActorAgent extends Think<Env> {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
       extensions: this.extensions,
+      abortSignal: this.currentTurnSignal(),
       turnLocal,
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
@@ -6325,6 +6326,7 @@ export abstract class ActorAgent extends Think<Env> {
     // mirror of it would be a second place for the answer to be stale.
     return composePrepareStep({
       extensions: this.extensions,
+      abortSignal: this.currentTurnSignal(),
       cache: this._turnCachePlan,
       destinationProviderId: this.promptModelContext().provider,
       prune: this._turnContextWindow > 0

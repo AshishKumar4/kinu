@@ -20,8 +20,8 @@ import { beginModelOperation, normalizeUsage, type ModelCallSpend } from '@kinu.
 export function createModelSummarizer(
   getModel: () => LanguageModel,
   spend?: ModelCallSpend,
-): (prompt: string) => Promise<string> {
-  return async (prompt) => {
+): (prompt: string, signal?: AbortSignal) => Promise<string> {
+  return async (prompt, signal) => {
     // Opened before the request. If the process stops, the unmatched start row
     // names the in-flight fold on the next activation.
     const operation = beginModelOperation(spend, 'complete');
@@ -30,6 +30,7 @@ export function createModelSummarizer(
       result = await generateText({
         model: getModel(),
         prompt,
+        abortSignal: signal,
       });
     } catch (err) {
       operation.failed({ cause: err });

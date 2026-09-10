@@ -18,7 +18,7 @@
 
 import type { ModelMessage, ToolSet } from 'ai';
 import type { JsonObject } from './utils/json';
-import { diagnostics, toKinuError } from './obs/index';
+import { diagnostics, KinuError, toKinuError } from './obs/index';
 import type { ToolOutcome } from './tools/outcome';
 
 export interface TurnStartContext {
@@ -47,6 +47,9 @@ export interface PrepareStepContext {
   readonly stepNumber: number;
   /** The messages the SDK is about to send for this step. */
   readonly messages: ModelMessage[];
+  /** The turn's cancellation. A hook that does I/O forwards it; the host stops
+   *  waiting on any hook once it fires. */
+  readonly abortSignal?: AbortSignal;
 }
 
 export interface TransformContext {
@@ -66,6 +69,8 @@ export interface TransformContext {
   /** 'auto' = normal turn assembly; 'force' = overflow recovery demands a
    *  rewrite before the turn can be replayed. */
   readonly trigger: 'auto' | 'force';
+  /** The turn's cancellation, as on {@link PrepareStepContext}. */
+  readonly abortSignal?: AbortSignal;
 }
 
 /**
@@ -110,6 +115,26 @@ export interface KinuExtension {
  * Aggregates registered extensions and drives their hooks. Held by a backend
  * for the life of a turn (or longer) and passed to `runChat`.
  */
+/** Settle with the hook, or with the turn's cancellation, whichever comes
+ *  first. A hook that never settles would otherwise hold the turn past its own
+ *  abort; the orphaned promise is left to settle on its own. */
+async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return pending;
+  const cancelled = (): KinuError =>
+    new KinuError('cancelled', 'the turn was cancelled while an extension hook was running', { cause: signal.reason });
+  if (signal.aborted) throw cancelled();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(cancelled());
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 export class ExtensionHost {
   private readonly extensions: KinuExtension[] = [];
 
@@ -155,9 +180,10 @@ export class ExtensionHost {
       const next = this.extensions[index]?.prepareStep?.({
         stepNumber: ctx.stepNumber,
         messages,
+        abortSignal: ctx.abortSignal,
       });
       if (next instanceof Promise) {
-        return this.continuePrepareStep(index + 1, ctx.stepNumber, messages, changed, next);
+        return this.continuePrepareStep(index + 1, ctx, messages, changed, next);
       }
       if (next) {
         messages = next;
@@ -169,19 +195,20 @@ export class ExtensionHost {
 
   private async continuePrepareStep(
     start: number,
-    stepNumber: number,
+    ctx: PrepareStepContext,
     messages: ModelMessage[],
     changed: boolean,
     first: Promise<ModelMessage[] | undefined>,
   ): Promise<ModelMessage[] | undefined> {
-    const firstResult = await first;
+    const firstResult = await untilAborted(first, ctx.abortSignal);
     let current = firstResult ?? messages;
     let rewritten = changed || firstResult !== undefined;
     for (let index = start; index < this.extensions.length; index += 1) {
-      const next = await this.extensions[index]?.prepareStep?.({
-        stepNumber,
+      const next = await untilAborted(Promise.resolve(this.extensions[index]?.prepareStep?.({
+        stepNumber: ctx.stepNumber,
         messages: current,
-      });
+        abortSignal: ctx.abortSignal,
+      })), ctx.abortSignal);
       if (next) {
         current = next;
         rewritten = true;
@@ -199,9 +226,10 @@ export class ExtensionHost {
     hook: string,
     extension: string,
     run: () => T | Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T | undefined> {
     try {
-      return await run();
+      return await untilAborted(Promise.resolve(run()), signal);
     } catch (err) {
       const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
       // Every plugin failure is tolerated EXCEPT a cancelled turn and an oom:
@@ -228,6 +256,7 @@ export class ExtensionHost {
         'transformContext',
         ext.name,
         () => ext.transformContext?.({ ...ctx, messages: current }),
+        ctx.abortSignal,
       );
       if (next) {
         out = next;

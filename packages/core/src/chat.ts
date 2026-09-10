@@ -327,6 +327,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     contextWindow,
     providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
+    abortSignal: opts.signal,
   };
   // Exact pre-submission admission, when the caller resolved a provider that
   // can answer what a request costs. The assembly owns the decision (one
@@ -474,6 +475,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       prepareStep: ({ stepNumber, messages, steps }) =>
         composePrepareStep({
           extensions,
+          abortSignal: opts.signal,
           cache: rollTail ? { strategy: cache.strategy } : null,
           prune: { contextWindow, modelOutputLimit },
           budget: opts.budget,

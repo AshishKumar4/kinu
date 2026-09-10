@@ -59,6 +59,8 @@ export interface TurnContextInput {
   /** The previous turn's provider-priced prompt size — the measured trigger. */
   providerReportedTokens?: number;
   trigger: 'auto' | 'force';
+  /** The turn's cancellation, handed to every transformContext hook. */
+  abortSignal?: AbortSignal | undefined;
   /** Exact pre-submission admission, when the resolved provider can answer
    *  what a request costs. Omitted = no provider counter, and the assembly
    *  returns what it built with no admission check. */
@@ -172,6 +174,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
       contextWindow: input.contextWindow,
       providerReportedTokens: input.providerReportedTokens,
       trigger,
+      abortSignal: input.abortSignal,
     });
     const assembled = [...(transformed ?? history), ...(input.turnLocal ?? [])];
     return settleUnpairedToolCalls(assembled) ?? assembled;
