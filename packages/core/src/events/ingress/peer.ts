@@ -37,6 +37,7 @@
  */
 
 import * as v from 'valibot';
+import { WorkModeSchema } from '../../types/turn';
 import type { EventLog } from '../hub/log';
 import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types';
@@ -86,7 +87,6 @@ export interface PeerOutboxMessage {
   reply_expected: boolean;
 }
 
-const WorkModeSchema = v.picklist(['plan', 'build']);
 const PeerBackHolderSchema = v.object({
   agent_name: v.string(),
   user_id: v.string(),

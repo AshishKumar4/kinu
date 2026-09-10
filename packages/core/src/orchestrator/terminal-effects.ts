@@ -66,7 +66,6 @@ import {
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { WorkMode } from '../types/turn';
 import type { TurnContinuity } from './agent-orchestrator';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
@@ -94,12 +93,6 @@ export const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
   v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success),
 );
 
-/** The work mode a recorded effect carries. It TRAVELS with the row rather than
- *  being re-derived: a cold replay must not turn a Plan report into a Build one
- *  because the live turn metadata moved on. */
-export const WorkModeSchema: v.GenericSchema<WorkMode> = v.union([
-  v.literal('plan'), v.literal('build'),
-]);
 
 /** The conversational continuity a recorded turn ran under. Recorded rather than
  *  re-read: a fresh actor defaults to `conversation`, so a replay of an

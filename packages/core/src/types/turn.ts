@@ -24,7 +24,7 @@ export type WorkMode = 'plan' | 'build';
  */
 export type TurnProvenance = 'chat' | 'background_resume';
 
-const WorkModeSchema = v.picklist(['plan', 'build']);
+export const WorkModeSchema: v.GenericSchema<WorkMode> = v.picklist(['plan', 'build']);
 
 export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
   return v.is(WorkModeSchema, value);
