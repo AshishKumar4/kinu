@@ -42,25 +42,42 @@
  *
  *  * per-request hook: unchanged. Not `async`, annotated `: void`, no `await` in
  *    its own scope, no nested `blockConcurrencyWhile`.
- *  * container-start hook: not `async` and no `await` in its own scope either —
- *    so every awaited thing must live inside something the method RETURNS — plus
- *    it must return `Promise<void>`, and it must hand its work to
- *    `withContainerStartDeadline`, which bounds gate occupancy below the
- *    `do.block_concurrency.cancel_ms` cancellation and fails the container start instead of resetting the object.
- *    That is a replacement bound, not an exemption: an unbounded await is still
- *    unreachable, because a non-async method cannot await at all.
+ *  * container-start hook: `async`, annotated `: Promise<void>`, and every await
+ *    in its own scope on the admitted list — which names one spell, the
+ *    restoration the gate holds. Detaching the restore is the defect here: the
+ *    gate it extends is the only thing that stops an exec from observing a
+ *    container before its workspace is restored, and a promise left floating in
+ *    a Durable Object is cancelled on eviction with its rejection swallowed, so
+ *    the work simply would not happen.
  *
- *    ONE alternative to the wrapper, narrower than the wrapper and named in the
+ *    The restore completes inside the gate on the strength of an ordering, not
+ *    a bound. The box is admitted through `start()` on the instance, which the
+ *    patched SDK marks healthy BEFORE the hook
+ *    (`patches/@cloudflare%2Fcontainers@0.3.7.patch`, mirroring the
+ *    `startAndWaitForPorts` ordering at `container.js:632-636`) — so a command
+ *    the restore issues sees a healthy container and routes straight to it
+ *    instead of opening a nested start. That is the SDK's own documented
+ *    expectation for work issued from inside `onStart` (`sandbox-CPj2jsbz.js:
+ *    1019-1029`). An unpatched `start()` never marks healthy
+ *    (`container.js:570-586`): a command issued there asks for a nested
+ *    `startAndWaitForPorts` (`sandbox-CPj2jsbz.js:8691-8705`) and the
+ *    activation runs to the cap `do.block_concurrency.cancel_ms` names. The
+ *    wait is for the instance, never for an app port: a restore that starts
+ *    the app cannot wait behind that port — measured live, every admission
+ *    refused on a running container whose port was dark. The RPC control path
+ *    carries the same conjunction as a patch: a reconnect on a running,
+ *    healthy container returns before the wait
+ *    (`patches/@cloudflare%2Fsandbox@0.12.8.patch`).
+ *
+ *    ONE alternative to the admitted restore, narrower than it and named in the
  *    method: work this hook returns may instead be PLAINLY BOUNDED storage
  *    writes to this object's own `ctx.storage` when the method carries the
- *    `BOUNDED_STORAGE_ONLY` marker. The wrapper's timer is not delivered inside
- *    `blockConcurrencyWhile` (measured; see `lifecycle.ts`), so for that work a
- *    deadline is a paper bound — the platform's own cancel governs storage
- *    either way, and the genuinely external container admission must run OUTSIDE
- *    this gate, where its timer fires. The marker is the visible edit that says
- *    "nothing here reaches off-object", and it forbids the wrapper rather than
- *    merely omitting it: a wrapper that cannot fire would claim a bound that
- *    does not exist, which is the anti-pattern this gate exists to prevent.
+ *    `BOUNDED_STORAGE_ONLY` marker. A timer bound would be a paper bound here —
+ *    a timer set inside `blockConcurrencyWhile` is not delivered until the
+ *    block releases — so the in-gate budget is polled, not raced. The marker is
+ *    the visible edit that says "nothing here reaches off-object", and it
+ *    forbids the admitted restore rather than merely omitting it: holding the
+ *    restore while carrying the marker claims something false.
  *
  * ## The hook that is not `onStart`, and how this gate was blind to it
  *
@@ -292,7 +309,7 @@ export interface ClassifierDeclaration {
   readonly async: boolean;
 }
 
-/** Where the corpus declares {@link START_GATE_ARMS}, and the two facts the
+/** Where the corpus declares {@link START_GATE_ARMS}, and the three facts the
  *  container-start rule needs about it. */
 export interface RestoreDeclaration {
   readonly file: string;
@@ -300,9 +317,15 @@ export interface RestoreDeclaration {
   /** Routes its work through {@link START_DEADLINE} — a timer, and therefore a
    *  paper bound where this method runs. */
   readonly deadlineWrapped: boolean;
-  /** Names of {@link CONTAINER_REACHES} calls found inside it. Each one is a hop
-   *  that cannot complete while the gate is held. */
+  /** Names of {@link CONTAINER_REACHES} calls found inside it. Each one is
+   *  container work the gate holds — which is this method's job, not its
+   *  defect — so the rule below requires rather than refuses them. */
   readonly reaches: readonly string[];
+  /** Whether it drives the restore attempt ({@link START_GATE_ATTEMPT}). A
+   *  restore that reaches the container only transitively still names the
+   *  attempt that does; an admitted method naming neither is an arm-only stub
+   *  wearing the admitted spelling. */
+  readonly drivesAttempt: boolean;
   /** Names of {@link DO_SIDE_TIMERS} calls found inside it, nested functions
    *  included. Each one is a wait the runtime cannot deliver while the gate is
    *  held. */
@@ -342,7 +365,7 @@ export type HookKind = 'per-request' | 'container-start' | 'recovery';
  */
 const ADMITTED_INIT_AWAITS: readonly string[] = [
   'await this.hostedWorkspace().bundle.session()',
-  'await this.#armContainerSchedules()',
+  'await this.#restoreInStartGate()',
 ];
 
 /**
@@ -350,33 +373,47 @@ const ADMITTED_INIT_AWAITS: readonly string[] = [
  * declare it.
  *
  * A SECOND PIN, for the same reason {@link RECOVERY_CLASSIFIER} is one: the
- * admission is only as good as what the admitted call is allowed to do — and
- * what this one is allowed to do is now a COUNT rather than a budget. Deployed
- * probe `gp0902011918` measured the first container command issued inside the
- * gate never returning: reaching the container asks the SDK for a nested
- * `blockConcurrencyWhile` the runtime will not grant while the outer one is
- * held, so the activation ran to the cap `do.block_concurrency.cancel_ms` names
- * and the object was reset. A
- * bound on that work was never the missing piece; the work does not belong
- * there at all. Three properties of the declaration are decidable here with
- * zero type information:
+ * admission is only as good as what the admitted call is allowed to do. The
+ * box is admitted through `start()` on the instance, which the patched SDK
+ * marks healthy BEFORE the start hook (see
+ * `patches/@cloudflare%2Fcontainers@0.3.7.patch`, mirroring
+ * `@cloudflare/containers`, `container.js:632-636`) — so a command the
+ * restore issues routes straight to the container instead of opening a nested
+ * start. That ordering is the SDK's own documented
+ * expectation for work issued from inside `onStart` (`@cloudflare/sandbox`,
+ * `dist/sandbox-CPj2jsbz.js:1019-1029`), and the restore runs inside the gate
+ * on the strength of it. Three properties of the declaration are decidable
+ * here with zero type information:
  *
  *   • It must not route through {@link START_DEADLINE}. That bound is a timer,
  *     and a timer set inside `blockConcurrencyWhile` is not delivered until the
- *     block releases — so inside the gate it is a paper bound.
+ *     block releases — so inside the gate it is a paper bound. The in-gate
+ *     budget is polled instead.
  *   • It must contain no {@link DO_SIDE_TIMERS} call, anywhere inside it,
  *     nested functions included. A sleep in the Durable Object cannot be
  *     delivered while the gate is held, so one on this path does not slow the
  *     hook down — it WEDGES the activation.
- *   • It must reach NOTHING on the container: no {@link CONTAINER_REACHES} call
- *     anywhere inside it. That is the property the probe bought, and it is the
- *     cheapest one this file can hold.
+ *   • It must reach the container or drive the attempt that does: a
+ *     {@link CONTAINER_REACHES} call of its own, or a call to
+ *     {@link START_GATE_ATTEMPT}. That is the property the out-of-gate era
+ *     refused by name — then, a container reach inside the gate was the nested
+ *     deadlock — and the flip is the mechanism: under the healthy-before-hook
+ *     ordering the reach completes, so an admitted method naming neither is
+ *     an arm-only stub wearing the admitted spelling.
  *
  * WHAT IS NOT CHECKED, stated rather than implied: that the storage writes it
- * DOES make are few and small. The devbox package's own restore-out-of-gate
- * suite counts them against a container fake that answers nothing.
+ * DOES make are few and small. The devbox package's own restore-in-gate suite
+ * counts them against a container fake that answers nothing.
  */
-const START_GATE_ARMS = 'armContainerSchedules';
+const START_GATE_ARMS = 'restoreInStartGate';
+
+/**
+ * The restore attempt the admitted method drives. Pinned beside
+ * {@link START_GATE_ARMS} because the gate's require-check names it: the
+ * admitted restore reaches the container transitively, through this attempt,
+ * so the check that proves it is not an arm-only stub looks for this call.
+ */
+const START_GATE_ATTEMPT = 'gateRestoreAttempt';
 
 /**
  * Calls that reach the CONTAINER, pinned by name.
@@ -571,11 +608,11 @@ function handedBack(body: SyntaxNode): SyntaxNode[] {
 
 /**
  * The declaration of {@link START_GATE_ARMS} in one file, if it is here, with
- * the two facts the container-start rule asks about it.
+ * the three facts the container-start rule asks about it.
  *
  * A METHOD, not a module function — the mirror of {@link classifierIn}'s choice,
  * and for the same kind of reason: the gate's admitted await is spelled
- * `await this.restoreInStartGate()`, so the thing it names is a member of the
+ * `await this.#restoreInStartGate()`, so the thing it names is a member of the
  * class that holds the gate, and a module function of that name is not it.
  *
  * BOTH SCANS DESCEND INTO NESTED FUNCTIONS, unlike the gate's own await scan.
@@ -593,6 +630,7 @@ function restoreIn(parsed: Parsed, file: string): RestoreDeclaration | null {
     const timers: string[] = [];
     const reaches: string[] = [];
     let deadlineWrapped = false;
+    let drivesAttempt = false;
     if (body !== undefined) {
       walk(body, (inner) => {
         const called = memberCalleeName(inner) ?? identifierCalleeName(inner);
@@ -600,9 +638,10 @@ function restoreIn(parsed: Parsed, file: string): RestoreDeclaration | null {
         if (called === START_DEADLINE) deadlineWrapped = true;
         else if (DO_SIDE_TIMERS.includes(called)) timers.push(called);
         else if (CONTAINER_REACHES.includes(called)) reaches.push(called);
+        if (called.replace(/^#/, '') === START_GATE_ATTEMPT) drivesAttempt = true;
       });
     }
-    found = { file, line: parsed.lineAt(node.start), deadlineWrapped, timers, reaches };
+    found = { file, line: parsed.lineAt(node.start), deadlineWrapped, timers, reaches, drivesAttempt };
   });
   return found;
 }
@@ -795,18 +834,22 @@ export function auditFile(
       file, line: restore.line, owner: START_GATE_ARMS, member: START_GATE_ARMS,
       reason: `routes through \`${START_DEADLINE}\` — this method runs inside the init gate, `
         + 'where a timer is not delivered until the block releases, so that bound cannot '
-        + 'fire. Poll the budget instead is not the answer either: arm the schedule row and '
-        + 'let a delivered frame do the work',
+        + 'fire. The in-gate budget is polled, not raced',
     });
   }
-  for (const reached of restore?.reaches ?? []) {
+  // THE FLIP. A container reach inside the gate used to be the defect — the
+  // nested-start deadlock — and every reach failed by name. Under the
+  // healthy-before-hook ordering the reach completes, so the defect is now
+  // the opposite shape: an admitted restore that reaches nothing and drives
+  // no attempt, an arm-only stub wearing the admitted spelling while no box
+  // is restored. Reaches are reported, not refused; emptiness is refused.
+  if (restore !== null && restore.reaches.length === 0 && !restore.drivesAttempt) {
     violations.push({
-      file, line: restore?.line ?? 0, owner: START_GATE_ARMS, member: START_GATE_ARMS,
-      reason: `reaches \`${reached}\` — this method runs inside the init gate, and a command `
-        + 'sent to the container from there NEVER RETURNS: the SDK asks for a nested '
-        + 'blockConcurrencyWhile the runtime will not grant while the outer one is held, so the '
-        + 'activation reaches do.block_concurrency.cancel_ms and the object is RESET (measured, '
-        + 'deployed probe gp0902011918). Arm a schedule row and restore on a delivered frame',
+      file, line: restore.line, owner: START_GATE_ARMS, member: START_GATE_ARMS,
+      reason: `reaches no container and drives no \`${START_GATE_ATTEMPT}\` — the admitted `
+        + 'restore is an arm-only stub: the hook holds the gate for work that restores '
+        + 'nothing, and every box wakes unrestored. Reach the container or drive the '
+        + 'attempt that does',
     });
   }
   for (const timer of restore?.timers ?? []) {
@@ -939,11 +982,12 @@ if (import.meta.main) {
       + ' from that rule outright, because their sanctioned answer hands a re-drive (which may'
       + '\n  reach the model) to a detached durable carrier'
       + `;\n  what \`${START_GATE_ARMS}\``
-      + ` (${restore?.file ?? '(unknown)'}:${restore?.line ?? 0}) CALLS: this gate proves it`
-      + ' reaches no container, holds no paper bound and sleeps on no Durable Object timer —'
-      + '\n  the three ways an activation stops completing. What it does NOT prove is that the'
-      + ' storage writes it does make are few and small; the devbox package\'s own'
-      + '\n  restore-out-of-gate suite counts them against a container fake that answers nothing'
+      + ` (${restore?.file ?? '(unknown)'}:${restore?.line ?? 0}) CALLS past its own body: this gate proves it`
+      + ' holds no paper bound and sleeps on no Durable Object timer, and requires it to reach'
+      + '\n  the container or drive the attempt that does — the two ways an admitted restore stops'
+      + ' being one. What it does NOT prove is that the storage writes it does make are few and'
+      + ' small; the devbox package\'s own'
+      + '\n  restore-in-gate suite counts them against a container fake that answers nothing'
       + (vendor.length > 0
         ? `;\n  the startup of vendor DO classes this repo re-exports (${vendor.join(', ')})`
         : ''),
@@ -957,10 +1001,10 @@ if (import.meta.main) {
     '\nAnything the init chain awaits stalls every request on the object, and at 30s'
     + '\nthe runtime cancels blockConcurrencyWhile and RESETS the Durable Object.'
     + '\nPer-request hook: preconditions that need I/O belong on the turn path'
-    + '\n(ActorAgent.beforeTurn); recovery work that must reach the model is detached.'
     + `\nContainer-start hook: return \`${START_DEADLINE}(...)\` so the work is bounded, or hold`
-    + `\nthe admitted \`await this.#${START_GATE_ARMS}()\`, which arms the schedule rows and`
-    + '\nreaches no container: a command sent from inside the block never returns.'
+    + `\nthe admitted \`await this.#${START_GATE_ARMS}()\`, which restores inside the gate under`
+    + '\na polled budget: the box is admitted through `start()` on the instance, whose'
+    + '\npatched healthy-before-hook ordering is what lets a command reach the container.'
     + `\nRecovery hook: classify synchronously through \`${RECOVERY_CLASSIFIER}\` and hand`
     + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
     + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'

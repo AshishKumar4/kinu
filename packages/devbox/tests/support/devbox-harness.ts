@@ -25,6 +25,7 @@
 import { mock } from 'bun:test';
 
 import { createHash } from 'node:crypto';
+import * as v from 'valibot';
 
 import { describeThrown } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
@@ -1245,7 +1246,45 @@ export class FakeSandbox {
     if (fault !== undefined) throw fault;
   }
 
-  async startAndWaitForPorts(): Promise<void> {
+  /**
+   * The SDK's app-port wait, and why the box never admits through it. Like the
+   * platform, this refuses a requested port nothing listens on — and a port the
+   * box has not restored yet answers nothing, so admitting a fresh box through
+   * here refuses where admitting it through `start()` succeeds. That refusal
+   * is the fidelity the bench proof bought: a fake whose port wait always
+   * passed could not hold the shape production depends on, which is admission
+   * on the instance with every per-port proof inside the restore.
+   *
+   * A dark port refuses AFTER the instance starts but BEFORE the hook runs —
+   * the wait guards it — so the container is up, nothing restored, and the
+   * hook never ran. A port with a listener delegates to `start()`, which runs
+   * the hook inline the way the SDK runs it inside its block.
+   */
+  async startAndWaitForPorts(...args: unknown[]): Promise<void> {
+    // The app ports this call waits on, in every shape the SDK accepts: a bare
+    // port, a list, or the options object carrying `ports`. Decoded here, at
+    // the boundary the fake answers for — the rest parameter above is the one
+    // spelling of unknown this file allows, and anything else waits on nothing.
+    const single = v.safeParse(v.number(), args[0]);
+    const list = v.safeParse(v.array(v.number()), args[0]);
+    const options = v.safeParse(
+      v.object({ ports: v.union([v.number(), v.array(v.number())]) }), args[0],
+    );
+    const decoded = single.success ? single.output
+      : list.success ? list.output
+      : options.success ? options.output.ports
+      : undefined;
+    const wanted: readonly number[] = decoded === undefined ? []
+      : Array.isArray(decoded) ? decoded : [decoded];
+    const dark = wanted.filter((port) => !this.listening.has(port));
+    if (dark.length > 0) {
+      const wasRunning = this.running.running;
+      this.running.running = true;
+      if (!wasRunning) this.containerStarts += 1;
+      throw new Error(
+        `port ${dark.join(', ')} never answered: admission waits for the instance, and per-port proofs live inside the restore`,
+      );
+    }
     await this.start();
   }
 

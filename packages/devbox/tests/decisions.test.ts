@@ -499,6 +499,11 @@ describe('readiness is per container, not per Durable Object', () => {
     const startup = source.slice(source.indexOf('async #drive('));
     const body = startup.slice(0, startup.indexOf('\n  }'));
     expect(body).toContain('this.#invalidateGeneration();');
+    // Admitted through `start()` on the instance: the patched SDK marks healthy
+    // before the hook, so a command the restore issues routes straight to the
+    // container — and no app port is waited on, because the restore starts the
+    // app. An app-port wait here would hold the restore behind work it has not
+    // done yet.
     expect(body).toContain('await this.start(undefined, {');
     const invalidate = source.slice(source.indexOf('#invalidateGeneration(): void {'));
     const reset = invalidate.slice(0, invalidate.indexOf('\n  }'));
@@ -544,26 +549,27 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect(bodyOf('async kickStartup(')).toContain('this.#arm(STARTUP_CALLBACK, 1)');
   });
 
-  test('the hook holds the arming await and nothing else', () => {
-    // WHAT THE PROBE REFUTED, pinned so it cannot come back. A restore inside
-    // this hook cannot complete at all: the first container command asks the SDK
-    // for a nested `blockConcurrencyWhile` that the runtime will not grant while
-    // this one is held, so the activation runs to the cap
-    // `do.block_concurrency.cancel_ms` names and the object is reset (deployed
-    // probe gp0902011918). So the body is the arming await, and
-    // it wears no timer bound either — a timer cannot fire in here.
+  test('the hook holds the restore await and nothing else', () => {
+    // THE PLACEMENT, pinned so it cannot drift back out. The platform holds
+    // every request behind this hook until it settles, so a restore that runs
+    // here cannot be observed half-done — and the box is admitted through
+    // `start()` on the instance, which the patched SDK marks healthy BEFORE
+    // the hook, so a command the restore issues routes straight to the
+    // container instead of opening a nested start. The SDK documents that
+    // ordering as its expectation for work issued from inside `onStart`.
     const hook = bodyOf('override async onStart(');
-    expect(hook.slice(hook.indexOf('{') + 1).trim()).toBe('await this.#armContainerSchedules();');
-    const schedules = bodyOf('async #armContainerSchedules(');
-    expect(schedules).not.toContain('withContainerStartDeadline(');
-    expect(schedules).not.toContain('#restoreNow(');
-    expect(schedules).not.toContain('#rawExec(');
-    // ONE CALLER FOR THE RESTORE, reached from the two doors rather than from
-    // here: `restoreInStartGate` and the polled in-gate step policy are gone.
-    expect(source).not.toContain('restoreInStartGate');
-    expect(source).not.toContain('gateRestoreSteps');
-    expect(source).not.toContain('#startGate');
-    expect([...source.matchAll(/this\.#restoreNow\(/g)]).toHaveLength(1);
+    expect(hook.slice(hook.indexOf('{') + 1).trim()).toBe('await this.#restoreInStartGate();');
+    const restore = bodyOf('async #restoreInStartGate(');
+    expect(restore).not.toContain('withContainerStartDeadline(');
+    // The admitted restore drives the one attempt: a re-entered hook joins it
+    // in memory instead of opening a second restoration.
+    expect(restore).toContain('this.#gateRestoreAttempt()');
+    expect(source).toContain('#gateRestore');
+    // TWO CALLERS FOR THE RESTORE, two gates: the container-start hook under
+    // the polled budget, and the delivered frame under the raced one.
+    expect(source).toContain('restoreInStartGate');
+    expect(source).toContain('polledRestoreSteps');
+    expect([...source.matchAll(/this\.#restoreNow\(/g)]).toHaveLength(2);
   });
 
   test('the sweep of unreachable schedule rows runs at activation, before any arming', () => {
@@ -574,13 +580,16 @@ describe('every self-re-arming schedule needs a first link', () => {
     // never fires on a wake whose container is asleep, while the alarm loop
     // still runs — so a start-gated sweep could never reach the rows that spin
     // the loop. The sweep runs in the constructor's activation gate instead,
-    // which settles before the runtime delivers any event, alarm included; the
-    // start hook arms and nothing else.
+    // which settles before the runtime delivers any event, alarm included —
+    // and adopts the running container's restoration before anything touches it.
     const schedules = bodyOf('async #armContainerSchedules(');
     expect(schedules).not.toContain('#sweepUnknownSchedules');
     const activation = bodyOf('constructor(ctx: DurableObjectState<{}>, env: Env) {');
     expect(activation).toContain('ctx.blockConcurrencyWhile(');
-    expect(activation).toContain('this.#sweepUnknownSchedules()');
+    expect(activation).toContain('this.#activate()');
+    const activate = bodyOf('async #activate(');
+    expect(activate).toContain('this.#sweepUnknownSchedules()');
+    expect(activate).toContain('this.#adoptIfCurrent()');
     const sweep = bodyOf('async #sweepUnknownSchedules(');
     expect(sweep).toContain('SELECT DISTINCT callback FROM container_schedules');
     expect(sweep).toContain('this.deleteSchedules(callback)');
@@ -618,10 +627,12 @@ describe('every self-re-arming schedule needs a first link', () => {
     // Both failures are now one wrapper's job, except a failed container
     // admission: that callback must record its classified refusal and leave a
     // startup successor before it returns. The remaining calls are first links:
-    // the container-start hook forges one per self-re-arming chain, the recovery
-    // ladder re-arms the startup for the ONE action that asks the same container
-    // again, the incident recorder starts delivery on demand, and the guard
-    // maintains every chain thereafter.
+    // the container-start hook forges one per self-re-arming chain, the in-gate
+    // restore parks one successor when its own restore fails (the delivered
+    // frame continues it where timers fire), the recovery ladder re-arms the
+    // startup for the ONE action that asks the same container again, the
+    // incident recorder starts delivery on demand, and the guard maintains
+    // every chain thereafter.
     for (const callback of ['devboxCheckpoint', 'devboxHeartbeat', 'devboxIncidents']) {
       const body = bodyOf(`async ${callback}(`);
       expect({ callback, guarded: body.includes('this.#scheduled(') }).toEqual({
@@ -641,9 +652,10 @@ describe('every self-re-arming schedule needs a first link', () => {
       onKick: armSites(bodyOf('async kickStartup(')),
       onRecord: armSites(bodyOf('async #record(')),
       guard: armSites(bodyOf('async #scheduled(')),
+      parked: armSites(bodyOf('async #parkForDeliveredFrame(')),
     }).toEqual({
-      total: 8, onStart: 2, startupAdmission: 1, startupRetry: 1, startupUnclassified: 1,
-      onKick: 1, onRecord: 1, guard: 1,
+      total: 9, onStart: 2, startupAdmission: 1, startupRetry: 1, startupUnclassified: 1,
+      onKick: 1, onRecord: 1, guard: 1, parked: 1,
     });
     // And the ONE re-arm is reachable only from the action that means "ask this
     // same identity again". A refusal or a replacement that armed a startup

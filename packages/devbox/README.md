@@ -25,11 +25,14 @@ that on every call.
 
 `Devbox` owns this order:
 
-1. `onStart` takes the activity lease and arms two schedule rows. It does no
-   slow work because it runs inside `blockConcurrencyWhile`.
-2. A schedule attaches the filesystem, restarts processes, and re-exposes ports
-   outside that gate under a real budget. A port is re-exposed only after its own
-   listener answers.
+1. `onStart` restores inside `blockConcurrencyWhile`. It arms the container
+   schedule rows, then adopts the running instance when it is already restored,
+   else restores it — attach, workload restart, port exposure — under a polled
+   budget. The platform delivers nothing until the hook settles, so no caller
+   ever observes a half-restored box.
+2. A restore the gate cannot finish parks, never ladders: it records its reason
+   and arms the `devboxStartup` row, whose delivered frame continues it where
+   timers fire. A settled restore retires the startup row it no longer needs.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
@@ -48,9 +51,10 @@ interface DevboxStorage {
 }
 ```
 
-`attach()` takes no deadline. The container-start hook owns the budget and
-`withContainerStartDeadline` wraps the whole attach. No strategy would use
-a deadline argument.
+`attach()` takes no deadline. The container-start hook owns the budget: the
+restoration runs inside the gate under a polled budget, and a failure parks
+to the `devboxStartup` schedule row, whose delivered frame continues it where
+timers fire. No strategy would use a deadline argument.
 
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
 so tests can pin the reasoning without the platform.
@@ -146,13 +150,15 @@ shipped image, and against a FUSE fixture that refuses it to prove the case can
 go red.
 
 ## Platform constraints
-
 `onStart` runs inside `blockConcurrencyWhile`. I measured a deployed Worker
 where its first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
 The call was canceled and the Durable Object was reset.` A timer inside that
-block cannot fire until the block releases, so `withContainerStartDeadline`
-could not help. Attach runs in the `devboxStartup` schedule row instead.
+block cannot fire until the block releases, so the in-gate budget is polled,
+not raced. The box is admitted through `start()` on the instance, which the
+patched SDK marks healthy before the hook — so a command the restore issues
+routes straight to the container instead of opening a nested start. Admission
+waits for the instance, never for an app port the restore has not started yet.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and

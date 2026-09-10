@@ -434,6 +434,9 @@ const OPERATION_ID_PREFIX = 'bench:operation-id:';
  *  return, not to defer the work. */
 const OPERATION_DELAY_SECONDS = 1;
 
+/** The in-gate restore's latest wall-clock probe, written by `onStart`. */
+const RESTORE_PROBE_KEY = 'bench:restore-probe';
+
 /** The two key spellings, in one place each: four call sites read or write
  *  these rows, and a key spelled twice is a row nobody can find. */
 const operationKey = (token: string): string => `${OPERATION_PREFIX}${token}`;
@@ -468,6 +471,27 @@ class BenchBox extends Devbox<BenchEnv> {
     // constructor's signature identical to the base's rather than restating a
     // platform type that can drift.
     flushEnv = args[1];
+  }
+  /**
+   * Time the container-start restore from inside the gate, for the in-gate
+   * timing proof. Entry to settle, as the platform holds it: every request
+   * waits behind this hook, so its wall time is the number the
+   * `do.block_concurrency.cancel_ms` cap judges. Stored durably because the
+   * object may reset between the restore and the driver's read; overwritten
+   * by every start, so a read names the latest wake, never an old one.
+   */
+  override async onStart(): Promise<void> {
+    const enteredAt = Date.now();
+    await super.onStart();
+    const probe = { wallMs: Date.now() - enteredAt, at: enteredAt };
+    await this.ctx.storage.put(RESTORE_PROBE_KEY, probe);
+  }
+
+  /** The last in-gate restore's wall time, if any start has settled one. */
+  async readRestoreProbe(): Promise<{ readonly wallMs: number; readonly at: number } | undefined> {
+    return await this.ctx.storage.get<{ readonly wallMs: number; readonly at: number }>(
+      RESTORE_PROBE_KEY,
+    );
   }
 
   /**
@@ -661,6 +685,22 @@ class BenchBox extends Devbox<BenchEnv> {
     if (this.ctx.container?.running !== true) return false;
     await this.stop('SIGKILL');
     while (this.ctx.container?.running === true) await scheduler.wait(100);
+    return true;
+  }
+
+  /**
+   * Destroy this box's container identity without touching its rows or its
+   * store: the disk — and the boot id on it — is gone, so the next drive
+   * provisions a fresh instance and restores the committed generation onto
+   * it. The witness instrument for a true cold restore. A stop preserves the
+   * disk, so a wake after one adopts instead of restoring; only a destroy (or
+   * a platform replacement, which this is shaped like) proves the attach a
+   * fresh instance performs. The drive sorts out the generation: it observes
+   * the container down and turns over before admitting.
+   */
+  async destroyContainerForBench(): Promise<boolean> {
+    if (this.ctx.container?.running !== true) return false;
+    await this.destroy();
     return true;
   }
 
@@ -1035,6 +1075,15 @@ export default {
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
+        case 'POST /destroy': {
+          // The identity itself is gone — disk, boot id, mounts — while the
+          // rows and the store stay: the next drive provisions a fresh
+          // instance and restores the committed generation onto it. See
+          // `destroyContainerForBench`.
+          const destroyed = await box.destroyContainerForBench();
+          return json({ ok: true, strategy, box: name, destroyed, ms: Date.now() - started });
+        }
+
         case 'POST /wake': {
           await box.kickStartup();
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
@@ -1049,6 +1098,21 @@ export default {
             extractionAllowed: env.ALLOW_EXTRACTION === '1',
             storePrefix: storePrefixOf(env, strategy, name),
             state,
+            ms: Date.now() - started,
+          });
+        }
+
+        case 'GET /restore-probe': {
+          // The last in-gate restore's wall time, written by the start hook
+          // itself. The driver polls this after a wake settles: the number is
+          // the gate occupancy the platform cap judges, not the driver's own
+          // round trip.
+          const probe = await box.readRestoreProbe();
+          return json({
+            ok: probe !== undefined,
+            strategy,
+            box: name,
+            probe,
             ms: Date.now() - started,
           });
         }
