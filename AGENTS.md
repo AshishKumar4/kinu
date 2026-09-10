@@ -167,6 +167,12 @@ anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-A
 The inventory there is the count, and every tag in it currently carries blobs no
 other ref reaches. No test or gate fires when a tag disappears.
 
+## Platform Spend Is Not A Constraint
+
+The owner is a Cloudflare employee. Workers, Durable Objects, R2, Containers, Sandboxes, Workers AI and every other Cloudflare resource are free to this project. Never gate, cap, defer or ration a run, a bench, a probe or a deploy on its Cloudflare cost, and never describe one as "paid" or "money". The only real limits are the platform's own (the 30 s `blockConcurrencyWhile` gate, the 10 MB gzip bundle cap, rate limits) and wall-clock time. Model-provider spend is likewise not a reason to skip a measurement.
+
+There are no migrations, cutovers or compatibility periods here either. The product has no external users to migrate: a schema change is a reset deployment (§ Errors, Logging & Traceability), a rename moves every caller in one commit, and a deprecated path is deleted, not aliased.
+
 ## Deploy Discipline
 
 - `bun run deploy` (`scripts/deploy.sh`) is the only production deploy path. Never deploy production with a bare `wrangler deploy`. It skips the CLI-download asset check and the post-deploy smoke gate, and production has shipped assetless that way (every fresh install died on a checksum mismatch while the site looked fine).
