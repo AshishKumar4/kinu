@@ -618,7 +618,15 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect(activation).toContain('this.#activate()');
     const activate = bodyOf('async #activate(');
     expect(activate).toContain('this.#sweepUnknownSchedules()');
-    expect(activate).toContain('this.#adoptIfCurrent()');
+    // STORAGE ONLY. The gate delivers no timer, so a container command issued
+    // here cannot be bounded: a control server that accepts and never answers
+    // held the gate to the platform's cancel and the reset repeated it (dated
+    // 6e96741cc, 2026-09-09). The activation notes the durable claim; the
+    // first delivered frame asks the container (`#resolveAdoption`).
+    expect(activate).toContain('this.#durableClaim()');
+    expect(activate).not.toContain('#adoptIfCurrent');
+    expect(activate).not.toContain('#readBootId');
+    expect(activate).not.toContain('#rawExec');
     const sweep = bodyOf('async #sweepUnknownSchedules(');
     expect(sweep).toContain('SELECT DISTINCT callback FROM container_schedules');
     expect(sweep).toContain('this.deleteSchedules(callback)');

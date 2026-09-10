@@ -302,6 +302,93 @@ describe('the container-start hook restores the box', () => {
     expect(FakeSandbox.last?.schedules).toEqual([]);
     expect(FakeSandbox.last?.execs).toEqual([]);
   });
+
+  test('an activation over a running container asks it nothing; the first delivered frame does', async () => {
+    // THE HANG THIS REFUSES. A box that restored once, its container still
+    // running, and a control server that ACCEPTS the connection and never
+    // answers. The activation used to read the boot id inside the
+    // constructor's gate, where no timer is delivered: the exec hung, the
+    // platform cancelled the gate and reset the object, and the next
+    // activation repeated it — no request, no alarm, no stop, no destroy,
+    // until the container process died. A server that refuses outright is
+    // the counterexample: the exec rejects and the gate opens.
+    const storage = fakeStorage();
+    storage.rows.set('devbox:boot-id', 'instance-a');
+    storage.rows.set('devbox:restoration', { phase: 'attached' });
+    let activation: Promise<unknown> = Promise.resolve();
+    // SAFETY: the constructor's contract reads `storage`, `id`, `container`
+    // and `blockConcurrencyWhile` off its state; the fake carries those four,
+    // and hands the gate's closure back so the test can wait on the activation
+    // itself rather than on a clock.
+    const state = {
+      storage: storage.handle,
+      id: { toString: () => TEST_BOX_ID },
+      container: { running: true },
+      blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
+        const run = closure();
+        activation = run;
+        return await run;
+      },
+    } as ConstructorParameters<typeof Devbox>[0];
+    const box = new TestBox(state, {});
+    const container = FakeSandbox.last!;
+    // The control server accepts and never answers: any exec parks for ever.
+    const silent = gate();
+    container.execGate = silent;
+    // Either the activation settles, or it reaches the parked exec and would
+    // hold the platform's gate to its cancel: the old shape, and the red.
+    const outcome = await Promise.race([
+      activation.then(() => 'settled' as const),
+      silent.reached.then(() => 'asked the container' as const),
+    ]);
+    expect({ outcome, execs: container.execs }).toEqual({ outcome: 'settled', execs: [] });
+
+    // THE FIRST DELIVERED FRAME asks the question, where a deadline works: the
+    // server now answers, the boot id matches, and the box is adopted, not
+    // restored — one `cat`, no stamp.
+    container.execGate = undefined;
+    container.bootId = 'instance-a';
+    expect((await box.ensureReady()).kind).toBe('restored');
+    expect(container.execs.at(-1)).toBe('cat /tmp/devbox-boot-id 2>/dev/null || true');
+    expect(stamps(container)).toBe(0);
+  });
+
+  test('a pending adoption whose container was replaced is caught by the beat, not served', async () => {
+    const storage = fakeStorage();
+    storage.rows.set('devbox:boot-id', 'instance-a');
+    storage.rows.set('devbox:restoration', { phase: 'attached' });
+    let activation: Promise<unknown> = Promise.resolve();
+    // SAFETY: the constructor's contract reads `storage`, `id`, `container`
+    // and `blockConcurrencyWhile` off its state and nothing else (devbox.ts
+    // constructor + `#activate`); the fake is constructed with exactly those
+    // four members.
+    const state = {
+      storage: storage.handle,
+      id: { toString: () => TEST_BOX_ID },
+      container: { running: true },
+      blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
+        const run = closure();
+        activation = run;
+        return await run;
+      },
+    } as ConstructorParameters<typeof Devbox>[0];
+    const box = new TestBox(state, {});
+    const container = FakeSandbox.last!;
+    container.bootId = undefined;
+    await activation;
+
+    await box.devboxHeartbeat();
+
+    // The beat resolved the adoption first: the rows named an instance the
+    // container does not carry, so nothing was adopted — the box is not served
+    // as attached, and no quiesce was decided over it. The request door then
+    // restores the instance nobody restored: one fresh stamp.
+    const beaten = await box.devboxState();
+    expect({ restoration: beaten.restoration, decision: beaten.lastTick?.decision })
+      .toEqual({ restoration: 'unstarted', decision: 'hold' });
+    await box.ensureReady();
+    expect(stamps(container)).toBe(1);
+  });
 });
 
 describe('every ending is a named state, and no ending rejects into the platform', () => {
