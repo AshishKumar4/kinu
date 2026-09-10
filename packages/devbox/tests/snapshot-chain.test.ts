@@ -7,12 +7,41 @@
 // says so.
 //
 // TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
-import { readFileSync } from 'node:fs';
-import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+// Minted and released HERE, not in a shared helper: `gate:scratch-ownership`
+// reads the file that mints, and a module-scope `afterAll` in an imported file
+// registers with no suite and never fires. Only the prefix is shared.
+const mintedScratch = new Set<string>();
+
+function devboxScratchDir(label: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}${label}-`));
+  mintedScratch.add(dir);
+  return dir;
+}
+
+afterAll(() => {
+  // The directory AND the siblings written beside it. Several cases use the
+  // minted path as a STEM — `<dir>.sqsh`, `<dir>.excludes` — so removing only
+  // the directory leaves those behind: measured 2026-09-10, ten such files
+  // survived one run. They leaked the same way under the shared prefix and
+  // were invisible there, which is `gate:scratch-ownership`'s own stated blind
+  // spot ("a leak inside a helper that takes the path as an argument").
+  for (const dir of mintedScratch) {
+    rmSync(dir, { recursive: true, force: true });
+    const stem = basename(dir);
+    for (const entry of readdirSync(tmpdir())) {
+      if (entry.startsWith(`${stem}.`)) rmSync(join(tmpdir(), entry), { recursive: true, force: true });
+    }
+  }
+  mintedScratch.clear();
+});
+
 
 import {
   archiveCommand,
@@ -2841,7 +2870,7 @@ const T_SAME = 1_700_000_000;
 
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   test('a same-size rename changes the per-path mark', () => {
-    const dir = scratchDir('devbox-fingerprint-rename');
+    const dir = devboxScratchDir('devbox-fingerprint-rename');
     try {
       const firstPath = join(dir, 'before.txt');
       const secondPath = join(dir, 'after.txt');
@@ -2865,7 +2894,7 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // THE ORIGINAL RED PROOF. The old `%d` format truncated both marks below
     // to the same whole second and matched — the narrow unchanged-lie window
     // this gate exists to keep shut.
-    const dir = scratchDir('devbox-fingerprint');
+    const dir = devboxScratchDir('devbox-fingerprint');
     try {
       const file = join(dir, 'w.txt');
       writeFileSync(file, 'aaaaaaaaaa');
@@ -2892,7 +2921,7 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // fingerprint hashed agreed, so the gate skipped forever while content
     // drifted. The write itself moved ctime, which the per-path record hashes;
     // only an mtime restoration cannot undo that.
-    const dir = scratchDir('devbox-fingerprint-restored-mtime');
+    const dir = devboxScratchDir('devbox-fingerprint-restored-mtime');
     try {
       const file = join(dir, 'w.txt');
       const at = T_SAME + 0.5;
@@ -3016,7 +3045,7 @@ const FIXTURE = new Map<string, number>([
 ]);
 
 function fixtureTree(label: string): string {
-  const dir = scratchDir(label);
+  const dir = devboxScratchDir(label);
   for (const [path, size] of FIXTURE) {
     const full = join(dir, path);
     mkdirSync(dirname(full), { recursive: true });
