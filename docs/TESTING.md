@@ -390,7 +390,7 @@ A healthy credential ran one 26-minute, 91% CPU step on a 50,000-token
 
 ### Sizing before you run it
 
-`runSwarmAction` (`core/src/tools/agents-tool.ts:1416`) sets no node budget.
+`runSwarmAction` (`core/src/delegation/agents-tool.ts:1416`) sets no node budget.
 There is no step cap (owner ruling 2026-08-21): `runNodeLoop` ends when tools
 stop. Wall clock is `deps.maxWallClockMs` only when the caller supplies it.
 Otherwise it is absent and `runHeadInference` observes it between steps.
@@ -402,7 +402,7 @@ indefinitely (`rate-limit-retry.ts:69`: `for (let attempt = 1; ; attempt++)`).
 `PROVIDER_SDK_RETRIES = 2` (`rate-limit-retry.ts:13`) is the transport retry at
 `streamText`. A call ends when the provider answers, fails definitively, or is
 cancelled. A turn ends on completion, user stop, or throw. `classifyRunEnd`
-names the result. `AGENTS_ACTION_FIELDS.swarm` (`core/src/tools/agents-tool.ts:684`)
+names the result. `AGENTS_ACTION_FIELDS.swarm` (`core/src/delegation/agents-tool.ts:684`)
 records the deliberately absent iteration and wall-clock inputs.
 
 One wave had three nodes: 22, 25, 26 steps; 25, 27, 27 tool calls;

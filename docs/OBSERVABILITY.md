@@ -244,7 +244,7 @@ caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
 `ActivitySnapshot.budgets`: same ledger, narrower question, two figures.
 
 1. `MissionGovernor` guards review spend. `govern(llm, labels)`
-   (`tools/agents-tool.ts:1218`) is reached from `EvolutionEngine.reviewLlm`
+   (`delegation/agents-tool.ts:1218`) is reached from `EvolutionEngine.reviewLlm`
    (`evolution/engine.ts:338`). `AgentOrchestrator.recordTurn` stamps
    `CompletedTurn.missionLabels` from the active scope. It persists in the
    session window and deferred row because a drainer has no scope or a later
