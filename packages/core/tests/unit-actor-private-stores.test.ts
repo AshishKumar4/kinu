@@ -17,7 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors, type TestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { createFactsStore } from '../src/memory/facts';

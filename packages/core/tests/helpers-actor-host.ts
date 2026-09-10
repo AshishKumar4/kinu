@@ -23,7 +23,7 @@
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
 import { KinuError } from '../src/obs/error';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { createActorHost, type ActorHost, type BoundActor } from '../src/state/actor-host';

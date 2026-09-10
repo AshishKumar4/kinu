@@ -11,7 +11,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import {
   createActorHost, childContextResolver,

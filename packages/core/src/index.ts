@@ -35,7 +35,7 @@ export {
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
-export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './identity/workspace-schema';
+export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
