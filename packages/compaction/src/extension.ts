@@ -95,7 +95,7 @@ export interface CompactionExtensionDeps {
   archive: ArchiveIndexStore;
   /** One LLM call — prompt in, completion text out. Serves both summary
    *  kinds; failures degrade to deterministic previews, never break a turn. */
-  summarize: (prompt: string) => Promise<string>;
+  summarize: (prompt: string, signal?: AbortSignal) => Promise<string>;
   /** The ephemeral plane the ladder's first rung prunes. */
   ephemeral: EphemeralContextPlane;
   /** Trigger/target/recent-tool profile. Defaults to the light preset. */
@@ -110,10 +110,11 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const engine = createEngine(kinuSpec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
+  let turnSignal: AbortSignal | undefined;
   const summarizer: Summarizer = {
     async complete(job) {
       try {
-        return await deps.summarize(job.prompt);
+        return await deps.summarize(job.prompt, turnSignal);
       } catch (err) {
         deps.ports.logger.warn('Compaction summary call failed', {
           rangeStartMessageId: job.rangeStartMessageId,
@@ -298,6 +299,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     name: 'compaction',
 
     async transformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
+      turnSignal = ctx.abortSignal;
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
       const messages = [...ctx.messages];
       const turns = kinuCodec.encode(messages);

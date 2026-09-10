@@ -126,6 +126,8 @@ export interface StepPipeline {
   /** The claim's durable context plane: where a staged mid-turn edit lands and
    *  where the consumed revision is recorded. Absent = unclaimed work. */
   readonly context?: StepContextPlane | undefined;
+  /** The turn's cancellation, handed to every extension hook. */
+  readonly abortSignal?: AbortSignal | undefined;
 }
 
 export type StepPrepareResult =
@@ -156,7 +158,7 @@ export function composePrepareStep(
   const refusal = pipeline.budget?.guard('model_call');
   if (refusal) throw new MissionBudgetExhausted(refusal);
   const projected = projectToolErrorFeedback(ctx.messages, ctx.steps);
-  const prepared = projected === undefined ? ctx : { ...ctx, messages: projected };
+  const prepared = { ...ctx, messages: projected ?? ctx.messages, abortSignal: pipeline.abortSignal };
   const steered = pipeline.extensions?.runPrepareStep(prepared);
   if (steered instanceof Promise) {
     return steered.then((messages) => finishPrepareStep(pipeline, ctx, messages ?? projected));
