@@ -520,10 +520,12 @@ describe('readiness is per container, not per Durable Object', () => {
     const startup = source.slice(source.indexOf('async #drive('));
     const body = startup.slice(0, startup.indexOf('\n  }'));
     expect(body).toContain('this.#invalidateGeneration();');
-    // Admitted only through the healthy-before-hook path: a plain `start()`
-    // never marks healthy, and the first command issued inside its hook opens
-    // a nested start instead of reaching the container.
-    expect(body).toContain('await this.startAndWaitForPorts({');
+    // Admitted through `start()` on the instance: the patched SDK marks healthy
+    // before the hook, so a command the restore issues routes straight to the
+    // container — and no app port is waited on, because the restore starts the
+    // app. An app-port wait here would hold the restore behind work it has not
+    // done yet.
+    expect(body).toContain('await this.start(undefined, {');
     const invalidate = source.slice(source.indexOf('#invalidateGeneration(): void {'));
     const reset = invalidate.slice(0, invalidate.indexOf('\n  }'));
     expect(reset).toContain('this.#generation += 1;');
@@ -571,11 +573,11 @@ describe('every self-re-arming schedule needs a first link', () => {
   test('the hook holds the restore await and nothing else', () => {
     // THE PLACEMENT, pinned so it cannot drift back out. The platform holds
     // every request behind this hook until it settles, so a restore that runs
-    // here cannot be observed half-done — and the box is admitted only through
-    // `startAndWaitForPorts`, which marks the container healthy BEFORE the
-    // hook, so a command the restore issues routes straight to the container
-    // instead of opening a nested start. The SDK documents that ordering as
-    // its expectation for work issued from inside `onStart`.
+    // here cannot be observed half-done — and the box is admitted through
+    // `start()` on the instance, which the patched SDK marks healthy BEFORE
+    // the hook, so a command the restore issues routes straight to the
+    // container instead of opening a nested start. The SDK documents that
+    // ordering as its expectation for work issued from inside `onStart`.
     const hook = bodyOf('override async onStart(');
     expect(hook.slice(hook.indexOf('{') + 1).trim()).toBe('await this.#restoreInStartGate();');
     const restore = bodyOf('async #restoreInStartGate(');

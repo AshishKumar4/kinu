@@ -51,17 +51,22 @@
  *    the work simply would not happen.
  *
  *    The restore completes inside the gate on the strength of an ordering, not
- *    a bound. The box is admitted only through `startAndWaitForPorts`, which
- *    calls `setHealthy()` BEFORE the hook (`container.js:632-636`) — so a
- *    command the restore issues sees a healthy container and routes straight
- *    to it instead of opening a nested start. That is the SDK's own documented
+ *    a bound. The box is admitted through `start()` on the instance, which the
+ *    patched SDK marks healthy BEFORE the hook
+ *    (`patches/@cloudflare%2Fcontainers@0.3.7.patch`, mirroring the
+ *    `startAndWaitForPorts` ordering at `container.js:632-636`) — so a command
+ *    the restore issues sees a healthy container and routes straight to it
+ *    instead of opening a nested start. That is the SDK's own documented
  *    expectation for work issued from inside `onStart` (`sandbox-CPj2jsbz.js:
- *    1019-1029`). The other entry, plain `start()`, never marks healthy
+ *    1019-1029`). An unpatched `start()` never marks healthy
  *    (`container.js:570-586`): a command issued there asks for a nested
  *    `startAndWaitForPorts` (`sandbox-CPj2jsbz.js:8691-8705`) and the
  *    activation runs to the cap `do.block_concurrency.cancel_ms` names. The
- *    RPC control path carries the same conjunction as a patch: a reconnect on
- *    a running, healthy container returns before the wait
+ *    wait is for the instance, never for an app port: a restore that starts
+ *    the app cannot wait behind that port — measured live, every admission
+ *    refused on a running container whose port was dark. The RPC control path
+ *    carries the same conjunction as a patch: a reconnect on a running,
+ *    healthy container returns before the wait
  *    (`patches/@cloudflare%2Fsandbox@0.12.8.patch`).
  *
  *    ONE alternative to the admitted restore, narrower than it and named in the
@@ -369,14 +374,16 @@ const ADMITTED_INIT_AWAITS: readonly string[] = [
  *
  * A SECOND PIN, for the same reason {@link RECOVERY_CLASSIFIER} is one: the
  * admission is only as good as what the admitted call is allowed to do. The
- * box is admitted only through `startAndWaitForPorts`, which marks the
- * container healthy BEFORE the start hook (`@cloudflare/containers`,
- * `container.js:632-636`) — so a command the restore issues routes straight
- * to the container instead of opening a nested start. That ordering is the
- * SDK's own documented expectation for work issued from inside `onStart`
- * (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js:1019-1029`), and the
- * restore runs inside the gate on the strength of it. Three properties of the
- * declaration are decidable here with zero type information:
+ * box is admitted through `start()` on the instance, which the patched SDK
+ * marks healthy BEFORE the start hook (see
+ * `patches/@cloudflare%2Fcontainers@0.3.7.patch`, mirroring
+ * `@cloudflare/containers`, `container.js:632-636`) — so a command the
+ * restore issues routes straight to the container instead of opening a nested
+ * start. That ordering is the SDK's own documented
+ * expectation for work issued from inside `onStart` (`@cloudflare/sandbox`,
+ * `dist/sandbox-CPj2jsbz.js:1019-1029`), and the restore runs inside the gate
+ * on the strength of it. Three properties of the declaration are decidable
+ * here with zero type information:
  *
  *   • It must not route through {@link START_DEADLINE}. That bound is a timer,
  *     and a timer set inside `blockConcurrencyWhile` is not delivered until the
@@ -996,8 +1003,8 @@ if (import.meta.main) {
     + '\nPer-request hook: preconditions that need I/O belong on the turn path'
     + `\nContainer-start hook: return \`${START_DEADLINE}(...)\` so the work is bounded, or hold`
     + `\nthe admitted \`await this.#${START_GATE_ARMS}()\`, which restores inside the gate under`
-    + '\na polled budget: the box is admitted only through `startAndWaitForPorts`, whose'
-    + '\nhealthy-before-hook ordering is what lets a command reach the container.'
+    + '\na polled budget: the box is admitted through `start()` on the instance, whose'
+    + '\npatched healthy-before-hook ordering is what lets a command reach the container.'
     + `\nRecovery hook: classify synchronously through \`${RECOVERY_CLASSIFIER}\` and hand`
     + '\nevery re-drive to a detached durable carrier (ActorAgent.redriveRecoveredLane).'
     + '\nEither onStart, whatever the gate waits on: a call named in `MODEL_SINKS` is refused'
