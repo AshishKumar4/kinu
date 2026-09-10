@@ -31,18 +31,21 @@ function PlatformSection({ install }: { install: string }): ReactElement {
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · Where agents work</RuleLabel>
-      <SectionTitle>A computer for your agents. <Accent>Choose where it lives.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">A workspace is where one agent works. It holds the agent's files, tools, memory, and conversations.</p>
+      <SectionTitle>Run your agents in the cloud, <Accent>or on your own machine.</Accent></SectionTitle>
+      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">Same agent either way. You choose when you create it: hosted on Kinu, or local on your own machine.</p>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
         <article className="flex min-w-0 flex-col p-6 sm:p-8">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud agents</span>
           <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Close the laptop.<br />The agent keeps working.</h3>
-          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Cloud workspaces keep their files, conversations, and memory. Schedules, signed webhooks, and background jobs can start work without an open browser.</p>
-          <ul className="mb-8 space-y-3 text-sm leading-[1.65] p-text-2">
-            <li>Investigate repository events as they arrive.</li>
-            <li>Schedule research and check back on the sources.</li>
-            <li>Run builds in an attached Linux sandbox.</li>
+          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Hosted on Cloudflare, so the agent keeps working with your device off. It can start its own work on a schedule, or when a webhook arrives.</p>
+          <ul className="mb-6 space-y-3 text-sm leading-[1.65] p-text-2">
+            <li>A push or an issue wakes it, and you read what it did when you get back.</li>
+            <li>Ask for a Linux container when a job needs one, with a preview URL you can open.</li>
           </ul>
+          <div className="mb-8 rounded-xl border p-border p-recessed p-4">
+            <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Give it your devices</span>
+            <p className="mt-2 text-sm leading-[1.7] p-text-3">A cloud agent can reach your own machines. Connect one and it shows up at <code className="font-mono text-xs p-text-2">/pc</code>, and each extra machine gets its own name. It only ever gets the access you grant it.</p>
+          </div>
           <div className="mt-auto flex flex-wrap gap-3"><LandingActionLink href="/login" primary>Sign in to kinu.run →</LandingActionLink></div>
           <div id="deploy" className="mt-6 border-t p-border pt-5 text-sm leading-[1.7] p-text-3">
             To run it in your own Cloudflare account, <a className="p-accent underline underline-offset-4" href="https://deploy.workers.cloudflare.com/?url=https://github.com/AshishKumar4/kinu" target="_blank" rel="noreferrer">deploy Kinu</a> with the <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/SELF-HOSTING.md'} target="_blank" rel="noreferrer">self-hosting guide</a>. You need a Workers Paid plan and your model credentials.
@@ -50,7 +53,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
         </article>
         <article className="flex min-w-0 flex-col border-t p-border p-6 sm:p-8 md:border-l md:border-t-0">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Local</span>
-          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your checkout.<br />Your terminal or editor.</h3>
+          <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your terminal or editor.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Local workspaces run on your machine. Use the full-screen TUI, a one-shot CLI task, or an editor that speaks ACP. Model requests go to the provider you configured.</p>
           <div className="rounded-xl border p-border p-recessed p-4">
             <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
