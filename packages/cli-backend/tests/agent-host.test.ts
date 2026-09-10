@@ -846,7 +846,7 @@ describe('LocalAgentHost', () => {
    * fresh one, so the lesson would sit under an id nothing reads again. The
    * hire half is the control: the same ledgers, live for a child that persists.
    */
-  test('a task-lifetime child records no turn into the evolution window; a durable hire does', async () => {
+  test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     // One host per half: the fixture model reports on its FIRST turn only, so
     // each child needs a model of its own to make its failing report.
     const ask = makeRoots();
@@ -883,13 +883,10 @@ describe('LocalAgentHost', () => {
     await childTurnEnded.promise;
     await hiring.host.close();
 
-    // The hire's turn was graded by the environment and reflected: the same
-    // machinery, entered because this child is the one that will read it.
-    const hireRows = evolutionRows(hireDb, childActorId(hireDb, hired.name));
-    expect(hireRows.window).toBe(1);
-    expect(hireRows.outcomes).toEqual([{ outcome: 'corrected', source: 'execution' }]);
-    expect(hireRows.lessons).toEqual([{ source: 'turn_reflection', status: 'provisional' }]);
-    expect(hireChild.reflections()).toBe(1);
+    // Same as cf, where a subordinate runs `runHeadInference` and never
+    // reaches `recordTurn`: the hire's actor-scoped ledger stays empty.
+    expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(hireChild.reflections()).toBe(0);
   });
 
   /**
