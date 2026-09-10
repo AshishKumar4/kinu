@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-10",
   "files": 2060,
-  "functions": 52096,
+  "functions": 52102,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -94,15 +94,15 @@
       "complexity": 48
     },
     {
-      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 47
-    },
-    {
       "key": "lean/check-traceability.mjs#tsScan",
       "complexity": 46
     },
     {
       "key": "packages/cli/src/tui/home-app.tsx#HomeScene",
+      "complexity": 46
+    },
+    {
+      "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
       "complexity": 46
     },
     {
