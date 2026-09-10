@@ -412,11 +412,20 @@ export const LADDER: readonly Gate[] = [
 
   {
     run: 'bun run gate:dead-code',
-    tier: 'push',
-    // 7.0 s measured 2026-09-01: two knip runs dominate, the dependency census
-    // adds ~0.2 s over 11 manifests, 105 declarations and 961 installed
-    // package manifests read for their peer contracts.
-    seconds: 7,
+    // COMMIT, moved from push 2026-09-10. The old reason was that nothing can
+    // become dead between a commit and the push that follows it. That premise
+    // holds for one developer who commits then pushes, and it is FALSE for a
+    // lane: a subagent commits in its own worktree, yields, and the integrator
+    // merges, with no push in between — so the violation travelled as an
+    // artifact and surfaced at the merge. Measured that way four times in one
+    // day (`stepPruneBatchTokens`, `SlateSummary.port`, a lazy default export,
+    // `MOVIE_ASK`) plus `PLAN_MESSAGES` here, every one authored by a lane whose
+    // own acceptance was green because `bun run check` does not contain this
+    // gate. Here it cannot be handed on: the commit hook runs this tier.
+    // 15.2s measured 2026-09-10 on this tree, against the 7s declared when two
+    // knip runs were the whole cost.
+    tier: 'commit',
+    seconds: 15,
     catches: 'an export referenced only by its own test, a file no entry point reaches at '
       + 'all, and a MANIFEST DECLARATION nothing imports. `ensureActorSchema` was the first '
       + 'of ten; the dependency class deleted thirteen declarations across four manifests on '
@@ -434,11 +443,16 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:wired',
-    // PUSH, beside `gate:dead-code` and for its reason: at 3.6s it is three times
-    // the priciest commit-tier static gate, and nothing can become unwired
-    // between a commit and the push that follows it.
-    tier: 'push',
-    seconds: 3.6,
+    // COMMIT, moved from push 2026-09-10 beside `gate:dead-code` and for the
+    // same falsified premise: "nothing can become unwired between a commit and
+    // the push that follows it" assumes the author pushes. A lane commits in a
+    // worktree and yields, and the integrator merges — the commit is the last
+    // moment this tree governs before the symbol becomes someone else's
+    // artifact. Cost is real and stated rather than hidden: 7.7-9.3s measured
+    // against the 3.6s declared when it was cheaper, so the commit tier grows
+    // by roughly this plus dead-code's 15s.
+    tier: 'commit',
+    seconds: 9,
     catches: 'a capability that was designed, built, TESTED, and connected to nothing — the '
       + 'class `gate:dead-code` is structurally unable to see, because knip\'s unit of "used" '
       + 'for a re-exported symbol is the TERMINUS of the re-export chain, and every export in '
