@@ -287,12 +287,19 @@ describe('agents tool — registration and dep-gating', () => {
 
     expect(said(temporaryCapable)).toContain('lifetime:"task"');
     expect(said(durableOnly)).not.toContain('lifetime:"task"');
-    // The AXIS, in any form — the field name, either of its values, and the
-    // hedge that implies the choice without naming it. A rung or a result
-    // sentence reading "by default" or "a durable hire" promises the same
-    // unreachable alternative, so all four tokens are refused. None occurs on
-    // this surface for any other reason: measured zero, each of them.
-    expect(said(durableOnly)).not.toMatch(/lifetime|default|durable|\btask\b/i);
+    // THE AXIS VOCABULARY, in any form: the field name, its surviving value,
+    // and the hedge that implies the choice without naming it. A rung or a
+    // result sentence reading "by default" or "a durable hire" promises the
+    // same unreachable alternative, so all three are refused, and each is
+    // measured zero on this surface for any other reason.
+    //
+    // `task` is deliberately NOT here. It is ordinary English the rung may
+    // legitimately want — "hand it a bounded task" — so gating it would earn a
+    // false red on a correct edit, and a false red is what tempts the next
+    // reader to weaken this line, which is the one outcome it exists to stop.
+    // The value is covered anyway: it only ever appears as `lifetime:"task"`,
+    // and the paragraph carrying it opens with that spelling.
+    expect(said(durableOnly)).not.toMatch(/lifetime|default|durable/i);
     // Still a usable account of the rung it does have.
     expect(said(durableOnly)).toContain('Hire a helper (action=hire)');
     expect(said(durableOnly)).toContain('stays in your roster');
