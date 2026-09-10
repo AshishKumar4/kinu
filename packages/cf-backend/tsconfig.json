@@ -1,21 +1,38 @@
 {
-  "//": "Extends the repo base, not `agents/tsconfig`. Inheriting a config out of node_modules meant the one package Vite actually bundles was the one package our own base config did not govern: it ran at ES2021 without `resolveJsonModule`, and a dependency bump could have changed its module settings. The Worker-shaped parts — DOM libs, workers-types, the React JSX runtime — are declared here because they are genuinely cf-backend's, and `verbatimModuleSyntax` moved to the base so this package keeps the check it already had while every other project gains it.",
+  "//": "Extends the repo base, not `agents/tsconfig`. Inheriting a config out of node_modules meant the one package Vite actually bundles was the one package our own base config did not govern: it ran at ES2021 without `resolveJsonModule`, and a dependency bump could have changed its module settings. The Worker-shaped parts \u2014 DOM libs, workers-types, the React JSX runtime \u2014 are declared here because they are genuinely cf-backend's, and `verbatimModuleSyntax` moved to the base so this package keeps the check it already had while every other project gains it.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
-    "types": ["node", "@cloudflare/workers-types", "vite/client"],
+    "types": [
+      "node",
+      "@cloudflare/workers-types",
+      "vite/client"
+    ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
-  "include": ["src", "tests", "env.d.ts"],
-  "exclude": ["tests/workerd"],
+  "include": [
+    "src",
+    "tests",
+    "env.d.ts"
+  ],
+  "exclude": [
+    "tests/workerd"
+  ],
   "//files": "The decorated-class test and the probes that import production actors need production `Env`, not the workerd runner's probe bindings, so they are compiled HERE against their actual source closure while the separate workerd project checks its own runner and RPC client contracts. This list and that project's `exclude` are one decision in two files: a probe named in exactly one of them is either checked twice under the wrong globals or, worse, checked by nothing at all.",
   "files": [
     "tests/workerd/decorated-agent.test.ts",
     "tests/workerd/plan-announce-probe.ts",
-    "tests/workerd/slate-actor-probe.ts"
+    "tests/workerd/slate-actor-probe.ts",
+    "tests/workerd/user-socket-probe.ts"
   ]
 }

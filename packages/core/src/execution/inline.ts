@@ -289,7 +289,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // A joined markdown string has no .filter/.map and would break that call.
         const crafted = craftStore.list();
         // Pull quality scores. The columns live on the crafted_tools row the
-        // store just wrote (identity/workspace-schema.ts ensures the shape),
+        // store just wrote (state/workspace-schema.ts ensures the shape),
         // so a read that fails is a broken database, not an unscored tool.
         const scoreByName = new Map<string, number>();
         if (sql) {

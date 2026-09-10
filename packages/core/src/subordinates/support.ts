@@ -7,7 +7,7 @@
  * SubordinateRuntime (how a subordinate is actually spawned and addressed on
  * that platform); everything else — status transitions, rollback semantics,
  * the inherited-context digest, event admission — is the same policy wherever
- * it runs. Core already owned the vocabulary (tools/agents-tool.ts); this is
+ * it runs. Core already owned the vocabulary (delegation/agents-tool.ts); this is
  * the logic that belongs beside it.
  */
 

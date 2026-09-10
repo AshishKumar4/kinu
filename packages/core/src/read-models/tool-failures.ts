@@ -19,7 +19,7 @@
  * Nothing here guesses. Every reason is one the producing code computed and
  * wrote: `file` puts its `FileToolFailureReason` on the result (tools/
  * file-tool.ts), the `agents` fork puts `bad_input` on a call whose arguments do
- * not describe a fork (tools/agents-tool.ts), the `run` tool puts an `ErrorCode`
+ * not describe a fork (delegation/agents-tool.ts), the `run` tool puts an `ErrorCode`
  * on every refusal it returns (tools/builtins.ts), and an exec-shaped result
  * carries its exit code in the `Error (exit N)` prefix this codebase's own
  * renderer produced (execution/exec-result.ts:72). A row that fits none of those

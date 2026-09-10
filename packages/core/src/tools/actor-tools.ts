@@ -3,7 +3,7 @@
  * cannot hold — `agents`, the delegation tool.
  *
  * The split is a layering fact, not a preference. `agents`' implementation IS
- * the search engine: tools/agents-tool.ts → strategy/swarm-run.ts →
+ * the search engine: delegation/agents-tool.ts → strategy/swarm-run.ts →
  * strategy/node-agent.ts, and a node's own tool surface comes back out of
  * `buildBuiltinTools`. Registering the tool inside that factory therefore closed
  * a four-module runtime import cycle, and a value cycle is not a style
@@ -63,7 +63,7 @@ export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
 }
 
 // The delegation deps contracts (and the reserved peer-reply topic) live with
-// the tool that consumes them — tools/agents-tool.ts — and are re-exported here
+// the tool that consumes them — delegation/agents-tool.ts — and are re-exported here
 // for the backends that implement them, beside the factory that registers it.
 export {
   PEER_REPLY_TOPIC,

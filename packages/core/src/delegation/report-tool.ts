@@ -3,7 +3,7 @@
  * optional structured handoff, published into the parent workspace's EventLog.
  *
  * Factored out for the reason the other three dispatchers were: `report.*` in
- * codemode (tools/report-codemode.ts) and the native `report` tool are two
+ * codemode (delegation/report-codemode.ts) and the native `report` tool are two
  * surfaces of one capability, and they were validating the same two arguments
  * two different ways — codemode valibot-parsed both, while the native tool
  * hand-checked `content` and never checked `status` at all, so a status outside

@@ -300,7 +300,7 @@ function buildCraftedToolSetFromExecute(
     relevantNames = new Set();
     // Neither read is guarded: `crafted_tools_fts` and the crafted_tools
     // quality columns are both part of the one workspace schema
-    // (identity/workspace-schema.ts, asserted per root by conformance/
+    // (state/workspace-schema.ts, asserted per root by conformance/
     // manifest.ts), and CraftStore.search quotes the
     // query as an FTS5 phrase so no user text can make it a syntax error. A
     // failure here means the workspace database is broken, and swallowing it

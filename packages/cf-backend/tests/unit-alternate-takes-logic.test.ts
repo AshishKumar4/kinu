@@ -70,7 +70,7 @@ describe('take-pick schema ordering (lazy-engine hole)', () => {
     // EvolutionEngine constructor instead, a freshly-woken actor whose first
     // action is pickAlternateTake hits the narrow CHECK and loses the preference.
     const schema = readFileSync(
-      join(import.meta.dir, '..', '..', 'core', 'src', 'identity', 'workspace-schema.ts'), 'utf8',
+      join(import.meta.dir, '..', '..', 'core', 'src', 'state', 'workspace-schema.ts'), 'utf8',
     );
     const body = schema.slice(schema.indexOf('export function initWorkspaceSchema'));
     expect(body).toContain('initTurnOutcomeTables(execRaw)');

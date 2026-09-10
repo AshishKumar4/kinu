@@ -19,7 +19,7 @@
  *
  * Delegation itself is NOT absent from the sandbox — it just isn't duplicated
  * here. The `agents.*` namespace projects the existing `agents` tool over the
- * actor's own deps (core tools/agents-codemode.ts), so there is still exactly
+ * actor's own deps (core delegation/agents-codemode.ts), so there is still exactly
  * one spawn/join implementation, with one more caller.
  */
 import * as v from 'valibot';
