@@ -142,6 +142,14 @@ describe('canonical MCP endpoint identity', () => {
     expect(out.serverUrl).toBe('https://mcp.example.com/v1');
   });
 
+  test.each([
+    ['a username and password', 'https://svc:s3cret@mcp.example.com/v1'],
+    ['a bare username', 'https://svc@mcp.example.com/v1'],
+    ['an empty username with a password', 'https://:s3cret@mcp.example.com/v1'],
+  ])('a URL carrying %s is refused, so no credential lands in the plaintext column', (_label, serverUrl) => {
+    expect(() => validateMcpServerInput({ name: 'n', serverUrl })).toThrow(/username or password/u);
+  });
+
   test('an empty headers object is omitted, not stored as a credential', () => {
     // A row whose `headers` column is non-null is a row the hydration path
     // treats as holding a secret. `{}` is not one.
