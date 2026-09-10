@@ -10,6 +10,7 @@ import {
   renderSoulMarkdown,
   isReasoningEffort,
   normalizeUsage,
+  type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -21,7 +22,9 @@ import type { WorkspaceEntry, WorkspaceRegistration } from './user-do';
 import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
-  getConfig(caller: UserCaller, key: string): Promise<string | null>;
+  /** The account's profile catalog: its `default` tier is the one place the
+   *  account's default model lives, for new workspaces and every turn alike. */
+  getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope>;
   registerWorkspace(
     caller: UserCaller,
     name: string,
@@ -63,13 +66,13 @@ export async function createCloudWorkspaceForUser(
     throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
   }
   const menu = await listAvailableModels(env, userId, caller);
-  // The CHOICE is core's (`defaultSpecFor`): a configured default wins only if
-  // the account can actually serve it, else the native Workers AI model, else
-  // nothing — never the first entry in the menu, which would sign new
-  // workspaces up to a paid BYO provider. The COPY below stays here, because the
-  // remedy is this surface's: the CLI's counterpart names `kinu auth`.
+  // The CHOICE is core's (`defaultSpecFor`): the catalog's default tier wins
+  // only if the account can actually serve it, else the native Workers AI
+  // model, else nothing — never the first entry in the menu, which would sign
+  // new workspaces up to a paid BYO provider. The COPY below stays here, because
+  // the remedy is this surface's: the CLI's counterpart names `kinu auth`.
   const model = defaultSpecFor(
-    input.model ?? await userDO.getConfig(caller, 'default_model'),
+    input.model ?? (await userDO.getProfileCatalog(caller)).catalog.tiers.default.model,
     menu.models.map((entry) => entry.spec),
   );
   if (!model) {

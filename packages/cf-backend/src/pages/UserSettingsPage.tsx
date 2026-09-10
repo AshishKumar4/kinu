@@ -13,7 +13,7 @@
  *   #account    profile
  *   #devices    the machines linked to this account
  *   #providers  Cloudflare AI, ChatGPT, API keys, MCP servers
- *   #models     the default model and the role/tier catalog
+ *   #models     the role/tier catalog, whose default tier is the account's model
  *   #cli        the one command that installs the CLI
  *
  * The account reads stay on the PAGE rather than in the sections: they decide
@@ -24,16 +24,15 @@ import { startTransition, useEffect, useState, useCallback, useRef, type ReactNo
 import { Link, useLocation } from "react-router-dom";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import {
-  PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
+  PlugIcon, KeyIcon, CheckIcon, CopyIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
   DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { ModelPicker } from "@/components/ModelPicker";
 import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
-  listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
+  listAvailableModels, listProviderCatalog, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   acknowledgeUnstoppedDevice, registerDevice, renameDevice, revokeDevice,
@@ -104,14 +103,13 @@ function CardSlot<T>({ resource, what, onRetry, children }: {
 
 export default function UserSettingsPage() {
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
-  const [defaultModel, setDefaultModel] = useState<string | null>(null);
 
   // Every one of these reads describes what the account HAS connected, so none
   // of them may fail quietly: a swallowed rejection turned into "Connect
   // ChatGPT", no API keys and a Cloudflare OAuth CTA for an account that is
   // fully connected, walking the user into a needless re-grant. Each read is
   // its own resource so each also PUBLISHES independently: one unavailable
-  // dependency stalls or fails its own card, never the seven beside it, and
+  // dependency stalls or fails its own card, never the six beside it, and
   // every read runs under the api() helper's shared deadline rather than
   // waiting forever (KINU-073).
   const profile = useAsyncResource(getProfile);
@@ -121,9 +119,7 @@ export default function UserSettingsPage() {
   const catalog = useAsyncResource(listProviderCatalog);
   const gateways = useAsyncResource(listCloudflareGateways);
   const accounts = useAsyncResource(listCloudflareAccounts);
-  const storedDefault = useAsyncResource(useCallback(() => getConfig("default_model"), []));
-
-  const reads = [profile, creds, codex, models, catalog, gateways, accounts, storedDefault];
+  const reads = [profile, creds, codex, models, catalog, gateways, accounts];
   // One retry affordance: a mutation's onChanged and every card's Retry re-read
   // the whole account, because the mutators invalidate more than their own row
   // (connecting a provider changes the model menu, the catalog and the creds).
@@ -134,10 +130,6 @@ export default function UserSettingsPage() {
   // The install command is derivable from the origin, so its read failing
   // costs nothing and claims nothing.
   useEffect(() => { getCliSetup().then(setCliSetup, () => setCliSetup(null)); }, []);
-
-  // The picker is optimistic on the user's own pick; the loaded value is the
-  // fallback until it is re-read.
-  const selectedDefaultModel = defaultModel ?? lastValue(storedDefault.resource)?.value ?? '';
 
   // Section state lives in the URL, so a deep link, a reload and the browser's
   // Back button all land on the same section.
@@ -275,39 +267,7 @@ export default function UserSettingsPage() {
           </>
         )}
 
-        {section === "models" && (
-          <>
-            <Card title="Defaults" icon={GearSixIcon}>
-              <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-                {(menu) => (
-                  <CardSlot resource={storedDefault.resource} what="your default model" onRetry={reloadAll}>
-                    {() => (
-                      <div className="space-y-2">
-                        <div className="text-xs p-text-2">Default model for new workspaces</div>
-                        <ModelPicker
-                          models={menu.models}
-                          failures={menu.failures}
-                          value={selectedDefaultModel}
-                          onChange={async (spec) => {
-                            setDefaultModel(spec);
-                            try { await setConfig('default_model', spec); }
-                            catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
-                          }}
-                          clearable
-                          placeholder="(use system default)"
-                        />
-                        <p className="p-meta p-text-3">
-                          New workspaces use this default. Change an existing workspace under Workspace settings.
-                        </p>
-                      </div>
-                    )}
-                  </CardSlot>
-                )}
-              </CardSlot>
-            </Card>
-            <ProfileCatalogSettings />
-          </>
-        )}
+        {section === "models" && <ProfileCatalogSettings />}
           </div>
         </div>
       </div>

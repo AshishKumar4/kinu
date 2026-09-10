@@ -102,7 +102,6 @@ const ProviderFailureSchema = v.object({
 const ModelMenuSchema = v.object({
   models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
 });
-const ConfigEntrySchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
 
 export interface DeviceFlowStart {
   userCode: string;
@@ -273,11 +272,6 @@ export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll
   .then((r) => { if (r.connected) invalidateModelsCache(); return r; });
 export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache(); return r; });
-
-// ── Config / defaults ──────────────────────────────────────────────
-export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
-export const setConfig        = (key: string, value: string) =>
-  api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
 
 // ── Account roles and model tiers ─────────────────────────────────
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>

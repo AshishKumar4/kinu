@@ -8,13 +8,24 @@
 // reported as a wire read at one end and connected at neither.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, workspaceSlug } from '@kinu.run/core';
+import {
+  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  resolveTurnProfile, workspaceSlug, type ProfileCatalog, type ProfileCatalogEnvelope,
+} from '@kinu.run/core';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const AGENT = 'jarvis';
+/** A Workers AI model the offline menu still lists, and not the native default,
+ *  so a create that lands on it must have READ the catalog. */
+const CATALOG_DEFAULT = 'workers-ai/@cf/moonshotai/kimi-k2.6';
+
+function envelopeWithDefault(model: string): ProfileCatalogEnvelope {
+  const catalog: ProfileCatalog = { ...BUILTIN_PROFILE_CATALOG, tiers: { default: { model } } };
+  return { authority: { kind: 'account', accountId: USER_ID }, version: 1, digest: profileCatalogDigest(catalog), catalog };
+}
 
 interface CreateBody {
   name: string;
@@ -28,11 +39,13 @@ interface CreateBody {
  *  The whole route is driven rather than `createCloudWorkspaceForUser` alone,
  *  because the request-body-to-input mapping is the thing under test and
  *  calling the create directly would step over it. */
-async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[]; configKeys: string[]; error: string | null }> {
+async function postCreate(
+  body: CreateBody,
+  envelope: ProfileCatalogEnvelope = envelopeWithDefault(DEFAULT_WORKERS_AI_MODEL_SPEC),
+): Promise<{ status: number; calls: string[]; error: string | null }> {
   const calls: string[] = [];
-  const configKeys: string[] = [];
   const userDO = {
-    async getConfig(_caller: UserCaller, key: string) { configKeys.push(key); return null; },
+    async getProfileCatalog(_caller: UserCaller) { return envelope; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
       return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -53,7 +66,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
     async setInitialDisplayName() {},
     async setSoul() {},
     async resetWorkspaceBaseline() {},
-    async setModel() {},
+    async setModel(model: string) { calls.push(`model:${model}`); },
     async setReasoningEffort(effort: string) { calls.push(`effort:${effort}`); },
     async setRole(roleId: string) { calls.push(`role:${roleId}`); return { role: roleId }; },
     async beginGenesisTurn() { calls.push('genesis'); },
@@ -85,7 +98,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
       typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
     );
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
-    return { status: response.status, calls, configKeys, error };
+    return { status: response.status, calls, error };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -107,7 +120,7 @@ describe('the role a create request asks for', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
 
     expect(created.status).toBe(201);
-    expect(created.calls).toEqual(['genesis']);
+    expect(created.calls).toEqual([`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`, 'genesis']);
   });
 
   test('selects nothing when the request names the default role', async () => {
@@ -116,25 +129,40 @@ describe('the role a create request asks for', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'general' });
 
     expect(created.status).toBe(201);
-    expect(created.calls).toEqual(['genesis']);
+    expect(created.calls).toEqual([`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`, 'genesis']);
   });
 });
 
 describe('the model and effort a create request asks for', () => {
-  test('a supplied model short-circuits the stored default', async () => {
-    const created = await postCreate({
-      name: AGENT, purpose: 'Review the checkout flow.', model: DEFAULT_WORKERS_AI_MODEL_SPEC,
-    });
+  test('a supplied model short-circuits the catalog default', async () => {
+    const created = await postCreate(
+      { name: AGENT, purpose: 'Review the checkout flow.', model: DEFAULT_WORKERS_AI_MODEL_SPEC },
+      envelopeWithDefault(CATALOG_DEFAULT),
+    );
 
     expect(created.status).toBe(201);
-    expect(created.configKeys).not.toContain('default_model');
+    expect(created.calls).toContain(`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
   });
 
-  test('the stored default is consulted when the request names no model', async () => {
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
+  test('the catalog default tier is the model a new workspace starts on, and the one its turns resolve', async () => {
+    // ONE default, read from one place. The settings page once had a second
+    // "default model for new workspaces" beside the tier catalog's `default`,
+    // stored under its own config key; the two drifted (#6). A new workspace
+    // now starts on the same model the resolver hands every turn.
+    const envelope = envelopeWithDefault(CATALOG_DEFAULT);
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, envelope);
 
     expect(created.status).toBe(201);
-    expect(created.configKeys).toContain('default_model');
+    expect(created.calls).toContain(`model:${CATALOG_DEFAULT}`);
+    const turn = resolveTurnProfile({
+      envelope,
+      provider: { revision: 'r1', availableModels: [CATALOG_DEFAULT] },
+      roleId: 'general',
+      workMode: 'build',
+      availableTools: [],
+      activeSkills: [],
+    });
+    expect(turn.tier.model).toBe(CATALOG_DEFAULT);
   });
 
   test('effort reaches the new workspace, before its first turn runs', async () => {

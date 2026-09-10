@@ -150,7 +150,8 @@ export function initUserTables(sql: SqlExec): void {
   initEgressVaultTables(sql);
 
   // User-level config (key/value). Defaults that new agents inherit:
-  // default_model, default_strategy, default_inference_loop, default_approval_mode.
+  // default_strategy, default_inference_loop, default_approval_mode. The account's
+  // default MODEL is not here: it is the profile catalog's `default` tier.
   // `version` backs the profile_catalog row's compare-and-swap: a write must
   // name the version it read and lands at version+1. Other rows keep 0 —
   // only the catalog row is CAS-guarded.

@@ -258,9 +258,6 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
       id: "anthropic", credKey: "anthropic.bearer", name: "Anthropic", connected: true,
     }]);
   }
-  if (path === "/api/user/config/default_model") {
-    return fixtureJson({ key: "default_model", value: "workers-ai/llama-4" });
-  }
   if (path === "/api/user/cloudflare/accounts") {
     return fixtureJson({
       connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
