@@ -61,22 +61,22 @@ function judgeRegistry(
   };
 }
 
-/** `MODEL_ROUTE_POLICY.fast` is the `tiny` tier, so the naming pass must resolve
+/** `MODEL_ROUTE_POLICY.fast` is the `fast` tier, so the naming pass must resolve
  *  THIS spec and no other. Given a distinct value from the chat and deep tiers
  *  so a wrong route names a different model rather than accidentally agreeing.
  *
  *  The effort is explicit and deliberately implausible for a naming pass: an
  *  assertion against a DEFAULT effort would pass whether or not the tier's own
  *  assignment was read, which is the thing the old hardcoded effort got wrong. */
-const TINY_MODEL = 'fake-a/m1';
-const TINY_EFFORT = 'high' as const;
+const FAST_MODEL = 'fake-a/m1';
+const FAST_EFFORT = 'high' as const;
 
 function titleProfile() {
   const catalog = {
     ...BUILTIN_PROFILE_CATALOG,
     tiers: {
       default: { model: 'fake-chat/m1' },
-      tiny: { model: TINY_MODEL, reasoningEffort: TINY_EFFORT },
+      fast: { model: FAST_MODEL, reasoningEffort: FAST_EFFORT },
       deep: { model: 'fake-deep/m1' },
     },
   };
@@ -89,7 +89,7 @@ function titleProfile() {
     },
     provider: {
       revision: 'rev-1',
-      availableModels: ['fake-chat/m1', TINY_MODEL, 'fake-deep/m1'],
+      availableModels: ['fake-chat/m1', FAST_MODEL, 'fake-deep/m1'],
     },
     roleId: 'general',
     workMode: 'build',
@@ -188,7 +188,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
 });
 
 describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
-  test('the title call runs the TINY tier and files a start/end pair under fast', async () => {
+  test('the title call runs the FAST tier and files a start/end pair under fast', async () => {
     const harness = orchestratorHarness();
     const titleModel = new MockLanguageModelV3({
       doGenerate: async () => ({
@@ -223,8 +223,8 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     const title = await harness.agent.harnessSuggestWorkspaceTitle('track launches');
     expect(title).toBe('Mission Control');
 
-    // `fast` routes to `tiny`, and the effort is the tier's own.
-    expect(resolved).toEqual([{ spec: TINY_MODEL, effort: TINY_EFFORT }]);
+    // `fast` routes to the `fast` tier, and the effort is the tier's own.
+    expect(resolved).toEqual([{ spec: FAST_MODEL, effort: FAST_EFFORT }]);
 
     const ensembleSql = sqlOver(harness.db);
     const operations = operationsOf(new RunEventRecorder(ensembleSql, openWorkspaceMainActor(ensembleSql)));
@@ -237,6 +237,6 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
     // same string the model was built from. A seam that resolves a model behind
     // a cache cannot say which one, which leaves the one row that prices the
     // call unpriceable.
-    expect(operations.every((e) => e.spec === TINY_MODEL)).toBe(true);
+    expect(operations.every((e) => e.spec === FAST_MODEL)).toBe(true);
   });
 });

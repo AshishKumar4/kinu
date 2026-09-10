@@ -674,7 +674,7 @@ export interface AgentsToolInput {
    *  list. On `hire` it is the DISCRIMINANT: naming it is what asks for an agent
    *  that does not exist yet, and omitting it hands the workstream to `agent`. */
   role?: RoleId;
-  /** The inference tier the delegation runs at: `tiny|fast|default|slow|deep`.
+  /** The inference tier the delegation runs at: `fast|default|deep`.
    *  Explicit wins; omitted resolves through the role's default tier, then
    *  `default`. The one RUN-LEVEL routing input: it names ONE model for the whole
    *  search, and `models` — per-node routing — is mutually exclusive with it. */
@@ -1779,7 +1779,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },
-    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=swarm: the inference tier the nodes run at — tiny|fast|default|slow|deep. Omit to take the role\'s default tier.' },
+    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=swarm: the inference tier the nodes run at — fast|default|deep. Omit to take the role\'s default tier.' },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
     budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
@@ -1828,7 +1828,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: the catalog role to create the helper under. `role` is what makes a hire CREATE; `agent` beside it is the optional name to create the durable helper under, and `agent` WITHOUT `role` hands the workstream to one that already exists. One of the ids listed below.'
           + roleSummaryText(deps),
       },
-      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role` at the default durable lifetime: optional inference tier override — tiny|fast|default|slow|deep. Omit to take the role\'s default tier. A lifetime:"task" hire runs at its role\'s tier and refuses this field.' },
+      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role` at the default durable lifetime: optional inference tier override — fast|default|deep. Omit to take the role\'s default tier. A lifetime:"task" hire runs at its role\'s tier and refuses this field.' },
       deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });

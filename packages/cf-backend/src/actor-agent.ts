@@ -5355,7 +5355,7 @@ export abstract class ActorAgent extends Think<Env> {
    * Filed as `fast`, and RUN as `fast`. Naming is mechanical work, so
    * grouping it with the judges would make "what did grading cost" answer a
    * question it did not ask — and because `MODEL_ROUTE_POLICY.fast` is the
-   * `tiny` tier, that same attribution decides the model. One `'fast'`
+   * `fast` tier, that same attribution decides the model. One `'fast'`
    * literal feeds both the route and the spend label, so the two cannot
    * disagree.
    */

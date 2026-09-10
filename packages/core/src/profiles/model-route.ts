@@ -54,9 +54,9 @@ const MODEL_ROUTE_POLICY = {
   // Fixed slots: account-wide tier assignments decide these, never a pin.
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
-  advisor: { kind: 'fixed', tier: 'slow' },
+  advisor: { kind: 'fixed', tier: 'deep' },
   compaction: { kind: 'fixed', tier: 'fast' },
-  fast: { kind: 'fixed', tier: 'tiny' },
+  fast: { kind: 'fixed', tier: 'fast' },
   reflection: { kind: 'fixed', tier: 'fast' },
   // Embeddings and other binding-bound calls: no profile route exists.
   platform: { kind: 'platform' },

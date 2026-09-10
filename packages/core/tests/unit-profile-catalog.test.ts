@@ -81,6 +81,21 @@ describe('catalog validation', () => {
       .toThrow(/model/);
   });
 
+  test('a stored assignment or role tier naming a removed tier is refused by name, not aliased', () => {
+    // `tiny` and `slow` overlapped `fast` and `deep` and were removed (#7). A
+    // catalog written by an earlier build that still carries one must fail at
+    // read naming the key, because aliasing it would silently move the model
+    // an assignment was pinned to.
+    for (const removed of ['tiny', 'slow']) {
+      expect(() => validateProfileCatalog({
+        ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, [removed]: { model: 'm-old' } },
+      })).toThrow(new RegExp(removed));
+      expect(() => validateProfileCatalog({
+        ...VALID_CATALOG, roles: { x: { ...SCOUT, tier: removed } },
+      })).toThrow(/tier/);
+    }
+  });
+
   test('role keys must be kebab-case ids within the length cap', () => {
     for (const bad of ['Bad', '-lead', 'ok-', 'has_underscore', `${'a'.repeat(65)}`]) {
       const roles = { [bad]: VALID_CATALOG.roles.scout };
@@ -176,9 +191,9 @@ describe('built-in defaults', () => {
     const expected = {
       general: ['default', 'ideate'],
       researcher: ['fast', 'research'],
-      planner: ['slow', 'ideate'],
+      planner: ['deep', 'ideate'],
       implementer: ['default', 'optimise'],
-      auditor: ['slow', 'audit'],
+      auditor: ['deep', 'audit'],
       designer: ['default', 'ideate'],
     } satisfies Record<BuiltinRoleId, readonly [TierId, NamedSwarmPreset]>;
     for (const id of BUILTIN_IDS) {
@@ -207,7 +222,7 @@ describe('built-in defaults', () => {
   });
 
   test('every tier id the resolver knows is declared', () => {
-    expect([...TIER_IDS]).toEqual(['tiny', 'fast', 'default', 'slow', 'deep']);
+    expect([...TIER_IDS]).toEqual(['fast', 'default', 'deep']);
   });
 });
 

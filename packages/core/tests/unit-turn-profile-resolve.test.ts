@@ -101,7 +101,7 @@ describe('tier resolution', () => {
 
   test('every unconfigured non-default tier aliases default, marked as fallback', () => {
     const defaultOnly = catalog({ tiers: { default: { model: 'm-default' } } });
-    for (const missing of ['tiny', 'fast', 'slow', 'deep'] as const) {
+    for (const missing of ['fast', 'deep'] as const) {
       const profile = resolveTurnProfile({
         envelope: envelope(defaultOnly),
         provider: provider(),
@@ -160,7 +160,7 @@ describe('provider availability', () => {
   // have it" or "nobody managed to ask". Treating the second as the first is how
   // one vendor's 503 came to refuse every turn on the account — including turns
   // whose own tier runs somewhere else entirely, because the resolver checks all
-  // five slots.
+  // three slots.
   const degraded = (models: string[]): ProviderCatalogSnapshot => ({
     revision: 'rev-7-degraded',
     availableModels: models,
@@ -242,6 +242,9 @@ describe('role validation', () => {
   test('malformed ids, tiers and work modes refuse before any lookup', () => {
     expect(() => resolve({ roleId: 'Not_Valid' })).toThrow(/role id/);
     expect(() => resolve({ explicitTier: 'mega' })).toThrow(/explicit tier/);
+    // The removed tiers are unknown now, not aliases of the ones that replaced them.
+    expect(() => resolve({ explicitTier: 'tiny' })).toThrow(/explicit tier/);
+    expect(() => resolve({ explicitTier: 'slow' })).toThrow(/explicit tier/);
     expect(() => resolve({ workMode: 'auto' })).toThrow(/work mode/);
   });
 

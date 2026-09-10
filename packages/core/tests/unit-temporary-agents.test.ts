@@ -58,9 +58,7 @@ function testProfile(): AgentsProfileContext {
     roles: BUILTIN_PROFILE_CATALOG.roles,
     tiers: {
       default: { model: TEST_MODEL },
-      tiny: { model: TEST_MODEL },
       fast: { model: TEST_MODEL },
-      slow: { model: TEST_MODEL },
       deep: { model: TEST_MODEL },
     },
   };

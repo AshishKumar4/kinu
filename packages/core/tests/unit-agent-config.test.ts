@@ -462,8 +462,8 @@ describe('the hired assignment a child reads at its turn boundary', () => {
 
   test('clearing the pin returns the child to its role\'s own tier', () => {
     const c = setup();
-    c.setAssignedTier('tiny');
-    expect(c.getAssignedTier()).toBe('tiny');
+    c.setAssignedTier('fast');
+    expect(c.getAssignedTier()).toBe('fast');
     c.setAssignedTier(null);
     expect(c.getAssignedTier()).toBeNull();
     expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBeNull();
