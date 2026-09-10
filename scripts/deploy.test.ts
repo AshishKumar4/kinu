@@ -79,6 +79,7 @@ const REQUIRED_GATES = [
   "bun run gate:complexity",
   "bun run gate:dead-code",
   "bun run gate:undeclared-imports",
+  "bun run gate:client-graph",
   "bun run gate:wired",
   "bun scripts/test-census.ts --ratchet",
   "bun run gate:duplication",
