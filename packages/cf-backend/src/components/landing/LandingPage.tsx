@@ -75,7 +75,7 @@ function PlanSection(): ReactElement {
   return (
     <section id="plan" className={SECTION}>
       <RuleLabel>03 · Plan mode</RuleLabel>
-      <SectionTitle>Ask for a plan first, and <Accent>nothing changes until you approve it.</Accent></SectionTitle>
+      <SectionTitle>See the plan before <Accent>anything is written.</Accent></SectionTitle>
       <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">In Plan mode the agent can read files and research, but not edit anything. It submits a Markdown plan. You mark the lines that need work, or approve it, and only then does a Build turn start.</p>
       <LandingFrame kind="plan" />
       <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a live workspace.</span><span>Request changes is live while an annotation is on the plan; Approve is live once the plan is clean.</span></p>
@@ -89,7 +89,7 @@ function SlatesSection(): ReactElement {
     <section id="slates" className={SECTION}>
       <RuleLabel>04 · Slates</RuleLabel>
       <SectionTitle>Build live apps <Accent>with slates.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">Ask for a dashboard and the agent writes a small Worker. The source lives in the workspace, and its package.json declares what the app may reach. The app opens in its own tab on a preview URL.</p>
+      <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">Ask for a dashboard and the agent writes a small Worker. It opens in its own tab on a preview URL, reading whatever you connected — your files, or a database over MCP.</p>
       <LandingFrame kind="slate" />
       <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a running app.</span><span>The charts draw once on open.</span></p>
       <div className="mt-8 grid gap-4 text-[13px] leading-[1.7] p-text-3 md:grid-cols-2 md:gap-12">

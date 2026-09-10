@@ -306,7 +306,7 @@ function SearchCanvas(): ReactElement {
   );
 }
 
-const PHRASES = ['learn from feedback.', 'build their own tools.', 'run close to your code.', 'compare approaches.'] as const;
+const PHRASES = ['learn from feedback.', 'build their own tools.', 'run on your own machine.', 'compare approaches.'] as const;
 
 function Typewriter(): ReactElement {
   const elementRef = useRef<HTMLSpanElement>(null);
@@ -382,7 +382,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             <span className="size-[5px] rounded-full p-dot-accent" />
             The self-evolving agent platform
           </div>
-          <h1 aria-label="Agents that learn from feedback, build their own tools, run close to your code, and compare approaches." className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
+          <h1 aria-label="Agents that learn from feedback, build their own tools, run on your own machine, and compare approaches." className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
             Agents that{' '}
             <Typewriter />
           </h1>
