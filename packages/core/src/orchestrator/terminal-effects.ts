@@ -60,13 +60,22 @@
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 
-import { parseJsonValue, type JsonValue } from '../utils/json';
+import { parseJsonValue, JsonValueSchema, type JsonValue } from '../utils/json';
 import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { TurnContinuity } from './agent-orchestrator';
+import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
+import type { EvolutionEngine } from '../evolution/engine';
+import type { HeadJournal } from '../heads/journal';
+import { CompletedTurnSchema } from '../evolution/session-window';
+import { WorkModeSchema } from '../types/turn';
+import { claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes } from '../mcts/takes';
+import {
+  branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
+  type BranchStatusEvent, type PendingBranch,
+} from '../steer-branch';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import type { SignalDeliverer } from '../types/signals';
@@ -89,7 +98,7 @@ export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
  * recorder narrows a stored message with: a hand-written copy of its part unions
  * would be a second answer to what a model message is.
  */
-export const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
+const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
   v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success),
 );
 
@@ -97,7 +106,7 @@ export const ModelMessagesSchema: v.GenericSchema<ModelMessage[]> = v.array(
 /** The conversational continuity a recorded turn ran under. Recorded rather than
  *  re-read: a fresh actor defaults to `conversation`, so a replay of an
  *  independent task would park it awaiting a follow-up that cannot come. */
-export const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
+const TurnContinuitySchema: v.GenericSchema<TurnContinuity> = v.union([
   v.literal('conversation'), v.literal('independent_task'),
 ]);
 
@@ -308,6 +317,194 @@ export function outputLimitContinuationTerminalEffect(signals: SignalDeliverer):
     text: OUTPUT_CONTINUATION_TEXT,
     keyPrefix: 'output-continuation',
     undelivered: 'the output-limit continuation signal was undelivered',
+  });
+}
+
+/**
+ * The alternate-takes claim a settled turn owes.
+ *
+ * A turn the captures can be attributed to claims them; one whose answer is
+ * not there purges them, so the next turn never inherits captures that competed
+ * for an answer that does not exist.
+ */
+export function takesTerminalEffect(deps: {
+  readonly sql: SqlExecutor;
+  readonly actor: ActorHandle;
+  readonly sessionId: string;
+}): TerminalEffect {
+  return terminalEffect({
+    input: v.object({
+      credited: v.nullable(v.string()), startedAt: v.number(),
+      takeIds: v.array(v.string()),
+    }),
+    run: ({ credited, startedAt, takeIds }) => {
+      if (credited === null) {
+        purgeUnclaimedAlternateTakes(deps.sql, deps.actor, takeIds);
+      } else {
+        claimAlternateTakesForTurn(deps.sql, deps.actor, {
+          turnId: credited, sessionId: deps.sessionId, startedAt, takeIds,
+        });
+      }
+      return { status: 'completed' };
+    },
+  });
+}
+
+/**
+ * ONE steer branch, AWAITED, settled into the takes pipeline.
+ *
+ * With a live handle the branch settles through it. Without one — the head
+ * died with the process or isolate that owned it — the HEAD JOURNAL is the only
+ * record, and the check is not "is the head still running": a head reaches
+ * `completed` when its REPORT lands, which is before any take set exists, so
+ * the row's own disposition is the settlement marker. The journal is asked for
+ * the HEAD's id (`branchHeadId`), never the branch run's: read by the run id it
+ * found nothing and reported that as completed, dropping the comparison on
+ * every interruption between the report and the settle.
+ *
+ * The branch id is the settlement key on the LIVE path too. Keyed only on
+ * replay, the live write and the recovery write would be two take sets.
+ */
+export function branchesTerminalEffect(deps: {
+  readonly sql: SqlExecutor;
+  readonly actor: ActorHandle;
+  readonly sessionId: string;
+  readonly broadcast: (event: BranchStatusEvent) => void;
+  /** The branches launched against in-flight turns; a settled one is removed. */
+  readonly pending: PendingBranch[];
+  readonly journal: Pick<HeadJournal, 'readHeadView'>;
+}): TerminalEffect {
+  return terminalEffect({
+    input: v.object({
+      id: v.string(), task: v.string(),
+      turnId: v.nullable(v.string()), liveText: v.string(),
+    }),
+    run: async ({ id, task, turnId, liveText }) => {
+      const live = deps.pending.findIndex((entry) => entry.id === id);
+      if (live >= 0) {
+        const [entry] = deps.pending.splice(live, 1);
+        if (entry !== undefined) {
+          await settlePendingBranch(
+            { sql: deps.sql, actor: deps.actor, sessionId: deps.sessionId, broadcast: deps.broadcast },
+            entry, turnId, liveText, id,
+          );
+          return { status: 'completed' };
+        }
+      }
+      const head = deps.journal.readHeadView(branchHeadId(id));
+      if (head === null) {
+        return { status: 'completed', detail: 'the journal holds no such branch head' };
+      }
+      const report = branchOutcomeFromJournal(head);
+      if (report === null) {
+        return { status: 'owed', detail: `branch head is ${head.status}` };
+      }
+      const outcome = settleBranchIntoTakes(deps.sql, deps.actor, {
+        task, report, turnId, sessionId: deps.sessionId, liveText, settlementKey: id,
+      });
+      deps.broadcast(outcome.ok
+        ? {
+          type: 'branch_status', status: 'settled', branchId: id, task,
+          takeSetId: outcome.set.id, turnId: turnId ?? '',
+        }
+        : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+      return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
+    },
+  });
+}
+
+/**
+ * The evolution recording a settled turn owes.
+ *
+ * The window append is idempotent on the assistant message's own durable
+ * identity, so a replay leaves ONE window row and counts the session cadence
+ * once. Continuity, mode and the evolution gate come off the ROW, never off
+ * state a fresh process would default: a turn produced with auto-evolution on
+ * and recovered under `--no-auto-evolve` was otherwise marked completed with no
+ * window row, and one produced under the flag was recorded by whichever later
+ * host had evolution on. A plan turn records nothing, live or replayed.
+ */
+export function turnRecordTerminalEffect(
+  orch: Pick<AgentOrchestrator, 'recordTurn' | 'recordedTurn'>,
+): TerminalEffect {
+  return terminalEffect({
+    input: v.object({
+      messageId: v.string(), status: RunEndReasonSchema, turn: JsonValueSchema,
+      continuity: TurnContinuitySchema, workMode: WorkModeSchema, recordedAt: v.number(),
+      autoEvolve: v.boolean(),
+    }),
+    run: ({ messageId, status, turn, continuity, workMode, recordedAt, autoEvolve }) => {
+      if (workMode === 'plan') {
+        return { status: 'completed', detail: 'a plan turn records no evolution state' };
+      }
+      // Unkeyed for an empty id: every such response would share one key, and
+      // the second would read the first's append as its own.
+      const recordedId = keyedScope(messageId);
+      orch.recordTurn(
+        orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
+        continuity,
+        recordedId === undefined
+          ? { recordedAt, enabled: autoEvolve }
+          : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` },
+      );
+      return autoEvolve
+        ? { status: 'completed' }
+        : { status: 'completed', detail: 'the turn was produced with auto-evolution off' };
+    },
+  });
+}
+
+/**
+ * The reactor drain a settled turn owes. Idempotent by construction: the drain
+ * selects only PENDING, unbound rows. RETHROWING, because the drain absorbs its
+ * own failures for ambient callers that have nothing owed to retry them — this
+ * row does, and `completed` over a half-bound batch strands the assignment.
+ */
+export function eventDrainTerminalEffect(
+  orch: Pick<AgentOrchestrator, 'drainPendingEvents'>,
+): TerminalEffect {
+  return terminalEffect({
+    input: v.object({}),
+    run: async () => {
+      await orch.drainPendingEvents({ rethrow: true });
+      return { status: 'completed' };
+    },
+  });
+}
+
+/**
+ * The shadow trial a sampled turn owes — its OWN row, because its disposition
+ * differs from the improvement lanes beside it: a full queue is a refusal a
+ * later drain clears, so the trial stays owed while nothing else waits on it.
+ *
+ * A REFUSAL is not a deferral. `not_sampled` means there is nothing to queue
+ * and never will be for this turn — a session with evolution off answers it
+ * forever, and an owed row for it would hold the outer claim open across every
+ * later start — so the obligation is discharged. Only a full queue or a failed
+ * insert is worth coming back for, and both clear on their own.
+ */
+export function shadowTrialTerminalEffect(
+  engine: Pick<EvolutionEngine, 'queueShadowTrial'>,
+): TerminalEffect {
+  return terminalEffect({
+    input: v.object({
+      turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
+    }),
+    run: ({ turn, trialContext, pendingVersion }, scope) => {
+      const trialScope = keyedScope(scope);
+      const queued = engine.queueShadowTrial(
+        v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
+        trialScope === undefined
+          ? { pendingVersion }
+          : { pendingVersion, id: `trial-${trialScope}` },
+      );
+      if (queued === 'queue_full' || queued === 'failed') {
+        return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
+      }
+      return queued === 'queued'
+        ? { status: 'completed' }
+        : { status: 'completed', detail: `no trial to queue: ${queued}` };
+    },
   });
 }
 
