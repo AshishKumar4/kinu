@@ -292,7 +292,7 @@ CLI (`cli-backend/src/model-resolver.ts:303-355`): `workers-ai` and `my-gateway`
 
 Model lists come from `https://models.dev/api.json` behind a 5-minute cache (`core/src/providers/models-dev.ts:9`), supplying context windows and capability flags. Static lists (`WORKERS_AI_FALLBACK_MODEL_CATALOG` in `cf-backend/src/providers/workers-ai-catalog.ts`, per-provider `FALLBACK_MODELS`) apply only when that fetch fails, returns non-200, or filters empty. OpenRouter queries its own `/api/v1/models`.
 
-Default model lives once in core: `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC` (`@cf/zai-org/glm-5.3`, `core/src/providers/workers-ai.ts:6`), written into `default_model` at first sign-in. Seven-entry fallback catalog:
+Default model lives once in core: `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC` (`@cf/zai-org/glm-5.3`, `core/src/providers/workers-ai.ts:6`), the built-in profile catalog's `default` tier. Seven-entry fallback catalog:
 
 | Model ID | Name | Context |
 |----------|------|---------|

@@ -9,7 +9,7 @@ import { handleAuthRequest } from '../src/auth/routes';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
-import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@kinu.run/core';
+import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
@@ -41,7 +41,6 @@ function testEnv<UserStub, AgentStub>(bindings: CloudflareLoginTestBindings<User
 function setupEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
-  const config = new Map<string, string>();
   /** Sessions this account's authority holds, as the real UserDO holds them:
    *  the row is what says a cookie is live, and it carries the `authTime` a
    *  step-up compares against. */
@@ -59,8 +58,6 @@ function setupEnv() {
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
-    async getConfig(_caller: UserCaller, key: string) { return config.get(key) ?? null; },
-    async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
     async listActiveWorkspaces(_caller: UserCaller) { return []; },
   };
   const env = testEnv({
@@ -71,7 +68,7 @@ function setupEnv() {
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
-  return { env, kv, credentials, config, sessions };
+  return { env, kv, credentials, sessions };
 }
 
 function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
@@ -165,7 +162,7 @@ function sessionCookieIn(response: Response): string | undefined {
 
 describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   test('one login grants both the app session and a refreshable AI credential', async () => {
-    const { env, credentials, config } = setupEnv();
+    const { env, credentials } = setupEnv();
     const { fetchFake, tokenRequests } = fakeCloudflareNetwork({
       access_token: 'cf-access-1',
       refresh_token: 'cf-refresh-1',
@@ -198,7 +195,6 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       if (expiresAt === undefined) throw new Error('Cloudflare credential did not include an expiry');
       expect(expiresAt).toBeGreaterThan(Date.now());
       expect(credentials[0].credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
-      expect(config.get('default_model')).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     } finally {
       globalThis.fetch = originalFetch;
     }
