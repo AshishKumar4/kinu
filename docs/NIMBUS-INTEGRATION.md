@@ -30,7 +30,7 @@ applies at install. Four of those are Nimbus patches:
 `@nimbus-sh%2Fcore@0.6.0.patch`, `@nimbus-sh%2Ffabric@0.2.0.patch`,
 `@nimbus-sh%2Fplatform@0.1.0.patch`, and `@nimbus-sh%2Fworker@0.4.0.patch`. The
 other four are `@plannotator%2Fui@0.30.0.patch`,
-`@cloudflare%2Fsandbox@0.12.8.patch`, `agents@0.20.1.patch`, and
+`@cloudflare%2Fsandbox@0.12.8.patch`, `agents@0.22.0.patch`, and
 `@cloudflare%2Fcodemode@0.5.1.patch`. The core patch
 re-points `esbuild-wasm` at its browser entrypoint (`esbuild-wasm/esm/browser.js`) so the
 Worker bundle does not instantiate the Go-imports build. All eight are declared in

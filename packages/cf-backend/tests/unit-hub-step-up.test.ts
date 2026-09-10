@@ -19,8 +19,6 @@ interface WebhookOptions {
 function hubEnv() {
   const calls: string[] = [];
   const agent = {
-    // getAgentByName (partyserver getServerByName) calls setName first.
-    async setName() {},
     async createDurableWebhook(opts: WebhookOptions) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
       return {

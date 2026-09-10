@@ -62,6 +62,7 @@ import type {
   PrepareStepContext, StepConfig,
   ToolCallContext as ThinkToolCallContext,
   ChatResponseResult,
+  ChatRecoveryConfig,
   StreamableResult,
 } from "@cloudflare/think";
 import {
@@ -233,7 +234,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
-  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, McpProtocolFailureSchema, McpToolError,
+  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle,
 } from "@kinu.run/core";
@@ -6292,6 +6293,10 @@ export abstract class ActorAgent extends Think<Env> {
       workingRevision: admitted.workingRevision,
     });
     cfg.messages = [...admitted.messages];
+    // A tool call the SDK cannot parse is rewritten where a rewrite is settled
+    // (case-only name drift, fenced or double-encoded arguments) and left to
+    // the model's own retry otherwise — no inference behind the spend ledger.
+    cfg.repairToolCall = repairToolCall();
     // The turn's constants for the per-step context breakdown. Tool schemas
     // ride every request of the turn and are otherwise invisible to anyone
     // asking where the window went.
@@ -6714,15 +6719,17 @@ export abstract class ActorAgent extends Think<Env> {
    * Wrap every chat turn in a recovery fiber, so an interrupted turn resumes
    * after eviction with nobody watching.
    *
-   * Set EXPLICITLY, and as a class field rather than in `onStart`, for two
-   * separate reasons the SDK states. It defaults to `true` today, and a default
-   * is not a decision: every owner turn and every subordinate turn on this
-   * substrate depends on it, so it is declared here rather than inherited. And
-   * the SDK evaluates recovery budgets on every wake — it may seal an
-   * interrupted turn before `onStart` runs — so a value assigned there would
-   * arrive after the recovery it was meant to configure.
+   * Since cloudflare/agents#2071 the fiber is unconditional — `false` is no
+   * longer a value — so what this field decides is the BUDGET: `true` is the
+   * SDK's defaults, and an object tunes them. Set EXPLICITLY, and as a class
+   * field rather than in `onStart`, for two separate reasons the SDK states. A
+   * default is not a decision: every owner turn and every subordinate turn on
+   * this substrate depends on it, so it is declared here rather than
+   * inherited. And the SDK evaluates recovery budgets on every wake — it may
+   * seal an interrupted turn before `onStart` runs — so a value assigned there
+   * would arrive after the recovery it was meant to configure.
    */
-  override chatRecovery = true;
+  override chatRecovery: ChatRecoveryConfig = true;
 
   /**
    * The recovery budgets this backend DECLARES rather than inherits.

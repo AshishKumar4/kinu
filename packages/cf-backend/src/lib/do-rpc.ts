@@ -29,11 +29,12 @@
  * spelling of a supersede, and "Network connection lost." — which is the one this
  * exists for, because it is what a dropped stub or storage connection surfaces as.
  *
- * We MIRROR that matcher rather than import it. Re-verified 2026-08-18 against
- * agents@0.20.1: `./retries` is not in the package's `exports` map, so loading
- * `agents/retries` fails with `Cannot find module`; and the root entry it would
- * otherwise have to come through is `dist/index.js`, whose line 16 is
- * `import { EmailMessage } from "cloudflare:email"` — a workerd-only builtin, so
+ * We MIRROR that matcher rather than import it. Re-verified 2026-09-10 against
+ * agents@0.22.0: `./retries` is still not in the package's `exports` map, so
+ * loading `agents/retries` fails with `Cannot find module`; and the root entry
+ * it would otherwise have to come through is `dist/index.js`, whose `Agent`
+ * chunk (`dist/src-5W6JNKVb.js:21-22`) imports `cloudflare:email` and
+ * `cloudflare:workers` — workerd-only builtins, so
  * loading `agents` under bun fails with `Cannot find package 'cloudflare:email'`.
  * Nothing loadable under a test runner can depend on it. If a future release
  * exports the subpath, take it from there and delete the patterns below.

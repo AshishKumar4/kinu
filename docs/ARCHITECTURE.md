@@ -496,7 +496,7 @@ graph TB
     CLIB --> Compact
 
     subgraph ext["External"]
-        Think["@cloudflare/think 0.15.1 (^0.15.1)"]
+        Think["@cloudflare/think 0.17.0 (^0.17.0)"]
         Agents["agents (Agents SDK)"]
         AISDK["ai (Vercel AI SDK v6)"]
         Nimbus["@nimbus-sh/core 0.6.0: the workspace filesystem"]

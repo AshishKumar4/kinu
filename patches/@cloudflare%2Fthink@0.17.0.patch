@@ -1,0 +1,25 @@
+diff --git a/dist/index-B7zEkBBM.d.ts b/dist/index-B7zEkBBM.d.ts
+index 19793b620826f52e280d8a1421fd9734849b00ec..6e5a95ef336e103f21b8ee99b99eabc83b6f0424 100644
+--- a/dist/index-B7zEkBBM.d.ts
++++ b/dist/index-B7zEkBBM.d.ts
+@@ -751,6 +751,8 @@ interface TurnContext {
+   model: LanguageModel;
+   /** Whether this is a continuation turn. */
+   continuation: boolean;
++  /** The existing turn cancellation signal, also passed to streamText. */
++  readonly signal?: AbortSignal;
+   /** Custom body fields from the client request. */
+   body?: Record<string, unknown>;
+ }
+diff --git a/dist/think.js b/dist/think.js
+index 52e895fc1bf71d9ec9ead8860839e6aa8f247a4c..f00590a7c5f1a9cef7a03789d4112f2550458555 100644
+--- a/dist/think.js
++++ b/dist/think.js
+@@ -2682,6 +2682,7 @@ var Think = class Think extends Agent {
+ 			messages,
+ 			tools,
+ 			model,
++			signal: input.signal,
+ 			continuation: input.continuation,
+ 			body: input.body
+ 		};

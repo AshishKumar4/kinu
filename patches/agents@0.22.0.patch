@@ -1,8 +1,8 @@
-diff --git a/dist/agent-tool-types-BC-WFlsz.d.ts b/dist/agent-tool-types-BC-WFlsz.d.ts
-index 7ffe0d0647a01ad7e309da78496ef00efd006b0a..52e3d08091ae129532641d54a2ca652d26ab28f1 100644
---- a/dist/agent-tool-types-BC-WFlsz.d.ts
-+++ b/dist/agent-tool-types-BC-WFlsz.d.ts
-@@ -4857,6 +4857,9 @@ declare class Agent<
+diff --git a/dist/agent-routing-CnkaHb-v.d.ts b/dist/agent-routing-CnkaHb-v.d.ts
+index 07ae3e535f77ae29689662228b381b2f03451524..64d1aa70026c06d734682bb321dda031ca081608 100644
+--- a/dist/agent-routing-CnkaHb-v.d.ts
++++ b/dist/agent-routing-CnkaHb-v.d.ts
+@@ -5398,6 +5398,9 @@ declare class Agent<
     * @internal
     */
    private _cf_resolveSubAgent;
@@ -12,11 +12,11 @@ index 7ffe0d0647a01ad7e309da78496ef00efd006b0a..52e3d08091ae129532641d54a2ca652d
    /**
     * Forcefully abort a running sub-agent. The child stops executing
     * immediately and will be restarted on next {@link subAgent} call.
-diff --git a/dist/index.js b/dist/index.js
-index 842842699328780d3f5256a5224cdd0e5c43a65b..c075b8a9c521629f71c8e051dda94de9f3a53b33 100644
---- a/dist/index.js
-+++ b/dist/index.js
-@@ -3022,52 +3022,79 @@ var Agent = class Agent extends Server {
+diff --git a/dist/src-5W6JNKVb.js b/dist/src-5W6JNKVb.js
+index 8154429c7c282aac3cba5f62c49f21f48164b721..05232bc0bfd88481180bd7cb5c188750f0fc9168 100644
+--- a/dist/src-5W6JNKVb.js
++++ b/dist/src-5W6JNKVb.js
+@@ -2640,52 +2640,79 @@ var Agent = class Agent extends DurableObject {
  	async _checkRunFibers() {
  		if (this._runFiberRecoveryInProgress) return;
  		this._runFiberRecoveryInProgress = true;
@@ -136,7 +136,7 @@ index 842842699328780d3f5256a5224cdd0e5c43a65b..c075b8a9c521629f71c8e051dda94de9
              UPDATE cf_agents_fibers
              SET status = 'interrupted',
                  snapshot = ${row.snapshot},
-@@ -3075,78 +3102,100 @@ var Agent = class Agent extends Server {
+@@ -2693,78 +2720,100 @@ var Agent = class Agent extends DurableObject {
              WHERE fiber_id = ${row.id}
                AND status IN ('pending', 'running')
            `;
@@ -301,7 +301,7 @@ index 842842699328780d3f5256a5224cdd0e5c43a65b..c075b8a9c521629f71c8e051dda94de9
  			}
  		} finally {
  			this._runFiberRecoveryInProgress = false;
-@@ -5836,26 +5885,42 @@ var Agent = class Agent extends Server {
+@@ -5312,26 +5361,42 @@ var Agent = class Agent extends DurableObject {
        LIMIT 1
      `[0] ?? null;
  	}
